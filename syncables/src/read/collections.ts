@@ -43,6 +43,7 @@ import {
   type RuntimeMembers,
 } from './runtime-schemas.js';
 import type { Transport } from './transport.js';
+import { isListTombstone } from './list-tombstones.js';
 
 export interface CollectionReadOptions {
   transport: Transport;
@@ -99,6 +100,16 @@ export interface CollectionSnapshot {
   coverage?: ReadCoverage;
   /** Why a read that ended without an error is still not complete. */
   notComplete?: string;
+  /**
+   * Deletion Feeds 0.3.0-draft §4.5: the ids of the list tombstones this
+   * read returned (deleted when it was read), in the order read; they are
+   * not in `items`. Present when the collection declares
+   * `x-list-tombstone`; empty when the read ended with an error. An item
+   * with the marker but no id is skipped (it names no object). An object
+   * returned twice in one read, as a member or a list tombstone, fails the
+   * read as a repeated identity.
+   */
+  tombstones?: string[];
   /**
    * For a resource that declares `x-runtime-schema` (Runtime Schemas
    * 0.1.0-draft): each item's user-defined members, interpreted against its
@@ -260,6 +271,7 @@ export async function readCollections(
           pathParams: path,
           items: [],
           complete: false,
+          ...(collection.listTombstone ? { tombstones: [] } : {}),
         };
         collections.push(snapshot);
         try {
@@ -375,6 +387,24 @@ export async function readCollections(
                 collection.contextParams.map((p) => path[p]),
                 id,
               ]);
+              // A list tombstone reports a deletion and is not a member
+              // (§4.5); one without an identity names no object. Its
+              // identity counts as returned: the same object again in this
+              // read, as a member or a list tombstone, is a repeated item
+              // (a restore between pages, say), and the read fails below.
+              if (
+                collection.listTombstone &&
+                isListTombstone(collection.listTombstone, value)
+              ) {
+                if (!id) continue;
+                if (identities.has(key))
+                  throw new Error(
+                    'Missing or repeated record identity; pagination may not be forwarded by the proxy',
+                  );
+                identities.add(key);
+                (snapshot.tombstones ??= []).push(id);
+                continue;
+              }
               if (!id || identities.has(key)) {
                 throw new Error(
                   'Missing or repeated record identity; pagination may not be forwarded by the proxy',
@@ -402,6 +432,10 @@ export async function readCollections(
           if (options.probe) throw error;
           snapshot.error =
             error instanceof Error ? error.message : String(error);
+          // A read that ended with an error reports no list tombstones: a
+          // repeated item makes them unreliable, and a client acts only on
+          // those of reads that ended without one (§4.5).
+          if (snapshot.tombstones) snapshot.tombstones = [];
           errors.push(`${collection.name}: ${snapshot.error}`);
           if (error instanceof BudgetExhausted) {
             exhausted = true;
