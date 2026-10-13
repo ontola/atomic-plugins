@@ -206,15 +206,20 @@ table it is decides how an import gets in (`controller.ts` `Source`):
   allow editing first.", or after a refusal, "Editing the rows was refused,
   so a category or note cannot be saved until you allow it."); the "sync" it
   dates is the last import: the latest rows that arrived while the view is
-  open ("Synced just now", and the rows line ends "; 2 arrived at the last
-  sync"), else the newest `imported` stamp among the stored statements
-  ("Synced 3 days ago"); the rows line counts the complete rows and the
-  statements they came from ("6 transactions from 2 statements"). The
-  arrivals are every new row the table subscription brought in, from this
-  view's import or any other writer (the importer's review, another tab),
-  so they are "arrived", not "added", and the card's counts line ("Last
-  sync: N added, N updated, N unchanged") is not used: nothing here counts
-  updated or unchanged rows. A table whose statements are only derived
+  open ("Synced just now", and the rows line ends "; 2 imported here at
+  the last sync" or "; 2 arrived at the last sync"), else the newest
+  `imported` stamp among the stored statements ("Synced 3 days ago"); the
+  rows line counts the complete rows and the statements they came from ("6
+  transactions from 2 statements"). The arrivals are every new row the
+  table subscription brought in. From 0.4.4 those of the refreshes in the
+  15 s after an import this view applied (its own writes, or the host
+  importer it ran) are "imported here", and the header pill says "Imported
+  2 · just now"; any other writer's (the importer's review in another tab,
+  another device) "arrived", with the pill "2 arrived · 3 min ago". The pill
+  is dated like the card (`ago`), so it ages on each render; before 0.4.4 it
+  read "Imported N · just now" for every arrival and never aged. The card's
+  counts line ("Last sync: N added, N updated, N unchanged") is not used:
+  nothing here counts updated or unchanged rows. A table whose statements are only derived
   from its rows (an older importer table, a hand-made shared-class table)
   records no import date, so the card reads "Not synced yet" over the rows
   and the rows line says "when they were imported is not recorded" rather
