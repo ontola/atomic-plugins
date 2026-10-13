@@ -323,7 +323,8 @@ and apply request size, timeout, redirect, and response-size limits.
 Refresh tokens only at the provider token endpoint configured for that
 platform. Store rotated tokens atomically before returning a replacement
 credential. Do not forward the upstream's cookies or authorization headers.
-Rate-limit per owner, audit token use without logging secrets, and return
+Rate-limit per owner (not implemented: no limit on proxied requests per
+owner exists yet), audit token use without logging secrets, and return
 generic authentication errors.
 
 A composed document with a `$ref` path item (or a path item that is not an
@@ -434,7 +435,8 @@ provider. What it changes for safety:
   consent page asks for nothing and the owner is whichever agent signs. So
   on such a platform anyone can spend its `sourceIp` bucket and keep other
   tenants' requests refused with `429 provider_quota` for as long as they
-  keep sending; `AccessPolicy` (an allowlist of owners) is the only bound.
+  keep sending. The only bound is the access policy: `ALLOWED_AGENTS`,
+  `REVOKED_SUBJECTS`, or a deployment's own `AccessPolicy`.
 - **Bounded memory.** One log per declared bucket, keyed by platform and
   bucket id from the server-owned catalog, never by anything a caller
   sends; each log holds at most `requests` timestamps, and buckets above
