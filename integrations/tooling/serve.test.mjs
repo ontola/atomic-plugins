@@ -22,8 +22,12 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import {
+  binaryProblem,
+  binaryWarning,
   bindAddress,
   bringUp,
+  BUILD_STAMP,
+  buildInstructions,
   devServerHost,
   dockerRunArgs,
   IMAGE_STORE,
@@ -33,6 +37,7 @@ import {
   PLUGIN_ROUTES_ENV,
   routesImageFor,
   routesOrigin,
+  serverCheckout,
   serverEnv,
   sidecarUrl,
   storeVolume,
@@ -46,6 +51,117 @@ const pinnedImage = `ghcr.io/ontola/atomic-server-e2e:${readFileSync(
   join(root, '.atomic-server-ref'),
   'utf8',
 ).trim()}`;
+
+test("serverCheckout: the variable, else this pin's per-SHA checkout when it exists, else /tmp", () => {
+  const home = mkdtempSync(join(tmpdir(), 'atomic-home-'));
+  const sha = 'c'.repeat(40);
+  const perSha = join(home, '.cache/atomic-plugins/atomic-server', sha);
+
+  try {
+    const pick = (env, ref = () => sha) =>
+      serverCheckout({ env, home, pin: ref });
+    // Set: always wins.
+    assert.equal(pick({ ATOMIC_SERVER_CHECKOUT: '/x' }), '/x');
+    // Unset, no per-SHA checkout yet: the old default.
+    assert.equal(pick({}), '/tmp/atomic-server');
+    mkdirSync(perSha, { recursive: true });
+    assert.equal(pick({}), perSha);
+    // Another pin's checkout is never picked; nor a pin that is not a SHA.
+    assert.equal(
+      pick({}, () => 'd'.repeat(40)),
+      '/tmp/atomic-server',
+    );
+    assert.equal(
+      pick({}, () => 'main'),
+      '/tmp/atomic-server',
+    );
+    assert.equal(
+      pick({}, () => {
+        throw new Error('no .atomic-server-ref');
+      }),
+      '/tmp/atomic-server',
+    );
+    // No HOME: the old default.
+    assert.equal(
+      serverCheckout({ env: {}, home: undefined, pin: () => sha }),
+      '/tmp/atomic-server',
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('binaryProblem: a missing binary gets the full build lines, a stale stamp is refused, no stamp is trusted', () => {
+  const checkout = mkdtempSync(join(tmpdir(), 'atomic-checkout-'));
+  const binary = join(checkout, 'target/e2e/atomic-server');
+  const stamp = join(checkout, BUILD_STAMP);
+  const head = 'b'.repeat(40);
+
+  try {
+    // No binary: how to build it, the WASM bundle included, never cargo alone.
+    const missing = binaryProblem({ checkout, head });
+    assert.match(missing, /does not exist\. Build it first:/);
+    assert.ok(missing.includes(buildInstructions(checkout)));
+    assert.match(missing, /wasm-pack build --target web/);
+    assert.match(missing, /cargo build --profile e2e/);
+    assert.match(missing, /ATOMIC_SERVER_IMAGE/);
+
+    // A binary without a stamp (built by hand) is trusted.
+    mkdirSync(join(checkout, 'target/e2e'), { recursive: true });
+    writeFileSync(binary, '');
+    assert.equal(binaryProblem({ checkout, head }), undefined);
+
+    // A stamp for the checkout's commit passes; another commit is refused.
+    writeFileSync(stamp, `${head}\n`);
+    assert.equal(binaryProblem({ checkout, head }), undefined);
+    writeFileSync(stamp, `${pin}\n`);
+    const stale = binaryProblem({ checkout, head });
+    assert.match(
+      stale,
+      /was built from aaaaaaaaaaaa .*, but .* is at bbbbbbbbbbbb: that binary is a stale host/,
+    );
+    assert.ok(stale.includes(buildInstructions(checkout)));
+    assert.ok(stale.includes(`delete ${stamp}`));
+    // Without a readable HEAD (not a git checkout) the stamp cannot be judged.
+    assert.equal(binaryProblem({ checkout, head: undefined }), undefined);
+    assert.equal(binaryProblem({ checkout }), undefined);
+    // An empty stamp says nothing.
+    writeFileSync(stamp, '\n');
+    assert.equal(binaryProblem({ checkout, head }), undefined);
+  } finally {
+    rmSync(checkout, { recursive: true, force: true });
+  }
+});
+
+test('binaryWarning: only a stampless binary is warned about, with how to stamp it', () => {
+  const checkout = mkdtempSync(join(tmpdir(), 'atomic-checkout-'));
+  const binary = join(checkout, 'target/e2e/atomic-server');
+  const stamp = join(checkout, BUILD_STAMP);
+  const head = 'b'.repeat(40);
+
+  try {
+    // No binary: binaryProblem's business, not a warning.
+    assert.equal(binaryWarning({ checkout, head }), undefined);
+    mkdirSync(join(checkout, 'target/e2e'), { recursive: true });
+    writeFileSync(binary, '');
+    const warning = binaryWarning({ checkout, head });
+    assert.match(warning, /has no stamp/);
+    assert.match(warning, /the checkout is at bbbbbbbbbbbb/);
+    assert.ok(
+      warning.includes(`git -C "${checkout}" rev-parse HEAD > "${stamp}"`),
+    );
+    // Without a readable HEAD it still warns, without naming a commit.
+    assert.doesNotMatch(
+      binaryWarning({ checkout, head: undefined }),
+      /the checkout is at/,
+    );
+    // Any stamp (judged by binaryProblem): no warning.
+    writeFileSync(stamp, `${head}\n`);
+    assert.equal(binaryWarning({ checkout, head }), undefined);
+  } finally {
+    rmSync(checkout, { recursive: true, force: true });
+  }
+});
 
 test('dockerRunArgs publishes the lane port on loopback, same number inside and out', () => {
   const args = dockerRunArgs({

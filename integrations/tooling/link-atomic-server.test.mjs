@@ -9,13 +9,20 @@ import { execFileSync } from 'node:child_process';
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { layoutProblems } from './link-atomic-server.mjs';
+import { dirname, join } from 'node:path';
+import {
+  changedPaths,
+  dirtyProblem,
+  layoutProblems,
+  movePinProblem,
+} from './link-atomic-server.mjs';
+import { BUILD_OUTPUT_PATHS } from './server-build.mjs';
 
 function fixture({ installed = true, git = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'atomic-layout-'));
@@ -105,6 +112,145 @@ test('a missing browser link is reported', () => {
     f.pin(f.head);
     rmSync(join(f.base, 'browser'));
     assert.match(layoutProblems(f.base)[0], /does not exist/);
+  } finally {
+    f.done();
+  }
+});
+
+test('movePinProblem: a checkout named after another commit is never moved', () => {
+  const a = 'a'.repeat(40);
+  const b = 'b'.repeat(40);
+  const cache = '/home/x/.cache/atomic-plugins/atomic-server';
+
+  // Named after this pin, or not named after a commit: free to move.
+  assert.equal(movePinProblem(`${cache}/${a}`, a), undefined);
+  assert.equal(movePinProblem('/tmp/atomic-server', a), undefined);
+  assert.equal(movePinProblem(cache, a), undefined);
+  // Another commit's checkout: refused, with this pin's own path.
+  const problem = movePinProblem(`${cache}/${b}`, a);
+  assert.match(
+    problem,
+    /is the checkout for bbbbbbbbbbbb, not this branch's pin aaaaaaaaaaaa/,
+  );
+  assert.ok(problem.includes(`ATOMIC_SERVER_CHECKOUT=${cache}/${a} `));
+  // A variant keeps its suffix.
+  assert.ok(
+    movePinProblem(`${cache}/${b}-plugin-routes`, a).includes(
+      `ATOMIC_SERVER_CHECKOUT=${cache}/${a}-plugin-routes `,
+    ),
+  );
+});
+
+/**
+ * A throwaway repository with BUILD_OUTPUT_PATHS and other.txt committed, the
+ * shape of an atomic-server checkout before its build rewrites them.
+ */
+function dirtyFixture() {
+  const dir = mkdtempSync(join(tmpdir(), 'atomic-dirty-'));
+  const run = (...args) =>
+    execFileSync('git', args, { cwd: dir, encoding: 'utf8' }).trim();
+  run('init', '--quiet');
+
+  for (const path of [...BUILD_OUTPUT_PATHS, 'other.txt']) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), 'committed\n');
+  }
+
+  run('add', '.');
+  run(
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@example.invalid',
+    'commit',
+    '--quiet',
+    '-m',
+    'x',
+  );
+
+  return {
+    dir,
+    run,
+    edit: path => writeFileSync(join(dir, path), 'rebuilt\n'),
+    read: path => readFileSync(join(dir, path), 'utf8'),
+    done: () => rmSync(dir, { recursive: true, force: true }),
+  };
+}
+
+const ref = 'f'.repeat(40);
+
+test('dirtyProblem: a clean checkout may move', () => {
+  const f = dirtyFixture();
+
+  try {
+    assert.equal(dirtyProblem(f.dir, ref), undefined);
+  } finally {
+    f.done();
+  }
+});
+
+test('dirtyProblem: only the build outputs modified are tolerated and restored', () => {
+  const f = dirtyFixture();
+
+  try {
+    assert.equal(BUILD_OUTPUT_PATHS.length, 2);
+    for (const path of BUILD_OUTPUT_PATHS) f.edit(path);
+    // A staged change counts too, and is restored as well.
+    f.run('add', BUILD_OUTPUT_PATHS[0]);
+    assert.deepEqual(
+      changedPaths(f.dir).sort(),
+      [...BUILD_OUTPUT_PATHS].sort(),
+    );
+
+    assert.equal(dirtyProblem(f.dir, ref), undefined);
+    assert.equal(f.run('status', '--porcelain'), '');
+    for (const path of BUILD_OUTPUT_PATHS)
+      assert.equal(f.read(path), 'committed\n');
+  } finally {
+    f.done();
+  }
+});
+
+test('dirtyProblem: any other modified path still refuses', () => {
+  const f = dirtyFixture();
+
+  try {
+    f.edit('other.txt');
+    const problem = dirtyProblem(f.dir, ref);
+    assert.match(problem, /has uncommitted changes \(other\.txt\)/);
+    assert.match(problem, /not the pinned ffffffffffff/);
+    assert.equal(f.read('other.txt'), 'rebuilt\n');
+  } finally {
+    f.done();
+  }
+});
+
+test('dirtyProblem: the build outputs plus another path refuse, restoring nothing', () => {
+  const f = dirtyFixture();
+
+  try {
+    for (const path of [...BUILD_OUTPUT_PATHS, 'other.txt']) f.edit(path);
+    assert.match(
+      dirtyProblem(f.dir, ref),
+      /has uncommitted changes \(other\.txt\)/,
+    );
+    for (const path of [...BUILD_OUTPUT_PATHS, 'other.txt'])
+      assert.equal(f.read(path), 'rebuilt\n');
+  } finally {
+    f.done();
+  }
+});
+
+test('changedPaths: a rename reports both sides, so it refuses', () => {
+  const f = dirtyFixture();
+
+  try {
+    f.run('mv', BUILD_OUTPUT_PATHS[0], 'moved.html');
+    assert.deepEqual(changedPaths(f.dir), [
+      'moved.html',
+      BUILD_OUTPUT_PATHS[0],
+    ]);
+    assert.match(dirtyProblem(f.dir, ref), /\(moved\.html\)/);
   } finally {
     f.done();
   }

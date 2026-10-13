@@ -22,8 +22,8 @@ disk and ports. This page is true as of 2026-10-02.
   CLAUDE_CODE_REMOTE=true .claude/hooks/session-start.sh
   ```
 
-  It honours an exported `ATOMIC_SERVER_CHECKOUT`; export the pinned
-  checkout below first, or it builds its own under
+  It honours an exported `ATOMIC_SERVER_CHECKOUT`; export your pin's
+  per-SHA checkout below first, or it builds its own under
   `~/.cache/atomic-plugins/atomic-server`, which is not warmed here.
 - The user-testing stack and Michiel's dashboard run on the same host. See
   [Shared server](#shared-server-hands-off).
@@ -33,19 +33,51 @@ disk and ports. This page is true as of 2026-10-02.
 | Path | What |
 | --- | --- |
 | `/home/claude/work/atomic-plugins` | the repo checkout; workers use worktrees under `.claude/worktrees/` |
-| `/home/claude/work/atomic-server-pin` | atomic-server at the pinned SHA (`.atomic-server-ref`), already `pnpm install`ed with `@tomic/lib` built and Playwright Chromium installed. It is `ATOMIC_SERVER_CHECKOUT`. Read-only: never commit in it or move it by hand |
+| `~/.cache/atomic-plugins/atomic-server/<sha>` | atomic-server at one pinned SHA (a branch's `.atomic-server-ref`), one detached worktree per SHA, `pnpm install`ed with `@tomic/lib` built. It is `ATOMIC_SERVER_CHECKOUT` for every branch with that pin, and only for those. Read-only once built: never commit in it, move it, or point a branch with another pin at it |
+| `~/.cache/atomic-plugins/atomic-server/<sha>/target/e2e/atomic-server` | that SHA's e2e binary, with `target/e2e/.built-for-atomic-plugins` next to it holding the commit it was built from (the stamp) |
 | `/home/claude/work/atomic-server` | a full clone of ontola/atomic-server, for `git worktree add` and for `server-build.mjs`'s `ATOMIC_SERVER_REPO` |
-| `/home/claude/work/atomic-server-pin/target/e2e/atomic-server` | the e2e binary; `.built-for-atomic-plugins` next to it exists once it is built for the current pin |
+| `/home/claude/work/atomic-server-pin` | **retired, don't use.** One shared checkout for every branch: `link-atomic-server.mjs` moved it whenever workers' branches carried different pins (three times in 13 minutes on 2026-10-09), and its binary stayed the old pin's |
 | `~/.cache/atomic-plugins/atomic-server/<sha>-plugin-routes` | the plugin-routes build, where `server-build.mjs` looks (AGENTS.md, "The plugin-routes feature build") |
 | `/home/claude/.cache/atomic-plugins/heavy.lock` | the lock for heavy runs |
 
+Use the checkout of your own branch's pin, never another:
+
 ```sh
-export ATOMIC_SERVER_CHECKOUT=/home/claude/work/atomic-server-pin
-node integrations/tooling/link-atomic-server.mjs   # from your worktree root
+SHA=$(cat .atomic-server-ref)                       # from your worktree root
+export ATOMIC_SERVER_CHECKOUT=$HOME/.cache/atomic-plugins/atomic-server/$SHA
+cat "$ATOMIC_SERVER_CHECKOUT/target/e2e/.built-for-atomic-plugins"  # must print $SHA
+node integrations/tooling/link-atomic-server.mjs --no-fetch
 ```
 
-After a pin bump, `link-atomic-server.mjs` moves the checkout in place. Do that
-once, from the coordinator, not from several workers at once.
+Without the export, the tools pick the same directory themselves when it
+exists (`serve.mjs`'s `serverCheckout()`); the export still makes it explicit,
+and is the only way to point a branch at a checkout for another pin.
+
+- **One checkout per SHA.** A branch on an older or newer pin (one stacked
+  on an unmerged PR, say) uses that SHA's directory, not main's. Pointing it
+  at another pin's checkout makes `link-atomic-server.mjs` move that checkout
+  under whoever else is using it, and their lanes then run one pin's
+  `browser/` against another pin's binary. `link-atomic-server.mjs` (without
+  `--no-fetch`, which skips this check) refuses to move a checkout named
+  after another commit (`<sha>` or `<sha>-<variant>`, #462): it stops before fetching and prints this pin's
+  own `ATOMIC_SERVER_CHECKOUT` path. A checkout not named after a commit
+  (`/tmp/atomic-server`, CI's) still moves.
+- **Read-only once built.** Never commit in it, check out another commit in
+  it, or rebuild it in place.
+- **No binary?** The SHA isn't built here yet. Build it once, under
+  the heavy lock and from one session only, with AGENTS.md's "Shared pinned
+  atomic-server build" recipe, which ends by writing the stamp. Or run the
+  published image (`ATOMIC_SERVER_IMAGE`; AGENTS.md, "Or run the published
+  image instead of building") and skip the build. A binary without a stamp
+  was built without the recipe's last line: tell the coordinator rather than
+  stamping someone else's build blind.
+- **Always write the stamp.** `serve.mjs` (#412) refuses a binary whose stamp
+  names another commit than its checkout, and prints the build lines. A
+  binary without a stamp is not refused when its checkout moves; `serve.mjs`
+  warns about it. Only the builder writes the stamp; anyone else tells the
+  coordinator (see above). On 2026-10-12 the `e922179` (candidate21)
+  build had none; it was given its own SHA under the heavy lock after
+  checking that the binary embeds that commit.
 
 ## Docker
 
@@ -134,11 +166,12 @@ The host also runs things Michiel and testers depend on:
   `127.0.0.1:8082`, `8081` and `8080` respectively. Welcome page, catalog and
   logs are on `*.usertest.michielbdejong.com`. Restarting the moderator or the
   server ends running test sessions; the rule on #227 is to warn there first,
-  and to restart only when no session is running. Deploys go through
-  `usertest-deploy.yml` and need Michiel's OK
-  ([usertest-droplet.md](usertest-droplet.md); it still describes the
-  DigitalOcean droplet, which was destroyed on 2026-10-02, so read its
-  commands as for the new host).
+  and to restart only when no session is running. Deploys are done by
+  hand on this host under Michiel's standing OK (Decision Inbox Q-104),
+  after checking that no session is running
+  ([usertest-droplet.md](usertest-droplet.md), "On the build VPS").
+  `usertest-deploy.yml` still targets the DigitalOcean droplet, destroyed
+  on 2026-10-02, so it cannot deploy here.
 - **Michiel's dashboard** at https://dev.michielbdejong.com (`localhost:8090`),
   behind Cloudflare Access. It holds the Decision Inbox (Q-064: the questions
   of #227's inbox migrate there, keeping their `Q-###` ids).
@@ -159,10 +192,11 @@ when writing one:
 - **Worktree.** One worktree per task from fresh `origin/main` (`git fetch
   origin main && git checkout -B claude/<topic> origin/main`), never the main
   checkout. A subagent's worktree is isolated; don't `cd` out of it.
-- **Environment.** The `ATOMIC_SERVER_CHECKOUT` export and `link-atomic-server.mjs`
-  above; the e2e binary is ready once `.built-for-atomic-plugins` exists, and
-  workers never start their own build of the pinned SHA; heavy runs under
-  `flock`.
+- **Environment.** The per-SHA `ATOMIC_SERVER_CHECKOUT` export and
+  `link-atomic-server.mjs` above, for the worker's own branch's pin; the e2e
+  binary is ready once its stamp names that SHA. Workers never start their
+  own build of a SHA (the coordinator builds it once, or they use the
+  image), and never use another pin's checkout; heavy runs under `flock`.
 - **Scratchpad.** The session's scratchpad directory for plans
   (`plans/<topic>.md`, written before code, after checking sibling plans) and
   any other temporary files. Give each worker a file-name prefix (for example

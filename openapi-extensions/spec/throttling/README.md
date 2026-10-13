@@ -1,6 +1,6 @@
 # OpenAPI Throttling Extension
 
-**Spec version:** 0.2.0-draft
+**Spec version:** 0.3.0-draft
 
 This proposal addresses [issue #13](https://github.com/pondersource/openapi-extensions/issues/13).
 It describes announced API request quotas, the response headers that report
@@ -65,9 +65,11 @@ The capitalized requirements below are normative in the sense of
 | `limits` | map of bucket identifier to Limit Object | Nonempty bucket definitions. Required with `applies`. |
 | `applies` | array of bucket identifiers | Default selection; entries must be unique and defined. May be empty. Required with `limits`. |
 | `headers` | map of response header name to Header Role Object | Since 0.2.0. What each rate-limit response header reports, and its unit. See [Response headers](#response-headers). |
+| `bodyFields` | map of JSON body dot-path to Header Role Object | Since 0.3.0. The same roles read from the JSON response body instead of a header. See [Response body fields](#response-body-fields). |
 | `signals` | array of Signal Objects | Since 0.2.0. The responses that mean the request was throttled. See [Throttling signals](#throttling-signals). |
 
-The root object holds at least one of `limits`, `headers` and `signals`;
+The root object holds at least one of `limits`, `headers`, `bodyFields` and
+`signals`;
 `limits` and `applies` appear together or not at all. A document can therefore
 describe its rate-limit headers and throttling responses without announcing a
 numeric quota.
@@ -210,6 +212,46 @@ The headers of the IETF `RateLimit` and `RateLimit-Policy` structured fields
 (draft-ietf-httpapi-ratelimit-headers) carry several values in one header. A
 Header Role Object cannot describe them; this version does not cover them.
 
+## Response body fields
+
+Added in 0.3.0. Some APIs report rate-limit values in the JSON error body
+rather than, or as well as, in headers. Todoist's API v1 documents an
+`error_extra.retry_after` field ("Seconds to wait before retrying. May be
+returned on rate-limited requests and other API errors, not just 429
+responses"; [Todoist API v1](https://developer.todoist.com/api/v1/), Errors).
+`bodyFields` maps a dot-path into the parsed JSON response body to a Header
+Role Object (above): the same `role`, `unit` and `description`, the same
+roles at most once in the map, and the same rule that a value which does not
+parse in its declared encoding is ignored.
+
+A dot-path is one or more property names joined by `.`, read from the body's
+root object; each name is nonempty and is matched literally, so a name that
+contains a `.` cannot be addressed, and `a..b`, `.a` and `a.` are invalid.
+
+A field value is used as text. A string has its leading and trailing
+whitespace removed, as a header value does (below). A JSON integer is its
+decimal representation, so `3` reads as `deltaSeconds` `3`; a JSON number
+with no fractional part (`3.0`) reads the same; any other number (`3.5`), a
+boolean, `null`, an array or an object does not parse. An integer above
+2^53 − 1 (9007199254740991), written with or without a fractional part, does
+not parse either: beyond it a JSON number is not held exactly by every parser
+(RFC 8259 §6), and `1e300` would otherwise read as a 301-digit delay. The
+bound is fixed so that consumers agree: before it, "too large to parse" was
+left to each one, and `1e21` read as a 22-digit integer in Python but did not
+parse in TypeScript, whose `String(1e21)` is `"1e+21"`.
+
+A role read from both a header and a body field counts once: for `reset` and
+`retryAfter`, the later of the two times; for `limit` and `used`, the
+header's value when it parses, else the body field's; for `remaining`, the
+bucket is exhausted when either value is `0`.
+
+A body-field `retryAfter` or `reset` that gives no wait (a delay of `0`, or a
+time not after the response) counts as absent, so that the fallbacks of the
+earliest retry time still apply: a provider that sends the field on other
+errors too (Todoist does) may send `0` where it has no advice. A body
+field is read only from a response that is JSON and is classified as
+throttling (below); a role on another response says nothing.
+
 ## Throttling signals
 
 Added in 0.2.0. `signals` is a nonempty array of Signal Objects. A response
@@ -271,23 +313,32 @@ like throttling, or the reverse.
 A header field that appears more than once in a response has no single value:
 a role ignores it, and `equals` and `in` do not match it (`present` does).
 Header values are compared after removing leading and trailing whitespace.
+Whitespace here, and in a body field's string, means exactly space (U+0020),
+horizontal tab (U+0009), carriage return (U+000D) and line feed (U+000A):
+JSON's whitespace (RFC 8259 §2), which includes a header's optional
+whitespace (RFC 9110 §5.6.3). Other characters, such as U+00A0 or U+3000,
+are kept, so a value that holds them does not parse.
 
 **Earliest retry time.** For a matching response, a consumer computes:
 
-1. T1, from the `retryAfter` header, when it is declared, present and parses;
-2. T2, from the `reset` header, when it is declared, present and parses, and
-   the meaning is `quotaExhausted` or the `remaining` header is `0`;
+1. T1, from the `retryAfter` header or body field, when it is declared,
+   present and parses (the later of the two when both do);
+2. T2, from the `reset` header or body field, when it is declared, present and
+   parses, and the meaning is `quotaExhausted` or the `remaining` value is `0`;
 3. the later of T1 and T2. When neither exists: the response time plus
    `minDelaySeconds` when the signal gives it; else, for `quotaExhausted` with
    a `bucket` whose window is known, the response time plus that window's
-   `seconds`; otherwise the consumer's own backoff.
+   `seconds`; otherwise the consumer's own backoff. These are fallbacks, not
+   floors: a later time from T1 or T2 replaces them, and an earlier one is
+   used as it is.
 
 An absolute time (`epochSeconds`, `httpDate`) is measured twice: against the
 consumer's own clock, and, when the response has a `Date` header, as the same
 offset from `Date` applied to the time the response was received. The later of
 the two counts, so neither a wrong local clock nor a wrong `Date` header can
 make the time earlier. A delay (`deltaSeconds`) counts from the time the
-response was received. A decimal integer too large to parse does not parse.
+response was received. A decimal integer above 2^53 − 1 (9007199254740991)
+does not parse, in a header or a body field alike.
 
 A consumer MUST NOT send the request again, or another request counted against
 an exhausted bucket, before this time. It MAY wait longer, cap how long it is
@@ -422,7 +473,9 @@ that includes them, a `429` does not say which bucket is exhausted, and the
 signal should leave `bucket` out.
 
 [examples/response-signals.yaml](examples/response-signals.yaml) is a
-complete synthetic document with headers and signals.
+complete synthetic document with headers and signals, and
+[examples/body-fields.yaml](examples/body-fields.yaml) one shaped like
+Todoist's error body (`bodyFields`).
 
 ## Overlay publication and validation
 
@@ -477,6 +530,18 @@ API throttling.
 
 ## Changes
 
+- **0.3.0-draft** (2026-10-12, second follow-up): the whitespace that is
+  removed is exactly SP, HTAB, CR and LF; an integer above 2^53 − 1 does not
+  parse, in a header or a body field, integral float included; a body field
+  that gives no wait is ignored by its source, so a header with the same value
+  (`Retry-After: 0`) still counts.
+- **0.3.0-draft** (2026-10-12 follow-up): the dot-path syntax, whitespace
+  and integral numbers in body values, `remaining` exhausted by either value,
+  a body `retryAfter`/`reset` of no wait counting as absent, and fallbacks
+  that are not floors; a `bodyFields` example.
+- **0.3.0-draft** (2026-10-09): adds `bodyFields`, the Header Role Object's
+  roles read from a JSON body field (Todoist's `error_extra.retry_after`). A
+  0.2.0 document stays valid and means the same.
 - **0.2.0-draft** (2026-10-08): adds `headers` (Header Role Objects: `limit`,
   `remaining`, `used`, `reset`, `retryAfter`, with Time Units) and `signals`
   (Signal Objects with status, header and body predicates, `throttled` or

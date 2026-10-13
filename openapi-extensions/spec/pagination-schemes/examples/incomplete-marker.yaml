@@ -1,0 +1,62 @@
+openapi: 3.0.3
+info:
+  title: Illustrative capped query marked incomplete in the body
+  version: 1.0.0
+  description: >-
+    Synthetic, shaped like Notion's Query a data source: past 10,000 results
+    has_more becomes false and every page served from the capped result
+    carries request_status with type incomplete.
+servers:
+  - url: https://api.example.com
+components:
+  paginationSchemes:
+    cappedQuery:
+      type: pageToken
+      autoDetect: false
+      request:
+        bodyFields:
+          start_cursor:
+            role: cursor
+      response:
+        envelope:
+          itemsField: results
+        bodyFields:
+          next_cursor:
+            role: nextCursor
+        incomplete:
+          field: request_status.type
+          equals: incomplete
+          description: >-
+            Every page served from a result capped at 10,000 carries
+            request_status.type incomplete; has_more is then false.
+paths:
+  /tables/{table_id}/query:
+    post:
+      parameters:
+        - { name: table_id, in: path, required: true, schema: { type: string } }
+      x-pagination:
+        - scheme: cappedQuery
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                start_cursor: { type: string }
+                page_size: { type: integer, maximum: 100 }
+      responses:
+        '200':
+          description: One page of rows.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results: { type: array, items: { type: object } }
+                  has_more: { type: boolean }
+                  next_cursor: { type: string, nullable: true }
+                  request_status:
+                    type: object
+                    properties:
+                      type: { type: string }
+                      incomplete_reason: { type: string }

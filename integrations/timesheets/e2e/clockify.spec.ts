@@ -32,7 +32,7 @@
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type FrameLocator, type Page } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
 import {
   classes as sharedClasses,
@@ -40,6 +40,12 @@ import {
 } from '../../../ontology-kit/terms.mjs';
 // @ts-expect-error build.mjs is plain JS with no declaration file.
 import { cssRawPlugin } from '../app/build.mjs';
+import { dayKey, formatRange, weekContaining } from '../app/model/time';
+import {
+  DEFAULT_TIME_ZONE,
+  yesterdayAt,
+  // @ts-expect-error scenario.mjs is plain JS with no declaration file.
+} from '../fixtures/clockify/scenario.mjs';
 import { appVersion } from '../../tooling/apps.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
@@ -62,6 +68,25 @@ const WORK = {
 const NAME = 'https://atomicdata.dev/properties/name';
 const IS_A = 'https://atomicdata.dev/properties/isA';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
+
+/**
+ * Shows the week of the fixture's "yesterday" entries (Fix plugin source
+ * loading, Weekly sync; `clockifyEntries` puts them on yesterday's date in
+ * the fixture user's zone, weekStart MONDAY). On a Monday that is last week:
+ * the target is computed, not found by looking, and asserted on the range.
+ */
+async function toYesterdaysWeek(app: FrameLocator) {
+  const week = weekContaining(
+    dayKey(yesterdayAt(Date.now(), 12), DEFAULT_TIME_ZONE),
+    'MONDAY',
+  );
+  const range = app.locator('.weeknav .range');
+  const want = formatRange(week.days[0], week.days[6]);
+  if ((await range.textContent())?.trim() !== want)
+    await app.getByRole('button', { name: 'Previous week' }).click();
+  await expect(range).toHaveText(want);
+}
+
 /** The fixture's workspace (`../fixtures/clockify/scenario.mjs`). */
 const WORKSPACE_ID = 'aaaaaaaaaaaaaaaaaaaaaaaa';
 
@@ -187,8 +212,7 @@ test.describe('timesheets drive app', () => {
     // Both entries were yesterday: on a week's first day, that is last week.
     await app.getByRole('tab', { name: 'Entries' }).click();
     const weekly = app.getByRole('button', { name: /Weekly sync/ });
-    if (!(await weekly.count()))
-      await app.getByRole('button', { name: 'Previous week' }).click();
+    await toYesterdaysWeek(app);
     await weekly.click();
     const detail = app.getByRole('dialog', { name: 'Weekly sync' });
     await expect(detail).toContainText('Atomic plugins');
@@ -207,13 +231,23 @@ test.describe('timesheets drive app', () => {
     await expect(detail).toHaveCount(0);
     await expect(weekly).toBeFocused();
     await app.getByRole('tab', { name: 'Week' }).click();
+    // The week grid's Billable row (0.7.2, usertest-findings#13): yesterday's
+    // two entries are 2 h billable (Fix plugin source loading) of 3 h. The
+    // shown week is shared by the tabs (`ui.week`), so this is the week the
+    // Entries tab moved to above to find Weekly sync: no date-dependent step
+    // here.
+    const grid = app.getByRole('table', { name: /^Hours per project/ });
+    const totals = grid.locator('tfoot tr').first();
+    const bill = grid.locator('tfoot tr.bill');
+    await expect(totals.locator('td.tot [aria-hidden]')).toHaveText('3:00');
+    await expect(bill.getByRole('rowheader')).toHaveText('Billable');
+    await expect(bill.locator('td.tot [aria-hidden]')).toHaveText('2:00');
 
     const table = await tableOf(page);
 
     // "Open row in Atomic" shows the entry's table row in the host.
     await app.getByRole('tab', { name: 'Entries' }).click();
-    if (!(await weekly.count()))
-      await app.getByRole('button', { name: 'Previous week' }).click();
+    await toYesterdaysWeek(app);
     await weekly.click();
     await detail.getByRole('button', { name: 'Open row in Atomic' }).click();
     await expect(page).not.toHaveURL(appUrl);
@@ -445,8 +479,7 @@ test.describe('timesheets drive app', () => {
     // Edit in the drawer: saved to the row, listed, nothing sent.
     await app.getByRole('tab', { name: 'Entries' }).click();
     const weekly = app.getByRole('button', { name: /Weekly sync/ });
-    if (!(await weekly.count()))
-      await app.getByRole('button', { name: 'Previous week' }).click();
+    await toYesterdaysWeek(app);
     await weekly.click();
     const detail = app.getByRole('dialog', { name: 'Weekly sync' });
     await detail.getByRole('button', { name: 'Edit', exact: true }).click();
@@ -504,8 +537,7 @@ test.describe('timesheets drive app', () => {
     // A proxy without the write overlay refuses the write; the app says so.
     await fixture({ action: 'catalog', readOnly: true });
     await app.getByRole('tab', { name: 'Entries' }).click();
-    if (!(await weekly.count()))
-      await app.getByRole('button', { name: 'Previous week' }).click();
+    await toYesterdaysWeek(app);
     await app.getByRole('button', { name: /Weekly sync \(notes\)/ }).click();
     await app.getByRole('button', { name: 'Edit', exact: true }).click();
     await app
@@ -529,9 +561,11 @@ test.describe('timesheets drive app', () => {
     );
     test.setTimeout(240_000);
     await fixture({ action: 'reset' });
-    // Inside "Fix plugin source loading" (Atomic plugins, 28–26 h ago): an
-    // invented Research entry, so the timeline shows "unclear which project".
+    // Inside "Fix plugin source loading" (Atomic plugins, yesterday
+    // 10:00–12:00 in the fixture user's zone): an invented Research entry,
+    // 11:00–11:30, so the timeline shows "unclear which project".
     const now = Date.now();
+    const overlap = yesterdayAt(now, 11);
     await fixture({
       action: 'add',
       entry: {
@@ -546,8 +580,8 @@ test.describe('timesheets drive app', () => {
         isLocked: false,
         type: 'REGULAR',
         timeInterval: {
-          start: clockifyInstant(now - 27 * 3_600_000),
-          end: clockifyInstant(now - 26.5 * 3_600_000),
+          start: clockifyInstant(overlap),
+          end: clockifyInstant(overlap + 30 * 60_000),
           duration: 'PT30M',
         },
       },

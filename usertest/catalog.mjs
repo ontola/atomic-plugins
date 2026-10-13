@@ -3,7 +3,23 @@
  * Builds the user-testing catalog into a folder that deploy.sh copies to the
  * droplet's /srv/catalog:
  *
- *   node usertest/catalog.mjs [out]      # default out: usertest/out
+ *   node usertest/catalog.mjs [out]            # default out: usertest/out
+ *   node usertest/catalog.mjs --record [out]   # after a version bump
+ *
+ * It first installs each app's plugin dependencies that have a lockfile and
+ * no node_modules yet, or a stale one installed from a different
+ * pnpm-lock.yaml (`pnpm install --frozen-lockfile`, as run-lane.mjs and
+ * apps.mjs do through integrations/tooling/deps.mjs); `--no-install` skips
+ * that. On CI, where every lockfile is installed first, it does nothing.
+ *
+ * Without USERTEST_LOG_URL it refuses to build (exit 2), because an app
+ * marked `report: true` would lose its collector prelude and a deploy would
+ * replace the logged module under the same version (2026-10-13), unless
+ * `--no-log` says an unlogged build is meant (local tries, e2e/samples.mjs);
+ * such a build writes `out/UNLOGGED`, which check-live.mjs and deploy.sh
+ * refuse. `--record` alone may build unlogged: it records the hashes (which
+ * leave the prelude out), then removes the unlogged catalog.json so it can't
+ * be deployed. A refused or failed build leaves no catalog.json either.
  *
  * With USERTEST_LOG_URL set (deploy it with
  * USERTEST_LOG_URL=https://logs.<base-domain>/log), the modules of apps
@@ -29,17 +45,26 @@
  * The sample bank statements for the Money app
  * (integrations/money/fixtures/usertest/) are copied to samples/money/.
  *
- * VERSIONS below is the only thing to edit. Bump an app's version whenever
- * its build changes: the host offers "Update to <version>" only for a new
- * version string, and a changed file under an old version fails the
+ * VERSIONS below is the only thing to edit by hand. Bump an app's version
+ * whenever its build changes: the host offers "Update to <version>" only for
+ * a new version string, and a changed file under an old version fails the
  * integrity check for anyone who installs it afterwards.
  *
+ * builds.json, next to this file, records the sha256 of every module built
+ * here (without the collector prelude), keyed by `<id>/<version>`. After a
+ * bump, `--record` writes it for the current versions. A build that differs
+ * from what its version was recorded with is a forgotten bump: this script
+ * then exits 1 without a catalog.json, `--record` refuses to overwrite the
+ * hash, and integrations/tooling/apps.test.mjs fails in CI's tooling unit
+ * tests. A version not recorded yet is a warning here and a failure there.
+ *
  * Needs the layout AGENTS.md describes (browser/ from the pinned
- * atomic-server) and each app's dependencies installed (see README.md).
+ * atomic-server); the apps' own dependencies it installs as above.
  */
 import { createHash } from 'node:crypto';
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -49,21 +74,32 @@ import {
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  installMissing,
+  pluginDependencyDirs,
+  sharedDependencyDirs,
+} from '../integrations/tooling/deps.mjs';
+import { loadLanes } from '../integrations/tooling/lanes.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..');
-const out = resolve(process.argv[2] ?? resolve(here, 'out'));
+
+/** The recorded build hashes, `<id>/<version>` to `sha256-<base64>`. */
+export const BUILDS = resolve(here, 'builds.json');
 
 const A = 'https://atomicdata.dev/properties/';
 const I = 'https://atomicdata.dev/integrations/properties/';
 
-/** Drive apps built here. `base` is the catalog entry whose copy they reuse. */
-const VERSIONS = {
+/**
+ * Drive apps built here. `base` is the plugin: the catalog entry whose copy
+ * they reuse, and the folder `integrations/<base>/` whose app they build.
+ */
+export const VERSIONS = {
   calendar: 'usertest-12',
-  'issue-tracker': 'usertest-10',
-  money: 'usertest-4',
-  notion: 'usertest-9',
-  timesheets: 'usertest-10',
+  'issue-tracker': 'usertest-11',
+  money: 'usertest-6',
+  notion: 'usertest-11',
+  timesheets: 'usertest-12',
 };
 const APPS = {
   calendar: {
@@ -91,7 +127,7 @@ const APPS = {
  * provider fixture under sample-data/. Bump SAMPLE_VERSION whenever
  * sample-data/ or a fixture it imports changes.
  */
-const SAMPLE_VERSION = 'sample-2';
+export const SAMPLE_VERSION = 'sample-4';
 const SAMPLES = {
   calendar: { provider: 'Google Calendar', name: 'Google Calendar' },
   'issue-tracker': { provider: 'GitHub', name: 'GitHub issues' },
@@ -99,19 +135,21 @@ const SAMPLES = {
   notion: { provider: 'Notion', name: 'Notion' },
 };
 
-const LOG_URL = process.env.USERTEST_LOG_URL;
-if (LOG_URL && !/^https:\/\/[^/]+\/log$/.test(LOG_URL))
-  throw new Error('USERTEST_LOG_URL must look like https://<host>/log');
-/** text/plain keeps the post a simple request: no CORS preflight from the
- * frame's null origin. A failing collector never affects the app. */
-const PRELUDE = LOG_URL
-  ? `globalThis.__USERTEST_REPORT__=e=>{try{fetch(${JSON.stringify(LOG_URL)},{method:"POST",keepalive:!0,headers:{"content-type":"text/plain"},body:JSON.stringify(e)}).catch(()=>{})}catch{}};\n`
-  : '';
+/**
+ * The collector prelude for `logUrl`, or '' without one. text/plain keeps
+ * the post a simple request: no CORS preflight from the frame's null
+ * origin. A failing collector never affects the app.
+ */
+/** The shape USERTEST_LOG_URL must have: the collector's https endpoint. */
+const LOG_URL = /^https:\/\/[^/\s]+\/log$/;
 
-const catalog = JSON.parse(
-  readFileSync(resolve(repo, 'integrations/catalog.json'), 'utf8'),
-);
-const byShortname = name => catalog.find(r => r[A + 'shortname'] === name);
+function preludeFor(logUrl) {
+  if (!logUrl) return '';
+  if (!LOG_URL.test(logUrl))
+    throw new Error('USERTEST_LOG_URL must look like https://<host>/log');
+
+  return `globalThis.__USERTEST_REPORT__=e=>{try{fetch(${JSON.stringify(logUrl)},{method:"POST",keepalive:!0,headers:{"content-type":"text/plain"},body:JSON.stringify(e)}).catch(()=>{})}catch{}};\n`;
+}
 
 const require = createRequire(resolve(repo, 'browser/package.json'));
 const esbuild = require('esbuild');
@@ -120,9 +158,10 @@ const esbuild = require('esbuild');
  * The app's built module, wrapped so that its `store.proxy` is the sample
  * account of sample-data/<id>.mjs. It bundles the app's built module (before
  * the collector prelude), so the sample entry runs the same app build as the
- * real entry, minified once more together with the wrapper.
+ * real entry, minified once more together with the wrapper. Returns the
+ * module's text, without a prelude.
  */
-async function buildSample(id, appFile, file, prelude) {
+async function buildSample(id, appFile) {
   const at = path => JSON.stringify(path);
   const result = await esbuild.build({
     stdin: {
@@ -163,8 +202,8 @@ async function buildSample(id, appFile, file, prelude) {
       },
     ],
   });
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, prelude + result.outputFiles[0].text);
+
+  return result.outputFiles[0].text;
 }
 
 /** One catalog entry for a built module. */
@@ -184,80 +223,315 @@ function entryFor(source, id, version, bytes, fields) {
   return entry;
 }
 
-for (const [id, app] of Object.entries(APPS)) {
-  const version = VERSIONS[id];
-  const { build } = await import(
-    pathToFileURL(resolve(repo, 'integrations', id, 'app/build.mjs')).href
+/**
+ * The folders whose lockfiles the apps built here need, relative to the
+ * repository root: each app's plugin folders (deps.mjs
+ * `pluginDependencyDirs`), by its `base` plugin, and the shared packages
+ * that plugin's lane's `paths` import from source (`sharedDependencyDirs`).
+ */
+export function dependencyDirs(lanes = loadLanes().lanes) {
+  return [
+    ...new Set(
+      Object.values(APPS).flatMap(({ base }) => [
+        ...pluginDependencyDirs(base),
+        ...sharedDependencyDirs(lanes.find(l => l.id === base)?.paths),
+      ]),
+    ),
+  ];
+}
+
+/** The ids of the apps built here, for tests. */
+export const APP_IDS = Object.keys(APPS);
+
+/** Each app's `base` plugin, for tests. */
+export const appBase = id => APPS[id].base;
+
+/**
+ * What to do when a build still misses a package: catalog.mjs installs a
+ * missing or stale node_modules itself, unless it ran with --no-install.
+ */
+const INSTALL =
+  'run catalog.mjs without --no-install, which installs a missing or stale node_modules. From the repository root, CI installs every one with: for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile); done';
+
+/**
+ * `run()`, with a build that fails on a missing package (esbuild's "Could
+ * not resolve", Node's ERR_MODULE_NOT_FOUND) explained: the plugin's
+ * dependencies are most likely not installed in this checkout.
+ */
+export async function explained(what, run) {
+  try {
+    return await run();
+  } catch (error) {
+    const text = String(error?.message ?? error);
+    if (
+      error?.code === 'ERR_MODULE_NOT_FOUND' ||
+      /Could not resolve|Cannot find (module|package)/.test(text)
+    )
+      throw new Error(
+        `usertest: building ${what} failed on a missing package, so its plugin's dependencies are probably not installed here: ${INSTALL}\n${text}`,
+        { cause: error },
+      );
+    throw error;
+  }
+}
+
+/** What builds.json records for a module's text. */
+export const sha256 = text =>
+  'sha256-' + createHash('sha256').update(text).digest('base64');
+
+/**
+ * Builds the catalog into `out`: the modules under apps/, the sample files
+ * and catalog.json. Returns the catalog and, per module built here, its
+ * `<id>/<version>` key and the sha256 of its text without the prelude
+ * (what builds.json records), in build order.
+ */
+export async function buildCatalog(out, { logUrl } = {}) {
+  const prelude = preludeFor(logUrl);
+  const catalog = JSON.parse(
+    readFileSync(resolve(repo, 'integrations/catalog.json'), 'utf8'),
   );
-  const file = resolve(out, 'apps', id, version, 'ui.js');
-  mkdirSync(dirname(file), { recursive: true });
-  // The app alone, before the prelude: what a sample entry wraps.
-  await build({ outfile: file });
-  const plain = readFileSync(file, 'utf8');
-  const prelude = app.report ? PRELUDE : '';
-  if (prelude) writeFileSync(file, prelude + plain);
-  const bytes = readFileSync(file);
+  const byShortname = name => catalog.find(r => r[A + 'shortname'] === name);
+  const modules = [];
 
-  const source = byShortname(app.base);
-  if (!source) throw new Error(`catalog.json has no entry ${app.base}`);
-  const entry = entryFor(source, id, version, bytes, {
-    name: app.name,
-    emoji: app.emoji,
-    description: app.description,
-  });
-  entry[I + 'app-row-name'] = app.row[0];
-  entry[I + 'app-row-name-plural'] = app.row[1];
+  for (const [id, app] of Object.entries(APPS)) {
+    const version = VERSIONS[id];
+    const { build } = await explained(
+      id,
+      () =>
+        import(
+          pathToFileURL(
+            resolve(repo, 'integrations', app.base, 'app/build.mjs'),
+          ).href
+        ),
+    );
+    const file = resolve(out, 'apps', id, version, 'ui.js');
+    mkdirSync(dirname(file), { recursive: true });
+    // The app alone, before the prelude: what a sample entry wraps.
+    await explained(id, () => build({ outfile: file }));
+    const plain = readFileSync(file, 'utf8');
+    modules.push({ key: `${id}/${version}`, sha256: sha256(plain) });
+    const own = app.report ? prelude : '';
+    if (own) writeFileSync(file, own + plain);
+    const bytes = readFileSync(file);
 
-  const at = catalog.indexOf(source);
-  if (app.base === id) catalog[at] = entry;
-  else catalog.splice(at + 1, 0, entry);
+    const source = byShortname(app.base);
+    if (!source) throw new Error(`catalog.json has no entry ${app.base}`);
+    const entry = entryFor(source, id, version, bytes, {
+      name: app.name,
+      emoji: app.emoji,
+      description: app.description,
+    });
+    entry[I + 'app-row-name'] = app.row[0];
+    entry[I + 'app-row-name-plural'] = app.row[1];
 
-  const sample = SAMPLES[id];
-  if (!sample) continue;
-  const sampleId = `${id}-sample`;
-  const sampleVersion = `${version}-${SAMPLE_VERSION}`;
-  const sampleFile = resolve(out, 'apps', sampleId, sampleVersion, 'ui.js');
-  const appFile = resolve(out, 'apps', id, version, 'plain.js');
-  writeFileSync(appFile, plain);
-  await buildSample(id, appFile, sampleFile, prelude);
-  rmSync(appFile);
-  const sampleEntry = entryFor(
-    entry,
-    sampleId,
-    sampleVersion,
-    readFileSync(sampleFile),
-    {
-      name: `${sample.name} (sample data)`,
-      description: `Try ${sample.name} on invented sample data, without a ${sample.provider} account. For user testing: nothing reaches ${sample.provider}, and its changes stay in this app.`,
-    },
+    const at = catalog.indexOf(source);
+    if (app.base === id) catalog[at] = entry;
+    else catalog.splice(at + 1, 0, entry);
+
+    const sample = SAMPLES[id];
+    if (!sample) continue;
+    const sampleId = `${id}-sample`;
+    const sampleVersion = `${version}-${SAMPLE_VERSION}`;
+    const sampleFile = resolve(out, 'apps', sampleId, sampleVersion, 'ui.js');
+    const appFile = resolve(out, 'apps', id, version, 'plain.js');
+    writeFileSync(appFile, plain);
+    const sampleText = await explained(sampleId, () =>
+      buildSample(id, appFile),
+    );
+    rmSync(appFile);
+    modules.push({
+      key: `${sampleId}/${sampleVersion}`,
+      sha256: sha256(sampleText),
+    });
+    mkdirSync(dirname(sampleFile), { recursive: true });
+    writeFileSync(sampleFile, own + sampleText);
+    const sampleEntry = entryFor(
+      entry,
+      sampleId,
+      sampleVersion,
+      readFileSync(sampleFile),
+      {
+        name: `${sample.name} (sample data)`,
+        description: `Try ${sample.name} on invented sample data, without a ${sample.provider} account. For user testing: nothing reaches ${sample.provider}, and its changes stay in this app.`,
+      },
+    );
+    catalog.splice(catalog.indexOf(entry) + 1, 0, sampleEntry);
+  }
+
+  // Sample files testers download during a session (moderator/sessions/*.md
+  // name them; the page links them): catalog.<base-domain>/samples/<app>/.
+  const SAMPLE_FILES = {
+    money: resolve(repo, 'integrations/money/fixtures/usertest'),
+  };
+
+  for (const [app, dir] of Object.entries(SAMPLE_FILES)) {
+    mkdirSync(resolve(out, 'samples', app), { recursive: true });
+    for (const name of readdirSync(dir))
+      if (/\.(mt940|xml)$/.test(name))
+        copyFileSync(resolve(dir, name), resolve(out, 'samples', app, name));
+  }
+
+  // Every drive app, Pets included: enabled, and shown without the toggle.
+  for (const entry of catalog) {
+    if (!entry[I + 'app-module']) continue;
+    entry[I + 'enabled'] = true;
+    entry[I + 'experimental'] = false;
+  }
+
+  mkdirSync(out, { recursive: true });
+  writeFileSync(
+    resolve(out, 'catalog.json'),
+    JSON.stringify(catalog, null, 2) + '\n',
   );
-  catalog.splice(catalog.indexOf(entry) + 1, 0, sampleEntry);
+
+  return { catalog, modules };
 }
 
-// Sample files testers download during a session (moderator/sessions/*.md
-// name them; the page links them): catalog.<base-domain>/samples/<app>/.
-const SAMPLE_FILES = {
-  money: resolve(repo, 'integrations/money/fixtures/usertest'),
-};
-for (const [app, dir] of Object.entries(SAMPLE_FILES)) {
-  mkdirSync(resolve(out, 'samples', app), { recursive: true });
-  for (const name of readdirSync(dir))
-    if (/\.(mt940|xml)$/.test(name))
-      copyFileSync(resolve(dir, name), resolve(out, 'samples', app, name));
+/** builds.json as an object, or {} before the first record. */
+export const readBuilds = (file = BUILDS) =>
+  existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {};
+
+/**
+ * `modules` (from buildCatalog) against `recorded` (builds.json). `changed`:
+ * a version whose build differs from what it was recorded with, the
+ * forgotten bump. `unrecorded`: a version with no hash yet.
+ */
+export function versionProblems(modules, recorded) {
+  const changed = [];
+  const unrecorded = [];
+
+  for (const { key, sha256: hash } of modules) {
+    const [id, version] = key.split('/');
+    const app = id.endsWith('-sample') ? id.slice(0, -'-sample'.length) : id;
+    const bump =
+      app === id
+        ? `bump VERSIONS['${id}']`
+        : `bump VERSIONS['${app}'] if that app changed, else SAMPLE_VERSION,`;
+    if (!Object.hasOwn(recorded, key))
+      unrecorded.push(
+        `${key} is not in usertest/builds.json: run node usertest/catalog.mjs --record`,
+      );
+    else if (recorded[key] !== hash)
+      changed.push(
+        `${id}: the build differs from what ${version} was recorded with (usertest/builds.json): ${bump} in usertest/catalog.mjs, then run node usertest/catalog.mjs --record`,
+      );
+  }
+
+  return { changed, unrecorded };
 }
 
-// Every drive app, Pets included: enabled, and shown without the toggle.
-for (const entry of catalog) {
-  if (!entry[I + 'app-module']) continue;
-  entry[I + 'enabled'] = true;
-  entry[I + 'experimental'] = false;
+/** builds.json for exactly `modules`, sorted by key. */
+export const recordedFor = modules =>
+  Object.fromEntries(
+    modules
+      .map(({ key, sha256: hash }) => [key, hash])
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
+
+/**
+ * Why this build may not run without a log URL, or undefined: an app in it
+ * reports to the collector, USERTEST_LOG_URL is unset, and neither
+ * `--no-log` nor `--record` says an unlogged build is meant.
+ */
+export function logProblem(env, argv) {
+  if (env.USERTEST_LOG_URL)
+    return LOG_URL.test(env.USERTEST_LOG_URL)
+      ? undefined
+      : `USERTEST_LOG_URL is ${JSON.stringify(env.USERTEST_LOG_URL)}; it must look like https://<host>/log (the collector's endpoint).`;
+  if (argv.includes('--no-log') || argv.includes('--record')) return undefined;
+  const reporting = Object.entries(APPS)
+    .filter(([, app]) => app.report)
+    .map(([id]) => id);
+  if (!reporting.length) return undefined;
+
+  return (
+    `USERTEST_LOG_URL is not set, so ${reporting.join(', ')} would be built without the collector prelude, ` +
+    'and deploying that would replace the logged module under the same version. ' +
+    'Set it (USERTEST_LOG_URL=https://logs.<base-domain>/log), or pass --no-log for a build that is not deployed.'
+  );
 }
 
-mkdirSync(out, { recursive: true });
-writeFileSync(
-  resolve(out, 'catalog.json'),
-  JSON.stringify(catalog, null, 2) + '\n',
-);
-for (const entry of catalog)
-  if (entry[I + 'app-module'])
-    console.log(`${entry[A + 'shortname']} ${entry[I + 'version']}`);
+/** Removes `out`'s catalog.json and UNLOGGED marker, if any. */
+export function clearOut(out) {
+  rmSync(resolve(out, 'catalog.json'), { force: true });
+  rmSync(resolve(out, 'UNLOGGED'), { force: true });
+}
+
+/**
+ * Marks `out` UNLOGGED when the build will have no collector prelude, before
+ * any catalog.json exists there, so no moment has an unmarked unlogged
+ * catalog on disk: check-live.mjs and deploy.sh refuse a marked one.
+ */
+export function markOut(out, env) {
+  if (env.USERTEST_LOG_URL) return;
+  mkdirSync(out, { recursive: true });
+  writeFileSync(
+    resolve(out, 'UNLOGGED'),
+    'Built without USERTEST_LOG_URL (catalog.mjs --no-log or --record): not for deploying.\n',
+  );
+}
+
+async function main() {
+  const argv = process.argv.slice(2);
+  const recording = argv.includes('--record');
+  const out = resolve(
+    argv.find(a => !a.startsWith('--')) ?? resolve(here, 'out'),
+  );
+  const unlogged = logProblem(process.env, argv);
+
+  const clear = () => clearOut(out);
+  // Whatever happens below (a refusal, a failed install or build), no
+  // catalog.json from an earlier build stays to be deployed by mistake.
+  clear();
+
+  if (unlogged) {
+    console.error(`catalog: ${unlogged}`);
+    process.exit(2);
+  }
+
+  markOut(out, process.env);
+
+  if (!argv.includes('--no-install')) installMissing(dependencyDirs());
+  let built;
+
+  try {
+    built = await buildCatalog(out, { logUrl: process.env.USERTEST_LOG_URL });
+  } catch (error) {
+    clear();
+    throw error;
+  }
+
+  const { catalog, modules } = built;
+  const { changed, unrecorded } = versionProblems(modules, readBuilds());
+
+  if (changed.length) {
+    // Never leave a catalog that serves new bytes under an old version.
+    rmSync(resolve(out, 'catalog.json'), { force: true });
+    for (const line of changed) console.error(`catalog: ${line}`);
+    process.exit(1);
+  }
+
+  if (recording) {
+    writeFileSync(BUILDS, `${JSON.stringify(recordedFor(modules), null, 2)}\n`);
+    console.info(
+      `catalog: recorded ${modules.length} build(s) in usertest/builds.json`,
+    );
+
+    if (!process.env.USERTEST_LOG_URL && !argv.includes('--no-log')) {
+      clear();
+      console.warn(
+        'catalog: catalog.json removed: built without USERTEST_LOG_URL, so not for deploying. Rebuild with it to deploy.',
+      );
+    } else if (!process.env.USERTEST_LOG_URL)
+      console.warn(
+        'catalog: catalog.json kept with out/UNLOGGED (--record --no-log): check-live.mjs and deploy.sh refuse it. Rebuild with USERTEST_LOG_URL to deploy.',
+      );
+  } else for (const line of unrecorded) console.warn(`catalog: ${line}`);
+
+  for (const entry of catalog)
+    if (entry[I + 'app-module'])
+      console.info(`${entry[A + 'shortname']} ${entry[I + 'version']}`);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  await main();

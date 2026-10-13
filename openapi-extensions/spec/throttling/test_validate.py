@@ -235,4 +235,114 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(result["meaning"], "quotaExhausted")
 
 
+class BodyFieldTests(unittest.TestCase):
+    """0.3.0: roles read from the JSON body (Todoist's error_extra.retry_after)."""
+
+    def document(self):
+        return {"x-throttling": {"bodyFields": {"error_extra.retry_after": {"role": "retryAfter", "unit": "deltaSeconds"}}}}
+
+    def test_validation(self):
+        validate(self.document())
+        for mutate in (lambda r: r.update(bodyFields={}),
+                       lambda r: r["bodyFields"]["error_extra.retry_after"].pop("unit"),
+                       lambda r: r["bodyFields"].update({"other": {"role": "retryAfter", "unit": "deltaSeconds"}}),
+                       lambda r: r["bodyFields"]["error_extra.retry_after"].update(role="wait")):
+            d = self.document()
+            mutate(d["x-throttling"])
+            with self.assertRaises(ValueError):
+                validate(d)
+        # Body paths are case-sensitive: these are two names (but each role only once).
+        d = self.document()
+        d["x-throttling"]["bodyFields"]["Error_extra.limit"] = {"role": "limit"}
+        validate(d)
+
+    def test_retry_after_from_the_body(self):
+        body = {"error": "Too many requests", "http_code": 429, "error_extra": {"retry_after": 3, "event_id": "x"}}
+        self.assertEqual(classify(self.document(), 429, {}, body, NOW), {"meaning": "throttled", "bucket": None, "retryAt": NOW + 3})
+        # A string digit sequence parses too; booleans, floats and objects do not.
+        body["error_extra"]["retry_after"] = "7"
+        self.assertEqual(classify(self.document(), 429, {}, body, NOW)["retryAt"], NOW + 7)
+        for value in (True, 3.5, {"s": 3}, None):
+            body["error_extra"]["retry_after"] = value
+            self.assertIsNone(classify(self.document(), 429, {}, body, NOW)["retryAt"])
+        # A non-throttling response's body field says nothing.
+        body["error_extra"]["retry_after"] = 3
+        self.assertIsNone(classify(self.document(), 404, {}, body, NOW))
+
+    def test_header_and_body_for_one_role(self):
+        d = self.document()
+        d["x-throttling"]["headers"] = {"Retry-After": {"role": "retryAfter", "unit": "deltaSecondsOrHttpDate"}}
+        body = {"error_extra": {"retry_after": 3}}
+        self.assertEqual(classify(d, 429, {"Retry-After": "10"}, body, NOW)["retryAt"], NOW + 10)  # the later time
+        self.assertEqual(classify(d, 429, {"Retry-After": "1"}, body, NOW)["retryAt"], NOW + 3)
+        # remaining: either value at 0 means exhausted.
+        d = {"x-throttling": {"headers": {"X-Remaining": {"role": "remaining"}, "X-Reset": {"role": "reset", "unit": "deltaSeconds"}},
+                              "bodyFields": {"remaining": {"role": "remaining"}}}}
+        self.assertEqual(classify(d, 429, {"X-Remaining": "5", "X-Reset": "60"}, {"remaining": 0}, NOW)["retryAt"], NOW + 60)
+        self.assertEqual(classify(d, 429, {"X-Remaining": "5", "X-Reset": "60"}, {"remaining": 2}, NOW)["retryAt"], None)
+        self.assertEqual(classify(d, 429, {"X-Remaining": "x", "X-Reset": "60"}, {"remaining": 0}, NOW)["retryAt"], NOW + 60)
+
+
+class BodyFieldFollowUpTests(unittest.TestCase):
+    """#454 follow-ups: dot-paths, text forms, zero waits, fallbacks."""
+
+    def document(self, min_delay=None):
+        d = example("body-fields.yaml")
+        if min_delay:
+            d["x-throttling"]["signals"][0]["minDelaySeconds"] = min_delay
+        return d
+
+    def test_example_is_valid(self):
+        validate(self.document())
+
+    def test_invalid_dot_paths(self):
+        for path in ("a..b", ".a", "a."):
+            d = self.document()
+            d["x-throttling"]["bodyFields"] = {path: {"role": "retryAfter", "unit": "deltaSeconds"}}
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                validate(d)
+
+    def test_text_forms(self):
+        for value, expected in ((" 3 ", NOW + 3), (3.0, NOW + 3), (3.5, None), (-1.0, None), ("", None)):
+            body = {"error_extra": {"retry_after": value}}
+            with self.subTest(value=value):
+                self.assertEqual(classify(self.document(), 429, {}, body, NOW)["retryAt"], expected)
+
+    def test_whitespace_and_large_integers(self):
+        for value, expected in (("\t3\r\n", NOW + 3), ("\u00a03", None), ("3\u3000", None),
+                                (float(2 ** 53 - 1), NOW + 2 ** 53 - 1), (1e21, None), (1e300, None),
+                                (2 ** 53 - 1, NOW + 2 ** 53 - 1), (2 ** 53, None), (10 ** 400, None),
+                                ("9" * 400, None), ("9" * 5000, None)):
+            body = {"error_extra": {"retry_after": value}}
+            with self.subTest(value=str(value)[:20]):
+                self.assertEqual(classify(self.document(), 429, {}, body, NOW)["retryAt"], expected)
+        d = {"x-throttling": {"headers": {"Retry-After": {"role": "retryAfter", "unit": "deltaSeconds"}}}}
+        self.assertEqual(classify(d, 429, {"Retry-After": " \t5\t "}, None, NOW)["retryAt"], NOW + 5)
+        self.assertIsNone(classify(d, 429, {"Retry-After": "\u00a05"}, None, NOW)["retryAt"])
+        self.assertIsNone(classify(d, 429, {"Retry-After": "1" + "0" * 400}, None, NOW)["retryAt"])
+
+    def test_a_zero_header_wait_counts_beside_a_zero_body_wait(self):
+        # Ignored by source, not by value: the header's Retry-After: 0 is a wait of 0, not absent.
+        d = self.document(min_delay=30)
+        d["x-throttling"]["headers"] = {"Retry-After": {"role": "retryAfter", "unit": "deltaSeconds"}}
+        body = {"error_extra": {"retry_after": 0}}
+        self.assertEqual(classify(d, 429, {"Retry-After": "0"}, body, NOW)["retryAt"], NOW)
+        self.assertEqual(classify(d, 429, {}, body, NOW)["retryAt"], NOW + 30)
+        # The #472 review's case: the same value and unit on both sides.
+        d = {"x-throttling": {"headers": {"Retry-After": {"role": "retryAfter", "unit": "deltaSecondsOrHttpDate"}},
+                              "bodyFields": {"w": {"role": "retryAfter", "unit": "deltaSecondsOrHttpDate"}},
+                              "signals": [{"status": [429], "meaning": "throttled", "minDelaySeconds": 30}]}}
+        validate(d)
+        self.assertEqual(classify(d, 429, {"Retry-After": "0"}, {"w": 0}, NOW)["retryAt"], NOW)
+        self.assertEqual(classify(d, 429, {}, {"w": 0}, NOW)["retryAt"], NOW + 30)
+
+    def test_a_zero_body_wait_does_not_suppress_the_fallback(self):
+        body = {"error_extra": {"retry_after": 0}}
+        self.assertEqual(classify(self.document(min_delay=30), 429, {}, body, NOW)["retryAt"], NOW + 30)
+        self.assertIsNone(classify(self.document(), 429, {}, body, NOW)["retryAt"])
+        # A positive body wait shorter than minDelaySeconds is used as it is: a fallback, not a floor.
+        body = {"error_extra": {"retry_after": 5}}
+        self.assertEqual(classify(self.document(min_delay=30), 429, {}, body, NOW)["retryAt"], NOW + 5)
+
+
 if __name__ == "__main__": unittest.main()

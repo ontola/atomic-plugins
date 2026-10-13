@@ -233,7 +233,7 @@ These extensions do not authorize HTTP requests or loosen origin/security checks
 
 ## Reference implementation
 
-[`validate.py`](validate.py) checks the `x-time-zone` rules of §7 and the shape of `x-filter` (a JSON Pointer `field` and one of the five operators) in a whole document, including Parameter Objects under `components.parameters`. It also holds `wall_clock_param` and `covered_span`, a reference implementation of the client steps under "Parameter time zones". It finds Parameter Objects under `paths`, `webhooks`, `components.pathItems`, callbacks and `components.parameters`, resolves `$ref`'d schemas and `content` parameters' schemas for the date-time check, and checks the zone operation of a `components.parameters` entry that no operation uses for existence and method only. From the repository root:
+[`validate.py`](validate.py) checks the `x-time-zone` rules of §7 and the shape of `x-filter` (a JSON Pointer `field` and one of the five operators) in a whole document, including Parameter Objects under `components.parameters`. It also holds `wall_clock_param` and `covered_span`, a reference implementation of the client steps under "Parameter time zones". It finds Parameter Objects under `paths`, `webhooks`, `components.pathItems`, callbacks and `components.parameters`, resolves `$ref`'d schemas, `content` parameters' schemas and the members of `allOf`, `oneOf` and `anyOf` for the date-time check, checks parameters that a path item lists but an operation shadows, or that a path item without operations lists, and checks the zone operation of a `components.parameters` entry that no operation uses for existence and method only. From the repository root:
 
 ```sh
 python3 -m venv /tmp/filtering-venv

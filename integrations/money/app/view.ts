@@ -28,6 +28,8 @@ import {
 import { h, icons } from './ui/dom.js';
 import { importSheet, importStatus, type ImportActions } from './viewImport.js';
 import { imports, type ImportsActions } from './viewImports.js';
+import { renderSyncStatus } from '../../sync-status/card.js';
+import { syncStatusFor } from './status.js';
 
 export interface Actions extends LedgerActions, ImportActions, ImportsActions {
   toggleHelp(open?: boolean): void;
@@ -53,7 +55,9 @@ export function status(ctx: Ctx): { state: PillState; text: string } {
           : 'Loading…',
       };
     case 'error':
-      return { state: 'error', text: "Couldn't load" };
+      // The status card's headline word for the same failure ("Sync
+      // failed …"); the card's error text says what could not be loaded.
+      return { state: 'error', text: 'Sync failed' };
     case 'empty':
       return { state: 'idle', text: 'No transactions yet' };
     case 'populated':
@@ -150,6 +154,21 @@ function body(ctx: Ctx, actions: Actions): Node[] {
   return transactions(ctx, actions);
 }
 
+/**
+ * The shared sync-status card (Q-084), first on the Transactions and Imports
+ * tabs: `status.ts` maps the state onto it. Not on Sources, which lists
+ * where transactions can come from rather than the table's data.
+ */
+function statusCard(ctx: Ctx, actions: Actions): HTMLElement {
+  const now = ctx.now ?? Date.now();
+
+  return renderSyncStatus(
+    document,
+    syncStatusFor({ state: ctx.state, now, onOpenRow: actions.openRow }),
+    { now, locale: ctx.locale, buttonClass: 'pl-btn' },
+  );
+}
+
 export function renderApp(ctx: Ctx, actions: Actions): Node[] {
   const { state, locale } = ctx;
   const pillState = status(ctx);
@@ -187,6 +206,7 @@ export function renderApp(ctx: Ctx, actions: Actions): Node[] {
       actions.setTab,
       'Money views',
     ),
+    ...(state.tab === 'sources' ? [] : [statusCard(ctx, actions)]),
     ...body(ctx, actions),
     ...(state.importing ? importSheet(ctx, state.importing, actions) : []),
     ...(state.help ? [shortcuts(actions)] : []),

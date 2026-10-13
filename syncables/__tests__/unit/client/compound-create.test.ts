@@ -1,0 +1,759 @@
+// @wc-ignore-file
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createApiClient,
+  InMemoryStorageAdapter,
+  type OpenApiDocument,
+  type TransportRequest,
+  type TransportResponse,
+} from '../../../src/browser.js';
+import { compoundDocument } from '../../fixtures/compound-create.js';
+
+// CRUD Causality 0.5.0 compound creates (§4.7.2) in the client, on a
+// GitHub-issues-shaped document after the held overlay: the create sends
+// `labels`, which GitHub silently drops without push access, and
+// `issues-add-labels` adds what is missing; `assignees` is `create: omit`.
+// Transports and data are invented.
+
+const json = (value: unknown, status = 200): TransportResponse => ({
+  status,
+  headers: {},
+  body: value === undefined ? '' : JSON.stringify(value),
+});
+
+interface Issue {
+  number: number;
+  title: string;
+  labels: { name: string }[];
+  assignees: { login: string }[];
+}
+
+/**
+ * A fake GitHub: the create applies `labels` only with `pushAccess`; the
+ * follow-ups answer as `labelsAnswer`/`assigneesAnswer` say (status), and
+ * apply only on a 2xx. Every request is recorded as `METHOD path`.
+ */
+function github(
+  options: {
+    pushAccess?: boolean;
+    labelsAnswer?: () => number | TransportResponse;
+    assigneesAnswer?: () => number;
+    /** Whether the list read returns the issues (default true). */
+    listed?: () => boolean;
+    /** The status of an item GET (default: the issue, or 404). */
+    itemStatus?: () => number;
+  } = {},
+): {
+  issues: Map<number, Issue>;
+  requests: { line: string; body?: unknown }[];
+  transport: (r: TransportRequest) => Promise<TransportResponse>;
+} {
+  const issues = new Map<number, Issue>();
+  const requests: { line: string; body?: unknown }[] = [];
+  let next = 7;
+  return {
+    issues,
+    requests,
+    transport: async (r): Promise<TransportResponse> => {
+      const path = r.url.pathname;
+      const body = r.body ? JSON.parse(r.body) : undefined;
+      requests.push({ line: `${r.method} ${path}`, body });
+      if (r.method === 'GET' && path === '/repos/o/r/issues')
+        return json(options.listed?.() === false ? [] : [...issues.values()]);
+      const read = /^\/repos\/o\/r\/issues\/(\d+)$/.exec(path);
+      if (r.method === 'GET' && read) {
+        const status = options.itemStatus?.();
+        if (status !== undefined) return json({ message: 'x' }, status);
+        const issue = issues.get(Number(read[1]));
+        return issue ? json(issue) : json({ message: 'not found' }, 404);
+      }
+      if (r.method === 'POST' && path === '/repos/o/r/issues') {
+        const issue: Issue = {
+          number: next++,
+          title: String(body.title),
+          labels: options.pushAccess
+            ? (body.labels ?? []).map((name: string) => ({ name }))
+            : [],
+          assignees: [],
+        };
+        issues.set(issue.number, issue);
+        return json(issue, 201);
+      }
+      const item = /^\/repos\/o\/r\/issues\/(\d+)$/.exec(path);
+      if (r.method === 'PATCH' && item) {
+        const issue = issues.get(Number(item[1]))!;
+        issue.title = String(body.title);
+        return json(issue);
+      }
+      const labels = /^\/repos\/o\/r\/issues\/(\d+)\/labels$/.exec(path);
+      if (r.method === 'POST' && labels) {
+        const answer = options.labelsAnswer?.() ?? 200;
+        if (typeof answer !== 'number') return answer;
+        const status = answer;
+        if (status >= 300) return json({ message: 'no' }, status);
+        const issue = issues.get(Number(labels[1]))!;
+        for (const name of body.labels as string[]) issue.labels.push({ name });
+        return json(issue.labels);
+      }
+      const assignees = /^\/repos\/o\/r\/issues\/(\d+)\/assignees$/.exec(path);
+      if (r.method === 'POST' && assignees) {
+        const status = options.assigneesAnswer?.() ?? 201;
+        if (status >= 300) return json({ message: 'no' }, status);
+        const issue = issues.get(Number(assignees[1]))!;
+        for (const login of body.assignees as string[])
+          issue.assignees.push({ login });
+        return json(issue, 201);
+      }
+      return json({ message: 'not found' }, 404);
+    },
+  };
+}
+
+const settle = (ms = 30): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+function client(
+  fake: ReturnType<typeof github>,
+  document: OpenApiDocument = compoundDocument(),
+  storage = new InMemoryStorageAdapter(),
+): ReturnType<typeof createApiClient> {
+  return createApiClient(document, {
+    transport: fake.transport,
+    constants: { owner: 'o', repo: 'r' },
+    retry: { baseDelayMs: 5, maxDelayMs: 10 },
+    storage,
+  });
+}
+
+const lines = (fake: ReturnType<typeof github>): string[] =>
+  fake.requests.map((r) => r.line).filter((l) => !l.startsWith('GET'));
+
+describe('compound creates (CRUD Causality 0.5.0 §4.7)', () => {
+  it('sends no follow-up when the create applied the field (§4.7.2 step 4)', async () => {
+    const fake = github({ pushAccess: true });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug', 'ui'] });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(lines(fake)).toEqual(['POST /repos/o/r/issues']);
+    expect(fake.requests[0]!.body).toEqual({
+      title: 'Bug',
+      labels: ['bug', 'ui'],
+    });
+  });
+
+  it('adds only the labels the create dropped, through the follow-up (include, itemKey)', async () => {
+    const fake = github({ pushAccess: false });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug', 'ui'] });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(lines(fake)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+    ]);
+    expect(fake.requests[1]!.body).toEqual({ labels: ['bug', 'ui'] });
+    expect(fake.issues.get(7)!.labels).toEqual([
+      { name: 'bug' },
+      { name: 'ui' },
+    ]);
+    // The record is filed under the server's identity.
+    expect(await c.get('issues', '7')).toMatchObject({ number: 7 });
+  });
+
+  it('leaves an omit field out of the create body and sets it with its follow-up', async () => {
+    const fake = github({ pushAccess: true });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', assignees: ['ada'] });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(fake.requests[0]!.body).toEqual({ title: 'Bug' });
+    expect(lines(fake)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/assignees',
+    ]);
+    expect(fake.requests[1]!.body).toEqual({ assignees: ['ada'] });
+  });
+
+  it('a refused follow-up leaves the create partly applied: never sent again, later follow-ups not sent (§4.7.2 step 6)', async () => {
+    const fake = github({ pushAccess: false, labelsAnswer: () => 403 });
+    const c = client(fake);
+    await c.create('issues', {
+      title: 'Bug',
+      labels: ['bug'],
+      assignees: ['ada'],
+    });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites().map((w) => w.state)).toEqual([
+        'failed',
+        'failed',
+      ]),
+    );
+    expect(lines(fake)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+    ]);
+    expect(c.pendingWrites()).toMatchObject([
+      {
+        id: '7',
+        type: 'update',
+        lastStatus: 403,
+        followUp: {
+          operation: 'issues-add-labels',
+          field: 'labels',
+          reason: 'refused',
+        },
+      },
+      {
+        id: '7',
+        type: 'update',
+        followUp: {
+          operation: 'issues-add-assignees',
+          field: 'assignees',
+          reason: 'notSent',
+        },
+      },
+    ]);
+    // The issue exists and is bound; nothing creates it again.
+    expect(fake.issues.size).toBe(1);
+    await c.sync();
+    await settle();
+    expect(lines(fake)).toHaveLength(2);
+  });
+
+  it('a 403 on a follow-up refuses that follow-up, not the credentials: no auth block, writes queued after the create go on', async () => {
+    const fake = github({ pushAccess: false, labelsAnswer: () => 403 });
+    const c = client(fake);
+    const created = await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    // Queued behind the create, so after its follow-ups.
+    await c.update('issues', String(created['number']), {
+      title: 'Bug, retitled',
+    });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { id: '7', state: 'failed', followUp: { reason: 'refused' } },
+      ]),
+    );
+    expect(c.authBlocked()).toBeUndefined();
+    expect(lines(fake)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+      'PATCH /repos/o/r/issues/7',
+    ]);
+  });
+
+  it('a later settled update that sets the field supersedes the refused follow-up', async () => {
+    const fake = github({ pushAccess: false, labelsAnswer: () => 403 });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'refused' } },
+      ]),
+    );
+    await c.update('issues', '7', { labels: [] });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+  });
+
+  it('retrying a refused follow-up does not overwrite a newer queued app edit of its field (#480 B1)', async () => {
+    let patch = 503;
+    const fake = github({ pushAccess: false, labelsAnswer: () => 403 });
+    const inner = fake.transport;
+    fake.transport = async (r): Promise<TransportResponse> =>
+      r.method === 'PATCH' && patch >= 300
+        ? json({ message: 'busy' }, patch)
+        : inner(r);
+    const c = createApiClient(compoundDocument(), {
+      transport: fake.transport,
+      constants: { owner: 'o', repo: 'r' },
+      retry: { baseDelayMs: 60_000 },
+    });
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'refused' } },
+      ]),
+    );
+    // The app sets the labels itself; its PATCH waits between retries.
+    await c.update('issues', '7', { labels: ['ui'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'refused' } },
+        { type: 'update', state: 'pending', attempts: 1 },
+      ]),
+    );
+    await expect(
+      c.resolveWrite('issues', '7', { action: 'retry' }),
+    ).rejects.toThrow(/superseded by queued writes/);
+    expect(lines(fake).filter((l) => l.endsWith('/labels'))).toHaveLength(1);
+    patch = 200;
+  });
+
+  it('refuses retry of a follow-up whose outcome is unknown: it is read back first (#480 S1)', async () => {
+    const fake = github({ pushAccess: false, labelsAnswer: () => 502 });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'unknown' }, awaitingRefresh: true },
+      ]),
+    );
+    await expect(
+      c.resolveWrite('issues', '7', { action: 'retry' }),
+    ).rejects.toThrow(/unknown outcome and waits for a read/);
+    expect(lines(fake)).toHaveLength(2);
+  });
+
+  it('retries a rate-limit 403 on a follow-up instead of refusing it', async () => {
+    let calls = 0;
+    const fake = github({
+      pushAccess: false,
+      labelsAnswer: () =>
+        ++calls === 1
+          ? {
+              status: 403,
+              headers: { 'x-ratelimit-remaining': '0' },
+              body: '{"message":"API rate limit exceeded"}',
+            }
+          : 200,
+    });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(lines(fake).filter((l) => l.endsWith('/labels'))).toHaveLength(2);
+    expect(c.authBlocked()).toBeUndefined();
+  });
+
+  it('retrying a refused follow-up re-queues its notSent siblings, in order', async () => {
+    let answer = 403;
+    const fake = github({ pushAccess: false, labelsAnswer: () => answer });
+    const c = client(fake);
+    await c.create('issues', {
+      title: 'Bug',
+      labels: ['bug'],
+      assignees: ['ada'],
+    });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'refused' } },
+        { followUp: { reason: 'notSent' } },
+      ]),
+    );
+    answer = 200;
+    await c.resolveWrite('issues', '7', { action: 'retry' });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(lines(fake)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+      'POST /repos/o/r/issues/7/labels',
+      'POST /repos/o/r/issues/7/assignees',
+    ]);
+  });
+
+  it('an unknown follow-up failed by a missing record is still read back before a retry sends it (#480 re-review S1)', async () => {
+    let listed = true;
+    let itemStatus: number | undefined;
+    let labelsCalls = 0;
+    const fake = github({
+      pushAccess: false,
+      listed: () => listed,
+      itemStatus: () => itemStatus as number,
+      labelsAnswer: () => {
+        labelsCalls += 1;
+        // Applied, then the answer was lost.
+        fake.issues.get(7)!.labels.push({ name: 'bug' });
+        return 502;
+      },
+    });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'unknown' }, awaitingRefresh: true },
+      ]),
+    );
+    // The list no longer returns the issue and its read fails: the
+    // follow-up fails as a missing record, keeping reason unknown.
+    listed = false;
+    itemStatus = 500;
+    await c.sync().catch(() => {});
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { state: 'failed', followUp: { reason: 'unknown' } },
+      ]),
+    );
+    await c.resolveWrite('issues', '7', { action: 'retry' });
+    await settle(30);
+    expect(c.pendingWrites()).toMatchObject([
+      {
+        state: 'pending',
+        awaitingRefresh: true,
+        followUp: { reason: 'unknown' },
+      },
+    ]);
+    expect(labelsCalls).toBe(1);
+    // The read shows the label: settled, never applied twice.
+    listed = true;
+    itemStatus = undefined;
+    await c.sync();
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(labelsCalls).toBe(1);
+    expect(fake.issues.get(7)!.labels).toEqual([{ name: 'bug' }]);
+  });
+
+  it('puts the follow-ups ahead of writes already queued under the server id (#480 re-review)', async () => {
+    let releaseCreate: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (releaseCreate = resolve));
+    let patches = 0;
+    const fake = github({ pushAccess: false });
+    const inner = fake.transport;
+    fake.transport = async (r): Promise<TransportResponse> => {
+      if (r.method === 'POST' && r.url.pathname === '/repos/o/r/issues') {
+        const answer = await inner(r); // the issue exists now...
+        await gate; // ...but the answer is held
+        return answer;
+      }
+      if (r.method === 'PATCH' && ++patches === 1) {
+        fake.requests.push({ line: 'PATCH /repos/o/r/issues/7 (503)' });
+        return json({ message: 'busy' }, 503);
+      }
+      return inner(r);
+    };
+    const c = createApiClient(compoundDocument(), {
+      transport: fake.transport,
+      constants: { owner: 'o', repo: 'r' },
+      retry: { baseDelayMs: 200, maxDelayMs: 200 },
+    });
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() => expect(fake.issues.size).toBe(1));
+    // A read shows issue 7 before the create's answer; the app edits it
+    // twice, and the first PATCH waits between retries.
+    await c.sync();
+    await c.update('issues', '7', { title: 'First' });
+    await vi.waitFor(() => expect(patches).toBe(1));
+    await c.update('issues', '7', { title: 'Second' });
+    releaseCreate();
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]), {
+      timeout: 3000,
+    });
+    const sent = lines(fake).filter((l) => !l.includes('(503)'));
+    // The head that was between retries goes first, then the follow-up,
+    // then the edit queued behind it.
+    expect(sent.slice(1)).toEqual([
+      'PATCH /repos/o/r/issues/7',
+      'POST /repos/o/r/issues/7/labels',
+      'PATCH /repos/o/r/issues/7',
+    ]);
+  });
+
+  it('a retry of another failed write of the record leaves a queued unknown follow-up waiting for its read (#480 S1, queued branch)', async () => {
+    let labelsCalls = 0;
+    const fake = github({
+      pushAccess: false,
+      labelsAnswer: () => {
+        labelsCalls += 1;
+        return 502;
+      },
+    });
+    const storage = new InMemoryStorageAdapter();
+    const first = client(fake, compoundDocument(), storage);
+    const created = await first.create('issues', {
+      title: 'Bug',
+      labels: ['bug'],
+    });
+    await first.update('issues', String(created['number']), {
+      title: 'Retitled',
+    });
+    await vi.waitFor(() =>
+      expect(first.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'unknown' }, awaitingRefresh: true },
+        { type: 'update', state: 'pending' },
+      ]),
+    );
+    // A stored state where the record has a failed write and the unknown
+    // follow-up queued: the app's edit is moved to the failed writes.
+    const outbox = structuredClone(
+      (await storage.get('syncables:outbox', 'outbox')) as {
+        records: {
+          failed: Record<string, unknown>[];
+          queue: Record<string, unknown>[];
+        }[];
+      },
+    );
+    const entry = outbox.records[0]!;
+    const edit = entry.queue.pop()!;
+    entry.failed.push({
+      ...edit,
+      state: 'failed',
+      lastStatus: 422,
+      lastError: 'refused',
+      seq: -1,
+    });
+    const copy = new InMemoryStorageAdapter();
+    await copy.put('syncables:outbox', 'outbox', outbox);
+    const second = client(fake, compoundDocument(), copy);
+    await second.ready();
+    expect(second.pendingWrites()).toMatchObject([
+      { type: 'update', state: 'failed' },
+      { followUp: { reason: 'unknown' }, awaitingRefresh: true },
+    ]);
+    // Retrying the failed edit must not release the follow-up unread.
+    await second.resolveWrite('issues', '7', { action: 'retry' });
+    await settle(30);
+    expect(second.pendingWrites().find((w) => w.followUp)).toMatchObject({
+      followUp: { reason: 'unknown' },
+      awaitingRefresh: true,
+    });
+    expect(labelsCalls).toBe(1);
+  });
+
+  it('a 401 on a follow-up still goes through the auth handling', async () => {
+    const fake = github({ pushAccess: false, labelsAnswer: () => 401 });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.authBlocked()).toMatchObject({ status: 401 }),
+    );
+    expect(c.pendingWrites()).toMatchObject([
+      { state: 'blocked', followUp: { field: 'labels' } },
+    ]);
+  });
+
+  it("an app's classifyWriteFailure still decides a follow-up's 403", async () => {
+    const fake = github({ pushAccess: false, labelsAnswer: () => 403 });
+    const seen: unknown[] = [];
+    const c = createApiClient(compoundDocument(), {
+      transport: fake.transport,
+      constants: { owner: 'o', repo: 'r' },
+      retry: { baseDelayMs: 5, maxDelayMs: 10 },
+      classifyWriteFailure: (failure) => {
+        seen.push({ method: failure.method, followUp: failure.followUp });
+        return 'auth';
+      },
+    });
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.authBlocked()).toMatchObject({ status: 403 }),
+    );
+    expect(seen).toContainEqual({
+      method: 'POST',
+      followUp: { operation: 'issues-add-labels', field: 'labels' },
+    });
+  });
+
+  it('retrying a refused follow-up sends only what is still missing', async () => {
+    let answer = 422;
+    const fake = github({ pushAccess: false, labelsAnswer: () => answer });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([{ state: 'failed' }]),
+    );
+    answer = 200;
+    await c.resolveWrite('issues', '7', { action: 'retry' });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(lines(fake)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+      'POST /repos/o/r/issues/7/labels',
+    ]);
+  });
+
+  it('an unknown follow-up outcome waits for a read of the record, and is skipped when the read shows it applied', async () => {
+    const fake = github({
+      pushAccess: false,
+      labelsAnswer: () => {
+        // GitHub applied the labels, then the answer was lost.
+        const issue = fake.issues.get(7)!;
+        issue.labels.push({ name: 'bug' });
+        return 502;
+      },
+    });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        {
+          state: 'pending',
+          awaitingRefresh: true,
+          followUp: { reason: 'unknown' },
+        },
+      ]),
+    );
+    await settle(50);
+    expect(lines(fake)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+    ]);
+    // The read shows the label: settled, not sent again.
+    await c.sync();
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(lines(fake)).toHaveLength(2);
+  });
+
+  it('an unknown follow-up outcome is sent again after the read when the field is still missing', async () => {
+    let answer = 502;
+    const fake = github({ pushAccess: false, labelsAnswer: () => answer });
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'unknown' } },
+      ]),
+    );
+    answer = 200;
+    await c.sync();
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(lines(fake)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+      'POST /repos/o/r/issues/7/labels',
+    ]);
+  });
+
+  it('keeps a pending follow-up across a restart, stored as type followUp', async () => {
+    const storage = new InMemoryStorageAdapter();
+    let answer = 502;
+    const fake = github({ pushAccess: false, labelsAnswer: () => answer });
+    const first = client(fake, compoundDocument(), storage);
+    await first.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(first.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'unknown' } },
+      ]),
+    );
+    const outbox = (await storage.get('syncables:outbox', 'outbox')) as {
+      records: { writes: { type: string; followUp?: unknown }[] }[];
+    };
+    expect(JSON.stringify(outbox)).toContain('"type":"followUp"');
+    answer = 200;
+    const second = client(fake, compoundDocument(), storage);
+    await second.ready();
+    expect(second.pendingWrites()).toMatchObject([
+      {
+        id: '7',
+        type: 'update',
+        followUp: { operation: 'issues-add-labels', field: 'labels' },
+      },
+    ]);
+    await second.sync();
+    await vi.waitFor(() => expect(second.pendingWrites()).toEqual([]));
+    expect(fake.issues.get(7)!.labels).toEqual([{ name: 'bug' }]);
+  });
+
+  it('an uncertain create confirmed with resolveWrite reads the object back before any follow-up (§4.7.2 step 2)', async () => {
+    let createAnswer = 502;
+    const fake = github({ pushAccess: false });
+    const inner = fake.transport;
+    fake.transport = async (r): Promise<TransportResponse> => {
+      if (r.method === 'POST' && r.url.pathname === '/repos/o/r/issues') {
+        const answer = await inner(r); // the issue is made...
+        if (createAnswer >= 300) return json({}, createAnswer); // ...the answer lost
+        return answer;
+      }
+      return inner(r);
+    };
+    const c = client(fake);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { type: 'create', state: 'uncertain' },
+      ]),
+    );
+    createAnswer = 201;
+    const [pending] = c.pendingWrites();
+    await c.resolveWrite('issues', pending!.id, {
+      action: 'confirm',
+      id: '7',
+    });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        {
+          id: '7',
+          awaitingRefresh: true,
+          followUp: { field: 'labels' },
+        },
+      ]),
+    );
+    expect(lines(fake)).toEqual(['POST /repos/o/r/issues']);
+    await c.sync();
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(lines(fake)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+    ]);
+  });
+
+  it('a follow-up whose bound value resolves to nothing is not sent', async () => {
+    const doc = compoundDocument([
+      {
+        field: 'labels',
+        create: 'include',
+        itemKey: 'name',
+        operation: 'issues-add-labels',
+        bind: {
+          'path.issue_number': { from: 'created', field: 'node_id' },
+          'body.labels': { from: 'missing', field: 'labels' },
+        },
+      },
+    ]);
+    const fake = github({ pushAccess: false });
+    const c = client(fake, doc);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { state: 'failed', followUp: { reason: 'notSent' } },
+      ]),
+    );
+    expect(lines(fake)).toEqual(['POST /repos/o/r/issues']);
+  });
+
+  it('refuses a create whose followUps it cannot make, before any request', async () => {
+    const doc = compoundDocument([
+      {
+        field: 'labels',
+        create: 'include',
+        operation: 'issues-get',
+        bind: { 'body.labels': { from: 'missing', field: 'labels' } },
+      },
+    ]);
+    const fake = github();
+    const c = client(fake, doc);
+    await expect(
+      c.create('issues', { title: 'Bug', labels: ['bug'] }),
+    ).rejects.toThrow(/compound create this client cannot make/);
+    expect(fake.requests).toEqual([]);
+  });
+
+  it('a create without followUps behaves as before', async () => {
+    const doc = compoundDocument();
+    const create = (
+      doc.paths['/repos/{owner}/{repo}/issues']!.post as Record<
+        string,
+        Record<string, unknown>
+      >
+    )['x-crud']!;
+    delete create['followUps'];
+    const fake = github({ pushAccess: false });
+    const c = client(fake, doc);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    expect(lines(fake)).toEqual(['POST /repos/o/r/issues']);
+  });
+});
+
+describe('compound creates and Write Preconditions (#490 review)', () => {
+  it("does not apply the update operation's x-write-precondition to a follow-up", async () => {
+    const document = compoundDocument();
+    const patch = document.paths['/repos/{owner}/{repo}/issues/{issue_number}']!
+      .patch as Record<string, unknown>;
+    patch['x-write-precondition'] = { kind: 'readVerify' };
+    const fake = github({ pushAccess: false });
+    const c = client(fake, document);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    // No read of the issue before the follow-up: readVerify is the
+    // update's, and a follow-up is outside Write Preconditions' scope.
+    expect(fake.requests.map((r) => r.line)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+    ]);
+  });
+});

@@ -1,0 +1,101 @@
+openapi: 3.0.3
+info:
+  title: Illustrative range windows
+  version: 1.0.0
+  description: >
+    Synthetic, shaped like Moneybird's financial mutations list. The list has
+    no page parameter and answers at most 100 transactions; its filter takes a
+    closed day range such as period:20260101..20260131. A client reads a year
+    as day windows, halving any window whose answer holds 100 transactions.
+    The /entries operation reads a range from a pair of parameters instead.
+servers:
+  - url: https://api.example.com/v2
+components:
+  parameters:
+    ledgerId:
+      name: ledgerId
+      in: path
+      required: true
+      schema: { type: string }
+  paginationSchemes:
+    periodWindows:
+      type: rangeWindow
+      autoDetect: false
+      description: At most 100 transactions per answer; read a range as day windows.
+      window:
+        unit: day
+        format: basicDate
+        bounds: closed
+        cap: 100
+        field: /date
+        timeZone: Europe/Amsterdam
+      request:
+        queryParameters:
+          filter:
+            role: windowRange
+            template: "period:{start}..{end},state:all"
+    changedWindows:
+      type: rangeWindow
+      autoDetect: false
+      window:
+        unit: second
+        format: dateTime
+        bounds: halfOpen
+        cap: 500
+        field: /updatedAt
+      request:
+        queryParameters:
+          updatedFrom:
+            role: windowStart
+          updatedBefore:
+            role: windowEnd
+paths:
+  /ledgers/{ledgerId}/transactions:
+    parameters:
+      - $ref: '#/components/parameters/ledgerId'
+    get:
+      parameters:
+        - name: filter
+          in: query
+          description: Comma-separated key:value terms; period takes a closed day range YYYYMMDD..YYYYMMDD.
+          schema: { type: string, default: 'period:this_year' }
+      x-pagination:
+        - scheme: periodWindows
+      responses:
+        '200':
+          description: At most 100 transactions; the body is the array.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 100
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    date: { type: string, format: date }
+                    amount: { type: string }
+  /entries:
+    get:
+      parameters:
+        - name: updatedFrom
+          in: query
+          schema: { type: string, format: date-time }
+        - name: updatedBefore
+          in: query
+          schema: { type: string, format: date-time }
+      x-pagination:
+        - scheme: changedWindows
+      responses:
+        '200':
+          description: At most 500 entries; the body is the array.
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 500
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
+                    updatedAt: { type: string, format: date-time }

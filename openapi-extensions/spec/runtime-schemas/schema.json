@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ontola.github.io/atomic-plugins/openapi-extensions/spec/runtime-schemas/schema.json",
+  "title": "Runtime Schemas 0.1.0-draft",
+  "description": "The Runtime Schema Object (§4.1), the value of x-runtime-schema on a CRUD Causality Resource Object. Covers validation rules 2, 3, 6, 7 and 8; validate.py adds 1, 4 and 5.",
+  "$ref": "#/$defs/runtimeSchema",
+  "$defs": {
+    "path": {
+      "description": "A dot-path (§3): non-empty segments separated by '.', a segment holding '.' written as [\"a.b\"].",
+      "type": "string",
+      "pattern": "^(?:[^.\\[\\]]+|\\[\"[^\"]+\"\\])(?:\\.(?:[^.\\[\\]]+|\\[\"[^\"]+\"\\]))*$"
+    },
+    "runtimeSchema": {
+      "type": "object",
+      "required": ["field", "keyedBy", "match", "describedBy", "definition", "types"],
+      "properties": {
+        "field": { "$ref": "#/$defs/path" },
+        "keyedBy": { "enum": ["name", "id"] },
+        "match": { "enum": ["id", "key"] },
+        "memberId": { "$ref": "#/$defs/path" },
+        "memberType": { "$ref": "#/$defs/path" },
+        "describedBy": { "$ref": "#/$defs/describedBy" },
+        "definition": { "$ref": "#/$defs/definition" },
+        "types": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/type" }
+        },
+        "description": { "type": "string" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false,
+      "if": { "required": ["match"], "properties": { "match": { "const": "id" } } },
+      "then": { "required": ["memberId"] }
+    },
+    "describedBy": {
+      "type": "object",
+      "required": ["reference", "definitions", "shape"],
+      "properties": {
+        "reference": { "type": "string", "minLength": 1 },
+        "definitions": { "$ref": "#/$defs/path" },
+        "shape": { "enum": ["map", "array"] }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "definition": {
+      "type": "object",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/path" },
+        "type": { "$ref": "#/$defs/path" },
+        "name": { "$ref": "#/$defs/path" },
+        "description": { "$ref": "#/$defs/path" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "type": {
+      "type": "object",
+      "required": ["value", "schema"],
+      "properties": {
+        "value": {
+          "description": "Rule 7: the empty string is the member itself.",
+          "anyOf": [{ "const": "" }, { "$ref": "#/$defs/path" }]
+        },
+        "schema": { "type": "object" },
+        "options": { "$ref": "#/$defs/options" },
+        "multiple": { "type": "boolean" },
+        "description": { "type": "string" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false,
+      "dependentRequired": { "multiple": ["options"] }
+    },
+    "options": {
+      "type": "object",
+      "required": ["field", "id", "name", "valueId"],
+      "properties": {
+        "field": { "$ref": "#/$defs/path" },
+        "id": { "$ref": "#/$defs/path" },
+        "name": { "$ref": "#/$defs/path" },
+        "valueId": { "$ref": "#/$defs/path" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    }
+  }
+}
