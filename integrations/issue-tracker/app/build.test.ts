@@ -40,7 +40,7 @@ describe('GitHub issues drive-app bundle', async () => {
     // baselines on the rows, #177 item 6); 137,315 bytes
     // on 2026-10-01 after resolving uncertain creates (#156); 125,472 bytes
     // on 2026-09-24 for the designed board/list/detail UI (#89). The limit is
-    // the latest plus 10%, rounded up to the next KiB (197,431 -> 193 KiB).
+    // the latest plus 10%, rounded up to the next KiB (197,640 -> 194 KiB).
     expect(bytes).toBeLessThan(194 * 1024);
   });
 

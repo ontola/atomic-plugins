@@ -627,7 +627,7 @@ evidence; see [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
   syncing view per app is assumed. (The design's alternative, a per-browser
   host storage op, needs atomic-server work.)
 - The sync state's write journal is pruned only after a pass that leaves no
-  saved operation (0.4.2, below); a write whose answer was lost stays in it
+  saved operation (0.4.2, see "Pruning the write journal" above); a write whose answer was lost stays in it
   until a person settles it. While writes keep being held for review, the
   answered ones stay too.
 - Comments made in the data-browser's own comment panel on a row are not
