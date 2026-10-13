@@ -11,6 +11,15 @@
  * apps.mjs do through integrations/tooling/deps.mjs); `--no-install` skips
  * that. On CI, where every lockfile is installed first, it does nothing.
  *
+ * Without USERTEST_LOG_URL it refuses to build (exit 2), because an app
+ * marked `report: true` would lose its collector prelude and a deploy would
+ * replace the logged module under the same version (2026-10-13), unless
+ * `--no-log` says an unlogged build is meant (local tries, e2e/samples.mjs);
+ * such a build writes `out/UNLOGGED`, which check-live.mjs and deploy.sh
+ * refuse. `--record` alone may build unlogged: it records the hashes (which
+ * leave the prelude out), then removes the unlogged catalog.json so it can't
+ * be deployed. A refused or failed build leaves no catalog.json either.
+ *
  * With USERTEST_LOG_URL set (deploy it with
  * USERTEST_LOG_URL=https://logs.<base-domain>/log), the modules of apps
  * marked `report: true` start with a prelude that defines `globalThis.__USERTEST_REPORT__`, which
@@ -86,7 +95,7 @@ const I = 'https://atomicdata.dev/integrations/properties/';
  */
 export const VERSIONS = {
   calendar: 'usertest-12',
-  'issue-tracker': 'usertest-10',
+  'issue-tracker': 'usertest-11',
   money: 'usertest-6',
   notion: 'usertest-11',
   timesheets: 'usertest-11',
@@ -130,9 +139,12 @@ const SAMPLES = {
  * the post a simple request: no CORS preflight from the frame's null
  * origin. A failing collector never affects the app.
  */
+/** The shape USERTEST_LOG_URL must have: the collector's https endpoint. */
+const LOG_URL = /^https:\/\/[^/\s]+\/log$/;
+
 function preludeFor(logUrl) {
   if (!logUrl) return '';
-  if (!/^https:\/\/[^/]+\/log$/.test(logUrl))
+  if (!LOG_URL.test(logUrl))
     throw new Error('USERTEST_LOG_URL must look like https://<host>/log');
 
   return `globalThis.__USERTEST_REPORT__=e=>{try{fetch(${JSON.stringify(logUrl)},{method:"POST",keepalive:!0,headers:{"content-type":"text/plain"},body:JSON.stringify(e)}).catch(()=>{})}catch{}};\n`;
@@ -416,16 +428,80 @@ export const recordedFor = modules =>
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   );
 
+/**
+ * Why this build may not run without a log URL, or undefined: an app in it
+ * reports to the collector, USERTEST_LOG_URL is unset, and neither
+ * `--no-log` nor `--record` says an unlogged build is meant.
+ */
+export function logProblem(env, argv) {
+  if (env.USERTEST_LOG_URL)
+    return LOG_URL.test(env.USERTEST_LOG_URL)
+      ? undefined
+      : `USERTEST_LOG_URL is ${JSON.stringify(env.USERTEST_LOG_URL)}; it must look like https://<host>/log (the collector's endpoint).`;
+  if (argv.includes('--no-log') || argv.includes('--record')) return undefined;
+  const reporting = Object.entries(APPS)
+    .filter(([, app]) => app.report)
+    .map(([id]) => id);
+  if (!reporting.length) return undefined;
+
+  return (
+    `USERTEST_LOG_URL is not set, so ${reporting.join(', ')} would be built without the collector prelude, ` +
+    'and deploying that would replace the logged module under the same version. ' +
+    'Set it (USERTEST_LOG_URL=https://logs.<base-domain>/log), or pass --no-log for a build that is not deployed.'
+  );
+}
+
+/** Removes `out`'s catalog.json and UNLOGGED marker, if any. */
+export function clearOut(out) {
+  rmSync(resolve(out, 'catalog.json'), { force: true });
+  rmSync(resolve(out, 'UNLOGGED'), { force: true });
+}
+
+/**
+ * Marks `out` UNLOGGED when the build will have no collector prelude, before
+ * any catalog.json exists there, so no moment has an unmarked unlogged
+ * catalog on disk: check-live.mjs and deploy.sh refuse a marked one.
+ */
+export function markOut(out, env) {
+  if (env.USERTEST_LOG_URL) return;
+  mkdirSync(out, { recursive: true });
+  writeFileSync(
+    resolve(out, 'UNLOGGED'),
+    'Built without USERTEST_LOG_URL (catalog.mjs --no-log or --record): not for deploying.\n',
+  );
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const recording = argv.includes('--record');
   const out = resolve(
     argv.find(a => !a.startsWith('--')) ?? resolve(here, 'out'),
   );
+  const unlogged = logProblem(process.env, argv);
+
+  const clear = () => clearOut(out);
+  // Whatever happens below (a refusal, a failed install or build), no
+  // catalog.json from an earlier build stays to be deployed by mistake.
+  clear();
+
+  if (unlogged) {
+    console.error(`catalog: ${unlogged}`);
+    process.exit(2);
+  }
+
+  markOut(out, process.env);
+
   if (!argv.includes('--no-install')) installMissing(dependencyDirs());
-  const { catalog, modules } = await buildCatalog(out, {
-    logUrl: process.env.USERTEST_LOG_URL,
-  });
+  let built;
+
+  try {
+    built = await buildCatalog(out, { logUrl: process.env.USERTEST_LOG_URL });
+  } catch (error) {
+    clear();
+    throw error;
+  }
+
+  const { catalog, modules } = built;
   const { changed, unrecorded } = versionProblems(modules, readBuilds());
 
   if (changed.length) {
@@ -440,6 +516,16 @@ async function main() {
     console.info(
       `catalog: recorded ${modules.length} build(s) in usertest/builds.json`,
     );
+
+    if (!process.env.USERTEST_LOG_URL && !argv.includes('--no-log')) {
+      clear();
+      console.warn(
+        'catalog: catalog.json removed: built without USERTEST_LOG_URL, so not for deploying. Rebuild with it to deploy.',
+      );
+    } else if (!process.env.USERTEST_LOG_URL)
+      console.warn(
+        'catalog: catalog.json kept with out/UNLOGGED (--record --no-log): check-live.mjs and deploy.sh refuse it. Rebuild with USERTEST_LOG_URL to deploy.',
+      );
   } else for (const line of unrecorded) console.warn(`catalog: ${line}`);
 
   for (const entry of catalog)

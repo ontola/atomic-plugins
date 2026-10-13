@@ -49,6 +49,10 @@ cat "$ATOMIC_SERVER_CHECKOUT/target/e2e/.built-for-atomic-plugins"  # must print
 node integrations/tooling/link-atomic-server.mjs --no-fetch
 ```
 
+Without the export, the tools pick the same directory themselves when it
+exists (`serve.mjs`'s `serverCheckout()`); the export still makes it explicit,
+and is the only way to point a branch at a checkout for another pin.
+
 - **One checkout per SHA.** A branch on an older or newer pin (one stacked
   on an unmerged PR, say) uses that SHA's directory, not main's. Pointing it
   at another pin's checkout makes `link-atomic-server.mjs` move that checkout
