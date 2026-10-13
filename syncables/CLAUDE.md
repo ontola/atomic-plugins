@@ -221,7 +221,9 @@ Data flows through four stages, each its own directory under `src/`:
    `resolveWrite` `retry`, sets its field's first segment or deletes the
    record; `retry` refuses an `unknown` follow-up), an unknown outcome sets `awaitingRefresh` (read back first),
    and a `confirm`ed uncertain create queues them `awaitingRefresh`;
-   updates select declared PUT, otherwise PATCH; the chosen operation's
+   updates use the item-path PUT or PATCH whose `x-crud` declares
+   `action: update` for the resource (both declared: PUT; neither, or a
+   legacy document: PUT, else PATCH; `clientRoutes`); the chosen operation's
    `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
    `merge-patch.ts`): `jsonMergePatch` sends the changes alone and applies
    RFC 7396 locally, `jsonPatch` makes `update()` throw, anything else (and
@@ -673,6 +675,11 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   under an unavailable parent concluded at once and sent again after the
   parent returns, `record` on unavailable reports, and an unrecognised
   `notFound` read as `unavailable`.
+- `unit/client/update-modes.test.ts` covers update bodies (`mode`,
+  `patchFormat`, merge patches, conflicts, stored `updateBody`) and which
+  operation updates: a declared PATCH over an undeclared PUT, the reverse,
+  both declared, neither, another resource's `x-crud`, and a declared
+  `jsonPatch` PATCH throwing.
 - `unit/client/write-preconditions.test.ts` covers the client side of
   Write Preconditions: `ifMatch` (body version without a read, header
   version with one, `conflictStatus` and `header`), `refuseWhen`,
