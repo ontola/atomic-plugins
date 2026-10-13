@@ -77,7 +77,11 @@ into the view root.
   mirror (`app/model/source.ts`), never from the table's rows: Week grid
   (project × day), Entries (by day), Projects (the whole window), a
   read-only entry drawer, the settings sheet, and the set-up, empty and
-  error states. Below 560px of frame width the week becomes a strip of day
+  error states. From 0.7.2 the week grid has a "Billable" row under its
+  day totals, each day's billable time and the week's
+  (ontola/usertest-findings#13: a tester asked for yesterday's billable
+  hours did not find the week's totals under the grid); the narrow day
+  strip is unchanged and still marks billable entries one by one. Below 560px of frame width the week becomes a strip of day
   tabs. `app/ui/theme.ts` maps every `--pl-*` token from the host's
   `--t-*` theme variables, so dark mode is the host's. `app/ui/theme.ts`,
   `components.ts` and `dom.ts` know nothing of Clockify: shared-kit

@@ -331,6 +331,50 @@ describe('InboxConsumer', () => {
     });
   });
 
+  it('backs off on a real-shaped 503, a 409 while provisioning and a 409 for an ended generation', async () => {
+    const { inbox, journal, consumer } = setup();
+    await consumer.step();
+    // The inbox's database is busy.
+    inbox.answerOnce.set(
+      'GET /events',
+      json(503, { status: 'error', code: 'capacity-unavailable' }),
+    );
+    expect(await consumer.step()).toEqual({
+      kind: 'backoff',
+      seconds: 5,
+      reason: 'capacity-unavailable',
+    });
+    // The subscription is still provisioning its hook.
+    inbox.answerOnce.set(
+      'GET /events',
+      json(409, { status: 'error', code: 'barrier-mismatch' }),
+    );
+    expect(await consumer.step()).toEqual({
+      kind: 'backoff',
+      seconds: 1,
+      reason: 'barrier-mismatch',
+    });
+    // A gap ended the generation between the fetch and the ack: the events
+    // are journaled, and the next fetch reports the gap.
+    inbox.deliver('d-1');
+    inbox.answerOnce.set(
+      'POST /ack',
+      json(409, { status: 'error', code: 'obsolete-generation' }),
+    );
+    expect(await consumer.step()).toEqual({
+      kind: 'backoff',
+      seconds: 1,
+      reason: 'obsolete-generation',
+    });
+    expect(journal.events.map((e) => e.deliveryId)).toEqual(['d-1']);
+    expect(journal.stored).toEqual(expect.objectContaining({ id: 'sub-1' }));
+    expect(await consumer.step()).toEqual({
+      kind: 'events',
+      stored: 0,
+      duplicates: 1,
+    });
+  });
+
   it('does not back off on refusals a retry would not fix', async () => {
     const { inbox, consumer } = setup();
     await consumer.step();
@@ -354,5 +398,55 @@ describe('parseRetryAfter', () => {
     expect(parseRetryAfter('soon', now)).toBeUndefined();
     expect(parseRetryAfter('-1', now)).toBeUndefined();
     expect(parseRetryAfter(undefined, now)).toBeUndefined();
+  });
+
+  it('strips only space, tab, CR and LF, and bounds delay-seconds at 2^53 − 1', () => {
+    const now = Date.parse('2026-10-09T12:00:00Z');
+    expect(parseRetryAfter('\t 7\r\n', now)).toBe(7);
+    expect(parseRetryAfter(' 7', now)).toBeUndefined();
+    expect(parseRetryAfter('﻿7', now)).toBeUndefined();
+    expect(parseRetryAfter('', now)).toBeUndefined();
+    expect(parseRetryAfter(' \t', now)).toBeUndefined();
+    expect(parseRetryAfter('1.5', now)).toBeUndefined();
+    expect(parseRetryAfter(String(Number.MAX_SAFE_INTEGER), now)).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
+    expect(parseRetryAfter('9007199254740992', now)).toBeUndefined();
+    expect(parseRetryAfter('9'.repeat(400), now)).toBeUndefined();
+  });
+
+  it('takes HTTP-dates in their exact forms only, never a lenient Date.parse reading', () => {
+    const now = Date.parse('2026-10-09T12:00:00Z');
+    // IMF-fixdate, the obsolete RFC 850 form, and asctime.
+    expect(parseRetryAfter('Fri, 09 Oct 2026 12:01:00 GMT', now)).toBe(60);
+    expect(parseRetryAfter('Friday, 09-Oct-26 12:01:00 GMT', now)).toBe(60);
+    expect(parseRetryAfter('Fri Oct  9 12:01:00 2026', now)).toBe(60);
+    for (const loose of [
+      '2026-10-09T12:01:00Z',
+      'Fri, 9 Oct 2026 12:01:00 GMT',
+      'Fri, 09 Oct 2026 12:01:00 +0000',
+      'Fri, 09 Oct 2026 12:01:00 GMT',
+      'Fri, 31 Feb 2026 12:01:00 GMT',
+      'October 9, 2026',
+    ]) {
+      expect({ loose, seconds: parseRetryAfter(loose, now) }).toEqual({
+        loose,
+        seconds: undefined,
+      });
+    }
+  });
+});
+
+describe('InboxError.backoff', () => {
+  it('backs off on 503, 429 and the passing 409s, and not on other refusals', async () => {
+    const { InboxError } = await import('../../../src/inbox/client.js');
+    expect(new InboxError(503, 'capacity-unavailable').backoff()).toBe(5);
+    expect(new InboxError(503, undefined, undefined, 12).backoff()).toBe(12);
+    expect(new InboxError(409, 'obsolete-generation').backoff()).toBe(1);
+    expect(new InboxError(409, 'barrier-mismatch').backoff()).toBe(1);
+    expect(new InboxError(409, 'cursor-ahead').backoff()).toBeUndefined();
+    expect(
+      new InboxError(404, 'unknown-subscription').backoff(),
+    ).toBeUndefined();
   });
 });

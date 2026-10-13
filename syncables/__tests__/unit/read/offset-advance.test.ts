@@ -9,6 +9,7 @@ import {
   type OpenApiDocument,
   type PaginationSchemeObject,
   type Transport,
+  type TransportResponse,
 } from '../../../src/browser.js';
 
 // Pagination Schemes 0.7.0 §4.3.2: an offset field's `advance`. Shaped like
@@ -181,6 +182,125 @@ describe('advance: itemCount (the default)', () => {
     const { transport } = provider(10, 4, { holes: [4, 5, 6, 7] });
     expect(await read(scheme(), transport)).toHaveLength(4);
   });
+
+  it('reads on to the first empty page without a totalCount (#495)', async () => {
+    // The issue's repro: 6 items, a page limit of 2, no total_count.
+    const s = scheme();
+    delete s.response!.bodyFields!['total_count'];
+    const { transport, offsets } = provider(6, 2);
+    expect(await read(s, transport, 2)).toHaveLength(6);
+    expect(offsets).toEqual([0, 2, 4, 6]);
+  });
+
+  it('goes on past a short page without a totalCount, by the items it held', async () => {
+    const s = scheme();
+    delete s.response!.bodyFields!['total_count'];
+    // The server caps a page at 3 although 4 were asked for.
+    const { transport, offsets } = provider(7, 3);
+    const capped: Transport = (request) => {
+      const url = new URL(request.url);
+      url.searchParams.set('limit', '3');
+      return transport({ ...request, url });
+    };
+    expect(await read(s, capped, 4)).toHaveLength(7);
+    expect(offsets).toEqual([0, 3, 6, 7]);
+  });
+
+  it('ends at total_count without asking for an empty page', async () => {
+    const { transport, offsets } = provider(6, 2);
+    expect(await read(scheme(), transport, 2)).toHaveLength(6);
+    expect(offsets).toEqual([0, 2, 4]);
+  });
+});
+
+describe('an offset scheme that also declares a next link', () => {
+  /** Spotify-shaped: `next` holds the following page's URL, null at the end. */
+  function linked(advance: 'itemCount' | 'pageSize'): PaginationSchemeObject {
+    const s = scheme(advance);
+    s.response!.bodyFields!['next'] = { role: 'nextLink' };
+    return s;
+  }
+  function linkingProvider(entries: number): {
+    transport: Transport;
+    offsets: number[];
+  } {
+    const { transport, offsets } = provider(entries, 2);
+    return {
+      offsets,
+      transport: async (request): Promise<TransportResponse> => {
+        const response = await transport(request);
+        const body = JSON.parse(response.body) as Record<string, unknown>;
+        const offset = Number(request.url.searchParams.get('offset') ?? '0');
+        const following = offset + 2;
+        const url = new URL(request.url);
+        url.searchParams.set('offset', String(following));
+        return {
+          ...response,
+          body: JSON.stringify({
+            ...body,
+            next: following < entries ? url.href : null,
+          }),
+        };
+      },
+    };
+  }
+
+  it('follows the link while there is one, and ends at a null link, under itemCount', async () => {
+    const { transport, offsets } = linkingProvider(6);
+    const s = linked('itemCount');
+    delete s.response!.bodyFields!['total_count'];
+    expect(await read(s, transport, 2)).toHaveLength(6);
+    expect(offsets).toEqual([0, 2, 4]);
+  });
+
+  it('follows the link while there is one, and ends at a null link, under pageSize (0.7.1)', async () => {
+    for (const withTotal of [false, true]) {
+      const { transport, offsets } = linkingProvider(6);
+      const s = linked('pageSize');
+      if (!withTotal) delete s.response!.bodyFields!['total_count'];
+      expect(await read(s, transport, 2)).toHaveLength(6);
+      expect(offsets).toEqual([0, 2, 4]);
+    }
+  });
+
+  it('ends at an absent link even when total_count says more items exist (0.7.1)', async () => {
+    for (const advance of ['itemCount', 'pageSize'] as const) {
+      const { transport, offsets } = linkingProvider(4);
+      const s = linked(advance);
+      const more: Transport = async (request) => {
+        const response = await transport(request);
+        const body = JSON.parse(response.body) as Record<string, unknown>;
+        return {
+          ...response,
+          body: JSON.stringify({ ...body, total_count: 10 }),
+        };
+      };
+      expect(await read(s, more, 2)).toHaveLength(4);
+      expect(offsets).toEqual([0, 2]);
+      // The read ends there, but is not complete.
+      const result = await readCollections(document(s), {
+        transport: more,
+        constants: { folder_id: '0' },
+      });
+      const [snapshot] = result.collections;
+      expect(result.errors).toEqual([]);
+      expect(snapshot!.items).toHaveLength(4);
+      expect(snapshot!.complete).toBe(false);
+      expect(snapshot!.notComplete).toMatch(
+        /totalCount \(10\) exceeds the 4 items read: not a complete read/,
+      );
+    }
+  });
+
+  it('is complete at an absent link when total_count matches the items read', async () => {
+    const { transport } = linkingProvider(4);
+    const result = await readCollections(document(linked('pageSize')), {
+      transport,
+      constants: { folder_id: '0' },
+    });
+    expect(result.collections[0]!.complete).toBe(true);
+    expect(result.collections[0]!.items).toHaveLength(4);
+  });
 });
 
 describe('a server that ignores the offset (review of #484)', () => {
@@ -201,8 +321,9 @@ describe('a server that ignores the offset (review of #484)', () => {
         });
       };
       const s = scheme(advance);
-      // Without a totalCount an itemCount read has no next page at all.
-      if (advance === 'pageSize') delete s.response!.bodyFields!['total_count'];
+      // Without a totalCount both advances go on past a full page (#495),
+      // so only the repeat check ends the read.
+      delete s.response!.bodyFields!['total_count'];
       await expect(read(s, transport, 2)).rejects.toThrow(
         /holds an item an earlier page returned/,
       );

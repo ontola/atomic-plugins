@@ -3,7 +3,11 @@ import yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 import type { InboxEvent } from '../../../src/inbox/client.js';
-import { pathSegment, scopedReads } from '../../../src/inbox/reads.js';
+import {
+  decodeBase64Utf8,
+  pathSegment,
+  scopedReads,
+} from '../../../src/inbox/reads.js';
 
 // The Webhook Deliveries spec's synthetic GitHub fixture and one of its
 // signed deliveries (openapi-extensions/spec/webhook-deliveries/examples):
@@ -39,6 +43,39 @@ function event(eventType: string, body: string): InboxEvent {
     },
   };
 }
+
+describe('decodeBase64Utf8', () => {
+  it('decodes what Buffer decodes, without Buffer', () => {
+    for (const text of [
+      '',
+      'a',
+      'ab',
+      'abc',
+      '{"title":"fixture"}',
+      'é ß € 𝄞 中文 🙂',
+      delivery.body,
+    ]) {
+      expect(decodeBase64Utf8(Buffer.from(text).toString('base64'))).toBe(text);
+    }
+  });
+
+  it('refuses malformed base64 and malformed UTF-8', () => {
+    expect(decodeBase64Utf8('abc')).toBeUndefined();
+    expect(decodeBase64Utf8('ab$=')).toBeUndefined();
+    expect(decodeBase64Utf8('YQ==YQ==')).toBeUndefined();
+    for (const bytes of [
+      [0xff],
+      [0xc0, 0x80], // overlong
+      [0xe2, 0x82], // truncated
+      [0xed, 0xa0, 0x80], // a surrogate
+      [0xf4, 0x90, 0x80, 0x80], // past U+10FFFF
+    ]) {
+      expect(
+        decodeBase64Utf8(Buffer.from(bytes).toString('base64')),
+      ).toBeUndefined();
+    }
+  });
+});
 
 describe('scopedReads', () => {
   it('names the issue and its collection for an issues delivery', () => {

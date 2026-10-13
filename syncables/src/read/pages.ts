@@ -231,6 +231,14 @@ function integerRole(
   return undefined;
 }
 
+/** Whether the scheme's response declares a field (body or header) with `role`. */
+function declaresRole(scheme: PaginationSchemeObject, role: string): boolean {
+  return [
+    ...Object.values(scheme.response?.bodyFields ?? {}),
+    ...Object.values(scheme.response?.headers ?? {}),
+  ].some((field) => field.role === role);
+}
+
 /** The `advance` of the scheme's offset field (spec 0.7.0 §4.3.2), if any. */
 function offsetAdvance(
   scheme: PaginationSchemeObject,
@@ -733,10 +741,14 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
     // Pagination Schemes 0.7.0 §4.3.2: an offset that advances by the page
     // size (a reported pageSize field, else the size sent) ends only at
     // totalCount; a short or empty page before that does not end the list.
+    // A scheme that also declares a next link is led by it (0.7.1): an
+    // absent or null link ends the read below, never a step from an offset
+    // that was not advanced while links were followed.
     if (
       scheme.type === 'pageNumber' &&
       !linkPresent &&
-      offsetAdvance(scheme) === 'pageSize'
+      offsetAdvance(scheme) === 'pageSize' &&
+      !declaresRole(scheme, 'nextLink')
     ) {
       // §4.3.2: a reported page size counts as an integer of at least 1,
       // a totalCount as an integer of at least 0; read per response, as
@@ -763,6 +775,49 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
       cursor = { offset: following };
       next = undefined;
       continue;
+    }
+    // §4.3.2 `itemCount` (the default advance): the next offset adds the
+    // items the page held, and the list ends at the first empty page or,
+    // when the response carries a totalCount, once the next offset reaches
+    // it. Without a totalCount a full or short page does not end it (#495:
+    // such a read used to stop after one page, short and unreported); the
+    // repeat check above ends a read whose server ignores the offset. A
+    // scheme that also declares a next link (Spotify's `next`) is led by
+    // it: a link that is absent or `null` is the last page (0.7.1 §4.3.2).
+    if (
+      scheme.type === 'pageNumber' &&
+      !linkPresent &&
+      offsetAdvance(scheme) === 'itemCount' &&
+      !declaresRole(scheme, 'nextLink')
+    ) {
+      const totalCount = integerRole(scheme, body, 'totalCount', 0);
+      const following = (cursor.offset ?? 0) + items.length;
+      if (
+        items.length === 0 ||
+        (totalCount !== undefined && following >= totalCount)
+      ) {
+        return;
+      }
+      cursor = { offset: following };
+      next = undefined;
+      continue;
+    }
+    // 0.7.1 §4.3.2: in an offset scheme that declares a next link, an
+    // absent, null or empty link ends the read under either advance. When
+    // the last response's totalCount exceeds the items read, the read ends
+    // there but is not complete.
+    if (
+      !linkPresent &&
+      scheme.type === 'pageNumber' &&
+      offsetAdvance(scheme) !== undefined &&
+      declaresRole(scheme, 'nextLink')
+    ) {
+      const totalCount = integerRole(scheme, body, 'totalCount', 0);
+      if (walk.outcome && totalCount !== undefined && totalCount > itemsSoFar) {
+        walk.outcome.complete = false;
+        walk.outcome.reason = `ended by a response without a next link while its totalCount (${totalCount}) exceeds the ${itemsSoFar} items read: not a complete read (Pagination Schemes 0.7.1 §4.3.2)`;
+      }
+      return;
     }
     if (!state.hasNextPage && !linkPresent) {
       return;

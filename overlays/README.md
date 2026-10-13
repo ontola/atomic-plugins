@@ -267,6 +267,23 @@ deletion feed over the event list is declared (Deletion Feeds §8).
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
 
+## Spotify throttling
+
+[Spotify Web API throttling](APIs/spotify.com/1.0.0-readonly/throttling-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Spotify's [rate-limits page](https://developer.spotify.com/documentation/web-api/concepts/rate-limits):
+one bucket per app (`partitionBy: [application]`) over "a rolling 30 second
+window" (`kind: sliding`) with no request count, because none is published
+and it differs between development and extended quota mode; `Retry-After`
+in seconds, which a 429 "will normally include"; and a 429 as `throttled`.
+The 429 is not declared `quotaExhausted` for the app bucket, because Spotify
+also has endpoint limits that answer 429, of which it names one, "the
+playlist image upload endpoint" (not in the read-only document this overlay
+extends). No dated catalog selects
+it yet. `tests/test_spotify_throttling.py` composes it alone and after the
+catalog's Spotify overlays and classifies synthetic responses. No provider
+was called.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
