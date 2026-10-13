@@ -37,6 +37,7 @@ import {
   PLUGIN_ROUTES_ENV,
   routesImageFor,
   routesOrigin,
+  serverCheckout,
   serverEnv,
   sidecarUrl,
   storeVolume,
@@ -50,6 +51,45 @@ const pinnedImage = `ghcr.io/ontola/atomic-server-e2e:${readFileSync(
   join(root, '.atomic-server-ref'),
   'utf8',
 ).trim()}`;
+
+test("serverCheckout: the variable, else this pin's per-SHA checkout when it exists, else /tmp", () => {
+  const home = mkdtempSync(join(tmpdir(), 'atomic-home-'));
+  const sha = 'c'.repeat(40);
+  const perSha = join(home, '.cache/atomic-plugins/atomic-server', sha);
+
+  try {
+    const pick = (env, ref = () => sha) =>
+      serverCheckout({ env, home, pin: ref });
+    // Set: always wins.
+    assert.equal(pick({ ATOMIC_SERVER_CHECKOUT: '/x' }), '/x');
+    // Unset, no per-SHA checkout yet: the old default.
+    assert.equal(pick({}), '/tmp/atomic-server');
+    mkdirSync(perSha, { recursive: true });
+    assert.equal(pick({}), perSha);
+    // Another pin's checkout is never picked; nor a pin that is not a SHA.
+    assert.equal(
+      pick({}, () => 'd'.repeat(40)),
+      '/tmp/atomic-server',
+    );
+    assert.equal(
+      pick({}, () => 'main'),
+      '/tmp/atomic-server',
+    );
+    assert.equal(
+      pick({}, () => {
+        throw new Error('no .atomic-server-ref');
+      }),
+      '/tmp/atomic-server',
+    );
+    // No HOME: the old default.
+    assert.equal(
+      serverCheckout({ env: {}, home: undefined, pin: () => sha }),
+      '/tmp/atomic-server',
+    );
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 test('binaryProblem: a missing binary gets the full build lines, a stale stamp is refused, no stamp is trusted', () => {
   const checkout = mkdtempSync(join(tmpdir(), 'atomic-checkout-'));

@@ -20,8 +20,10 @@ node integrations/tooling/link-atomic-server.mjs
 ```
 
 This shallow-fetches atomic-server at `.atomic-server-ref` into
-`$ATOMIC_SERVER_CHECKOUT` (default `/tmp/atomic-server`, the default
-`run-lane.mjs`/`serve.mjs` also use; one checkout serves every worktree). It
+`$ATOMIC_SERVER_CHECKOUT` (default: this pin's
+`~/.cache/atomic-plugins/atomic-server/<sha>` when that directory exists,
+else `/tmp/atomic-server`; `run-lane.mjs`/`serve.mjs` use the same default;
+one checkout serves every worktree on that pin). It
 then symlinks `browser` and `integrations/node_modules`, and runs `pnpm
 install --frozen-lockfile` in its `browser/` (pnpm 10, per its
 `packageManager`). It refuses to move a checkout that has uncommitted changes.
