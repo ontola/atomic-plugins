@@ -3,16 +3,17 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
-## Unreleased
+## 0.4.0 (2026-10-13)
 
 - Opt-in OAuth device authorization for public CLI clients (#565), with Atomic
   owner-signed browser approval, explicitly selected connections and read scopes,
   PostgreSQL single-use grants, short-lived opaque access tokens, rotating refresh
   families with reuse revocation, and signed per-session owner revocation. See
-  DEVICE_AUTH.md for the contract and examples. Not released or deployed.
+  DEVICE_AUTH.md for the contract and examples. Device clients and an owner
+  approval hub must be configured to enable it.
 
 `Config` gains public fields (`webhooks`, `device`), a breaking change under Cargo's
-0.x semver rules, so the next release is 0.4.0.
+0.x semver rules, so this release is 0.4.0.
 
 - Pacing under provider quotas (docs/design/pieces.md P4): for `x-throttling`
   buckets partitioned by `sourceIp` or by nothing, with at most 10,000
