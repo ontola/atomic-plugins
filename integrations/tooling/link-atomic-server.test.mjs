@@ -10,6 +10,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -251,6 +252,27 @@ test('changedPaths: a rename reports both sides, so it refuses', () => {
       BUILD_OUTPUT_PATHS[0],
     ]);
     assert.match(dirtyProblem(f.dir, ref), /\(moved\.html\)/);
+  } finally {
+    f.done();
+  }
+});
+
+test('changedPaths: an intent-to-add rename (" R") reports both sides whole', () => {
+  const f = dirtyFixture();
+
+  try {
+    // Moved on disk, the new path only intended to add: git shows it as a
+    // working-tree rename, Y = R, with the source as the next field.
+    renameSync(join(f.dir, 'other.txt'), join(f.dir, 'renamed.txt'));
+    f.run('add', '--intent-to-add', 'renamed.txt');
+    assert.match(
+      execFileSync('git', ['status', '--porcelain=v1'], {
+        cwd: f.dir,
+        encoding: 'utf8',
+      }),
+      /^ R /,
+    );
+    assert.deepEqual(changedPaths(f.dir), ['renamed.txt', 'other.txt']);
   } finally {
     f.done();
   }
