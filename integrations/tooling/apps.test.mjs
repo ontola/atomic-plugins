@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import {
   mkdtempSync,
   mkdirSync,
@@ -650,28 +651,55 @@ test('usertest: catalog.mjs refuses an unlogged build unless --no-log or --recor
     logProblem({ USERTEST_LOG_URL: 'https://logs.example/log' }, []),
     undefined,
   );
+  // A set but malformed URL is refused before anything is built.
+  for (const bad of [
+    'logs.example/log',
+    'http://logs.example/log',
+    'https://logs.example/',
+  ])
+    assert.match(
+      logProblem({ USERTEST_LOG_URL: bad }, ['--no-log']),
+      /must look like https:\/\/<host>\/log/,
+      bad,
+    );
 });
 
-test('usertest: check-live.mjs exits 1 on a module changed under a live version, from a file or stdin', () => {
+test('usertest: check-live.mjs: a changed module fails, absent passes, unreachable fails', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'usertest-check-live-'));
   const I = 'https://atomicdata.dev/integrations/properties/';
   const A = 'https://atomicdata.dev/properties/';
+  const PATH = 'apps/calendar/usertest-12/ui.js';
   const entry = integrity => ({
     [A + 'shortname']: 'calendar',
-    [I + 'app-module']: 'apps/calendar/usertest-12/ui.js',
+    [I + 'app-module']: PATH,
     [I + 'app-module-integrity']: integrity,
   });
   const script = join(root, 'usertest/check-live.mjs');
-  const run = (live, input) =>
-    spawnSync(process.execPath, [script, live, join(dir, 'out')], {
-      input,
-      encoding: 'utf8',
+  const out = join(dir, 'out');
+  // Async: the HTTP cases below answer from this process.
+  const run = (args, input = '') =>
+    new Promise(done => {
+      const child = spawn(process.execPath, [script, ...args]);
+      let stderr = '';
+      child.stderr.on('data', chunk => (stderr += chunk));
+      child.on('close', status => done({ status, stderr }));
+      child.stdin.end(input);
     });
+  const live = json => run(['-', out], json);
+  const server = createServer((req, res) => {
+    const [status, body] = {
+      '/missing': [404, 'Not Found'],
+      '/down': [502, '<html>Bad Gateway</html>'],
+      '/html': [200, '<html>maintenance</html>'],
+      '/same': [200, JSON.stringify([entry('sha384-unlogged')])],
+    }[req.url] ?? [500, ''];
+    res.writeHead(status).end(body);
+  });
 
   try {
-    mkdirSync(join(dir, 'out'));
+    mkdirSync(out);
     writeFileSync(
-      join(dir, 'out/catalog.json'),
+      join(out, 'catalog.json'),
       JSON.stringify([entry('sha384-unlogged')]),
     );
     writeFileSync(
@@ -683,17 +711,58 @@ test('usertest: check-live.mjs exits 1 on a module changed under a live version,
       JSON.stringify([entry('sha384-logged')]),
     );
 
-    const changed = run(join(dir, 'live.json'));
+    // A module changed under a version the live catalog lists.
+    const changed = await run([join(dir, 'live.json'), out]);
     assert.equal(changed.status, 1);
     assert.match(
       changed.stderr,
       /calendar: apps\/calendar\/usertest-12\/ui\.js differs/,
     );
-    assert.equal(run('-', JSON.stringify([entry('sha384-logged')])).status, 1);
-    assert.equal(run(join(dir, 'same.json')).status, 0);
-    // Nothing live yet (a first deploy): passes.
-    assert.equal(run('-', '').status, 0);
+    assert.equal(
+      (await live(JSON.stringify([entry('sha384-logged')]))).status,
+      1,
+    );
+    assert.equal((await run([join(dir, 'same.json'), out])).status, 0);
+
+    // Absent passes: empty input, deploy.sh's NONE, no file in an existing folder.
+    assert.equal((await live('')).status, 0);
+    assert.equal((await live('NONE\n')).status, 0);
+    assert.equal(
+      (await run([join(dir, 'no-catalog-yet.json'), out])).status,
+      0,
+    );
+    // Unreachable or not a catalog fails: a missing folder (a mistyped path),
+    // truncated JSON, an object, an HTML page.
+    assert.equal((await run([join(dir, 'typo/catalog.json'), out])).status, 1);
+    assert.equal((await live('[{"truncated')).status, 1);
+    assert.equal((await live('{}')).status, 1);
+    assert.equal((await live('<html>Bad Gateway</html>')).status, 1);
+
+    // Over HTTP: 404 is absent; a 502 or an HTML 200 fails; so does no server.
+    await new Promise(ready => server.listen(0, '127.0.0.1', ready));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    assert.equal((await run([`${base}/missing`, out])).status, 0);
+    assert.equal((await run([`${base}/down`, out])).status, 1);
+    assert.equal((await run([`${base}/html`, out])).status, 1);
+    assert.equal((await run([`${base}/same`, out])).status, 0);
+    server.close();
+    assert.equal((await run([`${base}/same`, out])).status, 1);
+
+    // --served: a ui.js already on disk that the live catalog no longer lists.
+    const served = join(dir, 'srv');
+    mkdirSync(join(served, 'apps/calendar/usertest-12'), { recursive: true });
+    writeFileSync(join(served, PATH), 'the logged module');
+    const onDisk = await run(['-', out, '--served', served], 'NONE');
+    assert.equal(onDisk.status, 1);
+    assert.match(onDisk.stderr, /differs from the file already served/);
+
+    // A build made with --no-log is never deployed.
+    writeFileSync(join(out, 'UNLOGGED'), 'x');
+    const unlogged = await live('NONE');
+    assert.equal(unlogged.status, 1);
+    assert.match(unlogged.stderr, /--no-log/);
   } finally {
+    server.close();
     rmSync(dir, { recursive: true, force: true });
   }
 });

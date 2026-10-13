@@ -51,15 +51,20 @@ ssh root@178.62.223.35 USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server
 
   ```sh
   USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log node usertest/catalog.mjs &&
-    node usertest/check-live.mjs /srv/catalog/catalog.json &&
+    node usertest/check-live.mjs /srv/catalog/catalog.json usertest/out --served /srv/catalog &&
     (cd usertest/out && tar -cf - apps samples) | tar -xf - -C /srv/catalog &&
     cat usertest/out/catalog.json > /srv/catalog/catalog.json
   ```
 
   Chained with `&&`, a failed build or check copies nothing. `check-live.mjs`
   reads the live catalog from a file (or `-` for standard input) as well as
-  a URL. `catalog.mjs` refuses to build without `USERTEST_LOG_URL` (exit 2)
-  unless `--no-log` says the build is not for deploying; `--record` alone
+  a URL; absent passes, unreachable fails (a mistyped path fails, a missing
+  `catalog.json` in `/srv/catalog` is a first deploy). `--served /srv/catalog`
+  also compares each built module with the `ui.js` already on disk, which
+  catches a version the live catalog no longer lists. `catalog.mjs` refuses
+  to build without a well-formed `USERTEST_LOG_URL` (exit 2) unless
+  `--no-log` says the build is not for deploying; that writes
+  `usertest/out/UNLOGGED`, which `check-live.mjs` refuses. `--record` alone
   removes its unlogged `catalog.json`.
 
   `/srv/catalog` itself is owned by root, so `tar` cannot replace
