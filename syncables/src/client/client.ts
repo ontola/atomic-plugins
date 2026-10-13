@@ -5892,7 +5892,6 @@ export function createApiClient(
       const scope = scopeFor(route, context);
       // Read completely: its parent is back, and so are its members.
       goneParents.delete(scope);
-      completeScopes.add(scope);
       if (snapshot.runtimeMembers) {
         const members = new Map<string, RuntimeMembers>();
         snapshot.items.forEach((item, i) => {
@@ -6080,6 +6079,9 @@ export function createApiClient(
         }
         confirmedBefore = new Map(remote(scope));
         confirmed.set(scope, records);
+        // Applied: the confirmed copy is this complete read
+        // (matchUnboundCreates may now remember creates of the scope).
+        completeScopes.add(scope);
         // The newest confirmed copy of each written record: from this read,
         // or, for a record the read lacks, from just before it.
         for (const write of allWrites()) {
@@ -6113,6 +6115,9 @@ export function createApiClient(
         // Confirmed records and conflict bases of pending writes moved on.
         if (writeQueues.size || gaveUpWrites.size) await persistLater();
       }
+      // The read equals the last one applied: the confirmed copy is
+      // already this complete read.
+      if (!differs) completeScopes.add(scope);
       // An unchanged read rebuilds nothing, but unconfirmed records are
       // still checked.
       if (!differs)
@@ -6218,6 +6223,11 @@ export function createApiClient(
               !entry.known.has(id) &&
               !writeQueues.has(keyFor(scope, id)) &&
               !gaveUpWrites.has(keyFor(scope, id)) &&
+              // Nor the id another create was confirmed with, whose
+              // settling has not moved its writes there yet.
+              !allWrites().some(
+                (other) => other.scope === scope && other.confirmedId === id,
+              ) &&
               sent.every(
                 ([k, v]) => Object.hasOwn(item, k) && deepEqual(item[k], v),
               ),
@@ -6247,6 +6257,10 @@ export function createApiClient(
     }
     if (!bound) return;
     await persistLater();
+    // Drained now, in the middle of the sync, as after a resolveWrite
+    // confirm during one: the settle sends no request and counts as a
+    // write on the scope, so this snapshot's stale checks in performSync treat it
+    // as any write that settles while a sync runs.
     for (const write of found.keys()) {
       const key = keyFor(scope, write.id);
       if (write.confirmedId !== undefined && !draining.has(key))

@@ -48,3 +48,18 @@ both identical-create cases, the stranger record, no unique value (three
 ways), a record that existed before, one chance, no read before, a
 restart, an unknown collection. Removing the unique-value or the
 shared-candidate rule fails two of them.
+
+## Review fixes (#559)
+
+B1, reproduced by the reviewer: `completeScopes` took the scope when the
+snapshot arrived, before it was applied, so after a read the presence
+handler refused (or a stale one, or a create answered in between on a
+first sync) the create's `known` ids were empty and a record that already
+existed counted as new and was bound. The scope is now added only where
+the read is applied (`confirmed.set`, and an unchanged read). New test:
+the presence handler throws on the first sync, the create matches a record
+that read returned; nothing binds (fails on the code before). Nits: the
+README states the window (from the last applied complete read before the
+answer to the first complete read after it) and says "applied"; ids
+another create was confirmed with are not candidates; a comment on
+draining mid-sync.

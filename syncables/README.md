@@ -1185,11 +1185,13 @@ When the create operation declares an `x-crud` `create` for the resource
   in the record. A create is bound only when all of these hold:
   - it sent at least one listed field (other than the id field), with a
     value that is not `null` or `""`;
-  - the collection had a complete read since this client started, before
-    the create was answered;
+  - a complete read of the collection was applied to the local copy since
+    this client started, before the create was answered (a read the
+    presence handler refused, or one a write made stale, does not count);
   - exactly one record of the read is new since the create was answered
-    (not in the local copy then), has no local writes, and equals every
-    field the create sent, by JSON value (the id field left out);
+    (not in the confirmed copy then), has no local writes, is not the id
+    another create was confirmed with, and equals every field the create
+    sent, by JSON value (the id field left out);
   - no other unbound create of the collection has that record as a
     candidate.
 
@@ -1201,9 +1203,12 @@ When the create operation declares an `x-crud` `create` for the resource
   when the create was answered is not stored), or a collection without
   the listed field leave it to `resolveWrite`. A field the provider
   changes on the way (trims, normalises, defaults) prevents the match.
-  What remains is the app's guarantee: if a listed value is not in fact
-  unique (two clients, or a person, create the same value in the same
-  interval), and the record this create made is not listed (filtered out,
+  What remains is the app's guarantee. "New" means not in the last
+  applied complete read before the create was answered, so the window
+  runs from that read (which may be several syncs old) to the first
+  complete read that starts after the answer. If a listed value is not
+  in fact unique (two clients, or a person, create the same value in that
+  window), and the record this create made is not listed (filtered out,
   or not yet visible), the create is bound to the other record, and its
   later updates and deletes go there. Declare only fields whose
   uniqueness the provider enforces or the app alone assigns.

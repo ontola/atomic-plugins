@@ -231,6 +231,32 @@ describe('an unbound create with a declared unique value', () => {
     expect(c.pendingWrites()).toMatchObject([{ unbound: true }]);
   });
 
+  it('is not bound after a read that was not applied (the presence handler threw)', async () => {
+    const fake = provider();
+    // The provider makes nothing new: the matching record exists already.
+    fake.onPost = (): Row[] => [];
+    fake.rows = [{ ...rex, id: 's0' }];
+    // A record a reused storage holds, which the first read lacks: telling
+    // its removal throws, so that read is not applied.
+    const storage = new InMemoryStorageAdapter();
+    await storage.put('pets', 'old', { id: 'old', name: 'Old', ref: 'z9' });
+    let fail = true;
+    const c = client(fake, {
+      ...unique,
+      storage,
+      onPresence: () => {
+        if (fail) throw new Error('not now');
+      },
+    });
+    await expect(c.sync()).rejects.toThrow('not now');
+    await unbound(c, rex);
+    fail = false;
+    // s0 was in that read but never confirmed: it is not new since the
+    // create, so it must not be bound.
+    expect((await c.sync()).matched).toBeUndefined();
+    expect(c.pendingWrites()).toMatchObject([{ unbound: true }]);
+  });
+
   it('is not bound without a complete read of the collection before it', async () => {
     const fake = provider();
     const c = client(fake);

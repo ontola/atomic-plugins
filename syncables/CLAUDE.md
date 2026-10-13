@@ -226,7 +226,8 @@ Data flows through four stages, each its own directory under `src/`:
    with `matchUnboundCreates` (`uniqueFieldsOf`, resolved at construction)
    a create that sent a declared unique value is remembered in memory
    (`unboundKnown`: the scope's confirmed ids, the body, `readsStarted`)
-   if `completeScopes` has its scope, and `matchUnbound` in `performSync`
+   if `completeScopes` has its scope (added only where a complete read is
+   applied: `confirmed.set`, or an unchanged read), and `matchUnbound` in `performSync`
    (before the snapshot is applied) binds it on the first complete read of
    the scope that started later: exactly one new, write-less candidate
    equal on every sent field and claimed by no other create; then
