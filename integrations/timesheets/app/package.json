@@ -1,7 +1,7 @@
 {
   "name": "@atomic-integrations/timesheets-app",
   "private": true,
-  "version": "0.7.1",
+  "version": "0.7.2",
   "type": "module",
   "description": "Clockify timesheets drive app. Records the version its catalog entry and apps/timesheets/<version>/ui.js carry (integrations/tooling/apps.mjs). Its one npm dependency, devonian, is for the Clockify lens prototype's tests in ../devonian/clockify/; the app's bundle does not import it. Not a certified sandbox package (no atomicCertification).",
   "dependencies": {

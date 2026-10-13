@@ -1,6 +1,6 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.6.0
+**Spec version:** 0.7.1
 
 ---
 
@@ -114,8 +114,48 @@ Describes the fields the client sends to control pagination.
 | `role` | `RequestRole` (§4.5) | Semantic role of this field. |
 | `required` | boolean | Whether this field is required. Default: `false`. |
 | `start` | integer, at least 0 | Added in 0.6.0, and allowed only when `role` is `page`. The number of the first page. Default: `1`. A client asks for the first page with `start`, and for each next page with one more. |
+| `advance` | `"itemCount"` \| `"pageSize"` | Added in 0.7.0, and allowed only when `role` is `offset`. How the client works out the next offset (§4.3.2). Default: `"itemCount"`. |
 | `template` | string | Added in 0.5.0, and allowed only when `role` is `windowRange`, where it is REQUIRED. The whole value the client sends, with `{start}` and `{end}` standing for the window's bounds written in the window's `format` (§4.6.2). Each placeholder appears exactly once, and no other `{` or `}` appears. Everything else is sent as written, before the parameter's ordinary serialization (percent-encoding in a query string, for example). |
 | `x-*` | any | Extension fields. |
+
+#### 4.3.2 Offset advance
+
+Added in 0.7.0. Up to 0.6.0 this extension did not say how a client works
+out the next offset; clients added the number of items the page held. Some
+providers document another rule: Box says the next offset is
+`previous_offset + previous_limit`, "and not by the size of the entries in
+the response array, as this may be less than the limit". A client that adds
+the items held asks again from inside such a page, and reads its later
+items twice; one that stops at an empty page can stop before the end. An
+`offset` field's `advance` says which rule applies:
+
+| `advance` | Next offset | End of the list |
+|-----------|-------------|-----------------|
+| `itemCount` (default) | This offset plus the number of items the page held. | The first empty page, or, when the response carries a `totalCount` value, once the next offset reaches it. |
+| `pageSize` | This offset plus the page size: the value of the response's `pageSize` field when it is an integer of at least 1, else the page size the client sent through the scheme's `pageSize` request field. | When the response carries a `totalCount` value, once the next offset reaches it; a page with fewer items, an empty page included, does not end the list before that. When it carries none, the first empty page. |
+
+Each response is read on its own: whether it carries a `totalCount` value,
+and which page size it reports, is decided per response. A `totalCount`
+value is an integer of at least 0 and a reported page size an integer of at
+least 1; any other value (a string, a fraction, a negative number) counts as
+not carried.
+
+Under `pageSize`, a client that knows neither page size (no usable
+`pageSize` value in the answer and none sent) cannot go on, and ends the
+read with an error rather than guess. Under either rule, a page holding an
+item an earlier page of the same read returned ends the read with an error,
+as in §4.4.5: a list that changes during the read can shift items between
+offsets, and a server that ignores the `offset` field answers the same page
+again, which a client would otherwise request without end.
+
+When the scheme also declares a `nextLink` response field, the link leads,
+under either rule (added in 0.7.1). The first request uses the `offset`
+field as above (0, or the field omitted); after that, while a response
+carries a link, the client follows it, and a response whose link is
+absent, `null` or empty ends the read. The next-offset and end-of-list
+rules in the table decide nothing; a repeated item still ends the read
+with an error. A read that ends this way is not complete when the last
+response carries a `totalCount` value above the number of items read.
 
 ### 4.4 Response Pagination Fields Object
 
@@ -146,7 +186,29 @@ Some APIs return the paginated array as the response body itself (`[ {...}, {...
 | Field | Type | Description |
 |-------|------|-------------|
 | `itemsField` | string | Dot-path to the field holding the array of items (e.g. `results`, `data.items`). Omit, or set to `null`, when the response body root **is** the array. |
+| `emptyWhenAbsent` | boolean | Added in 0.7.0, and allowed only with an `itemsField` that is a non-empty string. `true`: a response body in which the field `itemsField` names is absent is a page with no items. Default: `false`, under which such a body is an error. See below. |
 | `x-*` | any | Extension fields. |
+
+The field `itemsField` names is *absent* when the body is an object and,
+following the dot-path segment by segment, some object along the way lacks
+the next segment as a member (`{ "kind": "tasks#tasks" }` for `items`, or
+`{}` for `data.items`). A present `null`, or a value along the path that is
+not an object, is not absent. Under either value of `emptyWhenAbsent`, a
+field that is present and is not an array is an error, and so is a body
+that is not an object when `itemsField` is a non-empty string.
+
+Some providers leave an empty array out of the response instead of sending
+`[]`. JSON serialized with the Protocol Buffers JSON mapping does this by
+default: "If the field doesn't support field presence and has the default
+value (for example any empty repeated field) serializers should omit it from
+the output" ([ProtoJSON format](https://protobuf.dev/programming-guides/json/)).
+A document declares `emptyWhenAbsent: true` only for such a provider: where
+its documentation says so, or where it serializes with that mapping. It
+never follows from the response schema alone, which lists the array either
+way. The default is `false` because a consumer that read every absent field
+as an empty page would read a mistyped `itemsField` as an empty and complete
+list, and a client that prunes its local copy by a complete list would then
+remove every record.
 
 #### 4.4.3 Link Resolution Object
 
@@ -563,6 +625,18 @@ Matches a response body shaped like:
 }
 ```
 
+An envelope whose array is left out when empty (Google Tasks-style, `examples/empty-when-absent.yaml`):
+
+```yaml
+    response:
+      envelope:
+        itemsField: items
+        emptyWhenAbsent: true
+```
+
+`{ "kind": "tasks#tasks", "etag": "\"e1\"" }` is then a page with no items,
+and the list ends there if it carries no `nextPageToken`.
+
 ### 8.6 Incremental sync (Google Calendar-style)
 
 ```yaml
@@ -837,6 +911,9 @@ A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every lin
 20. `shortPage` MAY appear only in the `response` of a `pageNumber` scheme. Its `size` is an integer of at least 1 or `"request"`, and its `assurance` one of `documented`, `observed` or `assumed`.
 21. When `size` is `"request"`, the scheme, after overrides are merged, has a request field whose `role` is `pageSize`. A component scheme on its own is not checked: an application's overrides may add the field.
 22. When a scheme with `shortPage` is applied to an operation, after its overrides are merged, it has exactly one request field whose `role` is `page`.
+23. `emptyWhenAbsent` MAY appear only in an Envelope Object whose `itemsField` is a non-empty string, and is a boolean.
+24. `advance` MAY appear only on a Request Field Object whose `role` is `offset`, and is `itemCount` or `pageSize`.
+25. When a scheme whose `offset` field has `advance: pageSize` is applied to an operation, after its overrides are merged, it has a request or response field whose `role` is `pageSize`. A component scheme on its own is not checked.
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paginationSchemes.myScheme.request.queryParameters.page`).
 
@@ -844,18 +921,20 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 
 ## Schema, validator and tests
 
-[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4, 8–10, 12–16, 19 and 20. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5, 11, 17, 18, 21 and 22 (for Swagger 2.0, rule 18 reads the operation's and path item's `parameters` the same way, with `$ref`s to the root `parameters`). It also holds `read_pages`, a reference implementation of the page-number traversal with `start` and §4.4.5 over a caller-supplied request function (with `totalPages`, `totalCount` and a reported `pageSize`, and refusing a page size above the documented maximum), `read_range`, a reference implementation of §4.6.3 and §4.6.4 over a caller-supplied request function, and `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
+[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4, 8–10, 12–16, 19, 20, 23 and 24. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5, 11, 17, 18, 21, 22 and 25 (for Swagger 2.0, rule 18 reads the operation's and path item's `parameters` the same way, with `$ref`s to the root `parameters`). It also holds `page_items`, which locates a page's items through the Envelope Object (with `emptyWhenAbsent`), `read_offsets`, a reference implementation of the offset traversal with `advance` (§4.3.2), `read_pages`, a reference implementation of the page-number traversal with `start` and §4.4.5 over a caller-supplied request function (with `totalPages`, `totalCount` and a reported `pageSize`, and refusing a page size above the documented maximum), `read_range`, a reference implementation of §4.6.3 and §4.6.4 over a caller-supplied request function, and `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
 
 ```sh
 python3 -m venv /tmp/pagination-schemes-venv
 /tmp/pagination-schemes-venv/bin/pip install -r openapi-extensions/spec/pagination-schemes/requirements.txt
 cd openapi-extensions/spec/pagination-schemes
 /tmp/pagination-schemes-venv/bin/python -m unittest test_validate
-/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml examples/range-window.yaml examples/short-page.yaml
+/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml examples/range-window.yaml examples/short-page.yaml examples/empty-when-absent.yaml examples/offset-advance.yaml
 ```
 
 ## Changes
 
+- **0.7.1** (2026-10-12): a clarification of §4.3.2: in a scheme that declares both an `offset` field and a `nextLink` response field, the link leads under either `advance`, an absent, `null` or empty link ends the read, and such a read is not complete when the last response's `totalCount` exceeds the items read. 0.7.0 did not say. No document changes meaning, but consumers that stepped the offset after following links change behaviour: such a consumer could ask again for a page it had. `read_offsets` takes `follow` for such schemes and returns `complete`.
+- **0.7.0** (2026-10-12): adds `emptyWhenAbsent` to the Envelope Object (§4.4.2): `true` makes a response without the `itemsField` field a page with no items, for providers that leave an empty array out (the Protocol Buffers JSON mapping does), such as Google's Tasks API. Adds `advance` to an `offset` request field (§4.3.2): `itemCount` (the default, what clients did) adds the items a page held, `pageSize` adds the page size and ends only at `totalCount`, for providers such as Box that document the next offset as the previous offset plus the previous limit. Validation rules 23–25, `page_items` and `read_offsets` in the validator, examples and tests. A document valid under 0.6.0 stays valid and means the same, with one new consumer requirement: an offset read, under `itemCount` (the default) as under `pageSize`, ends with an error at a page holding an item an earlier page of the same read returned (§4.3.2); 0.6.0 required that only of a read with a Short Page Object. A 0.6.0 consumer ignores both fields: it fails a read whose items field is absent, as before, and advances an offset by the items held, which under a provider that needs `pageSize` can read items twice or stop early.
 - **0.6.0** (2026-10-08): adds `start` on a `page` request field (the first page number, default 1, so zero-based pages are described), and the Short Page Object (`shortPage` on a `pageNumber` scheme's response, §4.4.5): a page with fewer than `size` items ends the list, with an `assurance` (`documented`, `observed` or `assumed`) that decides whether such a read is complete for Collection Completeness; validation rules 19–22, `read_pages` in the validator, an example and tests. For pondersource/openapi-extensions#25 and ontola/atomic-plugins#385 (ClickUp). A document valid under 0.5.0 stays valid and means the same. A 0.5.0 consumer ignores `start` and `shortPage`: it asks a zero-based list for page 1 first, skipping page 0, and stops after a page without a continuation signal, so a document that needs either should not be used with such a consumer.
 - **0.5.0** (2026-10-08): adds the `rangeWindow` scheme type for operations that answer at most a fixed number of items and have no page parameter, read one range of an item field at a time (§4.6): the Range Window Object (`window`: unit, bound format, closed or half-open bounds, cap, minimum width, the selected field and the day's time zone), the request roles `windowStart`, `windowEnd` and `windowRange`, the Request Field Object's `template`, the splitting procedure (halving by default), when a windowed read is complete, validation rules 12–18, and `read_range` in the validator. For ontola/atomic-plugins pieces.md K1 (Moneybird's financial mutations). A document valid under 0.4.0 stays valid.
 - **0.4.0** (2026-10-08): `nextLink` and `previousLink` values may be relative references. Adds the Link Resolution Object (`linkResolution` on a Response Field Object, §4.4.3), the link-following rules (§4.4.4: the server's origin only, no userinfo or fragment, an unfollowable link ends the read with an error, the checked URL is the one requested, and loops are detected), the refusal of values parsers disagree on (§4.4.3 rule 2), validation rules 8–11, and the schema, validator and examples. A document valid under 0.3.0 stays valid. A consumer that followed links to another origin may no longer do so.

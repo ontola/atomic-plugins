@@ -37,6 +37,8 @@ export interface WeekGrid {
   days: GridDay[];
   rows: GridRow[];
   dayTotals: number[];
+  /** Of `dayTotals`, the billable time per day (usertest-findings#13). */
+  dayBillable: number[];
   total: number;
   billable: number;
   notBillable: number;
@@ -65,6 +67,7 @@ export function weekGrid(
   const index = new Map(week.days.map((d, i) => [d, i]));
   const rows = new Map<string, GridRow>();
   const dayTotals = week.days.map(() => 0);
+  const dayBillable = week.days.map(() => 0);
   let billable = 0;
   let total = 0;
 
@@ -89,7 +92,11 @@ export function weekGrid(
     row.total += ms;
     dayTotals[i] += ms;
     total += ms;
-    if (entry.billable) billable += ms;
+
+    if (entry.billable) {
+      billable += ms;
+      dayBillable[i] += ms;
+    }
   }
 
   return {
@@ -101,6 +108,7 @@ export function weekGrid(
     })),
     rows: [...rows.values()].sort(byTotalThenName),
     dayTotals,
+    dayBillable,
     total,
     billable,
     notBillable: total - billable,

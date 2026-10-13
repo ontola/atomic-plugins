@@ -21,6 +21,7 @@ import {
   parsePaginationState,
   readNestedField,
   setNestedField,
+  splitPath,
 } from '../pagination/response-parser.js';
 import type {
   PaginationResponseState,
@@ -184,22 +185,85 @@ export function pageItems(
 
 /**
  * The caller's envelope (a Collection Object's), else the scheme's own
- * (Pagination Schemes §4.4.2; `null` means the body root); undefined when
- * neither declares one and the array is located.
+ * (Pagination Schemes §4.4.2; `null` means the body root), with its
+ * `emptyWhenAbsent` (0.7.0); undefined when neither declares one and the
+ * array is located.
  */
-function declaredItemsField(
+function declaredEnvelope(
   walk: PageWalk,
   scheme: PaginationSchemeObject | undefined,
-): string | undefined {
+): { path: string; emptyWhenAbsent: boolean } | undefined {
+  if (walk.itemsField !== undefined)
+    return {
+      path: walk.itemsField,
+      emptyWhenAbsent: walk.emptyWhenAbsent === true,
+    };
   const schemeEnvelope = scheme?.response?.envelope;
-  return (
-    walk.itemsField ??
-    (schemeEnvelope === undefined
-      ? undefined
-      : typeof schemeEnvelope.itemsField === 'string'
-        ? schemeEnvelope.itemsField
-        : '')
-  );
+  if (schemeEnvelope === undefined) return undefined;
+  return typeof schemeEnvelope.itemsField === 'string'
+    ? {
+        path: schemeEnvelope.itemsField,
+        emptyWhenAbsent: schemeEnvelope.emptyWhenAbsent === true,
+      }
+    : { path: '', emptyWhenAbsent: false };
+}
+
+/**
+ * The value of the scheme's response body field with `role`, when it is an
+ * integer of at least `min` as the body carries it (spec 0.7.0 §4.3.2).
+ */
+function integerRole(
+  scheme: PaginationSchemeObject,
+  body: unknown,
+  role: string,
+  min: number,
+): number | undefined {
+  if (!isRecord(body)) return undefined;
+  for (const [name, field] of Object.entries(
+    scheme.response?.bodyFields ?? {},
+  )) {
+    if (field.role !== role) continue;
+    const value = readNestedField(body, name);
+    if (typeof value === 'number' && Number.isInteger(value) && value >= min)
+      return value;
+    return undefined;
+  }
+  return undefined;
+}
+
+/** Whether the scheme's response declares a field (body or header) with `role`. */
+function declaresRole(scheme: PaginationSchemeObject, role: string): boolean {
+  return [
+    ...Object.values(scheme.response?.bodyFields ?? {}),
+    ...Object.values(scheme.response?.headers ?? {}),
+  ].some((field) => field.role === role);
+}
+
+/** The `advance` of the scheme's offset field (spec 0.7.0 §4.3.2), if any. */
+function offsetAdvance(
+  scheme: PaginationSchemeObject,
+): 'itemCount' | 'pageSize' | undefined {
+  for (const location of ['queryParameters', 'bodyFields'] as const)
+    for (const field of Object.values(scheme.request?.[location] ?? {}))
+      if (field.role === 'offset')
+        return field.advance === 'pageSize' ? 'pageSize' : 'itemCount';
+  return undefined;
+}
+
+/**
+ * Whether the field at a dot-path is absent (Pagination Schemes 0.7.0
+ * §4.4.2): the body is an object and some object along the path lacks the
+ * next segment. A present `null`, or a value along the way that is not an
+ * object, is not absent.
+ */
+function isAbsent(body: unknown, path: string): boolean {
+  let node: unknown = body;
+  for (const segment of splitPath(path)) {
+    if (!isRecord(node)) return false;
+    if (!Object.prototype.hasOwnProperty.call(node, segment)) return true;
+    node = node[segment];
+  }
+  return false;
 }
 
 /**
@@ -212,7 +276,11 @@ function itemsAt(
   body: unknown,
   path: string,
   skipNonObjects = false,
+  emptyWhenAbsent = false,
 ): Record<string, unknown>[] {
+  // Pagination Schemes 0.7.0: only a declared envelope makes an absent
+  // field an empty page; a mistyped itemsField must not read as empty.
+  if (emptyWhenAbsent && path !== '' && isAbsent(body, path)) return [];
   const array =
     path === ''
       ? body
@@ -327,6 +395,13 @@ export interface PageWalk {
    * and without that `pageItems` locates the array.
    */
   itemsField?: string;
+  /**
+   * With `itemsField`: a body in which that field is absent is a page with
+   * no items (an Envelope Object's `emptyWhenAbsent`, Pagination Schemes
+   * 0.7.0). Ignored without `itemsField`; the scheme's own envelope then
+   * says.
+   */
+  emptyWhenAbsent?: boolean;
   /** Skip items that are not objects instead of failing the page (the deletion feed read). */
   skipNonObjects?: boolean;
   /**
@@ -541,11 +616,16 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
 
-    const itemsField = declaredItemsField(walk, scheme);
+    const envelope = declaredEnvelope(walk, scheme);
     const items =
-      itemsField === undefined
+      envelope === undefined
         ? pageItems(body, responseSchema, scheme)
-        : itemsAt(body, itemsField, walk.skipNonObjects);
+        : itemsAt(
+            body,
+            envelope.path,
+            walk.skipNonObjects,
+            envelope.emptyWhenAbsent,
+          );
     // Pagination Schemes 0.6.0 §4.4.5: checked before the page is handed
     // on, so that its items are not taken.
     const number = cursor.page ?? first;
@@ -566,12 +646,28 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
           `Page ${number} holds ${items.length} items, more than the declared ${full}; the read is not complete`,
         );
       }
+    }
+    // §4.4.5, and §4.3.2 (0.7.0) for every offset read: a page holding an
+    // item an earlier page returned ends the read, so a server that ignores
+    // the page or offset field is not asked again without end.
+    if (
+      scheme &&
+      ((short && shortSize !== undefined) ||
+        (scheme.type === 'pageNumber' && offsetAdvance(scheme) !== undefined))
+    ) {
+      const where =
+        cursor.offset !== undefined || offsetAdvance(scheme) !== undefined
+          ? `The page at offset ${cursor.offset ?? 0}`
+          : `Page ${number}`;
       const identity = walk.identity;
-      if (identity) {
-        const ids = items.map((item) => identity(item)).filter((id) => id);
+      const ids = identity
+        ? items.map((item) => identity(item)).filter((id) => id)
+        : [];
+      // Items without an identity value fall back to the page fingerprint.
+      if (ids.length > 0) {
         if (ids.some((id) => seenIds.has(id))) {
           throw new PageReadError(
-            `Page ${number} holds an item an earlier page returned; the read is not complete`,
+            `${where} holds an item an earlier page returned; the read is not complete`,
           );
         }
         for (const id of ids) seenIds.add(id);
@@ -579,7 +675,7 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
         const fingerprint = JSON.stringify(items);
         if (items.length > 0 && fingerprint === previousPage) {
           throw new PageReadError(
-            `Page ${number} repeats the page before it; the read is not complete`,
+            `${where} repeats the page before it; the read is not complete`,
           );
         }
         previousPage = fingerprint;
@@ -641,6 +737,87 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
         next = undefined;
         continue;
       }
+    }
+    // Pagination Schemes 0.7.0 §4.3.2: an offset that advances by the page
+    // size (a reported pageSize field, else the size sent) ends only at
+    // totalCount; a short or empty page before that does not end the list.
+    // A scheme that also declares a next link is led by it (0.7.1): an
+    // absent or null link ends the read below, never a step from an offset
+    // that was not advanced while links were followed.
+    if (
+      scheme.type === 'pageNumber' &&
+      !linkPresent &&
+      offsetAdvance(scheme) === 'pageSize' &&
+      !declaresRole(scheme, 'nextLink')
+    ) {
+      // §4.3.2: a reported page size counts as an integer of at least 1,
+      // a totalCount as an integer of at least 0; read per response, as
+      // sent (a string or a fraction is not carried).
+      const reported = integerRole(scheme, body, 'pageSize', 1);
+      const totalCount = integerRole(scheme, body, 'totalCount', 0);
+      const sent =
+        sendsPageSize && Number.isInteger(pageSize) && (pageSize ?? 0) >= 1
+          ? pageSize
+          : undefined;
+      const step = reported ?? sent;
+      const offset = cursor.offset ?? 0;
+      if (step === undefined) {
+        throw new PageReadError(
+          `The page at offset ${offset} gives no page size to advance by; the read is not complete`,
+        );
+      }
+      const following = offset + step;
+      if (
+        totalCount !== undefined ? following >= totalCount : items.length === 0
+      ) {
+        return;
+      }
+      cursor = { offset: following };
+      next = undefined;
+      continue;
+    }
+    // §4.3.2 `itemCount` (the default advance): the next offset adds the
+    // items the page held, and the list ends at the first empty page or,
+    // when the response carries a totalCount, once the next offset reaches
+    // it. Without a totalCount a full or short page does not end it (#495:
+    // such a read used to stop after one page, short and unreported); the
+    // repeat check above ends a read whose server ignores the offset. A
+    // scheme that also declares a next link (Spotify's `next`) is led by
+    // it: a link that is absent or `null` is the last page (0.7.1 §4.3.2).
+    if (
+      scheme.type === 'pageNumber' &&
+      !linkPresent &&
+      offsetAdvance(scheme) === 'itemCount' &&
+      !declaresRole(scheme, 'nextLink')
+    ) {
+      const totalCount = integerRole(scheme, body, 'totalCount', 0);
+      const following = (cursor.offset ?? 0) + items.length;
+      if (
+        items.length === 0 ||
+        (totalCount !== undefined && following >= totalCount)
+      ) {
+        return;
+      }
+      cursor = { offset: following };
+      next = undefined;
+      continue;
+    }
+    // 0.7.1 §4.3.2: in an offset scheme that declares a next link, an
+    // absent, null or empty link ends the read under either advance. When
+    // the last response's totalCount exceeds the items read, the read ends
+    // there but is not complete.
+    if (
+      !linkPresent &&
+      scheme.type === 'pageNumber' &&
+      offsetAdvance(scheme) !== undefined &&
+      declaresRole(scheme, 'nextLink')
+    ) {
+      const totalCount = integerRole(scheme, body, 'totalCount', 0);
+      if (walk.outcome && totalCount !== undefined && totalCount > itemsSoFar) {
+        walk.outcome.complete = false;
+        walk.outcome.reason = `ended by a response without a next link while its totalCount (${totalCount}) exceeds the ${itemsSoFar} items read: not a complete read (Pagination Schemes 0.7.1 §4.3.2)`;
+      }
+      return;
     }
     if (!state.hasNextPage && !linkPresent) {
       return;
@@ -824,11 +1001,16 @@ async function* walkWindows(
     } catch {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
-    const itemsField = declaredItemsField(walk, scheme);
+    const envelope = declaredEnvelope(walk, scheme);
     const items =
-      itemsField === undefined
+      envelope === undefined
         ? pageItems(body, responseSchema, scheme)
-        : itemsAt(body, itemsField, walk.skipNonObjects);
+        : itemsAt(
+            body,
+            envelope.path,
+            walk.skipNonObjects,
+            envelope.emptyWhenAbsent,
+          );
     if (items.length >= window.cap) {
       const split = halves(low, high, window);
       if (!split) {

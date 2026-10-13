@@ -95,6 +95,12 @@ export interface RequestFieldObject {
   template?: string;
   /** `page` only: the number of the first page (spec 0.6.0 §4.3.1). Default 1. */
   start?: number;
+  /**
+   * `offset` only: how the next offset is worked out (spec 0.7.0 §4.3.2).
+   * `itemCount` (default) adds the items the page held; `pageSize` adds the
+   * page size and ends only at `totalCount`.
+   */
+  advance?: 'itemCount' | 'pageSize';
   [key: `x-${string}`]: unknown;
 }
 
@@ -133,6 +139,12 @@ export interface ShortPageObject {
  */
 export interface EnvelopeObject {
   itemsField?: string | null;
+  /**
+   * Pagination Schemes 0.7.0 §4.4.2: a body in which the `itemsField` field
+   * is absent is a page with no items (for providers that leave an empty
+   * array out). Only with a non-empty string `itemsField` (rule 23).
+   */
+  emptyWhenAbsent?: boolean;
   [key: `x-${string}`]: unknown;
 }
 

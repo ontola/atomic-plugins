@@ -74,6 +74,23 @@ proxy or platform router the process sees plain HTTP. Clients sign the URL they 
 
 ### Routes
 
+With `WEBHOOKS_ENABLED=true` only (Webhook Deliveries and Webhook
+Subscriptions, `openapi-extensions/spec/`):
+
+- `POST /webhooks/{endpointId}`: a provider's delivery. The body is capped
+  while it is read, and verified over its exact bytes before anything in it
+  is read. `204` only after it was stored (or recorded as a gap, or wanted
+  by nobody); `401` unverified, `413` over the cap, `503` not stored.
+- `POST /connections/{id}/subscriptions` `{source, parameters, events}`,
+  `GET` and `DELETE /subscriptions/{id}`, `POST /subscriptions/{id}/renew`,
+  `GET /subscriptions/{id}/events?after=&limit=&wait=` (long poll up to 25
+  seconds), `POST /subscriptions/{id}/ack` `{generation, cursor}`,
+  `POST /subscriptions/{id}/reconciled` `{generation, barrier}`: signed by
+  the subscription's consumer (the connection's owner, a delegate or a
+  runtime), checked on every request. Subscribing runs the source's access
+  check through the connection, and so do renewals, reconciliations and any
+  fetch whose last passing check is older than 12 hours.
+
 - `GET /` — a static landing page. `GET /catalog` lists the platforms;
   `GET /catalog/{platform}.yaml` returns a platform's composed OpenAPI
   document.
@@ -224,6 +241,7 @@ Signed endpoints answer errors as JSON, `{"error": "<code>", "message": "<text>"
 | 409 | `transfer_blocked`, `transfer_conflict` |
 | 404 | `unknown_connection` (deleted, idle-expired, or never existed: connect again) |
 | 400 | `bad_request`, `invalid_handoff` |
+| 429 | `provider_quota`, from `/proxy/…` only, with `Retry-After` in seconds: the proxy's own requests to the platform are at a quota the provider counts on the proxy's address (`x-throttling`; see "Pacing under provider quotas") |
 
 Catalog refusals and upstream failures from `/proxy/…` keep their plain-text
 bodies (`404 method or path is not in the catalog`, `502 upstream request failed`).
@@ -274,7 +292,8 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `OPERATOR_NAME` | no | Who runs this proxy, as the landing and consent pages name them. Defaults to `this integration proxy`, and the pages then name no one. The consent page also shows the host of `BASE_URL`. 0.2.1 and later. |
 | `OPERATOR_URL` | no | Absolute `http(s)` link for `OPERATOR_NAME` on those pages. Anything else (`javascript:`, a relative path, credentials in the URL) is refused at startup. 0.2.1 and later. |
 | `KEY_CHECK_LIMIT_PER_HOUR` | no | The most API key or token checks the consent form makes for one client network and platform in any hour (a sliding window, counted in PostgreSQL across instances). Defaults to `20`; `0` turns the limit off; more than `10000` stops the proxy at startup. Only platforms with a declared key check count. A client over it gets `429` and no key check. A network is an IPv4 address or an IPv6 /64. Unreleased. |
-| `WEBHOOKS_ENABLED` | no | `true` creates the webhook inbox's tables and runs its sweeper (ontola/atomic-plugins#369, step 2; see [SECURITY.md](SECURITY.md#webhook-inbox-369-unreleased)). Unset, empty or `false` (the default): no inbox table, no sweeper, no webhook route. Any other value stops the proxy at startup. No webhook route is mounted in this release either way. Unreleased. |
+| `WEBHOOKS_ENABLED` | no | `true` creates the webhook inbox's tables, runs its sweeper and mounts the webhook routes below (ontola/atomic-plugins#369; see [SECURITY.md](SECURITY.md#webhook-inbox-369-unreleased)). Unset, empty or `false` (the default): no inbox table, no sweeper, no webhook route. Any other value stops the proxy at startup. Unreleased. |
+| `WEBHOOK_SECRET_<PLATFORM>` | with webhooks, per platform | The secret of a platform's shared application hook, as configured at the provider (`<PLATFORM>` is the catalog name, upper case, `-` as `_`). Read only with `WEBHOOKS_ENABLED=true`, for platforms whose composed document declares `x-webhook-deliveries`. Without it, every delivery to that platform is refused and no subscription to it is created. Unreleased. |
 | `WEBHOOK_INBOX_MAX_BYTES` | no | The deployment's inbox budget in bytes, payloads plus a stated per-row overhead. Defaults to `1073741824` (1 GiB); at least `268435456` (the per-owner budget). Read only with `WEBHOOKS_ENABLED=true`: with the inbox off it is ignored, even when invalid. Unreleased. |
 | `TRUST_FORWARDED_FOR` | no; `heroku` on Heroku | Where that limit finds the client address: `none` (default) uses the TCP peer and ignores `X-Forwarded-For`; `heroku` (synonym `rightmost`) uses only the right-most `X-Forwarded-For` entry, which Heroku's router (or one reverse proxy in front) appends, and never an entry to its left; when that entry is missing or not an address, one shared bucket. Set `heroku` only behind such a proxy: without one, a client writes that entry itself. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `OAUTH_<PLATFORM>_CLIENT_SECRET`, `OAUTH_<PLATFORM>_CLIENT_AUTH_METHOD` | per OAuth platform | See below. |
@@ -381,6 +400,10 @@ same as `oauthSecurityScheme` for a document with several `apiKey` schemes,
 or several bearer/basic `http` schemes.
 **GET /catalog/{platform}.selection.json** returns the selection object (or an
 empty object when absent).
+
+A composed document whose `paths` holds a path item that is a `$ref`
+(OpenAPI 3.1) or not an object is refused at load, naming the platform and
+path: the proxy does not resolve `$ref` path items, and no catalog uses one.
 
 **Produced classes** (`x-produces`,
 [`openapi-extensions/spec/produced-classes`](../openapi-extensions/spec/produced-classes/README.md),
@@ -641,6 +664,36 @@ describes the controls and what is not yet verified.
 - Cookies are marked `Secure`, so in production `BASE_URL` must use
   `https://`. `http://localhost` works during local development because
   browsers treat `localhost` as a secure context.
+
+## Pacing under provider quotas
+
+A provider that counts requests per source address counts the proxy's
+address, shared by every tenant (pieces.md P4). When a platform's composed
+document declares such a quota in `x-throttling`
+([Throttling](../openapi-extensions/spec/throttling/README.md)), the proxy
+paces its own requests under it:
+
+- **Which buckets.** Those the operation selects (its own `x-throttling`
+  list, or the root `applies`) whose `partitionBy` is exactly `[sourceIp]`,
+  or `[]` (one counter for all callers: the proxy's traffic alone then stays
+  under the whole limit), with a known `requests` of at most 10,000 and a
+  `window.seconds`. Buckets partitioned by user, credential or anything else
+  are each caller's own and not paced; a bucket over 10,000 requests per
+  window is not paced either.
+- **How.** A sliding log per platform and bucket: at most `requests`
+  requests in any `window.seconds`, which stays under the limit for `fixed`
+  (with or without an `anchor`), `sliding` and `unspecified` windows alike.
+  A request is counted just before the provider is called, after
+  authentication, the catalog checks and any token refresh, and is not
+  given back if the provider then fails. A request that would exceed any
+  selected bucket is refused with `429 provider_quota` and `Retry-After`
+  (the seconds until the oldest counted request leaves the window, rounded
+  up); nothing is queued.
+- **Limits of the model.** The logs are in memory, per instance: N
+  instances behind one egress address may together send up to N times the
+  limit, and a restart starts empty. Other clients behind the same address
+  (or, for `[]`, anywhere) are not seen. The provider still enforces its own
+  limit, and its `429` and `Retry-After` are forwarded as before.
 
 ## Browser clients
 

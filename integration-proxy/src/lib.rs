@@ -49,6 +49,7 @@ mod connections;
 #[cfg(test)]
 mod identity_catalog_tests;
 mod oauth;
+mod pacing;
 mod providers;
 mod proxy;
 mod security;
@@ -57,9 +58,6 @@ mod templates;
 #[cfg(test)]
 mod test_support;
 mod transfer;
-// Step 2 of #369: the store's operations have no caller outside the tests
-// until step 3 mounts the routes.
-#[cfg_attr(not(test), allow(dead_code))]
 mod webhooks;
 
 use std::sync::Arc;
@@ -102,6 +100,11 @@ struct AppState {
     key_check_window: std::time::Duration,
     /// `TRUST_FORWARDED_FOR`: where that limit finds the client address.
     trust_forwarded_for: config::TrustForwardedFor,
+    /// The webhook inbox and its routes, only with `WEBHOOKS_ENABLED=true`.
+    webhooks: Option<Arc<webhooks::Webhooks>>,
+    /// The sliding logs pacing this instance's requests under providers'
+    /// `x-throttling` quotas on the proxy's own address (pieces.md P4).
+    pacer: Arc<pacing::Pacer>,
     /// Whether an owner still has open webhook subscriptions, which block a
     /// key transfer (#410).
     subscriptions: Arc<dyn transfer::OpenSubscriptions>,
@@ -252,7 +255,7 @@ pub async fn build_app_with_access(
         .map_err(Error::Security)?;
     // Off by default: with WEBHOOKS_ENABLED unset there are no inbox tables,
     // no sweeper and no webhook route.
-    webhooks::start(&config.webhooks, &config.database_url, &security)
+    let webhooks = webhooks::start(&config.webhooks, &config.database_url, &security, &catalog)
         .await
         .map_err(Error::Security)?;
     if config.key_check_limit_per_hour > 0
@@ -278,10 +281,20 @@ pub async fn build_app_with_access(
         key_check_limit: config.key_check_limit_per_hour,
         key_check_window: KEY_CHECK_WINDOW,
         trust_forwarded_for: config.trust_forwarded_for,
+        webhooks,
+        pacer: Arc::default(),
         subscriptions: Arc::new(transfer::NoSubscriptions),
         #[cfg(test)]
         test_upstream: None,
     };
+    if let Some(webhooks) = &state.webhooks {
+        webhooks::sweeper::spawn(
+            webhooks.store.clone(),
+            webhooks::provider::ProviderHookDeleter {
+                state: state.clone(),
+            },
+        );
+    }
 
     Ok(router(state))
 }
@@ -371,7 +384,13 @@ fn browser_cors() -> tower_http::cors::CorsLayer {
 }
 
 fn router(state: AppState) -> Router {
+    // The webhook routes exist only while the inbox is on.
+    let webhook_routes = match &state.webhooks {
+        Some(_) => webhooks::routes::router(),
+        None => Router::new(),
+    };
     Router::new()
+        .merge(webhook_routes)
         .route("/", get(home))
         .route("/healthz", get(healthz))
         .route("/logo.png", get(logo))

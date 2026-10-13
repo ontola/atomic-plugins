@@ -140,6 +140,12 @@ pub mod test_signer {
         pub fn sign(&self, message: &[u8]) -> String {
             STANDARD.encode(self.0.sign(message).to_bytes())
         }
+        /// A v2 request signature as atomic-server's signer encodes it
+        /// (`lib/src/authentication.rs`): URL-safe base64, unpadded. Pinned
+        /// by its golden vectors (`signature::tests`).
+        pub fn sign_v2(&self, message: &[u8]) -> String {
+            URL_SAFE_NO_PAD.encode(self.0.sign(message).to_bytes())
+        }
     }
 }
 

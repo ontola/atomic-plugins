@@ -33,6 +33,7 @@ export type {
   PendingWriteInfo,
   PendingWriteState,
   PendingWriteType,
+  WritePreconditionState,
   WriteConflict,
   WriteResolution,
   WriteFailure,
@@ -40,6 +41,9 @@ export type {
   AuthBlock,
   MissingRecord,
   MissingRecordEvidence,
+  PresenceChange,
+  PresenceMark,
+  PresenceMarkValue,
   MissingRecordFailure,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
@@ -99,6 +103,19 @@ export type {
   RuntimeMembers,
   RuntimeProperty,
 } from './read/runtime-schemas.js';
+export {
+  absoluteIri,
+  checkProduces,
+  lensFits,
+  parseProduces,
+  producedClasses,
+  resourcesProducing,
+  sameSubject,
+} from './read/produced-classes.js';
+export type {
+  ProducedClass,
+  ResourceProduction,
+} from './read/produced-classes.js';
 export { buildBody, buildQuery } from './pagination/request-builder.js';
 export type { PageCursor } from './pagination/request-builder.js';
 export { parseLinkHeader } from './pagination/response-parser.js';
@@ -123,6 +140,8 @@ export type {
   ThrottlingVerdict,
   TimeUnit,
 } from './throttling/throttling.js';
+export { Pacer } from './throttling/pacing.js';
+export type { Quota } from './throttling/pacing.js';
 export { halves, WindowReadError } from './pagination/window.js';
 export type {
   RangeWindowObject,
@@ -150,3 +169,43 @@ export type {
   ResponseRole,
   SchemeType,
 } from './pagination/types.js';
+
+// The daemon side of a webhook inbox (ontola/atomic-plugins#369): signed
+// requests to the receiver, its consumer routes, and the journal-before-ack
+// consumer. Signing is Node only; the rest is also in `syncables/browser`,
+// which needs no `URL`, `Buffer` or `TextDecoder` for it (a QuickJS sandbox).
+export {
+  agentKeyFromSeed,
+  sha256Hex,
+  signedTransport,
+  v2Headers,
+  v2Message,
+} from './inbox/sign.js';
+export type { AtomicAgentKey } from './inbox/sign.js';
+export {
+  DEFAULT_BACKOFF_SECONDS,
+  InboxClient,
+  InboxError,
+  parseRetryAfter,
+} from './inbox/client.js';
+export type {
+  GapMarker,
+  InboxEvent,
+  InboxEventPage,
+  InboxSubscription,
+  ReconciliationRequired,
+  SubscribeRequest,
+} from './inbox/client.js';
+export {
+  DEFAULT_WAIT_SECONDS,
+  InboxConsumer,
+  InMemoryInboxJournal,
+} from './inbox/consumer.js';
+export type {
+  InboxConsumerOptions,
+  InboxJournal,
+  StepResult,
+  StoredSubscription,
+} from './inbox/consumer.js';
+export { decodeBase64Utf8, pathSegment, scopedReads } from './inbox/reads.js';
+export type { ScopedRead } from './inbox/reads.js';

@@ -228,6 +228,9 @@ table it is decides how an import gets in (`controller.ts` `Source`):
   `now` feeds; an import that
   stopped midway is a problem ("The import stopped before every row was
   written.", the rows written so far are kept, check the same file again).
+  Both error texts end in a period only when the message doesn't already
+  end in `.`, `?` or `!` (load errors since 0.4.2, the stopped import since
+  0.4.3).
   Incomplete rows are ignored groups by what they miss, named, with "Open
   row" when the host can show a row and the group has one. The card is a
   region, not a live region: the header's pill stays the one `role="status"`.
@@ -367,6 +370,16 @@ minified, one module). Screenshots, axe and the render budget:
 
 ## Verified
 
+At 0.4.3 (`plugin.js` sha256
+`fa91ad60bf341e7e8c8da523be6e11b4ad81a1403a806b4ee895eb941e692bde`, again
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.3/ui.js`, 120,397 bytes; the only change from 0.4.2 is the
+stopped-import message's punctuation, unit-tested in `app/status.test.ts`)
+the money lane's e2e (`e2e/money.spec.ts` and `moneybird.spec.ts`)
+exited 0 on 2026-10-12 against the pin `7dab1ce` (the build VPS's source build);
+its log was lost, so there are no per-test counts for that run.
+The stopped-import state is still not reached end to end.
+
 At 0.4.2 (`plugin.js` sha256
 `2c4005acaaad5ce1fe730009c452fb59c8213f4852711f915b8e12868e39b963`, again
 0.3.0's bundle with only the manifest's `version` changed; app module
@@ -377,9 +390,16 @@ run adds over 0.4.1: after the MT940 import into the app's own table, the
 sync-status card reads "Synced just now", "2 transactions from 1
 statement; 2 arrived at the last sync", no "Last sync:" counts line, and
 "Read-only: edits here stay in Atomic. There is no bank connection". Not
-verified end to end: the card on the importer's table, on a table without
-import dates, after a stopped import, and with incomplete rows
-(`app/status.test.ts` and `app/view.test.ts` only). After a load error it
+verified end to end: the card on a table without import dates and after a
+stopped import (`app/status.test.ts` and `app/view.test.ts` only). With
+incomplete rows it is: the installed-app test checks the card's ignored
+group for the hand-typed row ("1 transaction is incomplete (missing
+Amount): …", the row under Which, Open row). On the importer's table too:
+the third test checks the card read-only with "Saving a category or note
+asks you to allow editing first.", dated "Synced just now" with "2 arrived
+at the last sync" after the importer's import, and without that sentence
+once editing is allowed. Both passed on 2026-10-12 at the pin `7dab1ce`
+(the five money e2e tests, 5.5 minutes). After a load error it
 is: `e2e/money.spec.ts` (the installed-app test) has the host fail the
 app's `getData` until the host recovers, by failing the page store's read
 of the app's table,

@@ -100,6 +100,11 @@ def validate(document):
                 and resource_read_value(document, resource_name, "notFound") != "unavailable":
             errors.append(f"crudResources.{resource_name}: gone: unavailable needs an explicit notFound: unavailable "
                           "(a 0.2.0 consumer reads the 410 by notFound, default deleted)")
+        unavailable = [f for f in READ_FIELDS if resource_read_value(document, resource_name, f) == "unavailable"]
+        deleted = sorted(n for n, d in declared.items() if d and d.get("absent") == "deleted")
+        if unavailable and deleted:
+            errors.append(f"crudResources.{resource_name}: {deleted} declare absent: deleted while the resource states "
+                          f"{' and '.join(f + ': unavailable' for f in unavailable)} (§4.3)")
         for field in READ_FIELDS:
             explicit = {d[field] for d in declared.values()
                         if d and field in d and isinstance(d[field], (str, int, float, bool, type(None)))}

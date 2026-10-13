@@ -1,6 +1,7 @@
 import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
 import type { ListMethod } from './transport.js';
 import { discoverResources } from '../resources/discover.js';
+import { parseProduces, type ProducedClass } from './produced-classes.js';
 
 /**
  * The collection model the read path walks, built from the OpenAPI CRUD
@@ -49,10 +50,23 @@ export interface ReadCollection {
    * envelope name).
    */
   itemsField?: string;
+  /**
+   * The Collection Object's `envelope.emptyWhenAbsent` (Pagination Schemes
+   * 0.7.0 §4.4.2): with a non-empty `itemsField`, a body without that field
+   * is a page with no items.
+   */
+  emptyWhenAbsent?: boolean;
   /** Item URL from the declared identity; absent for a list-only resource. */
   itemUrl?: string;
   /** Path variable bound to this item's own identity. */
   itemParam?: string;
+  /**
+   * Produced Classes 0.1.0-draft: the shared classes the resource's objects
+   * can be represented as (`x-produces` on its CRUD Resource Object, the
+   * same for every collection of the resource). Absent when not declared,
+   * or when the declaration does not parse (`producedClasses` says why).
+   */
+  produces?: ProducedClass[];
 }
 
 /** Enumerate `collection` and read `field` off each item to fill a path variable. */
@@ -164,6 +178,7 @@ export function discoverReadModel(
     if (!isRecord(def)) {
       continue;
     }
+    const produces = parseProduces(def['x-produces']);
     const identity = isRecord(def['identity']) ? def['identity'] : {};
     const itemUrl =
       typeof identity['urlTemplate'] === 'string'
@@ -217,6 +232,11 @@ export function discoverReadModel(
       const itemsField = isRecord(col['envelope'])
         ? col['envelope']['itemsField']
         : undefined;
+      const emptyWhenAbsent =
+        isRecord(col['envelope']) &&
+        col['envelope']['emptyWhenAbsent'] === true &&
+        typeof itemsField === 'string' &&
+        itemsField !== '';
       collections.push({
         name,
         resource,
@@ -232,8 +252,10 @@ export function discoverReadModel(
         ...(typeof itemsField === 'string' || itemsField === null
           ? { itemsField: itemsField ?? '' }
           : {}),
+        ...(emptyWhenAbsent ? { emptyWhenAbsent } : {}),
         ...(itemUrl ? { itemUrl } : {}),
         ...(itemParam ? { itemParam } : {}),
+        ...(produces ? { produces: structuredClone(produces) } : {}),
       });
     }
   }
