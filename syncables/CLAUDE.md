@@ -922,8 +922,8 @@ retention limit and leases on a simulated clock.
   `@typescript-eslint/explicit-function-return-type` as a warning, and a
   vitest plugin scoped to `__tests__/**`. Prettier config (`.prettierrc`) is
   applied via `eslint-config-prettier`, so ESLint won't fight Prettier.
-- Node engine is pinned to `>= 22.11 < 23` (see `package.json`
-  `engines`/`volta`).
+- Node runtime requires `>= 22.11`; CI covers Node 22, 24 and 26. The Volta
+  Node 22 pin is a reproducible development default, not an upper runtime limit.
 
 ## Generative AI disclosure (NLnet policy)
 

@@ -81,7 +81,7 @@ definitions. Library imports remain unchanged. See the [CLI guide](docs/cli.md)
 for the local mock, the device-server dependency and the current limits.
 
 For published releases, install with `npm install syncables`. To build the
-current source, run these commands from `syncables/` with Node 22:
+current source, run these commands from `syncables/` with Node 22.11 or newer:
 
 ```sh
 npm ci
@@ -1922,6 +1922,11 @@ class or lens, and maps no record.
 Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
+
+- **Unreleased**: Add the optional CLI authentication/configuration scaffold
+  in the existing package. Remove the inherited Node 22-only upper limit;
+  the minimum stays 22.11 and CI covers Node 22, 24 and 26. Root and browser
+  library entrypoints remain unchanged.
 
 - **Unreleased** (for 0.23.0): Pagination Schemes 0.8.0 `response.incomplete`
   (§4.4.6): a response body value that marks a capped result (Notion's

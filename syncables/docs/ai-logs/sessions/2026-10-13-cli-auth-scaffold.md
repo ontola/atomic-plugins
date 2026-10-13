@@ -40,3 +40,12 @@ passed. A packed npm install preserved both library imports and exposed the
 CLI executable. A local mock device approval followed by connection discovery
 and a GET API probe passed. Live device-flow/GitHub evidence depends on #565;
 macOS runtime replication and launchd installation are not part of this stage.
+
+## Follow-up during terminal testing
+
+The user reported using Node 26 and asked why the package was restricted to
+Node 22, then reported a missing cli:mock script. The restriction was inherited
+from the existing package/tooling baseline. Node 26.11.1 passed all 1,307 unit
+tests, compilation, lint and CLI help. Removed the upper limit while keeping
+the minimum at 22.11, added a Node 22/24/26 CI matrix, and clarified that the
+mock script requires this source branch and its syncables package directory.
