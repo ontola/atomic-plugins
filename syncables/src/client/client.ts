@@ -48,6 +48,7 @@ import {
   type QuerySelection,
   type ReadCollection,
 } from '../read/model.js';
+import type { ProducedClass } from '../read/produced-classes.js';
 import {
   mergePatchRecord,
   patchedField,
@@ -820,6 +821,14 @@ export interface ApiClient {
    * present as far as the client knows.
    */
   presence(resource?: string): PresenceMark[];
+  /**
+   * Produced Classes 0.1.0-draft: the shared classes the resource's records
+   * can be represented as, from `x-produces` on its CRUD Resource Object
+   * (each with its lens IRI, if declared). Empty when the resource declares
+   * none, or the declaration does not parse. Metadata only: nothing is
+   * fetched or mapped.
+   */
+  produces(resource: string): ProducedClass[];
   /**
    * Settles the `uncertain` or `failed` write for record `id`, or its restored
    * updates waiting for a refresh (see `WriteResolution`), or drops its
@@ -6133,6 +6142,9 @@ export function createApiClient(
         ...(gone || kept ? { awaitingRefresh: true } : {}),
       });
       if (gone) await concludeNew(scope, id, gone);
+    },
+    produces(resource): ProducedClass[] {
+      return structuredClone(resolveRoute(resource).collection.produces ?? []);
     },
     presence(resource): PresenceMark[] {
       const name = resource
