@@ -158,11 +158,13 @@ export interface State {
   selected?: string;
   /**
    * Rows that arrived in the latest refresh through the table subscription
-   * since the last load, and when (epoch ms, from `Options.now`). They may
-   * come from this view's import or from any other writer to the table (the
-   * importer's review, another tab), so the card says "arrived", not "added".
+   * since the last load, and when (epoch ms, from `Options.now`). `source`
+   * is `import` for the refreshes just after an import this view applied
+   * (its own writes, or the host importer it ran), else `elsewhere`: any
+   * other writer to the table (the importer's review in another tab,
+   * another device). The pill and the card word the two apart.
    */
-  arrived?: { count: number; at: number };
+  arrived?: { count: number; at: number; source: 'import' | 'elsewhere' };
   /** When the last load failed (epoch ms), while `view` is the error. */
   failedAt?: number;
   /** Saves of the open row's annotations, by field. */
@@ -283,6 +285,11 @@ export function createController(
   let unsubscribe: (() => void) | undefined;
   let refreshing: Promise<void> | undefined;
   let again = false;
+  /**
+   * Until when (epoch ms) a refresh's new rows count as this view's import:
+   * `Infinity` while an import runs, then 15 s after it applied, else 0.
+   */
+  let importedUntil = 0;
 
   const update = (patch: Partial<State>) => {
     state = { ...state, ...patch };
@@ -333,7 +340,15 @@ export function createController(
       rows,
       incomplete,
       view: settled(rows, incomplete),
-      ...(arrived ? { arrived: { count: arrived, at: now() } } : {}),
+      ...(arrived
+        ? {
+            arrived: {
+              count: arrived,
+              at: now(),
+              source: now() < importedUntil ? 'import' : 'elsewhere',
+            },
+          }
+        : {}),
       // A first import into an empty table opens where its rows are.
       ...(wasEmpty && rows.length
         ? { filters: noFilters(defaultPeriod(rows, today())) }
@@ -746,6 +761,11 @@ export function createController(
         },
       });
 
+      // Rows that arrive while the run is under way are this view's import
+      // too: the host importer's writes can reach the subscription before
+      // its result does (#537 review).
+      importedUntil = Infinity;
+
       try {
         const outcome = await port.apply(
           pendingText,
@@ -757,6 +777,7 @@ export function createController(
               update({ importing: { ...current, progress } });
           },
         );
+        importedUntil = outcome.status === 'applied' ? now() + 15_000 : 0;
         if (mine !== run) return;
 
         if (outcome.status === 'applied' || outcome.status === 'nothing') {
@@ -789,6 +810,7 @@ export function createController(
             },
           });
       } catch (error) {
+        importedUntil = 0;
         if (mine === run)
           update({
             importing: {

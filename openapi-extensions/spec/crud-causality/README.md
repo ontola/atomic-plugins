@@ -1,6 +1,6 @@
 # OpenAPI CRUD Causality Extension
 
-**Spec version:** 0.5.0
+**Spec version:** 0.6.0
 
 ---
 
@@ -100,10 +100,31 @@ Describes one kind of object behind the API.
 |-------|------|----------|-------------|
 | `schema` | OAS Schema Object | No | The shape of the object. |
 | `description` | string | No | Human-readable description. |
-| `identity` | `IdentityObject` (§4.1.1) | **Yes** | How an object's canonical URL is structured. |
+| `identity` | `IdentityObject` (§4.1.1) | Conditional | How an object's canonical URL is structured. Required when anything addresses one object of the resource (see below); optional for a list-only resource. Optional since 0.6.0. |
 | `references` | `Record<string, ReferenceObject>` (§4.1.3) | No | Named references from this object's fields to objects of another resource. |
 | `collections` | `Record<string, CollectionObject>` (§4.2) | No | Named collections this resource can be a member of. |
 | `x-*` | any | No | Extension fields. |
+
+A resource needs an `identity` when an operation or another object
+addresses one of its objects: an operation whose `x-crud` names the resource
+with action `create`, `read`, `update` or `delete` (a create's URL is read
+back through `identity.urlTemplate`, §4.3.2), or a Reference Object (§4.1.3)
+whose `resource` is this resource. A resource that nothing addresses that
+way, one that is only listed, MAY omit `identity` (rule 25).
+
+_Informative:_ other extensions may address an object of a resource too,
+and then rely on its `identity`; a [Write
+Preconditions](../write-preconditions/README.md) source object (§4.4.1
+there) is one. Rule 25 does not check them.
+
+A consumer treats a resource without `identity` as read-only. It reads the
+objects through the resource's collections, and identifies them by nothing
+more than the list items carry: it builds no item URL, reads no object on
+its own (so it cannot check one that a list no longer returns), sends no
+write, and takes no path variable for another collection from the
+resource's objects, since there are no `identity.bindings` to take it from.
+Which item field, if any, the consumer keys its copy by is its own choice;
+this extension states none for such a resource.
 
 #### 4.1.1 Identity Object
 
@@ -289,10 +310,12 @@ Describes where the newly created object's URL is found.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `source` | `header` \| `bodyField` \| `template` | **Yes** | Where to read the new object's URL from. |
-| `name` | string | Conditional | Header name (if `source: header`) or dot-path to a response body field (if `source: bodyField`). Not used for `template`. |
+| `name` | string | Conditional | Header name (if `source: header`) or dot-path to a response body field (if `source: bodyField`). Required for both since 0.6.0; not used for `template`. |
 | `x-*` | any | No | Extension fields. |
 
 When `source: template`, the URL is derived by substituting the created object's fields (request body plus `addedFields`) into the resource's `identity.urlTemplate` (§4.1.1), using `identity.bindings` (§4.1.2) to know which field fills which variable.
+
+_Informative:_ some consumers read the `Location` header when a `source: header` object names none (the reference `created_identity` and syncables do), for documents written before 0.6.0 required `name` (rule 26).
 
 Regardless of `source`, once the object's URL is known, `identity.bindings` MAY also be read in reverse: match the URL against `identity.urlTemplate` and treat the captured value for each bound `{variable}` as authoritative for the corresponding object field, even if that field isn't otherwise listed in `addedFields`.
 
@@ -751,6 +774,8 @@ A conforming implementation MUST enforce:
 22. `operation` MUST be the `operationId` of exactly one operation in the document, whose `x-crud` has `action: update` and the same `resource` as the create.
 23. Every `bind` key is `body`, `body.<dot-path>`, or `path.`, `query.` or `header.` followed by the name of a parameter of the follow-up operation (its own or its path item's); `body` and `body.<…>` need the follow-up operation to declare an `application/json` request body, and `body` excludes every `body.<…>` key. Every BindSource has `from` (`created`, `planned` or `missing`) and a dot-path `field`; `missing` is allowed only when its `field` equals the Follow-up Object's `field`.
 24. Every required path parameter of the follow-up operation is bound by a `path.<name>` key or is a path parameter of the create operation with the same name. Every required query or header parameter of the follow-up operation is bound by a `query.<name>` or `header.<name>` key. Header names compare case-insensitively, here and in rule 23.
+25. A CRUD Resource Object MUST have an `identity` when an operation's `x-crud` names it with action `create`, `read`, `update` or `delete`, or a Reference Object's `resource` names it (§4.1). An Identity Object, where present, MUST have a `urlTemplate` (§4.1.1).
+26. A Url Source Object with `source: header` or `source: bodyField` MUST have a `name` (§4.3.2).
 
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paths./widgets.post.x-crud.url`).
@@ -759,23 +784,39 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 
 ## Validator and tests
 
-[`validate.py`](validate.py) checks rules 2, 4, 9, 14–19 and 20–24 for a loaded OpenAPI
-document: the collection reads of §4.2.1 and the resource and collection names
-they depend on; rule 19 is reported as a warning, and the `x-list-*` forms are not checked. It does not check the other
-rules. It also holds `read_request`, which builds the first request of a read
-(§4.2.1 steps 1–3, with the `x-list-*` fallback), and `compound_create` and `continue_compound_create`, a reference implementation of §4.7.2 over caller-supplied request functions, with `created_identity` reading the created object's identity back as §4.3.2 says. [`examples/compound-create.yaml`](examples/compound-create.yaml) is a synthetic document with a compound create. [`examples/fixed-query.yaml`](examples/fixed-query.yaml)
-is a synthetic document with a fixed-query `GET` collection and a `POST`
-search collection. From the repository root:
+[`validate.py`](validate.py) checks every rule of §8 for a loaded OpenAPI
+document (OpenAPI 3, or Swagger 2.0 with the root `x-crudResources` of §6).
+The SHOULD rules 6, 10, 13 and 19 are reported as warnings. It also checks
+the value sets the object tables give: a Url Source Object's `source`
+(§4.3.2) and a `patchFormat` from §4.6.
+`addressed_resources` lists the resources rule 25 requires an `identity`
+of, with the operation or reference that addresses each. Rule 8's path
+template syntax is: begins with `/`, no query or fragment, every `{name}`
+closed, not nested, nonempty, and no name twice. Rules 14–18 constrain the
+standard fields only; the `x-list-*` forms are not checked. Each error names
+its location and its rule. It also holds `read_request`, which builds the
+first request of a read (§4.2.1 steps 1–3, with the `x-list-*` fallback),
+and `compound_create` and `continue_compound_create`, a reference
+implementation of §4.7.2 over caller-supplied request functions, with
+`created_identity` reading the created object's identity back as §4.3.2
+says. [`examples/widget-lifecycle.yaml`](examples/widget-lifecycle.yaml) is
+§7.1, §7.3, §7.4 and §7.6 as one synthetic document.
+[`examples/compound-create.yaml`](examples/compound-create.yaml) is a
+synthetic document with a compound create.
+[`examples/fixed-query.yaml`](examples/fixed-query.yaml) is a synthetic
+document with a fixed-query `GET` collection and a `POST` search collection.
+From the repository root:
 
 ```sh
 cd openapi-extensions/spec/crud-causality
 pip install -r requirements.txt
 python3 -m unittest test_validate
-python3 validate.py examples/fixed-query.yaml examples/compound-create.yaml
+python3 validate.py examples/*.yaml
 ```
 
 ## Changes
 
+- **0.6.0** (2026-10-13): `identity` is optional on a resource that nothing addresses one object of (§4.1): no `x-crud` create, read, update or delete names it and no Reference Object targets it. Such a list-only resource is read-only for a consumer, with no record identity beyond what its list items carry. Validation rule 25 states when `identity` is required. A Url Source Object with `source: header` now names its header (rule 26); no published overlay omitted it. The reference validator now checks every rule of §8. A 0.5.0 document stays valid and means the same, with one exception: a Url Source Object with `source: header` and no `name`, which 0.5.0 allowed, now breaks rule 26 (no published overlay in ontola/atomic-plugins has one).
 - **0.5.0** (2026-10-08): adds compound creates (§4.7): `followUps` on a `create` Operation CRUD Object, each naming a field, whether the create body carries it (`include`, possibly silently dropped, or `omit`), the follow-up update that sets it, and how its request is filled (`bind`); the steps of a compound create and its partly-applied state; validation rules 20–24, `compound_create` in the validator, an example and tests. For ontola/atomic-plugins pieces.md K8 (GitHub's issue create and label add). A 0.4.0 document stays valid and means the same.
 - **0.4.0** (2026-10-08): adds `listMethod`, `listQuery` and `listBody` to the
   Collection Object and defines a read of a collection (§4.2.1), with
@@ -787,4 +828,18 @@ python3 validate.py examples/fixed-query.yaml examples/compound-create.yaml
 
 ## Reference Implementation
 
-None yet. The motivating use case is a stateful mock API server, such as [`localthought/syncables`](https://github.com/localthought/syncables), driven entirely by this extension: given `crudResources` and `x-crud` annotations, the server can create objects with server-minted URLs and fields, add them to the right collections, serve single objects and paginated collections, apply replace/patch semantics, and delete objects (removing them from every collection they were added to) — without any hand-written business logic.
+[`syncables`](../../../syncables/README.md) reads `crudResources` and
+`x-crud` for its local copy, a subset of this extension (not the mint and
+request semantics described next). For a resource without `identity`
+(§4.1) it reads the collections, keys its copy by the items' `id` field
+(its default; an item without one, or one returned twice, fails the read),
+builds no item URL, cannot check a record a complete read no longer
+returns (under `absent: removed` it keeps such a record marked
+`unconfirmed`, "the record cannot be checked"; otherwise it removes it),
+throws on `update` and `remove`, and takes no path variable for a nested
+collection from the resource's objects. Unlike §4.1 says, syncables 0.22.0
+(#526) still sends a `create` when the collection's URL has a `POST`
+operation (its heuristic for documents without `x-crud`); #531, for
+syncables 0.22.1, makes it throw there too.
+
+Beyond that, no implementation yet. The motivating use case is a stateful mock API server, such as [`localthought/syncables`](https://github.com/localthought/syncables), driven entirely by this extension: given `crudResources` and `x-crud` annotations, the server can create objects with server-minted URLs and fields, add them to the right collections, serve single objects and paginated collections, apply replace/patch semantics, and delete objects (removing them from every collection they were added to) — without any hand-written business logic.

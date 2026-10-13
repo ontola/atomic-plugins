@@ -1,0 +1,53 @@
+# Reviewed 2026-10-12 against the pinned OAD; no live calls.
+# Source: the pinned OAD's Event.status description and calendar.events.list's
+# showDeleted, syncToken and updatedMin parameters.
+# Needs Deletion Feeds 0.3.0-draft (openapi-extensions/spec/deletion-feeds,
+# x-list-tombstone, §4.5). Selected by no dated catalog yet.
+#
+# The pinned document says of Event.status: "cancelled" - "The event is
+# cancelled (deleted). The list method returns cancelled events only on
+# incremental sync (when syncToken or updatedMin are specified) or if the
+# showDeleted flag is set to true." It gives "cancelled" two meanings:
+# "Cancelled exceptions of an uncancelled recurring event indicate that this
+# instance should no longer be presented to the user. Clients should store
+# these events for the lifetime of the parent recurring event. Cancelled
+# exceptions are only guaranteed to have values for the id, recurringEventId
+# and originalStartTime fields populated." and "All other cancelled events
+# represent deleted events. Clients should remove their locally synced
+# copies."
+#
+# So a cancelled item in the event list is a list tombstone (§4.5), except
+# one with recurringEventId: a cancelled exception, which the document says
+# clients store, not remove (a state it does not call deletion, so §4.5's
+# MUST excludes it with an except condition on the item). A cancelled
+# exception of a cancelled series is, by the same text, deleted too; the
+# item does not say whether its series is, so it is kept as a member. With
+# singleEvents=false (the Calendar drive app's read) the series' own item,
+# which has no recurringEventId, reports the series. With singleEvents=true
+# there is no series item: every instance carries recurringEventId, so the
+# instances of a deleted series are kept as members and nothing in that list
+# reports the deletion. "On the organizer's calendar, cancelled events continue
+# to expose event details ... so that they can be restored (undeleted)": a
+# later list that returns the event with another status supersedes the
+# list tombstone, as §4.5 says of every list tombstone.
+#
+# Declared on the list operation, so it applies to every collection that
+# lists events (with or without showDeleted: without it, the list returns
+# cancelled items only on incremental sync, or as cancelled instances of
+# recurring events, which carry recurringEventId), whichever crud-causality
+# overlay a catalog selects, and it resolves against the bare OAD.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32237fa5d14aa887dc9f3923395dac971e00a36c/APIs/googleapis.com/calendar/v3/openapi.yaml
+info:
+  title: Google Calendar v3 cancelled events in the event list as list tombstones
+  version: 1.0.0
+actions:
+  - target: $.paths['/calendars/{calendarId}/events'].get
+    update:
+      x-list-tombstone:
+        field: status
+        values:
+          - cancelled
+        except:
+          - field: recurringEventId
+            present: true

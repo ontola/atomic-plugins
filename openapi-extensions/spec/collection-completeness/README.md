@@ -1,6 +1,6 @@
 # OpenAPI Collection Completeness Extension
 
-**Spec version:** 0.3.0-draft
+**Spec version:** 0.4.0-draft
 
 ---
 
@@ -85,6 +85,14 @@ sends, beyond the values the collection's read fixes (CRUD Causality 0.4.0
 §4.2.1), no optional parameter that the API documents as narrowing the result
 (a filter, a search term, a date range), and gets a successful response for
 every page.
+
+Since 0.4.0: a read that the [Pagination Schemes Extension](../pagination-schemes/README.md)
+declares not complete is not a complete read, even when it followed every
+page the responses offered. Such reads are an offset read that ends while the
+last response's `totalCount` exceeds the items read (Pagination Schemes
+§4.3.2), a read ended by a short page under the `observed` or `assumed`
+assurance (§4.4.5), a windowed read (§4.6.4), and a read in which any
+response matches the scheme's Incomplete Object (§4.4.6).
 
 A _member_ is an object the collection's read can return under those
 conditions: its `list` operation with the collection's fixed values, if any.
@@ -398,7 +406,8 @@ A conforming consumer:
 
 * MUST NOT draw a conclusion from an object's absence from a read that is not
   complete (§3): a page failed, a budget stopped it, or it sent a narrowing
-  parameter;
+  parameter; since 0.4.0, also a read that Pagination Schemes declares not
+  complete (§3);
 * MAY treat an object absent from a complete read of a collection declared
   `absent: deleted` as deleted without reading it;
 * SHOULD read the object itself (its `read` operation) before treating it as
@@ -457,6 +466,13 @@ python3 validate.py examples/nested-tasks.yaml
 
 ## Changes
 
+- **0.4.0-draft** (2026-10-13): §3 and §7 say that a read the Pagination
+  Schemes Extension declares not complete (an offset read short of its
+  `totalCount`, a short-page end under `observed` or `assumed`, a windowed
+  read, a response marked by an Incomplete Object, Pagination Schemes 0.8.0)
+  is not a complete read. Those reads were already not complete under the
+  Pagination Schemes rules; this version states it here. No document changes
+  meaning.
 - **0.3.0-draft** (2026-10-09): adds `gone` (§4.3: what a `410` means,
   defaulting to `notFound`), so that a `410` documented as a deletion can mean
   `deleted` while a `404` stays `unavailable`. A 0.2.0 document stays valid
