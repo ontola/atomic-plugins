@@ -12,6 +12,11 @@
 # public_api_request_blocked, for which Notion says "This connection's API access has been
 # restricted. Retrying won't help. Contact Notion support.": meaning blocked, so a consumer
 # does not retry it.
+# Not declared: 529 service_overload ("Notion is temporarily overloaded. Respect the
+# Retry-After response header and try again later.", https://developers.notion.com/reference/status-codes).
+# Throttling says a response that may follow partial processing, a 5xx in general, is not a
+# throttling signal; a consumer's ordinary 5xx retry handles it (syncables reads its
+# Retry-After for a retryable answer).
 # Needs Throttling 0.4.0-draft (openapi-extensions/spec/throttling: blocked).
 overlay: 1.0.0
 info:
