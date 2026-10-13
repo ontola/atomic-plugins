@@ -1916,8 +1916,8 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
     later ones `notSent`; an unknown outcome is read back before it is sent
     again; a follow-up's 403 refuses that follow-up, not the credentials;
     `PendingWriteInfo.followUp`, `WriteFailure.followUp`); the update
-    operation follows `x-crud: { action: update }` (§4.3; both declared:
-    PUT).
+    operation follows `x-crud: { action: update }` (syncables' choice;
+    both declared: PUT).
   - Write Preconditions 0.1.0-draft (`x-write-precondition`, on create,
     update and delete operations): `ifMatch` sends the version (from the
     record, or an item GET when it is a header) and stops on a
