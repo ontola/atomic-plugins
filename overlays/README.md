@@ -148,34 +148,46 @@ fails through 2026-10-11 and reads as empty through this catalog;
 and stepped over under v3); run them from `syncables/` with
 `npx vitest run --root .. overlays/tests/<file>`.
 
-## Read tombstones
+## Read and list tombstones
 
-[Google Calendar v3 read tombstones](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
-declares [Deletion Feeds 0.2.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#44-read-tombstones)
-`x-read-tombstone: { field: status, values: [cancelled] }` on the event read
-(`GET /calendars/{calendarId}/events/{eventId}`). The pinned document's
-`Event.status` says "cancelled" is "The event is cancelled (deleted)", that
-"The get method always returns them", and that on the organizer's calendar
-cancelled events "can be restored (undeleted)"; a consumer treats every
-read tombstone as restorable. The document sets cancelled exceptions of a
-recurring event apart: "Cancelled exceptions of an uncancelled recurring
-event indicate that this instance should no longer be presented to the
-user. Clients should store these events for the lifetime of the parent
-recurring event." They are declared too: the object is that one instance
-(its own event id), its status is the same "cancelled" defined as
-"(deleted)", and an instance that should no longer be presented is that
-occurrence's deletion, not an archived state of a live object; a consumer
-concludes about the instance it read, never about the series, and a read
-tombstone does not remove a stored exception. A consumer that lists events
-with `showDeleted=true`, or with `syncToken` or `updatedMin`, never hits
-this, because cancelled events then appear in the list itself; the Calendar
-drive app lists with `showDeleted=true`. It is declared on the operation, so it
-applies with either crud-causality overlay, and no dated catalog selects
-it yet. syncables reads it (`x-read-tombstone`, since #330): when a pending
-edit's event is missing from a complete read and its GET answers
-`status: cancelled`, the edit fails as `deleted` rather than `filtered`. The
-event list as a deletion feed is declared separately (below).
-`tests/test_calendar_read_tombstone.py` composes it after the catalog's
+Google Calendar v3 declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#43-tombstone-object)
+tombstones on its events with one reading, wherever an event is answered:
+
+* [read tombstones, revision 2](APIs/googleapis.com/calendar/v3/read-tombstone-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml):
+  `x-read-tombstone: { field: status, values: [cancelled], except: [{
+  field: recurringEventId, present: true }] }` on the event read
+  (`GET /calendars/{calendarId}/events/{eventId}`);
+* [list tombstones](APIs/googleapis.com/calendar/v3/list-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml):
+  `x-list-tombstone` with the same marker and exception on the event list
+  (`GET /calendars/{calendarId}/events`).
+
+The pinned document's `Event.status` says "cancelled" is "The event is
+cancelled (deleted)", that "The get method always returns them", that the
+list returns them with `showDeleted=true` or on incremental sync, and that
+on the organizer's calendar cancelled events "can be restored (undeleted)";
+a consumer treats every such tombstone as restorable. The document gives
+"cancelled" a second meaning: "Cancelled exceptions of an uncancelled
+recurring event indicate that this instance should no longer be presented
+to the user. Clients should store these events for the lifetime of the
+parent recurring event", and "All other cancelled events represent deleted
+events". A cancelled exception carries `recurringEventId`, so the `except`
+condition keeps it out of both declarations: it is not a deletion, whether a
+read or a list answers it, as Deletion Feeds §4.3 requires of a marked state
+the provider documents as something else. A cancelled exception of a
+deleted series is kept too (the item does not say its series' state). In a
+`singleEvents=false` list, as the Calendar drive app reads, the series' own
+item, which has no `recurringEventId`, reports the series. With
+`singleEvents=true` there is no series item: every instance carries
+`recurringEventId`, so the instances of a deleted series are kept as
+members and nothing in that list reports the deletion. This supersedes the reading of
+the first read-tombstone revision,
+[`read-tombstone-32237fa5…`](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(#489), which declared cancelled exceptions as deletions of their
+occurrence; that file stays, as published revision files are immutable,
+and no catalog selects it. Both declarations are on operations, so they
+apply with either crud-causality overlay, and no dated catalog selects them
+yet. syncables reads both. `tests/test_calendar_read_tombstone_v2.py` and
+`tests/test_calendar_list_tombstone.py` compose them after the catalog's
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
 
@@ -197,20 +209,41 @@ Calendar overlay through the syncables client. No provider was called.
 ## Google Calendar deletion feed
 
 [Google Calendar v3 deletion feed](APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
-declares [Deletion Feeds 0.2.0-draft](../openapi-extensions/spec/deletion-feeds/README.md)
+declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md)
 `x-deletion-feed` on the `events` collection: the feed is the event list
 itself (`calendar.events.list`), read with the cursor `syncToken` and its
 pages only; the cursor for the next read is `nextSyncToken`, "present only
 on the very last page"; a 410 ("sync tokens are invalidated") drops the
-cursor; cancelled events are the tombstones. The pinned document's
+cursor; cancelled events are the tombstones, except items with
+`recurringEventId` (cancelled exceptions, which clients store), the same
+`except` as the read and list tombstones above. The pinned document's
 `syncToken` says "All events deleted since the previous list request will
 always be in the result set and it is not allowed to set showDeleted to
 False", so the feed needs no `showDeleted`, and every feed read sends the
 same parameters, as Google's
 [sync guide](https://developers.google.com/workspace/calendar/api/guides/sync)
-asks. It composes with either Calendar crud-causality overlay and is meant
-to be selected with the read-tombstone overlay above. Not documented: that a
-feed read returns an event at most once. No dated catalog selects it yet.
+asks. So the first cursor comes from a feed read without a cursor, never
+from the drive app's own list read (`singleEvents=false&showDeleted=true`),
+whose token would then be sent without those parameters. That first read is
+a full listing and counts against the consumer's record budget (syncables'
+`maxRecords`, 5000 by default): a calendar with more events never completes
+it and never gets a cursor. Members and tombstones are those
+`singleEvents=false` (the default) returns: a series is its master event,
+plus exceptions with their own ids; a deleted series has one tombstone, the
+master's, and its instances get none.
+
+It composes with `app-crud-causality-32237fa5…` (the catalogs' choice) or
+`crud-causality-32237fa5…`, both tested, and is selected with
+`read-tombstone-v2-32237fa5…`, not the first revision. Do not select it with
+`pagination-v2-32237fa5…`, whose event-list description says "Full listing
+only: omit syncToken". The first read-tombstone revision's comment "Not
+declared: an `x-deletion-feed` over the event list" is stale since this
+overlay; that file is published and stays as it is. Not verified and not
+documented: that a feed read returns an event at most once; what it returns
+for the exceptions of a deleted series; how an event moved to another
+calendar (`events.move`) or an attendee's copy after the attendee is removed
+appears (both may appear cancelled in the source calendar while the event
+still exists elsewhere). No dated catalog selects it yet.
 `tests/test_calendar_deletion_feed.py` checks the declaration against the
 composed document and the pinned wording. No provider was called.
 

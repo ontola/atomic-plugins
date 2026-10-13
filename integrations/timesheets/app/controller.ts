@@ -47,7 +47,6 @@ import { readMirror } from './viewData.js';
 import { ObservationLog } from './observationLog.js';
 import {
   blockers,
-  descriptionOf,
   planRange,
   snapToMinute,
   type ClockifyProject,
@@ -1292,7 +1291,7 @@ export function createController(
 
         return {
           id: entryId,
-          description: descriptionOf(desired.name),
+          description: desired.name,
           start: desired.start,
           end: desired.end,
           billable: desired.billable,
@@ -1317,7 +1316,7 @@ export function createController(
 
         return {
           ...rest,
-          description: descriptionOf(desired.name),
+          description: desired.name,
           start: desired.start,
           end: desired.end,
           billable: desired.billable,

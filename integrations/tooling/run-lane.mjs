@@ -7,7 +7,8 @@
  *
  * Needs the AGENTS.md layout: an atomic-server checkout at the pinned commit
  * with `browser` symlinked into this repo. Point ATOMIC_SERVER_CHECKOUT at it
- * (default /tmp/atomic-server) and build it once; every lane shares it. Or
+ * (default: this pin's ~/.cache/atomic-plugins/atomic-server/<sha> when it
+ * exists, else /tmp/atomic-server) and build it once; every lane shares it. Or
  * skip the build: with ATOMIC_SERVER_IMAGE set, serve.mjs runs the published
  * ghcr.io/ontola/atomic-server-e2e:<pin> image in Docker instead.
  *
@@ -85,9 +86,9 @@ if (tiers.some(tier => !['contract', 'node'].includes(tier))) {
   for (const problem of layoutProblems()) console.warn(`warning: ${problem}`);
 
   // Locally, this lane's own lockfiles (and a shared package its `paths`
-  // import from source) may not be installed yet. CI installs them before this
-  // script runs, so there every folder already has node_modules and nothing
-  // happens (deps.mjs).
+  // import from source) may not be installed yet, or installed from a
+  // different pnpm-lock.yaml (stale). CI installs them before this script
+  // runs, so there every folder is up to date and nothing happens (deps.mjs).
   try {
     installMissing([
       ...pluginDependencyDirs(lane.id),

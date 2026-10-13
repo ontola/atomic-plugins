@@ -28,9 +28,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// ../../../../atomic-server-pin/browser/node_modules/.pnpm/fast-json-stable-stringify@2.1.0/node_modules/fast-json-stable-stringify/index.js
+// browser/lib/node_modules/fast-json-stable-stringify/index.js
 var require_fast_json_stable_stringify = __commonJS({
-  "../../../../atomic-server-pin/browser/node_modules/.pnpm/fast-json-stable-stringify@2.1.0/node_modules/fast-json-stable-stringify/index.js"(exports, module) {
+  "browser/lib/node_modules/fast-json-stable-stringify/index.js"(exports, module) {
     "use strict";
     module.exports = function(data, opts) {
       if (!opts) opts = {};
@@ -117,7 +117,7 @@ function issuePatch(desired, previous) {
   return patch;
 }
 
-// ../../../../atomic-server-pin/browser/lib/src/subject.ts
+// browser/lib/src/subject.ts
 var ATOMIC_PREFIX = "atomic:";
 var DID_AD_PREFIX = "did:ad:";
 function isLegacyAtomicLink(raw) {
@@ -142,7 +142,7 @@ function canonicalIdentifier(raw) {
   return canonicalizeScheme(raw.split(/[?#]/)[0]);
 }
 
-// ../../../../atomic-server-pin/browser/lib/src/import-records.ts
+// browser/lib/src/import-records.ts
 var IMPORT_LOCAL_ID = "https://atomicdata.dev/properties/localId";
 var PARENT = "https://atomicdata.dev/properties/parent";
 var pure = (subject) => typeof subject === "string" ? canonicalIdentifier(subject) : subject;
@@ -158,7 +158,7 @@ function claimImportIdentity(host, parent2, sourceId, subject) {
   return { [IMPORT_LOCAL_ID]: sourceId };
 }
 
-// ../../../../atomic-server-pin/browser/lib/src/plugin-reconcile.ts
+// browser/lib/src/plugin-reconcile.ts
 var import_fast_json_stable_stringify = __toESM(require_fast_json_stable_stringify(), 1);
 var equal = (a, b) => (0, import_fast_json_stable_stringify.default)(a) === (0, import_fast_json_stable_stringify.default)(b);
 function reconcileRecord(base, local, remote) {
