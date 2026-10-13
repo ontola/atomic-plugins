@@ -1,12 +1,11 @@
-"""Validate CRUD Causality 0.5.0 documents: every rule of §8 (1-24).
+"""Validate CRUD Causality 0.6.0 documents: every rule of §8 (1-25).
 
 `validate(document, warnings)` raises ValueError listing every violation it
 finds and returns None for a valid document; the SHOULD rules (6, 10, 13
 and 19) are appended to `warnings` instead. Besides the numbered rules it
-checks the value sets the object tables give: a required `identity` and
-`identity.urlTemplate` (§4.1, §4.1.1), a Url Source Object's `source` and
-`name` (§4.3.2) and a `patchFormat` (§4.6). Ordinary OpenAPI validation is
-separate.
+checks the value sets the object tables give: a Url Source Object's
+`source` and `name` (§4.3.2) and a `patchFormat` (§4.6). Ordinary OpenAPI
+validation is separate.
 
 `read_request(document, resource, collection, context)` returns the request a
 read's first page sends (§4.2.1, steps 1-3), as a reference for consumers.
@@ -244,17 +243,46 @@ def _collection_variables(resource):
     return found
 
 
-def _resource_errors(resources, warnings):
-    """Rules 8, 10, 11, 12 and 13, and §4.1's required identity, for every CRUD Resource Object."""
+ADDRESSING = ("create", "read", "update", "delete")
+
+
+def addressed_resources(document):
+    """§4.1: {resource name: why} for the resources that need an identity:
+    named by an x-crud create, read, update or delete, or by a Reference
+    Object's resource."""
+    found = {}
+    for path, item in (document.get("paths") or {}).items():
+        item = _resolve(document, item)
+        if not isinstance(item, dict):
+            continue
+        for method in METHODS:
+            operation = item.get(method)
+            crud = operation.get("x-crud") if isinstance(operation, dict) else None
+            if isinstance(crud, dict) and crud.get("action") in ADDRESSING and isinstance(crud.get("resource"), str):
+                found.setdefault(crud["resource"], f"{method.upper()} {path} ({crud['action']})")
+    for name, resource in _resources(document).items():
+        for reference_name, reference in ((resource.get("references") or {}) if isinstance(resource, dict) else {}).items():
+            if isinstance(reference, dict) and isinstance(reference.get("resource"), str):
+                found.setdefault(reference["resource"], f"the reference {name}.references.{reference_name}")
+    return found
+
+
+def _resource_errors(resources, warnings, addressed=None):
+    """Rules 8, 10, 11, 12, 13 and 25 for every CRUD Resource Object."""
     errors = []
+    addressed = addressed or {}
     for name, resource in resources.items():
         where = f"crudResources.{name}"
         if not isinstance(resource, dict):
             errors.append(f"{where}: expected an object")
             continue
         identity = resource.get("identity")
-        if not isinstance(identity, dict) or "urlTemplate" not in identity:
-            errors.append(f"{where}.identity: an identity with a urlTemplate is required (§4.1, §4.1.1)")
+        if "identity" not in resource:
+            if name in addressed:
+                errors.append(f"{where}.identity: required, since {addressed[name]} addresses one object of it (rule 25)")
+            identity = {}
+        elif not isinstance(identity, dict) or "urlTemplate" not in identity:
+            errors.append(f"{where}.identity: an Identity Object needs a urlTemplate (rule 25, §4.1.1)")
             identity = identity if isinstance(identity, dict) else {}
         template = identity.get("urlTemplate")
         if "urlTemplate" in identity:
@@ -356,7 +384,7 @@ def validate(document, warnings=None):
     paths = document.get("paths", {})
     if not isinstance(resources, dict):
         raise ValueError("crudResources: expected an object")
-    errors += _resource_errors(resources, warnings)
+    errors += _resource_errors(resources, warnings, addressed_resources(document))
 
     for resource_name, resource in resources.items():
         if not isinstance(resource, dict):

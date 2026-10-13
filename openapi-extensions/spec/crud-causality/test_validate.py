@@ -1,4 +1,4 @@
-"""CRUD Causality 0.5.0: every rule of §8, collection reads (listMethod, listQuery, listBody) and compound creates."""
+"""CRUD Causality 0.6.0: every rule of §8, collection reads (listMethod, listQuery, listBody) and compound creates."""
 import copy
 import pathlib
 import unittest
@@ -462,7 +462,7 @@ def lifecycle():
 
 
 class StructureRuleTests(unittest.TestCase):
-    """Rules 1, 3, 5-8 and 10-13, and the value sets of §4.1, §4.3.2 and §4.6, on examples/widget-lifecycle.yaml."""
+    """Rules 1, 3, 5-8, 10-13 and 25, and the value sets of §4.3.2 and §4.6, on examples/widget-lifecycle.yaml."""
 
     def outcome(self, mutate):
         document = lifecycle()
@@ -566,11 +566,31 @@ class StructureRuleTests(unittest.TestCase):
         for template in ["/widgets", "/reports/{id}.json", "/a/{b}/c/{d}"]:
             self.assertIsNone(path_template_problem(template))
 
-    def test_identity_and_url_template_are_required(self):
+    def test_rule_25_identity_when_an_object_is_addressed(self):
         self.invalid(lambda d: self.resource(d, "widget").pop("identity"),
-                     "crudResources.widget.identity: an identity with a urlTemplate is required (§4.1, §4.1.1)")
+                     "crudResources.widget.identity: required, since POST /widgets (create) addresses one object of it (rule 25)")
+        # project is only listed, but timeEntry's reference targets it.
+        self.invalid(lambda d: self.resource(d, "project").pop("identity"),
+                     "crudResources.project.identity: required, since the reference timeEntry.references.project "
+                     "addresses one object of it (rule 25)")
         self.invalid(lambda d: self.resource(d, "project")["identity"].pop("urlTemplate"),
-                     "crudResources.project.identity: an identity with a urlTemplate is required")
+                     "crudResources.project.identity: an Identity Object needs a urlTemplate (rule 25, §4.1.1)")
+
+    def test_rule_25_a_list_only_resource_may_omit_identity(self):
+        def list_only(d):
+            self.resource(d, "timeEntry").pop("references")
+            self.resource(d, "project").pop("identity")
+        errors, warnings = self.outcome(list_only)
+        self.assertEqual(errors, "")
+        self.assertEqual(warnings, [])
+        # A read of one object needs it again.
+        def read_one(d):
+            list_only(d)
+            d["paths"]["/workspaces/{workspaceId}/projects/{projectId}"] = {
+                "get": {"x-crud": {"action": "read", "resource": "project"}, "responses": {"200": {"description": "One"}}}
+            }
+        self.assertIn("GET /workspaces/{workspaceId}/projects/{projectId} (read) addresses one object of it (rule 25)",
+                      self.outcome(read_one)[0])
 
     def test_rule_9_identity_bindings(self):
         self.invalid(lambda d: self.resource(d, "widget")["identity"]["bindings"].update(gadgetId={"field": "id"}),
