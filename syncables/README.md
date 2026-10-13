@@ -1799,7 +1799,8 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     one declaring `jsonPatch` makes `update()` throw;
   - a 404 or 410 of a missing record's read is `unavailable`, not
     `deleted`, under `notFound: unavailable` or `gone: unavailable`, under
-    an unrecognised `notFound`, `gone` or `absent`, or conflicting values;
+    an unrecognised `notFound`, `gone` or `absent` (a Completeness Object
+    without `absent` counts as unrecognised), or conflicting values;
     its queued writes fail and are held for `resolveWrite`;
   - `parentAbsent` concludes the records under a gone parent
     `unavailable`, and the default `missingRecordChecks: 'pending'` now
