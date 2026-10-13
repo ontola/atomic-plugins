@@ -375,6 +375,24 @@ minified, one module). Screenshots, axe and the render budget:
 
 ## Verified
 
+At 0.4.5 (app module `apps/money/0.4.5/ui.js`, 121,339 bytes; `plugin.js`
+again 0.3.0's bundle with only the manifest's `version` changed) a failed
+import never writes a row twice (#539). The sheet drops the preview that
+listed the rows it was writing, disables Import ("Checking what was
+written…") while it reads the table again and compares the file with it,
+and then offers only the rest; a check of the same file started meanwhile
+waits for that read. Unit tests (`app/shared.test.ts`, the second row write
+failing) reproduce both duplicates of 0.4.4 (Import pressed again at once:
+3 rows; the file checked again at once: 2 proposed) and pass now;
+`app/view.test.ts` checks the disabled button. The installed-app e2e step
+of 0.4.3 (below) now checks, with no wait, that the failed sheet never
+offers "Import 2 transactions" again but "Import 1 transaction", that a
+check made at once proposes New 1, that the server ends with each
+transaction once, and that the file checked again finds nothing new.
+The five money e2e tests, this step included, passed on 2026-10-14 at
+0.4.5 against the pin `7dab1ce` (the build VPS's source build), in 4.7
+minutes.
+
 At 0.4.3 (`plugin.js` sha256
 `fa91ad60bf341e7e8c8da523be6e11b4ad81a1403a806b4ee895eb941e692bde`, again
 0.3.0's bundle with only the manifest's `version` changed; app module
@@ -392,15 +410,12 @@ written so far are kept; …"; then, after the app's copy of the table caught
 up (its Transactions count), the same file checked again proposes the one
 left (New 1), and the import ends with 2 rows. The five money e2e tests, this step included, passed on 2026-10-13 at
 0.4.3 against the pin `7dab1ce` (the build VPS's source build), in 5.5
-minutes. Known limit, found
-that way (#539): the app writes exactly what its preview said was new, so
+minutes. Up to 0.4.4 the app had a known limit, found that way (#539) and
+fixed in 0.4.5 (above): it wrote exactly what its preview said was new, so
 checking the file again before the app's copy of the table caught up, or
-pressing Import again in the failed sheet (it keeps the old preview),
-writes the transaction written before the failure a second time; the first
-run of this step ended with that transaction twice. The sheet's
-"transactions saved before the failure are recognised and not written
-twice" holds only for a check made after the app's copy of the table caught
-up.
+pressing Import again in the failed sheet (it kept the old preview), wrote
+the transaction written before the failure a second time; the first run of
+this step ended with that transaction twice.
 
 At 0.4.2 (`plugin.js` sha256
 `2c4005acaaad5ce1fe730009c452fb59c8213f4852711f915b8e12868e39b963`, again

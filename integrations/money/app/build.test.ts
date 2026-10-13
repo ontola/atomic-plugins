@@ -18,10 +18,11 @@ describe('money drive-app bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 120,662 bytes minified (JS and embedded CSS) on 2026-10-13,
-    // at the 7dab1ce pin, for 0.4.4 (an import made here told from rows
-    // that arrived from elsewhere); the limit is that plus about 10%,
-    // rounded up. 0.4.3 measured 120,397 bytes on 2026-10-12 (0.4.2's card
+    // Measured 121,339 bytes minified (JS and embedded CSS) on 2026-10-13,
+    // at the 7dab1ce pin, for 0.4.5 (a failed import rechecks before it
+    // offers Import again, #539); the limit is that plus about 10%, rounded
+    // up. 0.4.4 measured 120,662 bytes on 2026-10-13 (an import made here
+    // told from rows that arrived from elsewhere). 0.4.3 measured 120,397 bytes on 2026-10-12 (0.4.2's card
     // with the stopped-import punctuation fix).
     // 0.4.2 measured 120,413 bytes at e922179 (the shared sync-status card,
     // Q-084, with its minified card.css and the app's status mapping).
@@ -32,7 +33,7 @@ describe('money drive-app bundle', async () => {
     // term, not only the bank ones) plus the app's own schema and write
     // path (`own.ts`, `write.ts`, `adopt.ts`). 0.4.0 measured 108,795
     // bytes, 0.3.0 88,741.
-    expect(bytes).toBeLessThan(132_800);
+    expect(bytes).toBeLessThan(133_500);
   });
 
   it('embeds its stylesheets minified', () => {
