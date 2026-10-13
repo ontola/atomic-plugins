@@ -17,7 +17,8 @@
  *     built from source (AGENTS.md, "Shared pinned atomic-server build").
  *     When the SessionStart hook's stamp next to it names another commit
  *     than the checkout is at, it is refused as stale (binaryProblem), with
- *     the full build lines; a stampless build is trusted;
+ *     the full build lines; a stampless build is trusted, with a warning
+ *     that says how to stamp it;
  *   - with ATOMIC_SERVER_IMAGE set (e.g.
  *     `ghcr.io/ontola/atomic-server-e2e:$(cat .atomic-server-ref)`), that
  *     image, run with `docker run` on the same port. Everything else is
@@ -313,6 +314,28 @@ export function binaryProblem({
   );
 }
 
+/**
+ * A warning for a local e2e binary that has no stamp, or undefined. Such a
+ * binary is still run (binaryProblem trusts it), but nothing can tell
+ * whether it was built from the commit the checkout is at now, so a moved
+ * checkout would test a stale host without a word. The warning says how to
+ * write the stamp once the binary is known to match.
+ */
+export function binaryWarning({
+  checkout,
+  binary = resolve(checkout, 'target/e2e/atomic-server'),
+  head = checkoutHead(checkout),
+}) {
+  const stampFile = resolve(checkout, BUILD_STAMP);
+  if (!existsSync(binary) || existsSync(stampFile)) return undefined;
+
+  return (
+    `${binary} has no stamp (${stampFile}), so serve.mjs cannot tell which commit it was built from` +
+    `${head ? ` (the checkout is at ${head.slice(0, 12)})` : ''}. ` +
+    `If you built it from that commit, write the stamp: git -C "${checkout}" rev-parse HEAD > "${stampFile}"; otherwise tell whoever built it`
+  );
+}
+
 /** The named volume that holds one label's store when running the image. */
 export const storeVolume = label => `atomic-plugins-lane-store-${label}`;
 
@@ -542,6 +565,8 @@ export async function bringUp({
     // and a binary whose stamp names another commit would run without a word.
     const problem = binaryProblem({ checkout: serverCheckout(), binary });
     if (problem) throw new Error(problem);
+    const warning = binaryWarning({ checkout: serverCheckout(), binary });
+    if (warning) console.warn(`warning: ${warning}`);
   }
 
   await assertFree(ports, config);
