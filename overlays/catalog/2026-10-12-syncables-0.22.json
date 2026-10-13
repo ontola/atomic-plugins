@@ -157,7 +157,8 @@
       "overlays": [
         "https://ontola.github.io/atomic-plugins/overlays/APIs/asana.com/1.0/auth-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/asana.com/1.0/pagination-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml",
-        "https://ontola.github.io/atomic-plugins/overlays/APIs/asana.com/1.0/crud-causality-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml"
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/asana.com/1.0/crud-causality-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/asana.com/1.0/throttling-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml"
       ],
       "selection": {
         "authenticationProfile": "asanaReadOnly"

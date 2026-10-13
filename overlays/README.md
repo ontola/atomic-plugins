@@ -157,6 +157,8 @@ entry:
 | `google-tasks` | `crud-causality-v2` in place of `crud-causality`, its collection envelopes with `emptyWhenAbsent` as pagination v2's (a reader takes a Collection Object's envelope over the scheme's); `throttling` last | CRUD Causality 0.4.0 `listQuery`, Throttling 0.2.0-draft (0.21.0); `emptyWhenAbsent` (0.22.0) |
 | `google-calendar` | `app-crud-causality-v2` in place of `app-crud-causality`; [`read-tombstone`](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) and [`throttling`](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) last | `listQuery` (0.21.0); the event update's `mode: patch` and `patchFormat` (#419); `x-read-tombstone` (since #330); Throttling 0.2.0-draft (0.21.0) |
 | `github-issues` | `throttling` last | Throttling 0.2.0-draft (0.21.0) |
+| `notion` (also) | `throttling` last | Throttling 0.2.0-draft (0.21.0) |
+| `spotify`, `airtable`, `asana` | `throttling` last | Throttling 0.2.0-draft (0.21.0) |
 
 Each v2 file keeps every key its v1 file sets (checked on 2026-10-09: no
 `x-list-query`, `x-list-body` or `x-list-method` in either v1 file, and the
@@ -174,7 +176,11 @@ Schemas validators on each changed composition, checks that no composition
 fails a validator its base composition passes, and checks that the
 compositions differ from the base ones only by the listed additions. No
 provider was called. `tests/google_tasks_empty_lists_syncables.test.ts` also
-reads an empty task list through this catalog with syncables.
+reads an empty task list through this catalog with syncables. The same test checks that every
+update in every composition names a CRUD Causality rule-5 `mode` and, for a
+patch, a §4.6 `patchFormat`; the only gaps are github-issues' v1 (two
+PATCHes declare `merge`, its label writes none), which its crud-causality v2
+fixes once that is selected here.
 
 ## Pagination Schemes 0.7.0 catalog: Google Tasks empty lists and Box offsets
 
