@@ -24,3 +24,19 @@ from a declaration with any violation; `producedClasses` and
 checks only what a caller-fetched lens names. Tests on the spec's example,
 its validation cases, and the published Clockify and Solid lenses. README,
 CLAUDE.md, changelog and the spec's reference-implementation note updated.
+
+## Turn 2
+
+**Human (via the coordinator session):** #520 review nits:
+`ApiClient.produces()` takes a collection name, not a resource key, and
+throws for an unknown name; say whether `lensFits` compares the lens `@id`;
+the IRI character check differs from Python on U+0085 and U+FEFF and
+neither rejects the C1 range: align both, spec included.
+
+**Assistant:** `produces(name)` takes a collection name, a legacy path or
+a CRUD resource key and returns nothing for an unknown name. `lensFits`
+documents that the `@id` is not compared (§4.2 names target and source
+only). Produced Classes 0.1.1-draft lists the excluded characters in §3
+(Unicode White_Space, C0, DEL, C1, U+FEFF and RFC 3987's ASCII
+exclusions); `validate.py` and `absoluteIri` use the same explicit set,
+with tests on both sides.
