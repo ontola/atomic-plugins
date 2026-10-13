@@ -134,7 +134,8 @@ export function movePinProblem(checkout, ref) {
 
 /**
  * Tracked paths with uncommitted changes in `checkout` (staged or not), both
- * sides of a rename or copy included.
+ * sides of a rename or copy included, each path once (a copy's source can
+ * also be modified, say).
  */
 export function changedPaths(checkout) {
   // Not git(): its trim() would eat the leading space of " M path".
@@ -156,7 +157,7 @@ export function changedPaths(checkout) {
     if ('RC'.includes(x) || 'RC'.includes(y)) paths.push(fields[++i]);
   }
 
-  return paths;
+  return [...new Set(paths)];
 }
 
 /**
