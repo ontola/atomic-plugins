@@ -6,6 +6,11 @@
  *   node usertest/catalog.mjs [out]            # default out: usertest/out
  *   node usertest/catalog.mjs --record [out]   # after a version bump
  *
+ * It first installs each app's plugin dependencies that have a lockfile and
+ * no node_modules yet (`pnpm install --frozen-lockfile`, as run-lane.mjs and
+ * apps.mjs do through integrations/tooling/deps.mjs); `--no-install` skips
+ * that. On CI, where every lockfile is installed first, it does nothing.
+ *
  * With USERTEST_LOG_URL set (deploy it with
  * USERTEST_LOG_URL=https://logs.<base-domain>/log), the modules of apps
  * marked `report: true` start with a prelude that defines `globalThis.__USERTEST_REPORT__`, which
@@ -44,7 +49,7 @@
  * tests. A version not recorded yet is a warning here and a failure there.
  *
  * Needs the layout AGENTS.md describes (browser/ from the pinned
- * atomic-server) and each app's dependencies installed (see README.md).
+ * atomic-server); the apps' own dependencies it installs as above.
  */
 import { createHash } from 'node:crypto';
 import {
@@ -59,6 +64,12 @@ import {
 import { createRequire } from 'node:module';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {
+  installMissing,
+  pluginDependencyDirs,
+  sharedDependencyDirs,
+} from '../integrations/tooling/deps.mjs';
+import { loadLanes } from '../integrations/tooling/lanes.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = resolve(here, '..');
@@ -73,7 +84,7 @@ const I = 'https://atomicdata.dev/integrations/properties/';
 export const VERSIONS = {
   calendar: 'usertest-12',
   'issue-tracker': 'usertest-10',
-  money: 'usertest-5',
+  money: 'usertest-6',
   notion: 'usertest-11',
   timesheets: 'usertest-11',
 };
@@ -194,6 +205,23 @@ function entryFor(source, id, version, bytes, fields) {
     'sha384-' + createHash('sha384').update(bytes).digest('base64');
 
   return entry;
+}
+
+/**
+ * The folders whose lockfiles the apps built here need, relative to the
+ * repository root: each app's plugin folders (deps.mjs
+ * `pluginDependencyDirs`) and the shared packages its lane's `paths` import
+ * from source (`sharedDependencyDirs`).
+ */
+export function dependencyDirs(lanes = loadLanes().lanes) {
+  return [
+    ...new Set(
+      Object.keys(APPS).flatMap(id => [
+        ...pluginDependencyDirs(id),
+        ...sharedDependencyDirs(lanes.find(l => l.id === id)?.paths),
+      ]),
+    ),
+  ];
 }
 
 /** The install loop CI runs for every plugin's own dependencies. */
@@ -379,6 +407,7 @@ async function main() {
   const out = resolve(
     argv.find(a => !a.startsWith('--')) ?? resolve(here, 'out'),
   );
+  if (!argv.includes('--no-install')) installMissing(dependencyDirs());
   const { catalog, modules } = await buildCatalog(out, {
     logUrl: process.env.USERTEST_LOG_URL,
   });

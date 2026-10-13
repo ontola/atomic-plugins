@@ -14,6 +14,7 @@ import {
   ALLOW_EDITING_NOTE,
   EDITING_REFUSED_NOTE,
   IMPORT_STOPPED_LEAD,
+  IMPORT_STOPPED_TEXT,
   LOAD_FAILED_LEAD,
   NO_DATES_SCOPE,
   NO_PROVIDER_NOTE,
@@ -302,6 +303,23 @@ describe('Money status card: busy, failed and stopped', () => {
       },
     ]);
     expect(lines(s).tone).toBe('neg');
+    // A failure that already ends a sentence keeps its own mark (0.4.3).
+    for (const failure of ['Is the host offline?', 'Refused!', 'Refused.'])
+      expect(
+        syncStatusFor({
+          state: state({
+            statements: [statement()],
+            importing: {
+              step: 'preview',
+              file,
+              preview: {} as never,
+              tab: 'new',
+              failure,
+            },
+          }),
+          now: NOW,
+        }).problems?.[0]?.text,
+      ).toBe(`${failure} ${IMPORT_STOPPED_TEXT}`);
   });
 });
 

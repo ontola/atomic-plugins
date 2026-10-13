@@ -8,6 +8,13 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 `Config` gains a public field (`webhooks`), a breaking change under Cargo's
 0.x semver rules, so the next release is 0.4.0.
 
+- Pacing under provider quotas (docs/design/pieces.md P4): for `x-throttling`
+  buckets partitioned by `sourceIp` or by nothing, with at most 10,000
+  requests per window, the proxy keeps a sliding log per platform and bucket
+  and refuses a request that would exceed one with `429 provider_quota` and
+  `Retry-After`, without calling the provider. In memory, per instance. See
+  README, "Pacing under provider quotas".
+
 - Webhook inbox, step 2 of ontola/atomic-plugins#369: the bounded inbox of
   `openapi-extensions/spec/webhook-subscriptions` in PostgreSQL, off unless
   `WEBHOOKS_ENABLED=true` (new `Config::webhooks`, `WebhookConfig`,
@@ -18,6 +25,15 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   deployment budgets, shared payloads, tombstones and dedicated-hook cleanup
   jobs, with the limits the plan gives as pilot values. See SECURITY.md,
   "Webhook inbox".
+- Webhook receiver and consumer routes, step 3 of #369, mounted only with
+  `WEBHOOKS_ENABLED=true`: `POST /webhooks/{endpointId}` verifies a
+  delivery's HMAC over its raw bytes before reading it, routes it through
+  access-checked bindings and stores it in one transaction; signed
+  subscribe, get, delete, renew, events (long poll), ack and reconciled
+  routes. Shared-hook secrets come from `WEBHOOK_SECRET_<PLATFORM>`.
+  Deleting a connection ends its subscriptions in the same transaction.
+  Subscriptions use shared application hooks only; no provider hook is
+  created.
 - Rate-limit and conditional headers (docs/design/pieces.md P1-P3): the
   provider's `X-RateLimit-Limit`, `-Remaining`, `-Used`, `-Reset`,
   `-Resource`, `RateLimit`, `RateLimit-Policy`, `RateLimit-Limit`,
@@ -29,6 +45,9 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   `Cache-Control: no-store`. A catalog-fixed value for a caller header now
   replaces the caller's instead of being sent next to it. See SECURITY.md,
   "Validating proxy".
+- A composed catalog document with a `$ref` path item, or a path item that is
+  not an object, is refused at load (naming the platform and path) instead of
+  being read inconsistently; no catalog uses one.
 
 ## 0.3.0 (2026-10-06)
 

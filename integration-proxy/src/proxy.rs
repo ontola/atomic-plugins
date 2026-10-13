@@ -129,6 +129,13 @@ struct RefreshToken {
     expires_in: Option<u64>,
 }
 
+/// A token endpoint's error response (RFC 6749 §5.2).
+#[derive(Deserialize)]
+struct TokenError {
+    #[serde(default)]
+    error: String,
+}
+
 fn needs_refresh(credential: &StoredCredential) -> bool {
     matches!(
         credential,
@@ -136,7 +143,22 @@ fn needs_refresh(credential: &StoredCredential) -> bool {
     )
 }
 
-async fn refresh_token(state: &AppState, credential: &mut StoredCredential) -> Result<(), ()> {
+/// Why a token refresh failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum RefreshFailure {
+    /// The provider refused the refresh token (`invalid_grant` in a `400`
+    /// or `401` from the token endpoint), or there is no refresh token: no
+    /// later attempt will do better.
+    Refused,
+    /// The token endpoint could not be reached or answered otherwise,
+    /// including another `400`/`401` error such as `invalid_client`.
+    Unavailable,
+}
+
+async fn refresh_token(
+    state: &AppState,
+    credential: &mut StoredCredential,
+) -> Result<(), RefreshFailure> {
     let StoredCredential::OAuth {
         provider,
         access_token,
@@ -147,9 +169,9 @@ async fn refresh_token(state: &AppState, credential: &mut StoredCredential) -> R
         // A static API key has nothing to refresh.
         return Ok(());
     };
-    let refresh_token_value = refresh_token.as_deref().ok_or(())?;
-    let configured =
-        crate::providers::Provider::configured(&state.catalog, provider).map_err(|_| ())?;
+    let refresh_token_value = refresh_token.as_deref().ok_or(RefreshFailure::Refused)?;
+    let configured = crate::providers::Provider::configured(&state.catalog, provider)
+        .map_err(|_| RefreshFailure::Unavailable)?;
     #[cfg(test)]
     let configured = {
         let mut configured = configured;
@@ -168,10 +190,31 @@ async fn refresh_token(state: &AppState, credential: &mut StoredCredential) -> R
         )
         .send()
         .await
-        .map_err(|_| ())?
-        .error_for_status()
-        .map_err(|_| ())?;
-    let token = response.json::<RefreshToken>().await.map_err(|_| ())?;
+        .map_err(|_| RefreshFailure::Unavailable)?;
+    match response.status() {
+        status if status.is_success() => {}
+        reqwest::StatusCode::BAD_REQUEST | reqwest::StatusCode::UNAUTHORIZED => {
+            // Only `invalid_grant` says this refresh token will never work
+            // (RFC 6749 §5.2). Others, such as `invalid_client` after a
+            // misconfigured client secret, are the proxy's own problem and
+            // must not end a user's subscription.
+            let error = response
+                .json::<TokenError>()
+                .await
+                .map(|body| body.error)
+                .unwrap_or_default();
+            return Err(if error == "invalid_grant" {
+                RefreshFailure::Refused
+            } else {
+                RefreshFailure::Unavailable
+            });
+        }
+        _ => return Err(RefreshFailure::Unavailable),
+    }
+    let token = response
+        .json::<RefreshToken>()
+        .await
+        .map_err(|_| RefreshFailure::Unavailable)?;
     *access_token = token.access_token;
     if token.refresh_token.is_some() {
         *refresh_token = token.refresh_token;
@@ -189,11 +232,12 @@ async fn refresh_connection(
     security: &Security,
     connection_id: &str,
     credential: &mut StoredCredential,
-) -> Result<(), ()> {
+) -> Result<(), RefreshFailure> {
     const ATTEMPTS: usize = 50;
     const WAIT: std::time::Duration = std::time::Duration::from_millis(200);
-    let reload = |record: Option<ConnectionRecord>| -> Result<StoredCredential, ()> {
-        serde_json::from_slice(&record.ok_or(())?.credential).map_err(|_| ())
+    let reload = |record: Option<ConnectionRecord>| -> Result<StoredCredential, RefreshFailure> {
+        serde_json::from_slice(&record.ok_or(RefreshFailure::Unavailable)?.credential)
+            .map_err(|_| RefreshFailure::Unavailable)
     };
     for _ in 0..ATTEMPTS {
         if !needs_refresh(credential) {
@@ -202,7 +246,7 @@ async fn refresh_connection(
         if security
             .claim_refresh_lease(connection_id)
             .await
-            .map_err(|_| ())?
+            .map_err(|_| RefreshFailure::Unavailable)?
         {
             // Another caller may have finished a refresh between our read
             // and our claim; start from the row as it is now.
@@ -215,20 +259,21 @@ async fn refresh_connection(
                 let _ = security.release_refresh_lease(connection_id).await;
                 return Ok(());
             }
-            if refresh_token(state, credential).await.is_err() {
+            if let Err(failure) = refresh_token(state, credential).await {
                 let _ = security.release_refresh_lease(connection_id).await;
-                return Err(());
+                return Err(failure);
             }
-            let serialized = serde_json::to_vec(&*credential).map_err(|_| ())?;
+            let serialized =
+                serde_json::to_vec(&*credential).map_err(|_| RefreshFailure::Unavailable)?;
             return security
                 .store_refreshed_connection(connection_id, &serialized)
                 .await
-                .map_err(|_| ());
+                .map_err(|_| RefreshFailure::Unavailable);
         }
         tokio::time::sleep(WAIT).await;
         *credential = reload(security.load_connection(connection_id).await.ok().flatten())?;
     }
-    Err(())
+    Err(RefreshFailure::Unavailable)
 }
 
 /// How a request was allowed to use a connection.
@@ -463,117 +508,10 @@ async fn forward_inner(
     }
     target.set_path(&request_path);
     target.set_query(query.as_deref());
-    let injection = match &credential {
-        StoredCredential::OAuth { access_token, .. } => {
-            // Only while the platform still resolves to OAuth: if its
-            // selection has since moved to an apiKey profile, the token must
-            // not go to that profile's operations, and the person has to
-            // connect again.
-            if !matches!(
-                state.catalog.security_scheme(platform),
-                Ok(crate::providers::SecurityScheme::OAuth(_))
-            ) {
-                return Err(ApiError::CredentialRefreshFailed);
-            }
-            CredentialInjection::Bearer(access_token.clone())
-        }
-        StoredCredential::ApiKey {
-            key,
-            scheme: bound,
-            placement,
-            ..
-        } => {
-            let Ok(crate::providers::SecurityScheme::ApiKey(scheme)) =
-                state.catalog.security_scheme(platform)
-            else {
-                return Err(ApiError::Internal);
-            };
-            // A key entered for one apiKey scheme is not sent under another,
-            // nor to another header or query parameter than it was entered
-            // for (rows written before the binding have none, and are sent
-            // as before).
-            if bound
-                .as_ref()
-                .is_some_and(|bound| *bound != scheme.scheme_name)
-                || placement
-                    .as_ref()
-                    .is_some_and(|placement| *placement != scheme.placement())
-            {
-                return Err(ApiError::CredentialRefreshFailed);
-            }
-            match scheme.location {
-                crate::providers::ApiKeyLocation::Header => CredentialInjection::Header {
-                    name: scheme.name,
-                    value: key.clone(),
-                },
-                crate::providers::ApiKeyLocation::Query => {
-                    target.query_pairs_mut().append_pair(&scheme.name, key);
-                    CredentialInjection::None
-                }
-                crate::providers::ApiKeyLocation::Cookie => {
-                    return Ok((
-                        StatusCode::NOT_IMPLEMENTED,
-                        "cookie-located API keys are not supported",
-                    )
-                        .into_response());
-                }
-            }
-        }
-        StoredCredential::HttpBearer {
-            token,
-            scheme: bound,
-            ..
-        } => {
-            // Only while the platform still resolves to the bearer scheme
-            // the token was entered for: it is not sent under another kind
-            // or another scheme.
-            match state.catalog.security_scheme(platform) {
-                Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
-                    name,
-                    auth: crate::providers::HttpAuth::Bearer,
-                    ..
-                })) if bound.as_ref().is_none_or(|bound| *bound == name) => {
-                    CredentialInjection::Bearer(token.clone())
-                }
-                _ => return Err(ApiError::CredentialRefreshFailed),
-            }
-        }
-        StoredCredential::HttpBasic {
-            username,
-            password,
-            scheme: bound,
-            layout: bound_layout,
-            ..
-        } => match state.catalog.security_scheme(platform) {
-            // The same for Basic, and the declared layout must still be the
-            // one the halves were built from.
-            Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
-                name,
-                auth: crate::providers::HttpAuth::Basic(layout),
-                ..
-            })) if bound.as_ref().is_none_or(|bound| *bound == name)
-                && bound_layout
-                    .as_ref()
-                    .is_none_or(|bound| *bound == layout.layout()) =>
-            {
-                CredentialInjection::Basic {
-                    username: username.clone(),
-                    password: password.clone(),
-                }
-            }
-            _ => return Err(ApiError::CredentialRefreshFailed),
-        },
-        StoredCredential::NoCredential { .. } => {
-            // Only while the catalog still says the platform needs none: if
-            // it has since gained a scheme, this connection holds nothing to
-            // send, and the person has to connect again.
-            if state.catalog.security_scheme(platform)
-                != Ok(crate::providers::SecurityScheme::NoCredential)
-            {
-                return Err(ApiError::CredentialRefreshFailed);
-            }
-            CredentialInjection::None
-        }
+    let injection = match resolve_injection(state, platform, &credential, &mut target) {
+        Ok(injection) => injection,
+        Err(InjectionError::Api(error)) => return Err(error),
+        Err(InjectionError::Response(response)) => return Ok(*response),
     };
     // P3: only where the operation declares the header. A provider scopes
     // idempotency keys to the account that sends them; a no-credential
@@ -601,6 +539,16 @@ async fn forward_inner(
         }
         _ => None,
     };
+    // P4: the last check before the provider is called, so only
+    // authenticated, allowed and valid requests count against the
+    // provider's quota on the proxy's own address.
+    let paced = state
+        .catalog
+        .paced_buckets(platform, method.as_str(), &request_path);
+    state
+        .pacer
+        .take(platform, &paced)
+        .map_err(ApiError::ProviderQuota)?;
     let upstream = match upstream_request(
         &state.http_client,
         method.clone(),
@@ -633,6 +581,363 @@ async fn forward_inner(
     *response.status_mut() = status;
     *response.headers_mut() = forwarded_headers;
     Ok(response)
+}
+
+pub(crate) enum InjectionError {
+    Api(ApiError),
+    Response(Box<Response>),
+}
+
+/// How `credential` goes upstream for `platform`, only while the catalog
+/// still resolves the platform to the scheme it was entered for.
+pub(crate) fn resolve_injection(
+    state: &AppState,
+    platform: &str,
+    credential: &StoredCredential,
+    target: &mut Url,
+) -> Result<CredentialInjection, InjectionError> {
+    Ok(match &credential {
+        StoredCredential::OAuth { access_token, .. } => {
+            // Only while the platform still resolves to OAuth: if its
+            // selection has since moved to an apiKey profile, the token must
+            // not go to that profile's operations, and the person has to
+            // connect again.
+            if !matches!(
+                state.catalog.security_scheme(platform),
+                Ok(crate::providers::SecurityScheme::OAuth(_))
+            ) {
+                return Err(InjectionError::Api(ApiError::CredentialRefreshFailed));
+            }
+            CredentialInjection::Bearer(access_token.clone())
+        }
+        StoredCredential::ApiKey {
+            key,
+            scheme: bound,
+            placement,
+            ..
+        } => {
+            let Ok(crate::providers::SecurityScheme::ApiKey(scheme)) =
+                state.catalog.security_scheme(platform)
+            else {
+                return Err(InjectionError::Api(ApiError::Internal));
+            };
+            // A key entered for one apiKey scheme is not sent under another,
+            // nor to another header or query parameter than it was entered
+            // for (rows written before the binding have none, and are sent
+            // as before).
+            if bound
+                .as_ref()
+                .is_some_and(|bound| *bound != scheme.scheme_name)
+                || placement
+                    .as_ref()
+                    .is_some_and(|placement| *placement != scheme.placement())
+            {
+                return Err(InjectionError::Api(ApiError::CredentialRefreshFailed));
+            }
+            match scheme.location {
+                crate::providers::ApiKeyLocation::Header => CredentialInjection::Header {
+                    name: scheme.name,
+                    value: key.clone(),
+                },
+                crate::providers::ApiKeyLocation::Query => {
+                    target.query_pairs_mut().append_pair(&scheme.name, key);
+                    CredentialInjection::None
+                }
+                crate::providers::ApiKeyLocation::Cookie => {
+                    return Err(InjectionError::Response(Box::new(
+                        (
+                            StatusCode::NOT_IMPLEMENTED,
+                            "cookie-located API keys are not supported",
+                        )
+                            .into_response(),
+                    )));
+                }
+            }
+        }
+        StoredCredential::HttpBearer {
+            token,
+            scheme: bound,
+            ..
+        } => {
+            // Only while the platform still resolves to the bearer scheme
+            // the token was entered for: it is not sent under another kind
+            // or another scheme.
+            match state.catalog.security_scheme(platform) {
+                Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
+                    name,
+                    auth: crate::providers::HttpAuth::Bearer,
+                    ..
+                })) if bound.as_ref().is_none_or(|bound| *bound == name) => {
+                    CredentialInjection::Bearer(token.clone())
+                }
+                _ => return Err(InjectionError::Api(ApiError::CredentialRefreshFailed)),
+            }
+        }
+        StoredCredential::HttpBasic {
+            username,
+            password,
+            scheme: bound,
+            layout: bound_layout,
+            ..
+        } => match state.catalog.security_scheme(platform) {
+            // The same for Basic, and the declared layout must still be the
+            // one the halves were built from.
+            Ok(crate::providers::SecurityScheme::Http(crate::providers::HttpScheme {
+                name,
+                auth: crate::providers::HttpAuth::Basic(layout),
+                ..
+            })) if bound.as_ref().is_none_or(|bound| *bound == name)
+                && bound_layout
+                    .as_ref()
+                    .is_none_or(|bound| *bound == layout.layout()) =>
+            {
+                CredentialInjection::Basic {
+                    username: username.clone(),
+                    password: password.clone(),
+                }
+            }
+            _ => return Err(InjectionError::Api(ApiError::CredentialRefreshFailed)),
+        },
+        StoredCredential::NoCredential { .. } => {
+            // Only while the catalog still says the platform needs none: if
+            // it has since gained a scheme, this connection holds nothing to
+            // send, and the person has to connect again.
+            if state.catalog.security_scheme(platform)
+                != Ok(crate::providers::SecurityScheme::NoCredential)
+            {
+                return Err(InjectionError::Api(ApiError::CredentialRefreshFailed));
+            }
+            CredentialInjection::None
+        }
+    })
+}
+
+/// What a call the receiver makes itself came back with.
+#[derive(Debug)]
+pub(crate) enum ReceiverReply {
+    /// The provider answered (after at most one forced refresh on a 401).
+    Answered(StatusCode, Bytes),
+    /// The call could not be made as asked: the connection is gone, its
+    /// credential does not fit the catalog any more, or the operation is not
+    /// in the catalog. Nothing was sent.
+    Refused(&'static str),
+    /// The provider could not be reached, answered too much, or a token
+    /// refresh failed for a passing reason: nothing is known.
+    Unreachable,
+    /// The token endpoint refused to refresh the credential (for example
+    /// `invalid_grant`): the connection no longer grants access.
+    RefreshRefused,
+}
+
+/// A connection's credential is force-refreshed on a 401 at most once a
+/// minute after a refresh that succeeded, so a caller cannot make the proxy
+/// spend refresh tokens in a loop. Only a successful refresh arms it: a
+/// failed one leaves the next 401 free to try again.
+const FORCED_REFRESH_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn refreshes() -> &'static std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>> {
+    use std::sync::{LazyLock, Mutex};
+    static LAST: LazyLock<Mutex<std::collections::HashMap<String, std::time::Instant>>> =
+        LazyLock::new(Default::default);
+    &LAST
+}
+
+/// Whether the connection's token was force-refreshed successfully within
+/// the cooldown.
+fn refreshed_recently(connection_id: &str) -> bool {
+    let now = std::time::Instant::now();
+    let mut last = refreshes().lock().unwrap_or_else(|e| e.into_inner());
+    last.retain(|_, at| now.duration_since(*at) < FORCED_REFRESH_COOLDOWN);
+    last.contains_key(connection_id)
+}
+
+fn mark_refreshed(connection_id: &str) {
+    refreshes()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(connection_id.to_owned(), std::time::Instant::now());
+}
+
+/// The OAuth access token of a credential, if it has one.
+fn access_token(credential: &StoredCredential) -> Option<&str> {
+    match credential {
+        StoredCredential::OAuth { access_token, .. } => Some(access_token),
+        _ => None,
+    }
+}
+
+/// A request the proxy makes on its own behalf through a connection, for
+/// webhook access checks and hook cleanup (#369): the same catalog
+/// allowlist, credential binding and refresh as a proxied request, without
+/// any caller header, query or body, and without counting as use of the
+/// connection. A 401 forces one token refresh and one retry, so only a 401
+/// that persists after a refresh comes back as such.
+pub(crate) async fn receiver_call(
+    state: &AppState,
+    security: &Security,
+    connection_id: &str,
+    platform: &str,
+    method: Method,
+    relative_path: &str,
+) -> ReceiverReply {
+    const MAX_CHECK_RESPONSE: usize = 1_048_576;
+    // Only a connection that is known to be gone is a refusal; a database
+    // error says nothing about it.
+    let record = match security.load_connection(connection_id).await {
+        Ok(Some(record)) => record,
+        Ok(None) => return ReceiverReply::Refused("unknown-connection"),
+        Err(_) => return ReceiverReply::Unreachable,
+    };
+    let Ok(mut credential) = serde_json::from_slice::<StoredCredential>(&record.credential) else {
+        return ReceiverReply::Refused("unreadable-credential");
+    };
+    if record.platform != platform || credential.provider() != platform {
+        return ReceiverReply::Refused("platform-mismatch");
+    }
+    let Some(base) = state.catalog.server_base_path(platform) else {
+        return ReceiverReply::Refused("not-in-catalog");
+    };
+    let request_path = format!("{base}{relative_path}");
+    if contains_traversal_segment(&request_path) {
+        return ReceiverReply::Refused("traversal");
+    }
+    let (Some(required_headers), Some(mut target)) = (
+        state
+            .catalog
+            .required_headers(platform, method.as_str(), &request_path),
+        state
+            .catalog
+            .allows(platform, method.as_str(), &request_path),
+    ) else {
+        return ReceiverReply::Refused("not-in-catalog");
+    };
+    if state
+        .catalog
+        .validate_request(platform, method.as_str(), &request_path, None, None, false)
+        .is_err()
+    {
+        return ReceiverReply::Refused("not-in-catalog");
+    }
+    target.set_path(&request_path);
+    target.set_query(None);
+    match refresh_connection(state, security, connection_id, &mut credential).await {
+        Ok(()) => {}
+        Err(RefreshFailure::Refused) => return ReceiverReply::RefreshRefused,
+        Err(RefreshFailure::Unavailable) => return ReceiverReply::Unreachable,
+    }
+    let mut refreshed = false;
+    loop {
+        let mut url = target.clone();
+        let Ok(injection) = resolve_injection(state, platform, &credential, &mut url) else {
+            return ReceiverReply::Refused("credential-does-not-fit");
+        };
+        let Ok(upstream) = upstream_request(
+            &state.http_client,
+            method.clone(),
+            url,
+            injection,
+            &HeaderMap::new(),
+            &required_headers,
+            None,
+            Bytes::new(),
+        )
+        .send()
+        .await
+        else {
+            return ReceiverReply::Unreachable;
+        };
+        let status = upstream.status();
+        if status == StatusCode::UNAUTHORIZED && !refreshed && can_refresh(&credential) {
+            refreshed = true;
+            if refreshed_recently(connection_id) {
+                // Refreshed successfully under a minute ago, perhaps by a
+                // concurrent call while this one used the older token: use
+                // the stored token if it changed; otherwise nothing is known
+                // yet, which is not a refusal.
+                let stored = security
+                    .load_connection(connection_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|record| {
+                        serde_json::from_slice::<StoredCredential>(&record.credential).ok()
+                    });
+                match stored {
+                    Some(stored) if access_token(&stored) != access_token(&credential) => {
+                        credential = stored;
+                        continue;
+                    }
+                    _ => return ReceiverReply::Unreachable,
+                }
+            }
+            match force_refresh(state, security, connection_id, &mut credential).await {
+                Ok(()) => mark_refreshed(connection_id),
+                Err(RefreshFailure::Refused) => return ReceiverReply::RefreshRefused,
+                Err(RefreshFailure::Unavailable) => return ReceiverReply::Unreachable,
+            }
+            continue;
+        }
+        return match read_bounded_body(upstream, MAX_CHECK_RESPONSE).await {
+            Ok(bytes) => ReceiverReply::Answered(status, bytes),
+            Err(()) => ReceiverReply::Unreachable,
+        };
+    }
+}
+
+fn can_refresh(credential: &StoredCredential) -> bool {
+    matches!(
+        credential,
+        StoredCredential::OAuth {
+            refresh_token: Some(_),
+            ..
+        }
+    )
+}
+
+/// Refreshes an OAuth token now, whatever its expiry, under the same
+/// per-connection lease as [`refresh_connection`]. If another caller
+/// refreshed it meanwhile, that token is used instead.
+async fn force_refresh(
+    state: &AppState,
+    security: &Security,
+    connection_id: &str,
+    credential: &mut StoredCredential,
+) -> Result<(), RefreshFailure> {
+    let StoredCredential::OAuth {
+        access_token: used, ..
+    } = credential.clone()
+    else {
+        return Err(RefreshFailure::Refused);
+    };
+    if !security
+        .claim_refresh_lease(connection_id)
+        .await
+        .map_err(|_| RefreshFailure::Unavailable)?
+    {
+        return Err(RefreshFailure::Unavailable);
+    }
+    let current = security
+        .load_connection(connection_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|record| serde_json::from_slice::<StoredCredential>(&record.credential).ok());
+    if let Some(current) = current {
+        *credential = current;
+    }
+    if matches!(credential, StoredCredential::OAuth { access_token, .. } if *access_token != used) {
+        let _ = security.release_refresh_lease(connection_id).await;
+        return Ok(());
+    }
+    if let Err(failure) = refresh_token(state, credential).await {
+        let _ = security.release_refresh_lease(connection_id).await;
+        return Err(failure);
+    }
+    let serialized = serde_json::to_vec(&*credential).map_err(|_| RefreshFailure::Unavailable)?;
+    security
+        .store_refreshed_connection(connection_id, &serialized)
+        .await
+        .map_err(|_| RefreshFailure::Unavailable)
 }
 
 /// Rate-limit response headers forwarded unchanged, by exact name only:
@@ -771,6 +1076,238 @@ fn upstream_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An OAuth connection on a stand-in provider: `/items` answers 200
+    /// only for `Bearer new-token`; the token endpoint answers from
+    /// `token_answers` in turn (then 200 with `new-token`). When the
+    /// returned `store_on_old` holds a credential, the provider stores it
+    /// before answering a request with the old token: a concurrent call's
+    /// refresh, landing between this call's read and its 401.
+    #[allow(clippy::type_complexity)]
+    async fn oauth_receiver(
+        token_answers: Vec<(StatusCode, &'static str)>,
+        expires_at: Option<u64>,
+    ) -> (
+        AppState,
+        Security,
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<tokio::sync::Mutex<Option<Vec<u8>>>>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let security = security().await;
+        let credential = serde_json::to_vec(&StoredCredential::OAuth {
+            provider: "github-issues".into(),
+            access_token: "old-token".into(),
+            refresh_token: Some("a-refresh-token".into()),
+            expires_at,
+        })
+        .unwrap();
+        let id = security
+            .create_connection("github-issues", &Agent::new(48).id(), &credential)
+            .await
+            .unwrap();
+        let token_requests = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = token_requests.clone();
+        let answers = std::sync::Arc::new(std::sync::Mutex::new(token_answers));
+        let store_on_old: std::sync::Arc<tokio::sync::Mutex<Option<Vec<u8>>>> = Default::default();
+        let (pending, store, connection) = (store_on_old.clone(), security.clone(), id.clone());
+        let upstream = axum::Router::new()
+            .route(
+                "/token",
+                axum::routing::post(move || {
+                    let counter = counter.clone();
+                    let answers = answers.clone();
+                    async move {
+                        counter.fetch_add(1, Ordering::SeqCst);
+                        let (status, error) = {
+                            let mut answers = answers.lock().unwrap();
+                            if answers.is_empty() {
+                                (StatusCode::OK, "")
+                            } else {
+                                answers.remove(0)
+                            }
+                        };
+                        if status != StatusCode::OK {
+                            return (status, axum::Json(json!({"error": error}))).into_response();
+                        }
+                        axum::Json(json!({"access_token": "new-token", "expires_in": 3600}))
+                            .into_response()
+                    }
+                }),
+            )
+            .route(
+                "/items",
+                axum::routing::get(move |headers: HeaderMap| {
+                    let (pending, store, connection) =
+                        (pending.clone(), store.clone(), connection.clone());
+                    async move {
+                        let bearer = headers.get(AUTHORIZATION).and_then(|v| v.to_str().ok());
+                        if bearer == Some("Bearer new-token") {
+                            return axum::Json(json!([{"id": 1}])).into_response();
+                        }
+                        if let Some(newer) = pending.lock().await.take() {
+                            store
+                                .store_refreshed_connection(&connection, &newer)
+                                .await
+                                .unwrap();
+                        }
+                        StatusCode::UNAUTHORIZED.into_response()
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let mut s = state(Some(security.clone()));
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "github-issues",
+            json!({
+                "servers": [{"url": upstream_url}],
+                "components": {"securitySchemes": {"oauth": {"type": "oauth2", "flows": {
+                    "authorizationCode": {
+                        "authorizationUrl": "https://auth.example/authorize",
+                        "tokenUrl": "https://auth.example/token",
+                        "scopes": {"read": "Read items"}
+                    }
+                }}}},
+                "security": [{"oauth": ["read"]}],
+                "paths": {"/items": {"get": {}}}
+            }),
+            json!({}),
+        );
+        s.test_upstream = Some(upstream_url);
+        (s, security, id, token_requests, store_on_old)
+    }
+
+    async fn check(s: &AppState, security: &Security, id: &str) -> ReceiverReply {
+        receiver_call(s, security, id, "github-issues", Method::GET, "/items").await
+    }
+
+    /// Review of #394, N2: a refresh that fails for a passing reason does
+    /// not arm the cooldown, so the next 401 tries again and succeeds.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_failed_forced_refresh_does_not_arm_the_cooldown() {
+        let far = crate::now_secs() + 86_400;
+        let (s, security, id, tokens, _) =
+            oauth_receiver(vec![(StatusCode::SERVICE_UNAVAILABLE, "")], Some(far)).await;
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::Unreachable
+        ));
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::Answered(StatusCode::OK, _)
+        ));
+        assert_eq!(tokens.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// Review of #394, N2: within the cooldown a 401 retries with a token a
+    /// concurrent call stored meanwhile, and is otherwise unknown, never a
+    /// refusal; no second refresh is spent either way.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_within_the_cooldown_a_401_is_retried_with_a_newer_token_or_unknown() {
+        let far = crate::now_secs() + 86_400;
+        let (s, security, id, tokens, store_on_old) = oauth_receiver(vec![], Some(far)).await;
+        // Another call refreshed successfully a moment ago.
+        mark_refreshed(&id);
+        // Its token is not stored: nothing new is known.
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::Unreachable
+        ));
+        // It is stored while this call holds the old token: reloaded, retried.
+        *store_on_old.lock().await = Some(
+            serde_json::to_vec(&StoredCredential::OAuth {
+                provider: "github-issues".into(),
+                access_token: "new-token".into(),
+                refresh_token: Some("a-refresh-token".into()),
+                expires_at: Some(far),
+            })
+            .unwrap(),
+        );
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::Answered(StatusCode::OK, _)
+        ));
+        assert_eq!(tokens.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    /// A refused refresh (`invalid_grant`) is a refusal, on expiry and on a
+    /// 401 alike, not an unknown.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_refused_refresh_is_a_refusal_on_expiry_and_on_401() {
+        let (s, security, id, _, _) =
+            oauth_receiver(vec![(StatusCode::BAD_REQUEST, "invalid_grant")], Some(0)).await;
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::RefreshRefused
+        ));
+        let far = crate::now_secs() + 86_400;
+        let (s, security, id, _, _) =
+            oauth_receiver(vec![(StatusCode::BAD_REQUEST, "invalid_grant")], Some(far)).await;
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::RefreshRefused
+        ));
+    }
+
+    /// Re-review of #394: a 400 or 401 from the token endpoint with another
+    /// error, such as `invalid_client`, is the proxy's own problem, so it is
+    /// unknown rather than a refusal; `invalid_grant` in a 401 still refuses.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_only_invalid_grant_refuses_a_refresh() {
+        let far = crate::now_secs() + 86_400;
+        for (status, expires_at) in [
+            (StatusCode::BAD_REQUEST, Some(0)),
+            (StatusCode::UNAUTHORIZED, Some(0)),
+            (StatusCode::BAD_REQUEST, Some(far)),
+        ] {
+            let (s, security, id, _, _) =
+                oauth_receiver(vec![(status, "invalid_client")], expires_at).await;
+            assert!(
+                matches!(check(&s, &security, &id).await, ReceiverReply::Unreachable),
+                "{status} invalid_client, expires {expires_at:?}"
+            );
+        }
+        let (s, security, id, _, _) =
+            oauth_receiver(vec![(StatusCode::UNAUTHORIZED, "invalid_grant")], Some(0)).await;
+        assert!(matches!(
+            check(&s, &security, &id).await,
+            ReceiverReply::RefreshRefused
+        ));
+    }
+
+    /// Re-review of #394: a connection that cannot be loaded is unknown;
+    /// only one that is known to be missing is `unknown-connection`.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_connection_that_cannot_be_loaded_is_unreachable() {
+        let (s, security, _, _, _) = oauth_receiver(vec![], None).await;
+        // PostgreSQL refuses a NUL in text, so the lookup itself fails.
+        assert!(matches!(
+            check(&s, &security, "broken\0id").await,
+            ReceiverReply::Unreachable
+        ));
+        assert!(matches!(
+            check(&s, &security, "no-such-connection").await,
+            ReceiverReply::Refused("unknown-connection")
+        ));
+    }
+
+    #[test]
+    fn only_a_successful_refresh_arms_the_cooldown() {
+        let connection = format!("cooldown-{}", rand::random::<u64>());
+        assert!(!refreshed_recently(&connection));
+        assert!(!refreshed_recently(&connection), "asking does not arm it");
+        mark_refreshed(&connection);
+        assert!(refreshed_recently(&connection));
+        assert!(!refreshed_recently(&format!("{connection}-other")));
+    }
     use crate::agent_id::test_signer::Agent;
     use crate::capability::{mint, Claims};
     use crate::test_support::{body_json, security, signed_request, state, PUBLIC_ORIGIN};
@@ -2034,6 +2571,109 @@ mod tests {
         let body = body_json(post("other").await.unwrap()).await;
         assert_eq!(body["idempotency_key"], serde_json::Value::Null);
         assert_eq!(body["if_none_match"], "\"v1\"");
+    }
+
+    /// pieces.md P4: a `sourceIp` bucket of the platform's `x-throttling`
+    /// is shared by every connection and owner on this instance; once its
+    /// sliding window is full the proxy answers `429 provider_quota` with
+    /// `Retry-After` and does not call the provider. Refused requests spend
+    /// nothing, and operations that select no paced bucket are not paced.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_requests_are_paced_under_a_source_ip_quota_across_tenants() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().fallback(move || {
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Json(json!([]))
+            }
+        });
+        let _server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let security = security().await;
+        let mut s = state(Some(security.clone()));
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "pets",
+            json!({
+                "servers": [{"url": format!("http://{address}/api")}],
+                "security": [],
+                "x-throttling": {
+                    "limits": {"source": {"requests": 2, "window": {"seconds": 300, "kind": "unspecified"}, "partitionBy": ["sourceIp"]}},
+                    "applies": ["source"]
+                },
+                "paths": {
+                    "/pets": {"get": {}},
+                    "/health": {"get": {"x-throttling": []}}
+                }
+            }),
+            json!({}),
+        );
+        let mut tenants = Vec::new();
+        for seed in [41, 42] {
+            let owner = Agent::new(seed);
+            let id = security
+                .create_connection(
+                    "pets",
+                    &owner.id(),
+                    &serde_json::to_vec(&StoredCredential::NoCredential {
+                        provider: "pets".into(),
+                    })
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            tenants.push((owner, id));
+        }
+        let get = |tenant: usize, path: &str| {
+            let (owner, id) = &tenants[tenant];
+            let request = signed_request(
+                &s,
+                owner,
+                "GET",
+                &format!("/proxy/{id}/pets/api/{path}"),
+                vec![],
+            );
+            crate::router(s.clone()).oneshot(request)
+        };
+        // A stranger's refused requests spend nothing.
+        let (_, id) = &tenants[0];
+        let stranger = signed_request(
+            &s,
+            &Agent::new(43),
+            "GET",
+            &format!("/proxy/{id}/pets/api/pets"),
+            vec![],
+        );
+        assert_eq!(
+            crate::router(s.clone())
+                .oneshot(stranger)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        // Two tenants share the proxy's address, and so the bucket.
+        assert_eq!(get(0, "pets").await.unwrap().status(), StatusCode::OK);
+        assert_eq!(get(1, "pets").await.unwrap().status(), StatusCode::OK);
+        for tenant in [0, 1] {
+            let response = get(tenant, "pets").await.unwrap();
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            let retry: u64 = response.headers()[header::RETRY_AFTER]
+                .to_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!((295..=300).contains(&retry), "{retry}");
+            assert_eq!(body_json(response).await["error"], "provider_quota");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        // An operation that selects no bucket is not paced.
+        assert_eq!(get(0, "health").await.unwrap().status(), StatusCode::OK);
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
