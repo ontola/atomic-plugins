@@ -125,3 +125,13 @@ Collection Completeness rows with Deletion Feeds 0.3.0-draft. §4.4 and
 no id is skipped. §9's first consumer bullet is scoped to a deletion
 feed's reads. The test sends the held delete (no GET) in both reads, and
 its 404 settles it.
+
+## Turn 6
+
+**Human (via the coordinator session):** Delta review: merge main (keep
+the Unreleased bullets in order), fix the short README line, and test that
+an id-less list tombstone is skipped.
+
+**Assistant:** Merged main: #525's Produced Classes bullet first, then this
+PR's three. The list-tombstones changelog bullet is re-wrapped. New test:
+an item with the marker and no id is neither a member nor a list tombstone.

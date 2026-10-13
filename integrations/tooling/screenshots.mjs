@@ -78,7 +78,8 @@ installMissing(
 const catalogDir = mkdtempSync(join(tmpdir(), 'screenshots-catalog-'));
 const built = spawnSync(
   process.execPath,
-  [resolve(root, 'usertest/catalog.mjs'), catalogDir],
+  // Not deployed: no collector to report to.
+  [resolve(root, 'usertest/catalog.mjs'), '--no-log', catalogDir],
   { stdio: ['ignore', 'ignore', 'inherit'] },
 );
 if (built.status !== 0) throw new Error('usertest/catalog.mjs failed');

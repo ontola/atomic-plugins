@@ -128,6 +128,19 @@ describe('readCollections and readPlatform with list tombstones', () => {
     expect(fake.requests[0]).toContain('showDeleted=true');
   });
 
+  it('skips an item with the marker but no id: neither a member nor a list tombstone', async () => {
+    const other = { id: 'e3', status: 'confirmed', summary: 'Other' };
+    const fake = calendar(() => [{ status: 'cancelled' }, other, cancelled]);
+    const result = await readCollections(listTombstones, {
+      transport: fake.transport,
+      constants: { calendarId: 'c1' },
+    });
+    const [snapshot] = result.collections;
+    expect(snapshot!.complete).toBe(true);
+    expect(snapshot!.items).toEqual([other]);
+    expect(snapshot!.tombstones).toEqual(['e1']);
+  });
+
   it('gives readPlatform no record for a list tombstone', async () => {
     const fake = calendar(() => [cancelled, exception]);
     const result = await readPlatform(listTombstones, {
