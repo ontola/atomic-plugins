@@ -63,15 +63,22 @@ fi
 # --- atomic-server checkout, ./browser, pnpm install ------------------------
 # The data-browser build that server/build.rs runs regenerates two committed
 # files with a small diff (BUILD_OUTPUT_PATHS in server-build.mjs, the one
-# list). The binary embeds the built output, not these sources, so the build
-# step below restores them. link-atomic-server.mjs tolerates (and restores)
-# those two paths when it moves the checkout to a new pin, and refuses any
-# other uncommitted change.
+# list). The binary embeds the built output, not these sources, so this hook
+# restores them before linking (a build interrupted before its own restore
+# leaves them modified, and a warm run doesn't build again) and after the
+# build below. link-atomic-server.mjs tolerates (and restores) those two
+# paths when it moves the checkout to a new pin, and refuses any other
+# uncommitted change. Idempotent: on a clean checkout it changes nothing.
 restore_generated() {
   [ -e "$CHECKOUT/.git" ] || return 0
-  node --input-type=module -e \
-    "import { restoreBuildOutputs } from '$REPO/integrations/tooling/server-build.mjs'; restoreBuildOutputs(process.argv[1]);" \
-    "$CHECKOUT" ||
+  # Both paths go through argv, never into the JS source.
+  node --input-type=module -e '
+    import { pathToFileURL } from "node:url";
+    const [, repo, checkout] = process.argv;
+    const tooling = `${repo}/integrations/tooling/server-build.mjs`;
+    const { restoreBuildOutputs } = await import(pathToFileURL(tooling).href);
+    restoreBuildOutputs(checkout);
+  ' "$REPO" "$CHECKOUT" ||
     warn "could not restore the build outputs in $CHECKOUT"
   return 0
 }
@@ -79,6 +86,7 @@ restore_generated() {
 step "link-atomic-server.mjs (checkout at $CHECKOUT)"
 cd "$REPO" || exit 0
 mkdir -p "$(dirname "$CHECKOUT")"
+restore_generated
 node integrations/tooling/link-atomic-server.mjs || warn "link-atomic-server.mjs failed"
 SHA=$(cat "$REPO/.atomic-server-ref")
 
@@ -167,9 +175,10 @@ else
     warn "atomic-server build failed"
   fi
   restore_generated
-  if [ -n "$(git -C "$CHECKOUT" status --porcelain --untracked-files=no)" ]; then
-    warn "$CHECKOUT has uncommitted changes; the next pin bump's link-atomic-server.mjs will refuse to move it"
-  fi
+fi
+if [ -e "$CHECKOUT/.git" ] &&
+  [ -n "$(git -C "$CHECKOUT" status --porcelain --untracked-files=no)" ]; then
+  warn "$CHECKOUT has uncommitted changes; the next pin bump's link-atomic-server.mjs will refuse to move it"
 fi
 
 step "Done ($WARNINGS warning(s))"
