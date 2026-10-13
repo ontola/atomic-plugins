@@ -175,7 +175,10 @@ Data flows through four stages, each its own directory under `src/`:
    vanished loop (`checkVanished`), counted against
    `maxMissingRecordChecks` per sync across collections
    (`SyncRound.lookups`). Kept `unavailable` marks without queued or failed
-   writes (`unsettled`) are re-read where `lookupPlanned` in a second pass,
+   writes (`unsettled`; the `!differs` path skips unconfirmed marks with
+   failed writes too, and routes a list-tombstoned kept mark to
+   `vanished` whatever `lookupPlanned` says, as the `differs` path does)
+   are re-read where `lookupPlanned` in a second pass,
    `recheckUnavailable` (from `SyncRound.unavailable`, before
    `finishFeeds`), oldest `checked` first across collections (`checkTime`,
    strictly increasing, stored with the mark; set by `checkVanished`'s

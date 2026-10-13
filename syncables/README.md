@@ -1965,7 +1965,13 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   deletion removes it; a 404 under `notFound: unavailable` keeps it
   without telling `onPresence` again. Behaviour change: more item GETs
   where such records are kept, and `onMissingRecord` is called again on
-  every re-check.
+  every re-check. Also changed with it: an unchanged read no longer
+  re-checks an `unconfirmed` record that has failed (held) writes either,
+  only one with no writes at all (before, only queued writes kept it
+  out), as a changed read already did; its failed writes say what became
+  of it. And a kept mark that an unchanged read lists as a list tombstone
+  is now settled as `deleted` even where the collection makes no checks,
+  as a changed read already did.
 - **0.22.1**: CRUD Causality 0.6.0 list-only resources and Produced Classes
   0.1.1-draft. Behaviour change to know before upgrading: in a CRUD
   Causality document, `create()` on a resource without `identity` now
