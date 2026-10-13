@@ -51,6 +51,12 @@ bin; it is not imported by either library entrypoint. See `docs/cli.md` for the
 authentication/configuration scaffold and `npm run cli:mock` for its local test
 server. There is still no `npm start` or installed daemon.
 
+The additive Node-only `syncables/postgres` subpath implements the optional
+local archive/caching/replay stage (`docs/postgres-cache.md`). Keep it and CLI
+database imports out of root/browser entrypoints. PostgreSQL integration tests
+use `SYNCABLES_TEST_DATABASE_URL`; CI supplies a disposable PostgreSQL 17 service
+for every Node matrix job. With that variable absent, database cases skip.
+
 ## Architecture
 
 Data flows through four stages, each its own directory under `src/`:

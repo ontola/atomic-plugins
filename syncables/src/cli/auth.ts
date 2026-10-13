@@ -1,4 +1,5 @@
 /** Device-flow scaffold. Tokens live only for the duration of auth-test. */
+import type { Transport, TransportRequest } from '../read/transport.js';
 export interface AuthOptions {
   issuer: string;
   clientId: string;
@@ -252,12 +253,11 @@ export async function listConnections(
   };
 }
 
-export async function probeApi(
+export function proxyRequest(
   session: Session,
   connection: Connection,
   path: string,
-  fetchImpl: typeof fetch = globalThis.fetch,
-): Promise<{ status: number; contentType: string | null; bytes: number }> {
+): TransportRequest {
   if (!path.startsWith('/') || path.startsWith('//') || path.includes('#'))
     throw new Error(
       'API path must begin with / and must not contain a fragment',
@@ -266,18 +266,77 @@ export async function probeApi(
   const url = new URL(prefix + path.slice(1), session.issuer);
   if (!url.pathname.startsWith(prefix))
     throw new Error('API path escapes the selected connection');
-  const response = await request(fetchImpl, url.href, {
-    method: 'GET',
-    headers: { authorization: `Bearer ${session.accessToken}` },
-  });
-  if (!response.ok)
+  return { url, method: 'GET', headers: {} };
+}
+
+export function proxyReadTransport(
+  session: Session,
+  connection: Connection,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Transport {
+  const prefix = `/proxy/${encodeURIComponent(connection.connection_id)}/${encodeURIComponent(connection.platform)}/`;
+  return async (input) => {
+    if (
+      input.method !== 'GET' ||
+      input.body !== undefined ||
+      input.url.origin !== session.issuer ||
+      !input.url.pathname.startsWith(prefix)
+    )
+      throw new Error(
+        'Read-only transport request escapes the approved connection',
+      );
+    const response = await request(fetchImpl, input.url.href, {
+      method: 'GET',
+      headers: {
+        ...input.headers,
+        authorization: `Bearer ${session.accessToken}`,
+      },
+    });
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    const reader = response.body?.getReader();
+    if (reader) {
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        size += chunk.value.length;
+        if (size > 8 * 1024 * 1024) {
+          await reader.cancel();
+          throw new Error('API response exceeds the 8 MiB read limit');
+        }
+        chunks.push(chunk.value);
+      }
+    }
+    const headers: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      headers[key] = value;
+    });
+    return {
+      status: response.status,
+      headers,
+      body: Buffer.concat(chunks).toString('utf8'),
+    };
+  };
+}
+
+export async function probeApi(
+  session: Session,
+  connection: Connection,
+  path: string,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<{ status: number; contentType: string | null; bytes: number }> {
+  const response = await proxyReadTransport(
+    session,
+    connection,
+    fetchImpl,
+  )(proxyRequest(session, connection, path));
+  if (response.status < 200 || response.status >= 300)
     throw new Error(
       `API read refused (HTTP ${response.status}); check connection permissions and catalog access`,
     );
-  const body = await response.text();
   return {
     status: response.status,
-    contentType: response.headers.get('content-type'),
-    bytes: Buffer.byteLength(body, 'utf8'),
+    contentType: response.headers['content-type'] ?? null,
+    bytes: Buffer.byteLength(response.body, 'utf8'),
   };
 }

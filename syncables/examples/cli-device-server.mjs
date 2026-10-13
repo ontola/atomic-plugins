@@ -10,10 +10,10 @@ const origin = `http://127.0.0.1:${port}`;
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, origin);
-  const send = (status, body) => {
+  const send = (status, body, cacheControl = 'no-store') => {
     response.writeHead(status, {
       'content-type': 'application/json',
-      'cache-control': 'no-store',
+      'cache-control': cacheControl,
     });
     response.end(JSON.stringify(body));
   };
@@ -118,7 +118,18 @@ const server = createServer(async (request, response) => {
       send(401, {});
       return;
     }
-    send(200, [{ id: 1, title: 'Invented issue', state: 'open' }]);
+    send(
+      200,
+      [
+        {
+          id: 1,
+          title: 'Invented issue',
+          state: 'open',
+          body: 'An invented note for the compression test. '.repeat(100),
+        },
+      ],
+      'private, max-age=60',
+    );
   } else send(404, { error: 'not_available' });
 });
 

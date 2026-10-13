@@ -49,3 +49,33 @@ from the existing package/tooling baseline. Node 26.11.1 passed all 1,307 unit
 tests, compilation, lint and CLI help. Removed the upper limit while keeping
 the minimum at 22.11, added a Node 22/24/26 CI matrix, and clarified that the
 mock script requires this source branch and its syncables package directory.
+
+## Local PostgreSQL stage
+
+The user confirmed the mock flow worked in their terminal and authorized
+continuing. Added the next stage: separate local PostgreSQL request attempts,
+compressed immutable payloads, cache heads, expiring refresh leases and ordered
+recorded-run replay. Tokens stay command-local; the live device-flow ticket
+still has no implementation contract. The CLI can record/repeat a read and
+replay it offline; no proxy-side archive was added.
+
+Added real PostgreSQL tests for deduplication/compression, owner/connection/grant
+isolation, parallel refresh coalescing, expired-lease fencing, atomic rollback,
+unfinished runs, HTTP 304 body references and paginated Syncables reconstruction.
+Collection range metadata, outgoing outbox persistence, native replication,
+Keychain and launchd remain subsequent stages. Test records are invented.
+
+The full Node 26 suite passed with PostgreSQL configured (1,320 tests), along
+with lint, formatting and TypeScript checks. A Node 22 compiled CLI test
+recorded an upstream read and cache hit,
+stopped the mock, restarted PostgreSQL, and replayed offline successfully.
+Its invented 4,360-byte body occupied one 100-byte compressed payload; that
+counts payload bytes only, not database metadata or indexes. Packed root and
+browser imports remained usable without opening a database; the installed
+PostgreSQL subpath successfully decoded its archived Zstandard/WASM payload.
+
+The user will wait for the localthought.io deployment before the live CLI test
+and requested instructions. Clarified source update/build, using the deployed
+public client/read-scope values, selecting an approved GitHub connection,
+the private repository installation requirement and expected HTTP 200 output.
+The live test does not require PostgreSQL or print provider bodies/tokens.

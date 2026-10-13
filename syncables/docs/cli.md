@@ -1,6 +1,6 @@
 # CLI authentication scaffold
 
-This first stage of [#566](https://github.com/ontola/atomic-plugins/issues/566)
+This CLI implements the first stages of [#566](https://github.com/ontola/atomic-plugins/issues/566)
 adds a CLI to the existing `syncables` npm package. Library imports and the
 `syncables/browser` entry remain unchanged. Importing either entry does not
 run the CLI or read CLI configuration.
@@ -8,8 +8,9 @@ run the CLI or read CLI configuration.
 The scaffold tests device authorization, connection discovery and a GET through
 Local Thought. It also saves and lists definitions for Atomic, NextGraph and
 remoteStorage replication. It does **not** run these replication protocols,
-start a daemon, store tokens, or implement PostgreSQL caching/outbox persistence.
-Those follow after this stage has been tested.
+start a daemon or store tokens. Optional local PostgreSQL archival, caching and
+offline replay are now available; see the [cache guide](postgres-cache.md).
+Outgoing outbox persistence and runtime replication follow in later stages.
 
 ## Build the source
 
@@ -66,20 +67,45 @@ it with `SYNCABLES_MOCK_PORT` if needed and use that origin in the CLI command.
 ## Test the real Local Thought deployment
 
 [#565](https://github.com/ontola/atomic-plugins/issues/565) must supply the
-public client ID, scopes and deployed device-flow contract first:
+public client ID, read scopes and deployed device-flow contract first. Use those
+published values, not the mock's `syncables-cli-demo` client ID. Update and
+rebuild the checkout before testing:
+
+```sh
+git pull --ff-only
+npm ci
+npm run build:release
+```
+
+This first live test does not require PostgreSQL. Request only read access,
+approve the existing GitHub connection in the browser, and test one issue:
 
 ```sh
 node build/src/cli/main.js auth-test \
   --issuer https://localthought.io \
   --client-id '<published-public-client-id>' \
   --scope '<published-read-scope>' \
-  --connection '<approved-connection-id>' \
   --path '/repos/ontola/usertest-findings/issues?state=all&per_page=1'
 ```
 
-If exactly one connection is returned, `--connection` is optional. Omit
+If more than one connection is returned, add
+`--connection '<approved-github-connection-id>'`. These are Local Thought
+provider connection IDs, distinct from the named replication destinations.
+Omit
 `--path` to test login and list connections without making a provider request.
 The command sends GET only; success logging does not imply write access.
+
+Success means the command prints the authenticated owner and accessible
+connections, then `apiAccess: verified`, `status: 200`, JSON content type and
+the response byte count. That is evidence of an actual GitHub API read through
+the selected connection. The private repository also requires the GitHub App
+installation to include `ontola/usertest-findings`; device login alone does not
+grant that upstream access.
+
+If it fails, share the terminal error/status only. The CLI does not print tokens
+or the provider response body. A discovery 404 means the contract is not yet
+available at this issuer (or needs the published endpoint overrides); a proxy
+401/403 or provider 404 needs connection/scope/repository-access verification.
 
 Discovery uses `/.well-known/oauth-authorization-server` and requires matching
 issuer, `device_authorization_endpoint` and `token_endpoint`. If #565 publishes

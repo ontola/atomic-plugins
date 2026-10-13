@@ -13,6 +13,11 @@ const HELP = `Syncables CLI scaffold
   syncables auth-test --client-id ID [--issuer URL] [--scope SCOPES]
     [--connection ID] [--path /repos/owner/repo/issues?per_page=1]
     [--device-endpoint URL --token-endpoint URL]
+    [--archive --repeat 2 --max-age 60]
+  syncables cache init
+  syncables cache runs --owner ID
+  syncables cache stats --owner ID
+  syncables cache replay --owner ID --run ID
   syncables replication add --name NAME --backend atomic|nextgraph|remotestorage
     --collections NAME[,NAME] [backend options] [--config-dir DIRECTORY]
   syncables replication list [--config-dir DIRECTORY]
@@ -29,7 +34,8 @@ overrides are available until its discovery contract is deployed.
 
 Replication commands save/list non-secret configuration only. Authentication
 and runtime replication for all three backends are NOT implemented yet.
-PostgreSQL, caching, outbox and daemon/service commands follow after this test.
+The optional archive uses SYNCABLES_DATABASE_URL for local PostgreSQL only.
+Outbox, collection coverage and daemon/service commands follow in later stages.
 `;
 
 async function main(): Promise<void> {
@@ -53,9 +59,14 @@ async function main(): Promise<void> {
         'address',
         'module',
         'config-dir',
+        'owner',
+        'run',
+        'repeat',
+        'max-age',
       ].map((key) => [key, { type: 'string' as const }]),
     );
   options.help = { type: 'boolean' };
+  options.archive = { type: 'boolean' };
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options,
@@ -67,6 +78,13 @@ async function main(): Promise<void> {
     return;
   }
   const directory = string('config-dir') ?? configDirectory();
+  if (positionals[0] === 'cache') {
+    if (positionals.length !== 2)
+      throw new Error('Use cache init, cache runs, or cache replay');
+    const { cacheCommand } = await import('./cache.js');
+    await cacheCommand(positionals[1], string('owner'), string('run'));
+    return;
+  }
   if (positionals[0] === 'replication') {
     if (positionals.length !== 2)
       throw new Error('Use replication add or replication list');
@@ -104,6 +122,21 @@ async function main(): Promise<void> {
   const scope = string('scope');
   const deviceEndpoint = string('device-endpoint');
   const tokenEndpoint = string('token-endpoint');
+  if (values.archive && !string('path'))
+    throw new Error('--archive requires an explicit --path API read');
+  const repeat = Number(string('repeat') ?? '2');
+  const maxAge = Number(string('max-age') ?? '60');
+  if (
+    values.archive &&
+    (!Number.isInteger(repeat) ||
+      repeat < 1 ||
+      repeat > 100 ||
+      !Number.isFinite(maxAge) ||
+      maxAge < 0)
+  )
+    throw new Error(
+      'Use --repeat 1–100 and a nonnegative --max-age in seconds',
+    );
   const session = await deviceLogin(
     {
       issuer: string('issuer') ?? 'https://localthought.io',
@@ -126,6 +159,18 @@ async function main(): Promise<void> {
         : undefined;
     if (!connection)
       throw new Error('Select an accessible --connection ID for the API probe');
+    if (values.archive) {
+      const { archivedProbe } = await import('./cache.js');
+      await archivedProbe({
+        session,
+        connection,
+        owner: available.owner,
+        path,
+        repeat,
+        maxAgeMs: maxAge * 1000,
+      });
+      return;
+    }
     const result = await probeApi(session, connection, path);
     process.stdout.write(
       JSON.stringify(
