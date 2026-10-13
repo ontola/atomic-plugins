@@ -1173,7 +1173,40 @@ When the create operation declares an `x-crud` `create` for the resource
   the 2xx and storing it leaves the create marked in flight, which a
   restart treats as before: `uncertain`, or resent under its idempotency
   key. Settle it with `confirm` (the server's id, found by a
-  refresh) or `discard`. Finding it automatically is not implemented.
+  refresh) or `discard`, or let the next read bind it (below).
+- `matchUnboundCreates: { uniqueFields: { pets: ['ref'] } }` (off by
+  default) binds an unbound create from the first complete read of its
+  collection that starts after the create was answered, as `confirm` with
+  the record's id would, and lists it on `SyncResult.matched` (`{
+  collection, context, localId, id }`). The keys are collection names (a
+  path in a legacy document); an unknown one makes `createApiClient`
+  throw. Each listed field is one the app guarantees no other record of
+  the collection shares: an external reference, an idempotency token kept
+  in the record. A create is bound only when all of these hold:
+  - it sent at least one listed field (other than the id field), with a
+    value that is not `null` or `""`;
+  - the collection had a complete read since this client started, before
+    the create was answered;
+  - exactly one record of the read is new since the create was answered
+    (not in the local copy then), has no local writes, and equals every
+    field the create sent, by JSON value (the id field left out);
+  - no other unbound create of the collection has that record as a
+    candidate.
+
+  Otherwise the create stays unbound, as without the option: two
+  identical creates that match one record, or two records each, bind
+  neither; a record someone else made with the same values but another
+  unique value is not a candidate. Each create gets that one read: a
+  provider that lists the record later, a restart (what the client knew
+  when the create was answered is not stored), or a collection without
+  the listed field leave it to `resolveWrite`. A field the provider
+  changes on the way (trims, normalises, defaults) prevents the match.
+  What remains is the app's guarantee: if a listed value is not in fact
+  unique (two clients, or a person, create the same value in the same
+  interval), and the record this create made is not listed (filtered out,
+  or not yet visible), the create is bound to the other record, and its
+  later updates and deletes go there. Declare only fields whose
+  uniqueness the provider enforces or the app alone assigns.
 
 Without a declaration, creates behave as described above.
 
@@ -1892,6 +1925,13 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   ignored, and each name is read from the item's own fields only. Before, any
   nonempty string was read as a path. A stored presence mark with
   `source: 'list'` is restored; an older client drops that mark's source.
+- **Unreleased**: `matchUnboundCreates` (off by default): an unbound
+  create (CRUD Causality 0.5.0 §4.3.2: a 2xx that did not identify the
+  record) is bound from the next complete read of its collection when it
+  sent a value of a field the app declares unique (`uniqueFields`) and
+  exactly one new record of that read matches every field it sent and no
+  other create. Bound creates are listed on `SyncResult.matched`. Before,
+  only `resolveWrite` `confirm` bound one.
 - **0.22.1**: CRUD Causality 0.6.0 list-only resources and Produced Classes
   0.1.1-draft. Behaviour change to know before upgrading: in a CRUD
   Causality document, `create()` on a resource without `identity` now
