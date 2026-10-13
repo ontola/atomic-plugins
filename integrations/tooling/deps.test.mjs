@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import {
   installMissing,
+  installReason,
   missingInstalls,
   pluginDependencyDirs,
   sharedDependencyDirs,
@@ -24,12 +25,21 @@ import {
 function fixture(dirs) {
   const base = mkdtempSync(join(tmpdir(), 'atomic-deps-'));
 
-  for (const [dir, { lock = true, installed = false }] of Object.entries(
-    dirs,
-  )) {
+  for (const [
+    dir,
+    { lock = true, installed = false, from = 'lockfileVersion: 9\n' },
+  ] of Object.entries(dirs)) {
     mkdirSync(join(base, dir), { recursive: true });
-    if (lock) writeFileSync(join(base, dir, 'pnpm-lock.yaml'), '');
-    if (installed) mkdirSync(join(base, dir, 'node_modules'));
+    if (lock)
+      writeFileSync(join(base, dir, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+
+    if (installed) {
+      // pnpm keeps a copy of the lockfile it installed from; `from` is it,
+      // or null for a node_modules without one.
+      mkdirSync(join(base, dir, 'node_modules/.pnpm'), { recursive: true });
+      if (from !== null)
+        writeFileSync(join(base, dir, 'node_modules/.pnpm/lock.yaml'), from);
+    }
   }
 
   return base;
@@ -119,6 +129,37 @@ test('an existing node_modules is left alone, as on CI', () => {
     );
     assert.deepEqual(calls, []);
     assert.deepEqual(lines, []);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('a node_modules installed from an older lockfile is installed again, and says so', () => {
+  const base = fixture({
+    'integrations/notion': { installed: true, from: 'lockfileVersion: 8\n' },
+    'integrations/pets': { installed: true },
+    'integrations/calendar/app': { installed: true, from: null },
+  });
+
+  try {
+    const { calls, install } = recorder(base);
+    const lines = [];
+    installMissing(
+      [
+        ...pluginDependencyDirs('notion'),
+        ...pluginDependencyDirs('pets'),
+        ...pluginDependencyDirs('calendar'),
+      ],
+      { base, install, log: line => lines.push(line) },
+    );
+    // Up to date, or without pnpm's copy to compare: left alone.
+    assert.deepEqual(calls, ['integrations/notion']);
+    assert.deepEqual(lines, [
+      'Installing integrations/notion dependencies again: node_modules was installed from an older pnpm-lock.yaml (pnpm install --frozen-lockfile)',
+    ]);
+    assert.equal(installReason('integrations/notion', base), 'stale');
+    assert.equal(installReason('integrations/pets', base), undefined);
+    assert.equal(installReason('integrations/calendar/app', base), undefined);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
