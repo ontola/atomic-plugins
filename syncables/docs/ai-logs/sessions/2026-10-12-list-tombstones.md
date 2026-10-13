@@ -107,3 +107,21 @@ spec's reference note say a held update fails and a held delete is
 released and sent; §4.4 and §9 say "objects" about read bodies. Merged
 main (with Produced Classes in `model.ts` and the READMEs; a duplicated
 overlays README section dropped).
+
+## Turn 5
+
+**Human (via the coordinator session):** Merge main, keeping only this
+PR's bullets under Unreleased (0.22.0 folded the rest). §4.4 and §4.5 say
+a queued write SHOULD NOT be sent after a tombstone, but the client sends
+a held delete: exempt deletes. Test a held delete released and sent, in a
+complete and an incomplete read; re-wrap; scope §9's first consumer bullet
+to feeds; say a list tombstone without an id is skipped.
+
+**Assistant:** Merged main: the README keeps this PR's three Unreleased
+bullets above 0.22.0, and the table takes main's Throttling and
+Collection Completeness rows with Deletion Feeds 0.3.0-draft. §4.4 and
+§4.5 now say "a write other than a delete"; a queued delete MAY be sent.
+§4.5 and the snapshot's `tombstones` doc say an item with the marker and
+no id is skipped. §9's first consumer bullet is scoped to a deletion
+feed's reads. The test sends the held delete (no GET) in both reads, and
+its 404 settles it.

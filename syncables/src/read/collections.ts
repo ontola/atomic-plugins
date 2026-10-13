@@ -104,7 +104,8 @@ export interface CollectionSnapshot {
    * Deletion Feeds 0.3.0-draft §4.5: the ids of the list tombstones this
    * read returned (deleted when it was read), in the order read; they are
    * not in `items`. Present when the collection declares
-   * `x-list-tombstone`; empty when the read ended with an error. An object
+   * `x-list-tombstone`; empty when the read ended with an error. An item
+   * with the marker but no id is skipped (it names no object). An object
    * returned twice in one read, as a member or a list tombstone, fails the
    * read as a repeated identity.
    */

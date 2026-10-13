@@ -284,10 +284,12 @@ treats every read tombstone as possibly restorable:
 * A consumer SHOULD NOT keep a read tombstone in place of reading the object
   again, as §5 allows for a feed tombstone: reading again is the same
   request, and shows a restore.
-* A consumer SHOULD NOT send a write it queued before the read tombstone to
-  the object without its user's or application's decision. On a restorable
-  state the write may restore the object, or change a deleted one, and
-  neither is what the write was made for.
+* A consumer SHOULD NOT send a write other than a delete, queued before the
+  read tombstone, to the object without its user's or application's
+  decision. On a restorable state the write may restore the object, or
+  change a deleted one, and neither is what the write was made for. A
+  queued delete MAY be sent: it asks for the state the tombstone reports,
+  and the provider answers a deleted object with 404 or 410 or deletes it.
 * Restoring an object is an ordinary write that the provider documents; this
   extension does not describe it.
 
@@ -321,7 +323,9 @@ its `except` conditions follow §4.3's rule.
 A _list tombstone_ is an item of a successful page of a read of the
 collection whose value at `field` equals one of `values`, and that matches
 no `except` condition. It is about the object its identity field names, as
-for any item of the collection (CRUD Causality §4.1.2).
+for any item of the collection (CRUD Causality §4.1.2). An item with the
+marker but without a value in that field names no object; a consumer skips
+it, as neither a member nor a list tombstone.
 
 By declaring `x-list-tombstone`, the document states:
 
@@ -341,8 +345,9 @@ that read, and the object may be restorable:
 * A later read of the collection that returns the object, not as a
   tombstone, or a later 2xx read of the object, not as a read tombstone,
   supersedes it.
-* A consumer SHOULD NOT send a write it queued before the list tombstone to
-  the object without its user's or application's decision, as §4.4 says.
+* A consumer SHOULD NOT send a write other than a delete, queued before the
+  list tombstone, to the object without its user's or application's
+  decision, as §4.4 says; a queued delete MAY be sent.
 * A consumer MAY remove its local copy of the object on a list tombstone. If
   it keeps a mark instead (to tell a restore from a new object), the mark is
   dropped by the next read that returns the object as a member.
@@ -640,8 +645,10 @@ A conforming document:
 
 A conforming consumer:
 
-* MUST NOT use items of a read that is not a feed read (§3): a page failed,
-  a budget stopped it, or a body did not have the declared shape;
+* MUST NOT use the items of a deletion feed's read that is not a feed read
+  (§3): a page failed, a budget stopped it, or a body did not have the
+  declared shape (§4.5 says what the list tombstones of an incomplete
+  collection read mean);
 * MUST NOT store a cursor from a read that is not a feed read, apart from
   the case in §4.2;
 * MAY treat an object as deleted when the last item about it in a feed read
@@ -738,12 +745,14 @@ that one does not parse, on the list operation): a list tombstone is left
 out of the collection's members and its id reported with the read. In a
 complete read, a record the read returns only as one is concluded deleted
 without a request (`source: 'list'`): removed, or kept marked deleted under
-its `retainDeleted` option, with no check counted against its limit, and a
-held update of it fails as deleted (a held delete is released and sent). A read that ends without an
-error but is not complete removes nothing; its list tombstones still fail a
-held update as deleted and release a held delete. A read that ends with an error reports no
-list tombstones; one that returns an object twice, as a member or a list
-tombstone, is such a read (its repeated-identity check). A later read that
-returns the record, not as a tombstone, brings it back.
+its `retainDeleted` option, with no check counted against its limit; a
+held update of it fails as deleted, and a held delete is released and
+sent. A read that ends without an error but is not complete removes
+nothing; its list tombstones still fail a held update as deleted and
+release a held delete. A read that ends with an error reports no list
+tombstones; one that returns an object twice, as a member or a list
+tombstone, is such a read (its repeated-identity check). An item with the
+marker and no id is skipped. A later read that returns the record, not as
+a tombstone, brings it back.
 
 Not verified against a real provider.

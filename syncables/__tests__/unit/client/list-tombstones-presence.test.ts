@@ -22,7 +22,7 @@ import {
 
 /**
  * Tasks paged by page number (two per page, a `total` field), with
- * `deleted: true` list tombstones, an item GET and a PATCH. A short page
+ * `deleted: true` list tombstones, an item GET, a PATCH and a DELETE. A short page
  * ends the read without an error, not complete (`assurance: observed`).
  */
 function tasks(): OpenApiDocument {
@@ -41,6 +41,7 @@ function tasks(): OpenApiDocument {
       '/task/{taskId}': {
         get: { responses: { '200': { description: 'One task' } } },
         patch: { responses: { '200': { description: 'Updated' } } },
+        delete: { responses: { '204': { description: 'Deleted' } } },
       },
     },
     components: {
@@ -287,6 +288,44 @@ describe('a list tombstone of a read that is not complete', () => {
     // Still in the local copy: an incomplete read removes nothing.
     expect(await ids(c1)).toContain('d');
   });
+});
+
+describe('a held delete of a record a read returns as a list tombstone', () => {
+  it.each([
+    [
+      'a complete read',
+      (): [Task[][], number | undefined] => complete([a, b, c, gone(d)]),
+    ],
+    [
+      'a read that is not complete',
+      (): [Task[][], number | undefined] => [[[a, gone(d)], [c]], undefined],
+    ],
+  ])(
+    'is released and sent after %s, and its 404 settles it',
+    async (_label, pages) => {
+      const fake = server();
+      const { client: c1, reports } = client(fake);
+      fake.set(...complete([a, b, c, d]));
+      await c1.sync();
+      // The DELETE answers 503: queued between retries.
+      fake.itemStatus = 503;
+      await c1.remove('tasks', 'd');
+      await vi.waitFor(() => expect(c1.pendingWrites()[0]?.attempts).toBe(1));
+      fake.itemStatus = 404;
+      fake.set(...pages());
+      fake.requests.length = 0;
+      await c1.sync();
+      await vi.waitFor(() => expect(c1.pendingWrites()).toEqual([]));
+      expect(reports).toMatchObject([
+        { id: 'd', evidence: 'deleted', source: 'list' },
+      ]);
+      // Sent, not failed; no GET of the record.
+      expect(fake.requests.filter((r) => r.startsWith('DELETE'))).toEqual([
+        'DELETE /v2/task/d',
+      ]);
+      expect(itemReads(fake.requests)).toEqual([]);
+    },
+  );
 });
 
 describe('an object returned twice in one read', () => {
