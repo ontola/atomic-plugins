@@ -1825,13 +1825,18 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **Unreleased**: A resource without `identity` in a CRUD
-  Causality document is read-only (CRUD Causality 0.6.0 §4.1): `create()`
-  no longer sends a POST to its collection's URL, which the client took as
-  the create of any collection whose URL has a POST operation; it throws
-  "declares no create operation", as `update()` and `remove()` already did.
-  A resource with an `identity`, an `x-crud` create, and legacy documents
-  (without `crudResources`) create as before.
+- **Unreleased**: A resource without `identity` in a CRUD Causality
+  document is read-only (CRUD Causality 0.6.0 §4.1). `create()` no longer
+  sends a POST to its collection's URL, which the client took as the create
+  of any collection read by GET whose URL has a POST operation, and an
+  `x-crud` create of it is refused (rule 25); `create()` throws, as
+  `update()` and `remove()` already did. A create queued by 0.22.0 for such
+  a resource is parked on restore (`failed`, or still `uncertain`, with
+  "declares no create operation; not sent: discard it"), never sent;
+  `resolveWrite` `retry` throws and `discard` drops it. A resource with an
+  `identity`, and legacy documents (without `crudResources`), create as
+  before. The `idField` option's documentation now says it must be unique
+  across a list's pages (the offset and short-page repeat checks).
 - **0.22.0**: Consumer support for new extension revisions (CRUD
   Causality 0.5.0, Collection Completeness 0.2.0 and 0.3.0, Pagination
   Schemes 0.6.0, 0.7.0 and 0.7.1, Throttling 0.3.0, Filtering 0.2.0

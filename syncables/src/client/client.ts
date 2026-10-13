@@ -1497,6 +1497,14 @@ function clientRoutes(
           continue;
         if (method === 'post' && crud['action'] === 'create') {
           route.createPath = path;
+          // CRUD Causality 0.6.0 rule 25: a create addresses an object, so
+          // its resource needs an identity; a resource without one is
+          // list-only and read-only (§4.1), and nothing is sent.
+          if (!legacy && !collection.itemUrl) {
+            route.createRefused =
+              'declares a create but no identity (CRUD Causality 0.6.0 rule 25): a list-only resource is read-only';
+            continue;
+          }
           const declared = legacy
             ? undefined
             : createDeclaration(document, crud);
@@ -2362,6 +2370,21 @@ export function createApiClient(
       };
       const failed = entry.failed.map(restored);
       const queue = entry.queue.map(restored);
+      // A create queued before the document stopped declaring one (a
+      // resource now list-only): parked in place, not sent; discard it.
+      for (const write of queue)
+        if (
+          write.type === 'create' &&
+          (!route.createPath || route.createRefused)
+        ) {
+          const message = `Resource ${route.collection.name} ${route.createRefused ?? 'declares no create operation'}; not sent: discard it`;
+          if (write.state !== 'uncertain') write.state = 'failed';
+          delete write.sending;
+          if (write.lastError !== message) {
+            write.lastError = message;
+            changed = true;
+          }
+        }
       // Blocked writes wait for authRenewed() only while the client is blocked.
       for (const write of queue)
         if (write.state === 'blocked' && !authBlock) write.state = 'pending';
@@ -6255,6 +6278,14 @@ export function createApiClient(
           await rebuild(scope, id);
           return;
         }
+        if (
+          resolution.action === 'retry' &&
+          head.type === 'create' &&
+          (!route.createPath || route.createRefused)
+        )
+          throw new Error(
+            `Resource ${resource} ${route.createRefused ?? 'declares no create operation'}; the create of record ${id} cannot be sent: discard it`,
+          );
         if (resolution.action === 'retry' && head.unbound)
           throw new Error(
             `The create of record ${id} of ${resource} succeeded but did not identify the record (unbound); confirm it with the server's id, or discard it`,

@@ -20,3 +20,21 @@ when the collection has an item URL (or the document is legacy); an
 collection and `create()` throws without a request (fails on the code
 before); a resource with an identity, and one with an `x-crud` create,
 still POST. Changelog bullet for 0.22.1 and CLAUDE.md.
+
+## Turn 2
+
+**Human (via the coordinator session):** #531 review nits: an `x-crud`
+create of a resource without identity breaks rule 25, so refuse it too; a
+create queued by 0.22.0 for a now list-only resource fails as `uncertain`
+with "Cannot read properties of undefined (reading 'replace')", so fail it
+cleanly; the heuristic only applied to collections read by GET; fold in
+the `idField` doc comment. Merge main.
+
+**Assistant:** An `x-crud` create of a resource without identity sets
+`createRefused`, so `create()` throws without a request. On restore, a
+queued create whose route has no create (or a refused one) is parked:
+`failed` (an `uncertain` one stays uncertain) with "declares no create
+operation; not sent: discard it"; `resolveWrite` `retry` throws and
+`discard` drops it. The new restore test fails on the code before (it sent
+the POST). The changelog names collections read by GET and the `idField`
+documentation; main was already merged.

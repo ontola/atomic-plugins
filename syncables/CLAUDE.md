@@ -213,7 +213,9 @@ Data flows through four stages, each its own directory under `src/`:
    (`retry.maxAttempts` is optional). A POST on a collection's URL is its
    create (`createPath`) unless the resource has no identity in a CRUD
    Causality document (list-only, read-only: `list-only.test.ts`); an
-   `x-crud` create always counts. Creates reconcile server-assigned IDs;
+   `x-crud` create of such a resource sets `createRefused` (rule 25), and
+   `restore` parks a create queued for a route without one (`failed`, or
+   `uncertain` kept; `resolveWrite` `retry` throws). Creates reconcile server-assigned IDs;
    a declared `x-crud` create (`ClientRoute.create`, `created-identity.ts`)
    leaves `generated` `addedFields` out of the body (`createBody`) and reads
    the identity from its `url` source through the identity template in
