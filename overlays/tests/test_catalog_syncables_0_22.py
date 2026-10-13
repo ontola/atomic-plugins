@@ -19,7 +19,7 @@ overlays that a syncables 0.22.0 reader uses:
 * Google Calendar: cancelled events as read tombstones (Deletion Feeds
   0.2.0-draft x-read-tombstone) and Throttling 0.2.0-draft limits and
   signals, last;
-* Notion (after its runtime schema) and Spotify: Throttling, last.
+* Notion (after its runtime schema), Spotify and Airtable: Throttling, last.
 
 Every update in every composition must also name a CRUD Causality rule-5
 `mode`, and a §4.6 `patchFormat` when the mode is `patch`.
@@ -54,6 +54,7 @@ NOTION = "notion.com/2026-03-11/{}-0c8e229623efdcc1d4ab50111d17bcca3214a899-over
 CLOCKIFY = "clockify.me/1.0.0-readonly/{}-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml"
 TASKS = "googleapis.com/tasks/v1/{}-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml"
 SPOTIFY = "spotify.com/1.0.0-readonly/{}-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml"
+AIRTABLE = "airtable.com/1.0-readonly/{}-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml"
 
 
 def url(template, kind):
@@ -79,6 +80,7 @@ CHANGES = {
     ],
     "clockify": [("append", url(CLOCKIFY, "time-zone"))],
     "spotify": [("append", url(SPOTIFY, "throttling"))],
+    "airtable": [("append", url(AIRTABLE, "throttling"))],
     "google-tasks": [
         ("replace", url(TASKS, "crud-causality"), url(TASKS, "crud-causality-v2")),
         ("append", url(TASKS, "throttling")),
@@ -102,6 +104,12 @@ ADDED = {
         ("x-throttling", "signals"),
     },
     "spotify": {("x-throttling",)},
+    "airtable": {
+        ("x-throttling",),
+        ("paths", "/v0/meta/bases/{baseId}/tables", "get", "x-throttling"),
+        ("paths", "/v0/{baseId}/{tableIdOrName}", "get", "x-throttling"),
+        ("paths", "/v0/{baseId}/{tableIdOrName}/{recordId}", "get", "x-throttling"),
+    },
     "notion": {
         ("x-throttling",),
         ("components", "crudResources", "page", "references"),

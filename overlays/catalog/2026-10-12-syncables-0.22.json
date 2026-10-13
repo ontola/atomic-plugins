@@ -169,7 +169,8 @@
       "overlays": [
         "https://ontola.github.io/atomic-plugins/overlays/APIs/airtable.com/1.0-readonly/auth-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/airtable.com/1.0-readonly/pagination-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml",
-        "https://ontola.github.io/atomic-plugins/overlays/APIs/airtable.com/1.0-readonly/crud-causality-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml"
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/airtable.com/1.0-readonly/crud-causality-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/airtable.com/1.0-readonly/throttling-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml"
       ],
       "selection": {
         "authenticationProfile": "airtableReadOnly"
