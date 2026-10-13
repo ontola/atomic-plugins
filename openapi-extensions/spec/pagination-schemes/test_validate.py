@@ -746,7 +746,6 @@ class ReadPagesSmallerPageSizeTests(unittest.TestCase):
         validate(document)
 
 
-
 class IncompleteMarkerTests(unittest.TestCase):
     """0.8.0: the Incomplete Object (§4.4.6, rule 26)."""
 
@@ -778,6 +777,28 @@ class IncompleteMarkerTests(unittest.TestCase):
         self.scheme(document)["request"]["incomplete"] = {"field": "a", "equals": 1}
         with self.assertRaises(ValueError):
             validate(document)
+
+    def test_only_on_page_number_token_and_link_schemes(self):
+        marker = {"field": "capped", "equals": True}
+        for name in ("short-page.yaml", "relative-next-link.yaml", "incomplete-marker.yaml"):
+            document = example(name)
+            for scheme in document["components"]["paginationSchemes"].values():
+                scheme.setdefault("response", {})["incomplete"] = dict(marker)
+            with self.subTest(example=name):
+                validate(document)
+        document = example("range-window.yaml")
+        for scheme in document["components"]["paginationSchemes"].values():
+            scheme.setdefault("response", {})["incomplete"] = dict(marker)
+        with self.assertRaises(ValueError):
+            validate(document)
+        document = self.document()
+        sync = {"type": "incrementalSync", "request": {"queryParameters": {"syncToken": {"role": "syncToken"}}},
+                "response": {"bodyFields": {"nextSyncToken": {"role": "nextSyncToken"}}, "incomplete": marker}}
+        document["components"]["paginationSchemes"]["sync"] = sync
+        with self.assertRaises(ValueError):
+            validate(document)
+        del sync["response"]["incomplete"]
+        validate(document)
 
     def test_marking(self):
         scheme = self.scheme(self.document())
@@ -822,6 +843,28 @@ class IncompleteMarkerTests(unittest.TestCase):
         result = read_offsets(offsets, by_offset)
         self.assertFalse(result["complete"])
         self.assertEqual(len(result["items"]), 30)
+
+    def test_a_marked_page_on_the_0_7_1_link_path(self):
+        scheme = copy.deepcopy(example("offset-advance.yaml")["components"]["paginationSchemes"]["limitPages"])
+        scheme["response"]["bodyFields"]["next"] = {"role": "nextLink"}
+        scheme["response"]["incomplete"] = {"field": "capped", "equals": True}
+
+        def page(offset, capped):
+            following = offset + 10
+            return {"entries": [{"id": str(i)} for i in range(offset, min(30, following))], "limit": 10,
+                    "offset": offset, "total_count": 30, "capped": capped,
+                    "next": f"/entries?offset={following}" if following < 30 else None}
+
+        def follow(link):
+            offset = int(link.split("=")[1])
+            return page(offset, offset == 20)
+
+        result = read_offsets(scheme, lambda values: page(0, False), follow=follow)
+        self.assertEqual(result["links"], ["/entries?offset=10", "/entries?offset=20"])
+        self.assertEqual(len(result["items"]), 30)
+        self.assertFalse(result["complete"])
+        unmarked = read_offsets(scheme, lambda values: page(0, False), follow=lambda link: {**follow(link), "capped": False})
+        self.assertTrue(unmarked["complete"])
 
     def test_0_7_documents_stay_valid(self):
         for name in ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml",

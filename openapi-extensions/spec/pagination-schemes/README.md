@@ -167,7 +167,7 @@ Describes the fields the client reads from the server response to determine the 
 | `bodyFields` | `Record<string, ResponseFieldObject>` | Fields in the JSON response body. Key is the field name as it appears in the response, or a dot-path (e.g. `metadata.continue`, `tokenPagination.pageToken`) to address a field nested inside an object. Each path segment is a literal property name; a segment MUST be escaped as `["a.b"]` if it contains a literal `.`. |
 | `headers` | `Record<string, ResponseFieldObject>` | HTTP response headers. Key is the header name. |
 | `shortPage` | `ShortPageObject` (§4.4.5) | Added in 0.6.0, for `pageNumber` schemes only: a page with fewer items than a full page ends the list. |
-| `incomplete` | `IncompleteObject` (§4.4.6) | Added in 0.8.0, for every scheme type: a response body value that marks the result the pages come from as cut short by the server. |
+| `incomplete` | `IncompleteObject` (§4.4.6) | Added in 0.8.0, for `pageNumber`, `pageToken` and `nextLink` schemes: a response body value that marks the result the pages come from as cut short by the server. |
 | `x-*` | any | Extension fields. |
 
 #### 4.4.1 Response Field Object
@@ -332,22 +332,36 @@ Incomplete Object names the body value that says otherwise.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `field` | string | **Yes** | A dot-path into the JSON response body, as a `bodyFields` key is written (§4.4). |
+| `field` | string | **Yes** | A dot-path into the JSON response body: one or more property names joined by `.`, each non-empty and matched literally. Unlike a `bodyFields` key (§4.4), it takes no bracket escape (`["a.b"]`) in this version, so a name that holds a `.` cannot be addressed. |
 | `equals` | string, number, boolean or `null` | One of `equals`, `in` | The response is marked when the value at `field` equals it (JSON equality, so `"0"` does not equal `0`). |
 | `in` | nonempty array of such values | One of `equals`, `in` | The response is marked when the value at `field` equals one of them. |
 | `description` | string | No | Human-readable description, such as the source of the claim. |
 | `x-*` | any | No | Extension fields. |
 
+`incomplete` belongs to a `pageNumber`, `pageToken` or `nextLink` scheme. A
+`rangeWindow` scheme's completeness is §4.6.4's, and an `incrementalSync`
+scheme's reads are not described in this version, so neither takes it
+(rule 26).
+
 A response whose body has no value at `field`, or another value, is not
 marked. A read in which any response is marked is **not complete**, in the
 sense of [Collection Completeness](../collection-completeness/README.md#3-conventions)
-("follows every page"): the items it returned are real items, but a consumer
-infers nothing about objects absent from it. The client otherwise pages as
-the scheme says, following the next-page signals of a marked response like
-any other; the mark changes whether the read is complete, not where it ends.
-A consumer that does not support `incomplete` (before 0.8.0) ignores it, and
-takes such a read as complete; a document that needs it should not be used
-with one.
+("follows every page"): the items it returned are real items. A consumer
+MUST NOT treat a read in which any response is marked as complete, and MUST
+NOT classify an object absent from it under Collection Completeness §4.2 or
+§4.3. The client otherwise pages as the scheme says, following the
+next-page signals of a marked response like any other, a next link included
+(§4.3.2); the mark changes whether the read is complete, not where it ends.
+
+An application's `overrides` (§5) merge into the Incomplete Object key by
+key and cannot remove a key, so an override cannot switch a marker from
+`equals` to `in` (the result has both, which rule 26 refuses); declare
+another scheme instead.
+
+A 0.7.1 validator rejects a scheme with `incomplete` (its response object
+allows no other fields). A consumer that does not validate and does not
+support it ignores it and takes a marked read as complete, so a document
+that needs it should not be used with either.
 
 ### 4.5 Semantic Roles
 
@@ -889,6 +903,29 @@ paginationSchemes:
 
 A full answer for `updatedFrom=2026-01-01T00:00:00Z&updatedBefore=2026-01-01T00:00:10Z` (10 seconds) is read again as `[00:00:00, 00:00:05)` and `[00:00:05, 00:00:10)`. This shape is a neutral example, not a claim about a particular API.
 
+### 8.14 Zero-based pages ended by a short page (ClickUp-style)
+
+```yaml
+paginationSchemes:
+  zeroBasedPages:
+    type: pageNumber
+    autoDetect: false
+    request:
+      queryParameters:
+        page:
+          role: page
+          start: 0
+    response:
+      envelope:
+        itemsField: tasks
+      shortPage:
+        size: 100
+        assurance: assumed
+        description: The documentation gives only "limited to 100 tasks per page".
+```
+
+The client asks for `page=0`, `page=1`, … and stops at the first page with fewer than 100 tasks. With `assurance: assumed` it has read every task the pages returned, but the read is not complete in the Collection Completeness sense (§4.4.5). [`examples/short-page.yaml`](examples/short-page.yaml) is a complete document of this shape.
+
 ### 8.15 A capped result marked in the body (Notion-style)
 
 ```yaml
@@ -917,29 +954,6 @@ The client follows `next_cursor` as usual; if any page carries
 [`examples/incomplete-marker.yaml`](examples/incomplete-marker.yaml) is a
 complete document of this shape.
 
-### 8.14 Zero-based pages ended by a short page (ClickUp-style)
-
-```yaml
-paginationSchemes:
-  zeroBasedPages:
-    type: pageNumber
-    autoDetect: false
-    request:
-      queryParameters:
-        page:
-          role: page
-          start: 0
-    response:
-      envelope:
-        itemsField: tasks
-      shortPage:
-        size: 100
-        assurance: assumed
-        description: The documentation gives only "limited to 100 tasks per page".
-```
-
-The client asks for `page=0`, `page=1`, … and stops at the first page with fewer than 100 tasks. With `assurance: assumed` it has read every task the pages returned, but the read is not complete in the Collection Completeness sense (§4.4.5). [`examples/short-page.yaml`](examples/short-page.yaml) is a complete document of this shape.
-
 ---
 
 ## 9. Validation
@@ -965,7 +979,7 @@ A conforming implementation MUST enforce:
 17. An operation whose `x-pagination` applies a `rangeWindow` scheme, after overrides are merged, applies exactly one scheme.
 18. When a `rangeWindow` scheme applied to an operation carries its window in `queryParameters` or `headerFields`, after its overrides are merged, each window field MUST name a parameter of that operation (its own or its path item's, by `name` and `in`, `$ref`s to `components.parameters` resolved).
 
-A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every link it follows, and the reading and completeness rules of §4.6.3 and §4.6.4 to every windowed read.
+A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every link it follows, and the reading and completeness rules of §4.6.3 and §4.6.4 to every windowed read. Since 0.8.0, it MUST NOT treat a read in which any response matches the scheme's Incomplete Object as complete (§4.4.6).
 
 19. `start` MAY appear only on a Request Field Object whose `role` is `page`, and is an integer of at least 0.
 20. `shortPage` MAY appear only in the `response` of a `pageNumber` scheme. Its `size` is an integer of at least 1 or `"request"`, and its `assurance` one of `documented`, `observed` or `assumed`.
@@ -974,7 +988,7 @@ A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every lin
 23. `emptyWhenAbsent` MAY appear only in an Envelope Object whose `itemsField` is a non-empty string, and is a boolean.
 24. `advance` MAY appear only on a Request Field Object whose `role` is `offset`, and is `itemCount` or `pageSize`.
 25. When a scheme whose `offset` field has `advance: pageSize` is applied to an operation, after its overrides are merged, it has a request or response field whose `role` is `pageSize`. A component scheme on its own is not checked.
-26. `incomplete` MAY appear only in a Response Pagination Fields Object. Its `field` is a non-empty dot-path whose segments are non-empty, and it has exactly one of `equals` (a JSON scalar) or `in` (a nonempty array of JSON scalars).
+26. `incomplete` MAY appear only in the Response Pagination Fields Object of a `pageNumber`, `pageToken` or `nextLink` scheme. Its `field` is a dot-path of one or more non-empty names, and it has exactly one of `equals` (a JSON scalar) or `in` (a nonempty array of JSON scalars).
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paginationSchemes.myScheme.request.queryParameters.page`).
 
@@ -994,7 +1008,7 @@ cd openapi-extensions/spec/pagination-schemes
 
 ## Changes
 
-- **0.8.0** (2026-10-13): adds `incomplete` to the Response Pagination Fields Object (§4.4.6), the Incomplete Object: a response body value (`field` with `equals` or `in`) that marks the result as cut short by the server, as Notion's query does past 10,000 results with `has_more: false`. A read in which any response is marked is not complete; paging is unchanged. Validation rule 26, `response_incomplete` in the validator, and `complete` in `read_pages` and `read_offsets` honour it; an example and tests. A document valid under 0.7.1 stays valid and means the same. A 0.7.1 consumer ignores `incomplete` and takes a marked read as complete.
+- **0.8.0** (2026-10-13): adds `incomplete` to the Response Pagination Fields Object (§4.4.6), the Incomplete Object: a response body value (`field` with `equals` or `in`) that marks the result as cut short by the server, as Notion's query does past 10,000 results with `has_more: false`. A read in which any response is marked is not complete; paging is unchanged. Validation rule 26, `response_incomplete` in the validator, and `complete` in `read_pages` and `read_offsets` honour it; an example and tests. Allowed on `pageNumber`, `pageToken` and `nextLink` schemes only. Collection Completeness 0.4.0-draft §3 states that such a read is not complete. A document valid under 0.7.1 stays valid and means the same. A 0.7.1 validator rejects a scheme with `incomplete`; a consumer that does not validate ignores it and takes a marked read as complete. The Notion overlay revision that declares it follows separately.
 - **0.7.1** (2026-10-12): a clarification of §4.3.2: in a scheme that declares both an `offset` field and a `nextLink` response field, the link leads under either `advance`, an absent, `null` or empty link ends the read, and such a read is not complete when the last response's `totalCount` exceeds the items read. 0.7.0 did not say. No document changes meaning, but consumers that stepped the offset after following links change behaviour: such a consumer could ask again for a page it had. `read_offsets` takes `follow` for such schemes and returns `complete`.
 - **0.7.0** (2026-10-12): adds `emptyWhenAbsent` to the Envelope Object (§4.4.2): `true` makes a response without the `itemsField` field a page with no items, for providers that leave an empty array out (the Protocol Buffers JSON mapping does), such as Google's Tasks API. Adds `advance` to an `offset` request field (§4.3.2): `itemCount` (the default, what clients did) adds the items a page held, `pageSize` adds the page size and ends only at `totalCount`, for providers such as Box that document the next offset as the previous offset plus the previous limit. Validation rules 23–25, `page_items` and `read_offsets` in the validator, examples and tests. A document valid under 0.6.0 stays valid and means the same, with one new consumer requirement: an offset read, under `itemCount` (the default) as under `pageSize`, ends with an error at a page holding an item an earlier page of the same read returned (§4.3.2); 0.6.0 required that only of a read with a Short Page Object. A 0.6.0 consumer ignores both fields: it fails a read whose items field is absent, as before, and advances an offset by the items held, which under a provider that needs `pageSize` can read items twice or stop early.
 - **0.6.0** (2026-10-08): adds `start` on a `page` request field (the first page number, default 1, so zero-based pages are described), and the Short Page Object (`shortPage` on a `pageNumber` scheme's response, §4.4.5): a page with fewer than `size` items ends the list, with an `assurance` (`documented`, `observed` or `assumed`) that decides whether such a read is complete for Collection Completeness; validation rules 19–22, `read_pages` in the validator, an example and tests. For pondersource/openapi-extensions#25 and ontola/atomic-plugins#385 (ClickUp). A document valid under 0.5.0 stays valid and means the same. A 0.5.0 consumer ignores `start` and `shortPage`: it asks a zero-based list for page 1 first, skipping page 0, and stops after a page without a continuation signal, so a document that needs either should not be used with such a consumer.
