@@ -148,11 +148,28 @@ export interface EnvelopeObject {
   [key: `x-${string}`]: unknown;
 }
 
+/**
+ * Incomplete Object (spec 0.8.0 §4.4.6): a response body value that marks
+ * the result as cut short by the server (Notion's `request_status.type:
+ * incomplete` past 10,000 results). A read in which any page is marked is
+ * not complete; paging is unchanged.
+ */
+export type IncompleteObject = {
+  /** Dot-path into the JSON body, as a `bodyFields` key. */
+  field: string;
+  description?: string;
+  [key: `x-${string}`]: unknown;
+} & ({ equals: JsonScalar } | { in: JsonScalar[] });
+
+export type JsonScalar = string | number | boolean | null;
+
 export interface ResponsePaginationFieldsObject {
   envelope?: EnvelopeObject;
   bodyFields?: Record<string, ResponseFieldObject>;
   headers?: Record<string, ResponseFieldObject>;
   shortPage?: ShortPageObject;
+  /** Pagination Schemes 0.8.0 §4.4.6. */
+  incomplete?: IncompleteObject;
   [key: `x-${string}`]: unknown;
 }
 

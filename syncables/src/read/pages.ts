@@ -24,6 +24,7 @@ import {
   splitPath,
 } from '../pagination/response-parser.js';
 import type {
+  IncompleteObject,
   PaginationResponseState,
   PaginationSchemeObject,
 } from '../pagination/types.js';
@@ -476,6 +477,25 @@ function withBody(
 }
 
 /**
+ * Whether a response body carries the Incomplete Object's value (0.8.0
+ * §4.4.6). The dot-path's names are read literally, own properties only; a
+ * missing value, or another value, is not a mark.
+ */
+export function responseIncomplete(
+  marker: IncompleteObject,
+  body: unknown,
+): boolean {
+  let node = body;
+  for (const name of marker.field.split('.')) {
+    if (!isRecord(node) || !Object.hasOwn(node, name)) return false;
+    node = node[name];
+  }
+  // JSON equality of scalars: `===` (1 equals 1.0; "1", true and 1 differ).
+  if ('equals' in marker) return node === marker.equals;
+  return marker.in.some((value) => node === value);
+}
+
+/**
  * Walks every page of one list operation through its resolved pagination
  * scheme (explicit `x-pagination`, else auto-detected): page numbers or
  * offsets, page tokens/cursors (in the query or, for a POST, the JSON
@@ -682,6 +702,16 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
       }
     }
     itemsSoFar += items.length;
+    // Pagination Schemes 0.8.0 §4.4.6: a marked page makes the read not
+    // complete; its items are real, and paging goes on as the scheme says.
+    if (
+      walk.outcome &&
+      scheme?.response?.incomplete &&
+      responseIncomplete(scheme.response.incomplete, body)
+    ) {
+      walk.outcome.complete = false;
+      walk.outcome.reason ??= `a response marks the result as incomplete (${scheme.response.incomplete.field}): not a complete read (Pagination Schemes 0.8.0 §4.4.6)`;
+    }
     yield { url, items, body };
 
     if (!scheme) {

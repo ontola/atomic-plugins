@@ -357,6 +357,47 @@ function checkEnvelope(
     );
 }
 
+const isJsonScalar = (value: unknown): boolean =>
+  value === null ||
+  typeof value === 'string' ||
+  typeof value === 'boolean' ||
+  (typeof value === 'number' && Number.isFinite(value));
+
+/** Rule 26 (0.8.0): the Incomplete Object's shape. */
+function checkIncomplete(path: string, value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  const at = `${path}.incomplete`;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    errors.push(`${at} must be an object (rule 26)`);
+    return;
+  }
+  const marker = value as Record<string, unknown>;
+  for (const key of Object.keys(marker))
+    if (
+      !['field', 'equals', 'in', 'description'].includes(key) &&
+      !key.startsWith('x-')
+    )
+      errors.push(`${at}.${key} is not an Incomplete Object field (rule 26)`);
+  const field = marker['field'];
+  if (typeof field !== 'string' || !field.split('.').every((s) => s !== ''))
+    errors.push(`${at}.field must be a dot-path of non-empty names (rule 26)`);
+  const hasEquals = Object.hasOwn(marker, 'equals');
+  const hasIn = Object.hasOwn(marker, 'in');
+  if (hasEquals === hasIn)
+    errors.push(`${at} needs exactly one of equals and in (rule 26)`);
+  if (hasEquals && !isJsonScalar(marker['equals']))
+    errors.push(`${at}.equals must be a JSON scalar (rule 26)`);
+  if (
+    hasIn &&
+    !(
+      Array.isArray(marker['in']) &&
+      marker['in'].length > 0 &&
+      marker['in'].every(isJsonScalar)
+    )
+  )
+    errors.push(`${at}.in must be a nonempty array of JSON scalars (rule 26)`);
+}
+
 /**
  * Validates a single scheme against spec section 9. Returns a list of
  * human-readable errors (each naming the offending location), empty if
@@ -411,6 +452,14 @@ export function validatePaginationScheme(
   }
 
   checkEnvelope(`${path}.response`, scheme.response?.envelope, errors);
+  checkIncomplete(`${path}.response`, scheme.response?.incomplete, errors);
+  if (
+    scheme.response?.incomplete !== undefined &&
+    !['pageNumber', 'pageToken', 'nextLink'].includes(scheme.type)
+  )
+    errors.push(
+      `${path}.response.incomplete is allowed only on a pageNumber, pageToken or nextLink scheme (rule 26)`,
+    );
   for (const [fieldName, field] of Object.entries(
     scheme.response?.bodyFields ?? {},
   )) {
