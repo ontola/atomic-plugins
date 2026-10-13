@@ -93,7 +93,7 @@ proxy. No credential ever reaches the frame.
   (0.4.0; see the limits below for the shape), and the translation between
   option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
   at the host boundary.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 145,002 bytes for
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 145,074 bytes for
   0.5.3 (144,024 for 0.5.2, with syncables 0.21.0; 125,914 for 0.5.1 with devonian 0.9.0 and
   syncables 0.19.0; 125,712 for 0.5.0; 115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
   document, syncables' read path, devonian's Atomic Data API and the shared
@@ -304,8 +304,10 @@ Notion property id.
 - Covered: plain title/rich text, number, checkbox, url, email, phone,
   select/status option id, and sorted multi-select option ids.
 - Notion `null` leaves the key absent; `0`, `false` and `[]` are kept.
-- Formatted text, mentions and links are left unprojected and listed in
-  `errors`. So are archived or trashed pages (`in_trash` or `in-trash`).
+- Formatted text, mentions and links are projected as their words without
+  the formatting (from 0.5.3) and listed in `errors`. A value with no plain
+  form at all (a malformed option) is left unprojected and listed, and so
+  are archived or trashed pages (`in_trash` or `in-trash`).
 - The raw `properties` object passes through.
 - It throws on a page outside the given data source, or on a property whose
   type changes during one fetch.

@@ -69,7 +69,10 @@ export interface SyncResult {
   updated: number;
   unchanged: number;
   dataSources: number;
-  /** Non-fatal: unprojected formatted text, archived pages, a partial read. */
+  /**
+   * Non-fatal: formatted text imported as plain text, values with no plain
+   * form, archived pages, a partial read.
+   */
   warnings: string[];
   /**
    * The part of `warnings` that says the read itself was incomplete (a
@@ -453,12 +456,10 @@ function compareOnSync(
           )
         : undefined;
 
-      if (
-        !existing ||
-        !base ||
-        mine === undefined ||
-        same(field.type, mine, before)
-      )
+      // A cleared cell is an edit too: it is kept, not refilled (#536
+      // review). A row that never held the words (formatted text before
+      // 0.5.3) has no baseline value either, so `same` takes Notion's.
+      if (!existing || !base || same(field.type, mine, before))
         agreed = remote.formatted;
       else {
         agreed = before;

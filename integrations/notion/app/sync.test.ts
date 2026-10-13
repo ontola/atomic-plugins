@@ -445,6 +445,21 @@ describe('syncNotion', () => {
     expect(retro()[notes]).toBe('Mine');
   });
 
+  it('keeps a formatted cell cleared here cleared, rather than refilling it (#536 review)', async () => {
+    const { store, transport } = await run();
+    const notes = [...store.resources].find(
+      ([, p]) => p[atomic.shortname] === notionFieldShortname('Nt0s'),
+    )![0];
+    const retro = () =>
+      [...store.resources.values()].find(
+        p => p[PARENT] === TABLE && p[atomic.name] === 'Retrospective',
+      )!;
+    expect(retro()[notes]).toBe('Keep this bold');
+    delete retro()[notes];
+    await syncNotion(store, transport);
+    expect(retro()).not.toHaveProperty(notes);
+  });
+
   it('only ever reads: every relayed request is a POST list', async () => {
     const { proxy } = await run();
     expect(new Set(proxy.calls.map(c => c.method))).toEqual(new Set(['POST']));

@@ -211,7 +211,7 @@ export function renderDetails(ctx: ViewContext): HTMLElement | null {
         warning(doc, [
           `${plural(n, 'page')} ${n === 1 ? 'has' : 'have'} formatting in `,
           h(doc, 'b', {}, property),
-          `: ${property} was copied as plain text, without the formatting, and an edit to it here is not sent to Notion.`,
+          `: ${property} was copied as plain text, without the formatting, and an edit to it here is not sent to Notion; while such an edit is kept, that row's other edits are held at Send too.`,
         ]),
       ),
       d.archived.length > 0 &&
