@@ -4,6 +4,7 @@ import type {
   ResponseFieldObject,
   ResponseRole,
 } from './types.js';
+import { splitPath } from './response-parser.js';
 
 const SCHEME_TYPES = new Set([
   'pageNumber',
@@ -357,6 +358,73 @@ function checkEnvelope(
     );
 }
 
+const INCOMPLETE_KEYS = new Set(['field', 'equals', 'in', 'description']);
+const INCOMPLETE_TYPES = new Set(['pageNumber', 'pageToken', 'nextLink']);
+
+const isJsonScalar = (value: unknown): boolean =>
+  value === null ||
+  typeof value === 'string' ||
+  typeof value === 'boolean' ||
+  (typeof value === 'number' && Number.isFinite(value));
+
+/**
+ * Spec 0.8.0 §9 rule 26: `response.incomplete` is an object with a `field`
+ * (a dot-path whose segments are non-empty) and exactly one of `equals` (a
+ * JSON scalar) and `in` (a nonempty array of them), on a pageNumber,
+ * pageToken or nextLink scheme. A scheme that breaks it is invalid: an
+ * explicit application then fails the read rather than reading a capped
+ * result as complete.
+ */
+function checkIncomplete(
+  path: string,
+  scheme: PaginationSchemeObject,
+  errors: string[],
+): void {
+  const marker = scheme.response?.incomplete as unknown;
+  if (marker === undefined) return;
+  const at = `${path}.response.incomplete`;
+  if (!INCOMPLETE_TYPES.has(scheme.type))
+    errors.push(
+      `${at} is allowed only on a pageNumber, pageToken or nextLink scheme (rule 26)`,
+    );
+  if (typeof marker !== 'object' || marker === null || Array.isArray(marker)) {
+    errors.push(`${at} must be an object (rule 26)`);
+    return;
+  }
+  const m = marker as Record<string, unknown>;
+  for (const key of Object.keys(m))
+    if (!INCOMPLETE_KEYS.has(key) && !isExtensionKey(key))
+      errors.push(`${at}.${key} is not an Incomplete Object field`);
+  const field = m['field'];
+  let segments: string[] | undefined;
+  try {
+    segments = typeof field === 'string' ? splitPath(field) : undefined;
+  } catch {
+    segments = undefined;
+  }
+  if (!segments || segments.length === 0 || segments.some((s) => s === ''))
+    errors.push(
+      `${at}.field must be a dot-path whose segments are non-empty (rule 26)`,
+    );
+  const hasEquals = 'equals' in m;
+  const hasIn = 'in' in m;
+  if (hasEquals === hasIn)
+    errors.push(`${at} needs exactly one of equals and in (rule 26)`);
+  if (hasEquals && !isJsonScalar(m['equals']))
+    errors.push(`${at}.equals must be a JSON scalar (rule 26)`);
+  if (
+    hasIn &&
+    (!Array.isArray(m['in']) ||
+      m['in'].length === 0 ||
+      !m['in'].every(isJsonScalar))
+  )
+    errors.push(
+      `${at}.in must be a nonempty array of JSON scalars (rule 26)`,
+    );
+  if ('description' in m && typeof m['description'] !== 'string')
+    errors.push(`${at}.description must be a string`);
+}
+
 /**
  * Validates a single scheme against spec section 9. Returns a list of
  * human-readable errors (each naming the offending location), empty if
@@ -378,6 +446,7 @@ export function validatePaginationScheme(
   }
   checkWindow(path, scheme, errors);
   checkShortPage(path, scheme, errors);
+  checkIncomplete(path, scheme, errors);
 
   if (!scheme.request && !scheme.response) {
     errors.push(`${path} must define at least one of "request" or "response"`);

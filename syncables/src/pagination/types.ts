@@ -148,11 +148,27 @@ export interface EnvelopeObject {
   [key: `x-${string}`]: unknown;
 }
 
+/**
+ * Pagination Schemes 0.8.0 §4.4.6: a response body value that marks the
+ * result the pages come from as cut short by the server. `field` is a
+ * dot-path into the body (as a `bodyFields` key); exactly one of `equals`
+ * and `in` (JSON scalars, compared by JSON equality).
+ */
+export interface IncompleteObject {
+  field: string;
+  equals?: string | number | boolean | null;
+  in?: (string | number | boolean | null)[];
+  description?: string;
+  [key: `x-${string}`]: unknown;
+}
+
 export interface ResponsePaginationFieldsObject {
   envelope?: EnvelopeObject;
   bodyFields?: Record<string, ResponseFieldObject>;
   headers?: Record<string, ResponseFieldObject>;
   shortPage?: ShortPageObject;
+  /** Pagination Schemes 0.8.0 §4.4.6. */
+  incomplete?: IncompleteObject;
   [key: `x-${string}`]: unknown;
 }
 

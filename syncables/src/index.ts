@@ -149,9 +149,12 @@ export type {
   WindowFormat,
   WindowUnit,
 } from './pagination/types.js';
-export { PageReadError } from './read/pages.js';
+export { PageReadError, responseIncomplete } from './read/pages.js';
 export type { WalkOutcome, WindowRange } from './read/pages.js';
-export type { ShortPageObject } from './pagination/types.js';
+export type {
+  IncompleteObject,
+  ShortPageObject,
+} from './pagination/types.js';
 
 export {
   PaginationSchemeError,
