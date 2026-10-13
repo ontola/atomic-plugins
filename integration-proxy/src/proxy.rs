@@ -1,8 +1,8 @@
 //! `ANY /proxy/{connection_id}/{platform}/{path}`: proxied provider calls
 //! (issue #54).
 //!
-//! Every request is authenticated one of two ways, both ending in a v2
-//! request signature (see [`crate::signature`]):
+//! Every request is authenticated with an Atomic v2 proof or a scoped
+//! Local Thought device access token:
 //!
 //! - **Signed by an agent with standing** on the connection: its owner; an
 //!   app agent holding a delegation for it; or a runtime registered (by the
@@ -12,7 +12,10 @@
 //!   [`crate::capability`]) signed by the owner for a delegated app, plus a
 //!   request signature by the capability's `cnf` key.
 //!
-//! Nothing rotates: the connection id is not a secret, and a signature is
+//! - **A device access token** for this owner and explicitly approved
+//!   connection, allowing only GET/HEAD and checked live against its session.
+//!
+//! The connection id is not a secret, and a signature is
 //! accepted once. The connection id is in the path, so the signature covers
 //! it. The owner is then checked against the access policy.
 use axum::{
@@ -287,7 +290,7 @@ enum Caller {
 }
 
 /// Authenticates a proxied request against the connection it names. See the
-/// module documentation for the two accepted presentations.
+/// module documentation for the accepted presentations.
 #[allow(clippy::too_many_arguments)]
 async fn authenticate(
     state: &AppState,

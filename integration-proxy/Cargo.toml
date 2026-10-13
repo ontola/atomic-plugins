@@ -24,6 +24,7 @@ include = [
     "/README.md",
     "/CHANGELOG.md",
     "/SECURITY.md",
+    "/DEVICE_AUTH.md",
     "/LICENSE",
 ]
 

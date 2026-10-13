@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS device_grants (
  device_hash TEXT PRIMARY KEY, user_hash TEXT UNIQUE NOT NULL,
  client_id TEXT NOT NULL, audience TEXT NOT NULL, scope TEXT NOT NULL,
  expires_at TIMESTAMPTZ NOT NULL, interval_secs INTEGER NOT NULL DEFAULT 5,
- next_poll TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '5 seconds',
+ next_poll TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp() + INTERVAL '5 seconds',
  status TEXT NOT NULL DEFAULT 'pending', owner TEXT, connections TEXT[]
 );
 CREATE INDEX IF NOT EXISTS device_grants_expiry_idx ON device_grants(expires_at);
@@ -18,21 +18,24 @@ CREATE TABLE IF NOT EXISTS device_approval_challenges (
  owner TEXT NOT NULL, expires_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX IF NOT EXISTS device_challenges_expiry_idx ON device_approval_challenges(expires_at);
+CREATE INDEX IF NOT EXISTS device_challenges_grant_idx ON device_approval_challenges(device_hash);
 CREATE TABLE IF NOT EXISTS device_sessions (
  session_id TEXT PRIMARY KEY, owner TEXT NOT NULL, client_id TEXT NOT NULL,
  audience TEXT NOT NULL, scope TEXT NOT NULL, connections TEXT[] NOT NULL,
- expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '30 days', revoked BOOLEAN NOT NULL DEFAULT FALSE
+ expires_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp() + INTERVAL '30 days', revoked BOOLEAN NOT NULL DEFAULT FALSE
 );
 CREATE INDEX IF NOT EXISTS device_sessions_owner_idx ON device_sessions(owner);
 CREATE INDEX IF NOT EXISTS device_sessions_expiry_idx ON device_sessions(expires_at);
 CREATE TABLE IF NOT EXISTS device_access_tokens (
  token_hash TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES device_sessions ON DELETE CASCADE,
- expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '10 minutes'
+ expires_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp() + INTERVAL '10 minutes'
 );
+CREATE INDEX IF NOT EXISTS device_access_session_idx ON device_access_tokens(session_id);
 CREATE TABLE IF NOT EXISTS device_refresh_tokens (
  token_hash TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES device_sessions ON DELETE CASCADE,
  used BOOLEAN NOT NULL DEFAULT FALSE
 );
+CREATE INDEX IF NOT EXISTS device_refresh_session_idx ON device_refresh_tokens(session_id);
 ";
 
 // Serialize only allocations, preventing unbounded grants and session rows.
@@ -50,17 +53,23 @@ async fn migration_lock(tx: &tokio_postgres::Transaction<'_>) -> Result<(), Erro
 }
 
 async fn sweep(tx: &tokio_postgres::Transaction<'_>) -> Result<(), Error> {
-    tx.execute("DELETE FROM device_grants WHERE expires_at <= NOW()", &[])
-        .await?;
     tx.execute(
-        "DELETE FROM device_approval_challenges WHERE expires_at <= NOW()",
+        "DELETE FROM device_grants WHERE expires_at <= clock_timestamp()-INTERVAL '1 hour'",
         &[],
     )
     .await?;
-    tx.execute("DELETE FROM device_sessions WHERE expires_at <= NOW()", &[])
-        .await?;
     tx.execute(
-        "DELETE FROM device_access_tokens WHERE expires_at <= NOW()",
+        "DELETE FROM device_approval_challenges WHERE expires_at <= clock_timestamp()",
+        &[],
+    )
+    .await?;
+    tx.execute(
+        "DELETE FROM device_sessions WHERE expires_at <= clock_timestamp()",
+        &[],
+    )
+    .await?;
+    tx.execute(
+        "DELETE FROM device_access_tokens WHERE expires_at <= clock_timestamp()",
         &[],
     )
     .await?;
@@ -94,7 +103,7 @@ pub async fn create(
     if count >= 10_000 {
         return Err(Error::limited());
     }
-    tx.execute("INSERT INTO device_grants(device_hash,user_hash,client_id,audience,scope,expires_at) VALUES($1,$2,$3,$4,$5,NOW()+INTERVAL '10 minutes')", &[&hash(&device), &hash(&user), &client, &audience, &scope]).await?;
+    tx.execute("INSERT INTO device_grants(device_hash,user_hash,client_id,audience,scope,expires_at) VALUES($1,$2,$3,$4,$5,clock_timestamp()+INTERVAL '10 minutes')", &[&hash(&device), &hash(&user), &client, &audience, &scope]).await?;
     tx.commit().await?;
     Ok((device, format!("{}-{}", &user[..5], &user[5..])))
 }
@@ -108,10 +117,20 @@ pub async fn challenge(
     let mut db = security.device_pool.get().await?;
     let tx = db.transaction().await?;
     migration_lock(&tx).await?;
-    let row = tx.query_opt("SELECT device_hash, client_id, scope FROM device_grants WHERE user_hash=$1 AND audience=$2 AND status='pending' AND expires_at>NOW() FOR UPDATE", &[&hash(user), &audience]).await?.ok_or(Error::oauth("invalid_grant"))?;
-    let challenge = secret("lt_approval_");
+    let row = tx.query_opt("SELECT device_hash, client_id, scope FROM device_grants WHERE user_hash=$1 AND audience=$2 AND status='pending' AND expires_at>clock_timestamp() FOR UPDATE", &[&hash(user), &audience]).await?.ok_or(Error::oauth("invalid_grant"))?;
     let device: String = row.get(0);
-    tx.execute("DELETE FROM device_approval_challenges WHERE device_hash=$1 AND (owner=$2 OR expires_at<=NOW())", &[&device, &owner]).await?;
+    if !tx
+        .query_one(
+            "SELECT expires_at>clock_timestamp() FROM device_grants WHERE device_hash=$1",
+            &[&device],
+        )
+        .await?
+        .get::<_, bool>(0)
+    {
+        return Err(Error::oauth("invalid_grant"));
+    }
+    let challenge = secret("lt_approval_");
+    tx.execute("DELETE FROM device_approval_challenges WHERE device_hash=$1 AND (owner=$2 OR expires_at<=clock_timestamp())", &[&device, &owner]).await?;
     let count: i64 = tx
         .query_one(
             "SELECT COUNT(*) FROM device_approval_challenges WHERE device_hash=$1",
@@ -123,7 +142,7 @@ pub async fn challenge(
         return Err(Error::limited());
     }
     tx.execute(
-        "INSERT INTO device_approval_challenges VALUES($1,$2,$3,NOW()+INTERVAL '2 minutes')",
+        "INSERT INTO device_approval_challenges VALUES($1,$2,$3,clock_timestamp()+INTERVAL '2 minutes')",
         &[&hash(&challenge), &device, &owner],
     )
     .await?;
@@ -146,24 +165,25 @@ pub async fn approve(
     migration_lock(&tx).await?;
     // Read the challenge before locking the grant, always using the same lock
     // order as challenge() and poll(). The delete below consumes it once.
-    let row = tx.query_opt("SELECT device_hash FROM device_approval_challenges WHERE challenge_hash=$1 AND owner=$2 AND expires_at>NOW()", &[&hash(challenge), &owner]).await?.ok_or(Error::oauth("invalid_grant"))?;
+    let row = tx.query_opt("SELECT device_hash FROM device_approval_challenges WHERE challenge_hash=$1 AND owner=$2 AND expires_at>clock_timestamp()", &[&hash(challenge), &owner]).await?.ok_or(Error::oauth("invalid_grant"))?;
     let device: String = row.get(0);
-    tx.query_opt("SELECT 1 FROM device_grants WHERE device_hash=$1 AND audience=$2 AND status='pending' AND expires_at>NOW() FOR UPDATE", &[&device, &audience]).await?.ok_or(Error::oauth("invalid_grant"))?;
-    if tx.execute("DELETE FROM device_approval_challenges WHERE challenge_hash=$1 AND owner=$2 AND expires_at>NOW()", &[&hash(challenge), &owner]).await? != 1 { return Err(Error::oauth("invalid_grant")); }
+    tx.query_opt("SELECT 1 FROM device_grants WHERE device_hash=$1 AND audience=$2 AND status='pending' AND expires_at>clock_timestamp() FOR UPDATE", &[&device, &audience]).await?.ok_or(Error::oauth("invalid_grant"))?;
+    if tx.execute("DELETE FROM device_approval_challenges WHERE challenge_hash=$1 AND owner=$2 AND expires_at>clock_timestamp()", &[&hash(challenge), &owner]).await? != 1 { return Err(Error::oauth("invalid_grant")); }
     if approve {
         if connections.is_empty() || connections.len() > 20 {
             return Err(Error::oauth("invalid_request"));
         }
         for id in connections {
-            tx.query_opt("SELECT 1 FROM agent_connections WHERE connection_id=$1 AND owner=$2 AND last_used_at>NOW()-INTERVAL '90 days' FOR SHARE", &[&id, &owner]).await?.ok_or(Error::oauth("access_denied"))?;
+            tx.query_opt("SELECT 1 FROM agent_connections WHERE connection_id=$1 AND owner=$2 AND last_used_at>clock_timestamp()-INTERVAL '90 days' FOR SHARE", &[&id, &owner]).await?.ok_or(Error::oauth("access_denied"))?;
         }
     }
     let status = if approve { "approved" } else { "denied" };
-    tx.execute(
-        "UPDATE device_grants SET status=$2, owner=$3, connections=$4 WHERE device_hash=$1",
+    if tx.execute(
+        "UPDATE device_grants SET status=$2, owner=$3, connections=$4 WHERE device_hash=$1 AND expires_at>clock_timestamp() AND status='pending'",
         &[&device, &status, &owner, &connections],
-    )
-    .await?;
+    ).await? != 1 {
+        return Err(Error::oauth("invalid_grant"));
+    }
     tx.execute(
         "DELETE FROM device_approval_challenges WHERE device_hash=$1",
         &[&device],
@@ -206,8 +226,11 @@ pub async fn poll(
     let mut db = security.device_pool.get().await?;
     let tx = db.transaction().await?;
     migration_lock(&tx).await?;
-    let row = tx.query_opt("SELECT status, expires_at<=NOW(), next_poll>NOW(), interval_secs, owner, connections, scope FROM device_grants WHERE device_hash=$1 AND client_id=$2 AND audience=$3 FOR UPDATE", &[&hash(device), &client, &audience]).await?.ok_or(Error::oauth("invalid_grant"))?;
-    if row.get::<_, bool>(1) {
+    let row = tx.query_opt("SELECT status, expires_at<=clock_timestamp(), next_poll>clock_timestamp(), interval_secs, owner, connections, scope FROM device_grants WHERE device_hash=$1 AND client_id=$2 AND audience=$3 FOR UPDATE", &[&hash(device), &client, &audience]).await?.ok_or(Error::oauth("invalid_grant"))?;
+    // Re-evaluate time after the row lock: a request may have waited behind
+    // another instance until after expiry or the polling interval changed.
+    let timing = tx.query_one("SELECT expires_at<=clock_timestamp(), next_poll>clock_timestamp() FROM device_grants WHERE device_hash=$1", &[&hash(device)]).await?;
+    if timing.get::<_, bool>(0) {
         return Err(Error::oauth("expired_token"));
     }
     let status: String = row.get(0);
@@ -217,9 +240,9 @@ pub async fn poll(
     if status == "redeemed" {
         return Err(Error::oauth("invalid_grant"));
     }
-    let early: bool = row.get(2);
+    let early: bool = timing.get(1);
     let interval: i32 = row.get::<_, i32>(3) + if early { 5 } else { 0 };
-    tx.execute("UPDATE device_grants SET interval_secs=$2, next_poll=NOW()+make_interval(secs=>$2::integer::double precision) WHERE device_hash=$1", &[&hash(device), &interval]).await?;
+    tx.execute("UPDATE device_grants SET interval_secs=$2, next_poll=clock_timestamp()+make_interval(secs=>$2::integer::double precision) WHERE device_hash=$1", &[&hash(device), &interval]).await?;
     if early || status == "pending" {
         tx.commit().await?;
         return Err(Error::oauth(if early {
@@ -253,11 +276,12 @@ pub async fn poll(
     let session = secret("lt_session_");
     tx.execute("INSERT INTO device_sessions(session_id,owner,client_id,audience,scope,connections) VALUES($1,$2,$3,$4,$5,$6)", &[&session, &owner, &client, &audience, &scope, &connections]).await?;
     let response = issue(&tx, &session, &owner, client, &scope).await?;
-    tx.execute(
-        "UPDATE device_grants SET status='redeemed' WHERE device_hash=$1",
+    if tx.execute(
+        "UPDATE device_grants SET status='redeemed' WHERE device_hash=$1 AND expires_at>clock_timestamp()",
         &[&hash(device)],
-    )
-    .await?;
+    ).await? != 1 {
+        return Err(Error::oauth("expired_token"));
+    }
     tx.commit().await?;
     Ok(response)
 }
@@ -271,9 +295,16 @@ pub async fn refresh(
     let mut db = security.device_pool.get().await?;
     let tx = db.transaction().await?;
     migration_lock(&tx).await?;
-    let row = tx.query_opt("SELECT s.session_id,s.owner,s.scope,s.revoked,s.expires_at<=NOW() FROM device_sessions s JOIN device_refresh_tokens r USING(session_id) WHERE r.token_hash=$1 AND s.client_id=$2 AND s.audience=$3 FOR UPDATE OF s", &[&hash(token), &client, &audience]).await?.ok_or(Error::oauth("invalid_grant"))?;
+    let row = tx.query_opt("SELECT s.session_id,s.owner,s.scope,s.revoked,s.expires_at<=clock_timestamp() FROM device_sessions s JOIN device_refresh_tokens r USING(session_id) WHERE r.token_hash=$1 AND s.client_id=$2 AND s.audience=$3 FOR UPDATE OF s", &[&hash(token), &client, &audience]).await?.ok_or(Error::oauth("invalid_grant"))?;
     let session: String = row.get(0);
-    if row.get::<_, bool>(3) || row.get::<_, bool>(4) {
+    let expired: bool = tx
+        .query_one(
+            "SELECT expires_at<=clock_timestamp() FROM device_sessions WHERE session_id=$1",
+            &[&session],
+        )
+        .await?
+        .get(0);
+    if row.get::<_, bool>(3) || expired {
         return Err(Error::oauth("invalid_grant"));
     }
     // A fresh statement after acquiring the family lock sees any rotation
@@ -350,7 +381,7 @@ pub async fn authenticate(
     if !super::valid_secret(token, "lt_access_") {
         return Err(Error::invalid_token());
     }
-    let row = security.client().await.query_opt("SELECT s.owner,s.client_id,s.session_id,s.connections,s.scope FROM device_access_tokens a JOIN device_sessions s USING(session_id) WHERE a.token_hash=$1 AND s.audience=$2 AND a.expires_at>NOW() AND s.expires_at>NOW() AND NOT s.revoked", &[&hash(token), &audience]).await?.ok_or(Error::invalid_token())?;
+    let row = security.client().await.query_opt("SELECT s.owner,s.client_id,s.session_id,s.connections,s.scope FROM device_access_tokens a JOIN device_sessions s USING(session_id) WHERE a.token_hash=$1 AND s.audience=$2 AND a.expires_at>clock_timestamp() AND s.expires_at>clock_timestamp() AND NOT s.revoked", &[&hash(token), &audience]).await?.ok_or(Error::invalid_token())?;
     Ok(Principal {
         owner: crate::parse_agent_id(&row.get::<_, String>(0)).ok_or(Error::invalid_token())?,
         client_id: row.get(1),
@@ -382,7 +413,7 @@ pub async fn revoke(
 }
 
 pub async fn sessions(security: &Security, owner: &str, audience: &str) -> Result<Value, Error> {
-    let rows = security.client().await.query("SELECT session_id, client_id, scope, connections, revoked FROM device_sessions WHERE owner=$1 AND audience=$2 AND expires_at>NOW() ORDER BY session_id LIMIT 100", &[&owner, &audience]).await?;
+    let rows = security.client().await.query("SELECT session_id, client_id, scope, connections, revoked FROM device_sessions WHERE owner=$1 AND audience=$2 AND expires_at>clock_timestamp() ORDER BY session_id LIMIT 100", &[&owner, &audience]).await?;
     Ok(
         json!({"sessions":rows.iter().map(|r|json!({"session_id":r.get::<_,String>(0),"client_id":r.get::<_,String>(1),"scope":r.get::<_,String>(2),"connections":r.get::<_,Vec<String>>(3),"revoked":r.get::<_,bool>(4)})).collect::<Vec<_>>() }),
     )

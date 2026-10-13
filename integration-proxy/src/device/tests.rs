@@ -685,3 +685,236 @@ async fn discovery_forms_and_brute_force_limits_match_the_public_cli_contract() 
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn complete_http_contract_supports_the_cli_and_refresh_logout() {
+    let f = Fixture::new(210).await;
+    let post = |path: &str, fields: &[(&str, &str)]| {
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(fields.iter().copied())
+            .finish();
+        Request::builder()
+            .method("POST")
+            .uri(path)
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .extension(ConnectInfo(
+                "192.0.2.210:1234".parse::<SocketAddr>().unwrap(),
+            ))
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let response = f
+        .send(post(
+            "/oauth/device/code",
+            &[("client_id", "syncables-cli"), ("scope", "proxy:write")],
+        ))
+        .await;
+    assert_eq!(body_json(response).await["error"], "invalid_scope");
+    let response = f
+        .send(post(
+            "/oauth/device/code",
+            &[("client_id", "syncables-cli")],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let device = body_json(response).await;
+    let request = f.signed(
+        "/device/challenge",
+        json!({"user_code":device["user_code"]}),
+    );
+    let replay = test_support::clone_request(&request);
+    let response = f.send(request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let challenge = body_json(response).await;
+    assert_eq!(body_json(f.send(replay).await).await["error"], "replayed");
+    let response = f
+        .send(f.signed(
+            "/device/approve",
+            json!({"challenge":challenge["challenge"],"approve":true,"connections":[f.connection]}),
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    f.ready(device["device_code"].as_str().unwrap()).await;
+    let response = f
+        .send(post(
+            "/oauth/device/token",
+            &[
+                ("client_id", "syncables-cli"),
+                ("grant_type", DEVICE_GRANT),
+                ("device_code", device["device_code"].as_str().unwrap()),
+            ],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    let token = body_json(response).await;
+    assert_eq!(token["owner"], f.owner.id());
+    assert_eq!(token["token_type"], "Bearer");
+    assert_eq!(token["expires_in"], 600);
+    let fixture: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/device-contract.json")).unwrap();
+    for field in fixture["token_response_fields"].as_array().unwrap() {
+        assert!(token.get(field.as_str().unwrap()).is_some());
+    }
+    assert_eq!(
+        f.bearer(
+            token["access_token"].as_str().unwrap(),
+            "GET",
+            "/connections"
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let response = f
+        .send(post(
+            "/oauth/device/token",
+            &[
+                ("client_id", "syncables-cli"),
+                ("grant_type", "refresh_token"),
+                ("refresh_token", token["refresh_token"].as_str().unwrap()),
+            ],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let rotated = body_json(response).await;
+    assert_eq!(rotated["session_id"], token["session_id"]);
+    assert_eq!(rotated["owner"], token["owner"]);
+    let response = f
+        .bearer(
+            token["access_token"].as_str().unwrap(),
+            "GET",
+            "/connections",
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        response.headers()[header::WWW_AUTHENTICATE],
+        "Bearer error=\"invalid_token\""
+    );
+    let sessions = signed_request(&f.state, &f.owner, "GET", "/device/sessions", vec![]);
+    let response = f.send(sessions).await;
+    assert!(body_json(response).await["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|s| s["session_id"] == token["session_id"]));
+    let response = f
+        .send(post(
+            "/oauth/device/revoke",
+            &[
+                ("client_id", "syncables-cli"),
+                ("token", rotated["refresh_token"].as_str().unwrap()),
+            ],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        f.bearer(
+            rotated["access_token"].as_str().unwrap(),
+            "GET",
+            "/connections"
+        )
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let response = f
+        .send(post(
+            "/oauth/device/revoke",
+            &[
+                ("client_id", "syncables-cli"),
+                ("token", rotated["refresh_token"].as_str().unwrap()),
+            ],
+        ))
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+// Opt-in browser evidence; CI's ordinary PostgreSQL suite needs no Node or
+// browser dependency. Run with DEVICE_BROWSER_TEST=1 and Playwright installed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TEST_DATABASE_URL and DEVICE_BROWSER_TEST=1 with Playwright"]
+async fn browser_owner_bridge_approves_an_outbound_only_client() {
+    if std::env::var("DEVICE_BROWSER_TEST").as_deref() != Ok("1") {
+        return;
+    }
+    let mut f = Fixture::new(211).await;
+    let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let upstream_address = upstream_listener.local_addr().unwrap();
+    let upstream = Router::new().route(
+        "/records",
+        get(|headers: HeaderMap| async move {
+            assert_eq!(
+                headers[header::AUTHORIZATION],
+                "Bearer invented-provider-value"
+            );
+            Json(json!({"records":[]}))
+        }),
+    );
+    let upstream =
+        tokio::spawn(async move { axum::serve(upstream_listener, upstream).await.unwrap() });
+    f.state.catalog = crate::catalog::Catalog::from_test_document(
+        "service",
+        json!({"servers":[{"url":format!("http://{upstream_address}")}],"components":{"securitySchemes":{"auth":{"type":"http","scheme":"bearer"}}},"security":[{"auth":[]}],"paths":{"/records":{"get":{}}}}),
+        json!({}),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let owner_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let owner_port = owner_listener.local_addr().unwrap().port();
+    drop(owner_listener);
+    f.state.base_url = format!("http://{address}");
+    f.state.public_origin = f.state.base_url.clone();
+    f.state.device.approval_url = Some(format!("http://127.0.0.1:{owner_port}"));
+    let router = crate::router(f.state.clone());
+    let proxy = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    use base64::Engine;
+    let seed = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(f.owner.0.to_bytes());
+    let issuer = f.state.base_url;
+    let id = f.connection;
+    let result = tokio::task::spawn_blocking(move || {
+        std::process::Command::new("node")
+            .arg("examples/device-login/browser-e2e.mjs")
+            .current_dir(env!("CARGO_MANIFEST_DIR"))
+            .env("ATOMIC_OWNER_SEED", seed)
+            .env("DEVICE_PROXY_URL", issuer)
+            .env("DEVICE_OWNER_PORT", owner_port.to_string())
+            .env("DEVICE_CONNECTION_ID", id)
+            .status()
+    })
+    .await
+    .unwrap()
+    .unwrap();
+    proxy.abort();
+    upstream.abort();
+    assert!(result.success());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn expiry_is_rechecked_after_waiting_for_another_instance_row_lock() {
+    let f = Fixture::new(212).await;
+    let (device, _) = f.create("proxy:read").await;
+    let mut db = f.security.device_pool.get().await.unwrap();
+    let tx = db.transaction().await.unwrap();
+    tx.execute("UPDATE device_grants SET expires_at=clock_timestamp()+INTERVAL '100 milliseconds' WHERE device_hash=$1",&[&hash(&device)]).await.unwrap();
+    let security = f.security.clone();
+    let code = device.clone();
+    let audience = f.state.base_url.clone();
+    let poll =
+        tokio::spawn(
+            async move { store::poll(&security, &code, "syncables-cli", &audience).await },
+        );
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    tx.commit().await.unwrap();
+    assert_eq!(poll.await.unwrap().unwrap_err().code, "expired_token");
+}

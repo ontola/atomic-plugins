@@ -4,8 +4,9 @@
 //! Clients authenticate with their Atomic agent key (issue #54): every
 //! request that matters carries an Atomic v2 request signature, a connection
 //! is owned by the agent that redeemed it, and apps use it through
-//! owner-signed delegations. There are no accounts, logins, tenants or
-//! rotating codes.
+//! owner-signed delegations. Opt-in RFC 8628 device sessions provide scoped
+//! bearer authentication to the same canonical owner; they do not create
+//! another account identity or revive provider connection codes.
 //!
 //! This crate is the whole service; the `integration-proxy` binary in this
 //! package, and any deployment wrapper (e.g. the Heroku app that serves

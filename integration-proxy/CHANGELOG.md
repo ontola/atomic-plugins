@@ -5,7 +5,13 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
 ## Unreleased
 
-`Config` gains a public field (`webhooks`), a breaking change under Cargo's
+- Opt-in OAuth device authorization for public CLI clients (#565), with Atomic
+  owner-signed browser approval, explicitly selected connections and read scopes,
+  PostgreSQL single-use grants, short-lived opaque access tokens, rotating refresh
+  families with reuse revocation, and signed per-session owner revocation. See
+  DEVICE_AUTH.md for the contract and examples. Not released or deployed.
+
+`Config` gains public fields (`webhooks`, `device`), a breaking change under Cargo's
 0.x semver rules, so the next release is 0.4.0.
 
 - Pacing under provider quotas (docs/design/pieces.md P4): for `x-throttling`
