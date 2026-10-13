@@ -170,9 +170,18 @@ Data flows through four stages, each its own directory under `src/`:
    `route.absentRemoved`, else `removed`; `lookupPlanned` is the check gate
    (not `'none'`, an item GET or a declaration, and `absent: removed`,
    `'all'`, a parent of a `parentAbsent` collection, or nested writes). The
-   lookups (previously unconfirmed first, also when `!differs`) run in
-   `releaseRefreshed`'s vanished loop, counted against
-   `maxMissingRecordChecks` (`SyncRound.lookups`); `reportMissing` turns
+   lookups (per collection, previously unconfirmed first, then the read's
+   new candidates; also when `!differs`) run in `releaseRefreshed`'s
+   vanished loop (`checkVanished`), counted against
+   `maxMissingRecordChecks` per sync across collections
+   (`SyncRound.lookups`). Kept `unavailable` marks without queued or failed
+   writes (`unsettled`) are re-read where `lookupPlanned` in a second pass,
+   `recheckUnavailable` (from `SyncRound.unavailable`, before
+   `finishFeeds`), oldest `checked` first across collections (`checkTime`,
+   strictly increasing, stored with the mark; set by `checkVanished`'s
+   `onChecked` only when `findEvidence` returned evidence, so a record the
+   budget or a 429 left unread keeps its place), so they never take checks
+   from unconfirmed or newly missing records; `reportMissing` turns
    the evidence into marks (`setMark`: changes go to the client-level
    `untoldMarks`, the latest per record, kept across syncs until told).
    `tell()` sends removals at once (dropping a held change of the same
@@ -617,6 +626,18 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   else the previous page's fingerprint when no item has an id) runs on
   every offset walk as well as on short-page walks. The validator checks rule 24,
   `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
+- Pagination Schemes 0.8.0: a scheme's `response.incomplete`
+  (`IncompleteObject`; `responseIncomplete(marker, body)` in
+  `read/pages.ts`, after the spec's `response_incomplete`: own properties
+  along the field's names split on `.`, no bracket escapes, JSON equality)
+  marks a response; `walkAllPages` records the
+  first mark in `WalkOutcome.marked` and `walkPages` then ends the outcome
+  not complete with that reason, paging unchanged. `readCollections` gives
+  `notComplete`, `readPlatform` `ReadResult.incomplete`, `paginate` its
+  `outcome` option, and `sync()` the `upsertIncomplete` path. The
+  validator checks rule 26 (`checkIncomplete`, with the type restriction
+  to pageNumber/pageToken/nextLink). Tests:
+  `unit/read/incomplete-marker.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
