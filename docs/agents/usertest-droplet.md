@@ -50,23 +50,25 @@ ssh root@178.62.223.35 USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server
   `deploy.sh` does not apply. From a checkout of `main`:
 
   ```sh
-  node usertest/catalog.mjs
+  USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log node usertest/catalog.mjs
+  node usertest/check-live.mjs https://catalog.usertest.michielbdejong.com/catalog.json
   (cd usertest/out && tar -cf - apps samples) | tar -xf - -C /srv/catalog
   cat usertest/out/catalog.json > /srv/catalog/catalog.json
-  node usertest/check-live.mjs https://catalog.usertest.michielbdejong.com/catalog.json
   ```
 
   `/srv/catalog` itself is owned by root, so `tar` cannot replace
   `catalog.json` there (it deletes the old file first); the file belongs to
-  `claude`, so it is written in place. Existing app versions stay. The
-  2026-10-12 build set no `USERTEST_LOG_URL`, and neither did the modules
-  already deployed, so the apps send no logs; `logs.usertest.michielbdejong.com`
-  answers, but setting `USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log`
-  is not verified here. A moderator change is copied in without the
+  `claude`, so it is written in place. Existing app versions stay. `check-live.mjs`
+  runs before the copy: it refuses a module that changed under an existing
+  version, which it can only see while the old one is still live. Build with
+  `USERTEST_LOG_URL`, as the earlier deploys here did (the Calendar modules
+  embed it): a 2026-10-12 build left it out, which changed Calendar's
+  `usertest-12` under the same version until it was rebuilt with it and
+  restored the same day. A moderator change is copied in without the
   root-owned `node_modules/`, then started (this ends sessions in progress):
 
   ```sh
-  tar -C usertest/moderator --exclude node_modules -cf - . | sudo tar -xf - -C /opt/usertest/moderator
+  tar -C usertest/moderator --exclude node_modules -cf - . | tar -xf - -C /opt/usertest/moderator
   sudo sh /opt/usertest/moderator/run.sh
   ```
 
