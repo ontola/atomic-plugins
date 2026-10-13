@@ -70,7 +70,10 @@ fi
 # paths when it moves the checkout to a new pin, and refuses any other
 # uncommitted change. Idempotent: on a clean checkout it changes nothing.
 restore_generated() {
+  # Nothing to restore without a commit: no checkout yet, or a half-made
+  # clone (git init done, fetch not), which would only print a stack trace.
   [ -e "$CHECKOUT/.git" ] || return 0
+  git -C "$CHECKOUT" rev-parse -q --verify HEAD >/dev/null 2>&1 || return 0
   # Both paths go through argv, never into the JS source.
   node --input-type=module -e '
     import { pathToFileURL } from "node:url";
@@ -78,7 +81,7 @@ restore_generated() {
     const tooling = `${repo}/integrations/tooling/server-build.mjs`;
     const { restoreBuildOutputs } = await import(pathToFileURL(tooling).href);
     restoreBuildOutputs(checkout);
-  ' "$REPO" "$CHECKOUT" ||
+  ' -- "$REPO" "$CHECKOUT" ||
     warn "could not restore the build outputs in $CHECKOUT"
   return 0
 }
