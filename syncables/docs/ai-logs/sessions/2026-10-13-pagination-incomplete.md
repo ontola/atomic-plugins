@@ -49,3 +49,14 @@ this branch: the walk records the first mark and ends the outcome with its
 reason, `ReadResult.incomplete`, `PaginateOptions.outcome`, and the
 capped `sync()` tests under three `absent` settings. A bracket-escaped
 name is now matched literally (tested).
+
+## Follow-up nits (after #550 merged)
+
+The coordinator relayed two nits from #550's review. `walkPages` now also
+clears `outcome.marked` when it starts, so an outcome passed to a second
+walk does not keep the first walk's mark (test: the same outcome through a
+marked and then an unmarked `paginate`, which fails on the code before).
+The README now says that an `autoDetect: true` scheme with an
+`incomplete` the validator refuses is skipped by auto-detection, so the
+read is unpaginated and does not fail (test: `resolveEffectiveScheme`
+returns nothing and `readCollections` reads one page without an error).
