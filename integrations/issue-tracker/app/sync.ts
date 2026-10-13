@@ -967,6 +967,31 @@ export async function readRows(options: PassOptions): Promise<IssueRow[]> {
   return tableRows(atomicStore, local, options);
 }
 
+/**
+ * Drops the journal entries GitHub answered, once nothing can use them again:
+ * only when no record has a saved operation (held ones included). Then no
+ * operation will be resumed, so no write id will be asked for again: an
+ * update's id derives from its finished operation's random id, and a create's
+ * from its record, which is bound to the issue it made by then. Entries
+ * without a receipt (a write whose answer was lost) stay: they are what keeps
+ * an uncertain write from being sent twice. Returns how many it dropped.
+ */
+export function pruneJournal(
+  journal: Record<string, unknown>,
+  records: Record<string, { pending?: unknown }>,
+): number {
+  if (Object.values(records).some(record => record.pending)) return 0;
+  let dropped = 0;
+
+  for (const [id, entry] of Object.entries(journal))
+    if ((entry as { receipt?: unknown } | undefined)?.receipt !== undefined) {
+      delete journal[id];
+      dropped++;
+    }
+
+  return dropped;
+}
+
 /** One pass. Throws a `PassError`; the state is flushed either way. */
 export async function runPass(options: PassOptions): Promise<PassResult> {
   const { bridge, atomicStore, sent, local } = bridgeFor(options);
@@ -999,6 +1024,13 @@ export async function runPass(options: PassOptions): Promise<PassResult> {
     await options.state.flush().catch(() => {});
     throw error;
   }
+
+  // The answered writes of a pass that left nothing pending: written with
+  // the flush below, so the sync state stops growing with every send.
+  pruneJournal(
+    options.state.state.journal,
+    bridge.records as Record<string, { pending?: unknown }>,
+  );
 
   // A row asked to be published is in the Bridge now (held or sent).
   const publish = options.state.state.publish ?? [];
