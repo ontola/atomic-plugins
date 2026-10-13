@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.7.0: schema, document validator, examples, link resolution and range windows."""
+"""Pagination Schemes 0.7.1: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -916,6 +916,42 @@ class OffsetAdvanceValueTests(unittest.TestCase):
 
         result = read_offsets(self.scheme(), request)
         self.assertEqual(result["offsets"], [0, 2, 4])
+
+    def test_a_declared_next_link_leads_and_a_null_link_ends_the_read_under_either_rule(self):
+        # 0.7.1: offsets are not used after the first request; the link leads.
+        for advance in ("pageSize", "itemCount"):
+            for total in (None, 6):
+                with self.subTest(advance=advance, total=total):
+                    scheme = self.scheme()
+                    scheme["request"]["queryParameters"]["offset"]["advance"] = advance
+                    scheme["response"]["bodyFields"]["next"] = {"role": "nextLink"}
+
+                    def body(offset):
+                        page = [{"id": str(i)} for i in range(offset, min(6, offset + 2))]
+                        following = offset + 2
+                        answer = {"entries": page, "limit": 2,
+                                  "next": f"https://api.example.com/items?offset={following}" if following < 6 else None}
+                        if total is not None:
+                            answer["total_count"] = total
+                        return answer
+
+                    result = read_offsets(scheme, lambda values: body(values[("queryParameters", "offset")]),
+                                          follow=lambda link: body(int(link.rsplit("=", 1)[1])), max_pages=10)
+                    self.assertEqual([item["id"] for item in result["items"]], ["0", "1", "2", "3", "4", "5"])
+                    self.assertEqual(result["offsets"], [0])
+                    self.assertEqual(len(result["links"]), 2)
+                    self.assertTrue(result["complete"])
+        # An absent link while totalCount says more: ends, not complete.
+        scheme = self.scheme()
+        scheme["response"]["bodyFields"]["next"] = {"role": "nextLink"}
+        result = read_offsets(scheme, lambda values: {"entries": [{"id": "a"}], "limit": 2, "total_count": 5},
+                              follow=lambda link: {"entries": []})
+        self.assertEqual(result["offsets"], [0])
+        self.assertFalse(result["complete"])
+        with self.assertRaises(ValueError):
+            scheme = self.scheme()
+            scheme["response"]["bodyFields"]["next"] = {"role": "nextLink"}
+            read_offsets(scheme, lambda values: {"entries": []})
 
     def test_a_server_that_ignores_the_offset_ends_the_read_under_either_rule(self):
         for advance in ("pageSize", "itemCount"):

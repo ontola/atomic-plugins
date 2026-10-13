@@ -1,0 +1,41 @@
+# Reviewed 2026-10-12 against the pinned OAD and official provider documentation.
+# Source: https://developers.notion.com/reference/request-limits
+#   "The Notion API enforces two rate limits: a per-connection limit and a per-workspace
+#   limit." Per connection: "600 requests per minute (an average of 10 per second)" on
+#   Business and Enterprise, "180 requests per minute (an average of 3 per second)" on all
+#   other plans; "Rate limits may change". When a limit is exceeded the API answers HTTP 429
+#   with the error code "rate_limited" and a Retry-After header whose value is "an integer
+#   number of seconds"; additional_data.rate_limit_reason names the limit.
+# No limits are declared: the per-connection numbers depend on the workspace's plan, which
+# Throttling does not express, and the per-workspace limit has no published number.
+# Not expressible either: the reason public_api_request_blocked ("retrying won't help") is
+# a 429 too, so a consumer classifies it as throttled and retries after Retry-After.
+# Needs Throttling 0.2.0-draft (openapi-extensions/spec/throttling: headers, signals).
+overlay: 1.0.0
+info:
+  title: Notion API 2026-03-11 throttling
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/0c8e229623efdcc1d4ab50111d17bcca3214a899/APIs/notion.com/2026-03-11/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        headers:
+          Retry-After:
+            role: retryAfter
+            unit: deltaSeconds
+            description: >-
+              Sent with a 429; Notion documents its value as "an integer
+              number of seconds".
+        signals:
+          - status: [429]
+            body:
+              pointer: /code
+              equals: rate_limited
+            meaning: throttled
+            description: >-
+              Notion's documented rate-limit response. additional_data.rate_limit_reason
+              says which limit was hit (the connection's, the workspace's, an
+              endpoint's, or an upstream one). public_api_request_blocked is
+              also sent this way, although Notion says retrying it won't help;
+              this version cannot tell a consumer to stop.

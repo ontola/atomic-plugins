@@ -451,8 +451,41 @@ stops the read with an error), then the budget waits the earliest retry
 time of a throttled answer and sends the request again, up to
 `limits.maxRetries` times, or stops with "API retry delay exceeds the
 remaining read time"; a throttled answer without a time is returned to the
-read as before. Pacing requests against the announced `limits` is not
-implemented, and nothing here has been checked against a real provider.
+read as before. Nothing here has been checked against a real provider.
+
+##### Pacing under announced quotas
+
+Where a Limit Object in `x-throttling` states `requests`, the client paces
+itself, so it does not have to run into the limit first (pieces.md K2). It
+sends at most `paceFraction` of `requests` (default 0.8, rounded down, at
+least one) in any window of the bucket. Moneybird's 150 per 300 s becomes
+120 per 300 s. The buckets a request counts against are its operation's
+`x-throttling` selection, else the root `applies`. An operation whose
+selection leaves a bucket out (`x-throttling: []`, say) is not paced by
+it. Buckets without `requests` are not paced. Documents without such a
+Limit Object behave as before.
+
+- **Windows.** A `sliding` or `unspecified` window counts the preceding
+  `seconds`. A `fixed` window with an `anchor` counts from its boundaries.
+  **A `fixed` window without an `anchor` is paced as sliding.** Its phase
+  is unknown, and pacing it as sliding keeps under the quota whatever the
+  phase is.
+- **Counting.** A request counts when it is sent, not when it is answered,
+  so requests in flight count and concurrent write queues cannot overshoot.
+  A request that finds no room waits.
+- **Reads** wait through `sleep` within their time limit, as for a paused
+  bucket. A wait past `limits.timeoutMs`, or past what is left of the
+  sync's budget, stops the read with an error before the request is sent.
+- **Writes** are held like a `notBefore`. Pacing alone never fails a write,
+  however long the hold, and waiting does not count an attempt.
+- **Only this client's own requests are counted**, in memory, so a restart
+  starts the count afresh. A bucket partitioned by `sourceIp` behind a
+  shared proxy, or shared with other clients of the same user, can still
+  run out. Pacing those across clients is the proxy's job (pieces.md P4).
+  The reaction to a throttled answer described above stays in place.
+
+Turn pacing off with `pace: false`. `paceFraction` must be greater than 0
+and at most 1.
 
 ```ts
 import { createApiClient, defaultWriteFailureClass } from 'syncables';
@@ -1607,7 +1640,12 @@ const { records, ontology, errors } = await readPlatform(document, {
   Object's `envelope: { itemsField: <dot-path> }`
   (CRUD Causality §4.2) says where each list response holds its array of
   items (`data.transactions`, say); a body without an array there fails that
-  collection's read with "No items array at <path>", never an empty read.
+  collection's read with "No items array at <path>", never an empty read,
+  unless the envelope (the Collection Object's or the scheme's) declares
+  `emptyWhenAbsent: true` (Pagination Schemes 0.7.0): then a body in which
+  the field is absent (an object along the path lacks the next segment) is
+  a page with no items, for providers that leave an empty array out. A
+  present `null` or other non-array still fails the read.
   `itemsField: null` (or `""`) says the body root is the array, and an item
   that is not an object fails the read ("Item <n> at <path> is not an
   object") instead of being dropped. Without an envelope, the pagination
@@ -1744,6 +1782,64 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Pacing under the quotas `x-throttling` announces
+  (pieces.md K2). Where a Limit Object states `requests`, the client sends
+  at most `paceFraction` (default 0.8) of them per window of each bucket a
+  request's operation selects. A `fixed` window without an `anchor` is
+  paced as sliding. Requests are counted when sent. Reads wait within
+  their time limit, and writes are held without failing or counting an
+  attempt. Only this client's own requests are counted, in memory. On by
+  default; `pace: false` turns it off. `ThrottlingDeclaration` gains
+  `quotas`, and `Pacer` and `Quota` are exported. Behaviour change only
+  for documents whose `x-throttling` limits state `requests`.
+- **Unreleased**: the webhook inbox consumer in `syncables/browser`, for
+  atomic-server's QuickJS sandbox (ontola/atomic-plugins#369 step 4b):
+  `InboxClient`, `InboxConsumer` and `scopedReads` need no `URL`,
+  `Buffer` or `TextDecoder`; `acknowledge: 'next-step'` acknowledges and
+  reports a reconciliation only on the step after the writes landed.
+  `InboxClient` now refuses a base URL
+  that is not canonical (a lower-case host, no default port, no query,
+  fragment, user info, escape or dot segment) and strips every trailing
+  `/` from it, not only one. `InboxError.backoff()` also covers a `409
+  obsolete-generation`, and `parseRetryAfter` follows the client's
+  `Retry-After` rules (`parseHttpDate`, 2^53 − 1).
+- **Unreleased**: An `itemCount` offset read (the default `advance`)
+  without a `totalCount` no longer stops after its first page (#495). It
+  read short, with no error and without being reported incomplete. It now
+  reads on, adding the items each page held, to the first empty page, as
+  Pagination Schemes 0.7.0 §4.3.2 says. With a `totalCount` it ends once
+  the next offset reaches it, as before. The repeat check ends a read
+  whose server ignores the offset.
+
+- **Unreleased**: Pagination Schemes 0.7.1 §4.3.2: in a scheme that
+  declares both an offset and a `nextLink` field, the link leads under
+  either `advance`. The client follows it while there is one. An absent,
+  `null` or empty link ends the read. When the last response's
+  `totalCount` exceeds the items read, the read still ends there, but is
+  not complete (`notComplete`), so nothing is concluded about records it
+  did not return. Before, under `advance: pageSize`, the read stepped from an
+  offset that was not advanced while links were followed. It then asked
+  for a page it already had and ended with an error.
+- **Unreleased**: Pagination Schemes 0.7.0 `emptyWhenAbsent` on an
+  Envelope Object (a scheme's `response.envelope` or a Collection Object's
+  `envelope`): with a non-empty `itemsField`, a body in which that field is
+  absent is a page with no items instead of an error. `paginate` takes
+  `emptyWhenAbsent` next to `itemsField`; `ApiClient.paginate` takes it from
+  the collection envelope it uses. The scheme validator checks rule 23.
+- **Unreleased**: Pagination Schemes 0.7.0 `advance` on an `offset` field:
+  `pageSize` makes the next offset add the page size (a reported
+  `pageSize` field, else the size sent) instead of the items the page held,
+  and ends the read only once it reaches `totalCount` (without one, at an
+  empty page); a short or empty page before that no longer ends it. With
+  neither page size known the read ends with an error. A reported page size
+  counts only as an integer of at least 1 and a `totalCount` as an integer
+  of at least 0, read per response. `itemCount`, the default, steps as
+  before. Every offset read (`paginate` and `ApiClient.paginate` too, not
+  only a collection read) now ends with `PageReadError` at a page holding an
+  item an earlier page returned (by identity, else a page identical to the
+  one before), so a server that ignores the offset is not asked again
+  without end. The scheme validator checks rule 24 and
+  `resolveEffectiveScheme` rule 25.
 - **Unreleased**: Write Preconditions 0.1.0-draft (`x-write-precondition`)
   on create, update and delete operations: `ifMatch` sends the version
   (from the record, or an item GET when it is a header) and stops on a

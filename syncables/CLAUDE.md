@@ -305,7 +305,15 @@ Data flows through four stages, each its own directory under `src/`:
    (`pausedBuckets`, stored as `throttlingPauses`; `pauseFor`,
    `pauseForOperation`, `operationBuckets`; the read transport waits within
    `limits.timeoutMs`), until the answer's time or else the write's backoff;
-   `mayHaveApplied` ignores the verdict, so a 5xx create stays uncertain. For another
+   `mayHaveApplied` ignores the verdict, so a 5xx create stays uncertain.
+   Pacing (K2, `throttling/pacing.ts`): `declaredThrottling`'s `quotas`
+   (Limit Objects with `requests`) feed a `Pacer` (`pace`, `paceFraction`,
+   default 0.8). The `baseTransport` wrapper counts every request when it
+   is sent (`take`), after waiting for room; it is not async, so a request
+   with room adds no tick. Reads wait first in `waitOutPacing` within their
+   limit (`RetryBeyondDeadline`). `drainQueue` holds a write for
+   `pacingDelay` without the `maxRetryAfterMs` failure or an attempt.
+   `pacingSleptUntil` takes a wait that did not move as waited out. For another
    retryable answer the delay is max(backoff, `Retry-After` capped at
    `retry.maxRetryAfterMs`), never below the backoff. The read `Budget`
    uses the same verdict to wait before retrying), `permanent` (other 4xx: failed
@@ -557,6 +565,30 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `page` field (`deriveHasNextPage`'s `firstPage`). The page size sent is
   capped at the parameter's `maximum`. The validator checks §9 rules
   19–21, `resolveEffectiveScheme` rule 22.
+- Pagination Schemes 0.7.0: an Envelope Object's `emptyWhenAbsent`
+  (`declaredEnvelope` in `read/pages.ts`, from `PageWalk.itemsField`/
+  `emptyWhenAbsent`, which a Collection Object's envelope sets through
+  `ReadCollection.emptyWhenAbsent`, else the scheme's `response.envelope`)
+  makes `itemsAt` return no items when the field is absent (`isAbsent`: an
+  object along the path lacks the next segment); a present non-array is
+  still an error. The validator checks rule 23. Tests:
+  `unit/read/empty-when-absent.test.ts`. An `offset` field's `advance`
+  (§4.3.2; `offsetAdvance` in `read/pages.ts`): `pageSize` steps the
+  offset by `state.pageSize` (≥ 1), else the page size sent
+  (`sendsPageSize`), ends at `totalCount` (without one, at an empty page)
+  and throws `PageReadError` with neither (`integerRole`: a reported
+  `pageSize` counts as an integer ≥ 1, `totalCount` as an integer ≥ 0, read
+  from the body per response); `itemCount` (default) steps by the items
+  the page held and ends at an empty page or `totalCount` (#495: before,
+  without a `totalCount`, `hasNextPage` ended it after one page), unless
+  the scheme declares a `nextLink` (`declaresRole`), which then leads under
+  either advance (0.7.1): the offset cursor is not advanced while links
+  are followed, so neither advance branch runs for such a scheme, and an
+  absent or `null` link ends the read before `hasNextPage` is asked (not
+  complete when that response's `totalCount` exceeds the items read). The repeat check (`seenIds` by `PageWalk.identity`,
+  else the previous page's fingerprint when no item has an id) runs on
+  every offset walk as well as on short-page walks. The validator checks rule 24,
+  `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
@@ -726,6 +758,14 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   `BodyFieldTests` and `BodyFieldFollowUpTests` (0.3.0 `bodyFields`, #463's
   rules) and the held Todoist overlay's test, on `bodyFieldsExample` and
   `todoistThrottling` in `__tests__/fixtures/throttling.ts`.
+- `unit/throttling/pacing.test.ts` covers `Pacer` (sliding, unspecified,
+  fixed with and without an anchor, several buckets, the minimum of one,
+  the fraction's range) and `declaredThrottling`'s `quotas`;
+  `unit/client/pacing.test.ts` the client: reads through the injected
+  sleep, a wait past the read limit, the Moneybird 120 of 150, `pace:
+  false` and `paceFraction`, a write held without failing or an attempt,
+  concurrent drains counted at send time, and an operation whose
+  selection leaves the bucket out.
 - `unit/throttling/throttling.test.ts` mirrors the Throttling spec's
   `ClassifyTests` on its synthetic example (`__tests__/fixtures/throttling.ts`,
   which also holds the GitHub, Google and Moneybird snippets), plus
@@ -758,8 +798,19 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
 ### Webhook inbox consumer (`src/inbox/`)
 
 The daemon side of a webhook receiver (ontola/atomic-plugins#369 step 4,
-`openapi-extensions/spec/webhook-subscriptions`), exported from the Node
-entry only (it uses `node:crypto`). `sign.ts` signs requests with Atomic v2
+`openapi-extensions/spec/webhook-subscriptions`). `sign.ts` uses
+`node:crypto` and is exported from the Node entry only; `client.ts`,
+`consumer.ts` and `reads.ts` are in `syncables/browser` too, and must run in
+atomic-server's QuickJS sandbox, which has no `URL`, `URLSearchParams`,
+`Buffer`, `TextDecoder` or `atob`: `url.ts` builds request URLs as strings
+(a stand-in object where `URL` is missing), `reads.ts` decodes base64 UTF-8
+itself, and `unit/inbox/sandbox.test.ts` runs the bundle in a bare `vm`
+context. `acknowledge: 'next-step'` is for hosts whose writes become
+durable only after the step (a scheduled sandbox run's intents): the cursor
+to acknowledge and a finished reconciliation are stored with the step's
+writes (`StoredSubscription.unacknowledged`, `.unconfirmedReconciliation`)
+and sent at the start of the next step (`unit/inbox/deferred.test.ts`).
+`sign.ts` signs requests with Atomic v2
 signatures (`signedTransport`; tested against atomic-server's golden vectors
 in `__tests__/fixtures/atomic-request-v2-vectors.json`, the copy
 `integration-proxy` verifies). `client.ts` is `InboxClient` for the consumer
