@@ -451,8 +451,41 @@ stops the read with an error), then the budget waits the earliest retry
 time of a throttled answer and sends the request again, up to
 `limits.maxRetries` times, or stops with "API retry delay exceeds the
 remaining read time"; a throttled answer without a time is returned to the
-read as before. Pacing requests against the announced `limits` is not
-implemented, and nothing here has been checked against a real provider.
+read as before. Nothing here has been checked against a real provider.
+
+##### Pacing under announced quotas
+
+Where a Limit Object in `x-throttling` states `requests`, the client paces
+itself, so it does not have to run into the limit first (pieces.md K2). It
+sends at most `paceFraction` of `requests` (default 0.8, rounded down, at
+least one) in any window of the bucket. Moneybird's 150 per 300 s becomes
+120 per 300 s. The buckets a request counts against are its operation's
+`x-throttling` selection, else the root `applies`. An operation whose
+selection leaves a bucket out (`x-throttling: []`, say) is not paced by
+it. Buckets without `requests` are not paced. Documents without such a
+Limit Object behave as before.
+
+- **Windows.** A `sliding` or `unspecified` window counts the preceding
+  `seconds`. A `fixed` window with an `anchor` counts from its boundaries.
+  **A `fixed` window without an `anchor` is paced as sliding.** Its phase
+  is unknown, and pacing it as sliding keeps under the quota whatever the
+  phase is.
+- **Counting.** A request counts when it is sent, not when it is answered,
+  so requests in flight count and concurrent write queues cannot overshoot.
+  A request that finds no room waits.
+- **Reads** wait through `sleep` within their time limit, as for a paused
+  bucket. A wait past `limits.timeoutMs`, or past what is left of the
+  sync's budget, stops the read with an error before the request is sent.
+- **Writes** are held like a `notBefore`. Pacing alone never fails a write,
+  however long the hold, and waiting does not count an attempt.
+- **Only this client's own requests are counted**, in memory, so a restart
+  starts the count afresh. A bucket partitioned by `sourceIp` behind a
+  shared proxy, or shared with other clients of the same user, can still
+  run out. Pacing those across clients is the proxy's job (pieces.md P4).
+  The reaction to a throttled answer described above stays in place.
+
+Turn pacing off with `pace: false`. `paceFraction` must be greater than 0
+and at most 1.
 
 ```ts
 import { createApiClient, defaultWriteFailureClass } from 'syncables';
@@ -1749,6 +1782,16 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
 ## Changelog
 
+- **Unreleased**: Pacing under the quotas `x-throttling` announces
+  (pieces.md K2). Where a Limit Object states `requests`, the client sends
+  at most `paceFraction` (default 0.8) of them per window of each bucket a
+  request's operation selects. A `fixed` window without an `anchor` is
+  paced as sliding. Requests are counted when sent. Reads wait within
+  their time limit, and writes are held without failing or counting an
+  attempt. Only this client's own requests are counted, in memory. On by
+  default; `pace: false` turns it off. `ThrottlingDeclaration` gains
+  `quotas`, and `Pacer` and `Quota` are exported. Behaviour change only
+  for documents whose `x-throttling` limits state `requests`.
 - **Unreleased**: the webhook inbox consumer in `syncables/browser`, for
   atomic-server's QuickJS sandbox (ontola/atomic-plugins#369 step 4b):
   `InboxClient`, `InboxConsumer` and `scopedReads` need no `URL`,
