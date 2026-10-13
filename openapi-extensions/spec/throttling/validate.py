@@ -20,6 +20,8 @@ MEANINGS = {"throttled", "quotaExhausted", "blocked"}
 HEADER_OPERATORS = {"equals", "in", "present"}
 BODY_OPERATORS = {"equals", "in", "contains", "present", "item"}
 DIGITS = re.compile(r"[0-9]+")
+MAX_INTEGER = 2 ** 53 - 1  # the largest integer every JSON parser holds exactly (RFC 8259 §6)
+WHITESPACE = " \t\r\n"  # SP, HTAB, CR, LF: JSON's whitespace, which includes a header's OWS
 POINTER = re.compile(r"(/([^~/]|~[01])*)*")
 
 
@@ -220,7 +222,7 @@ def single_header(headers, name):
         if len(value) != 1:
             return _REPEATED if value else None
         value = value[0]
-    return value.strip()
+    return value.strip(WHITESPACE)
 
 _REPEATED = object()
 
@@ -237,13 +239,14 @@ def header_matches(predicate, headers):
     return value in predicate["in"]
 
 def _integer(value):
-    """A non-negative decimal integer, or None (also for one too long for int())."""
+    """A decimal integer from 0 to MAX_INTEGER, or None."""
     if not DIGITS.fullmatch(value):
         return None
     try:
-        return int(value)
-    except ValueError:
+        number = int(value)
+    except ValueError:  # too many digits for int()
         return None
+    return number if number <= MAX_INTEGER else None
 
 def _http_date(value):
     try:
@@ -297,8 +300,8 @@ def _body_text(body, path):
     if isinstance(value, int):
         return str(value)
     if isinstance(value, float):
-        return str(int(value)) if value.is_integer() and value >= 0 else None
-    return value.strip() if isinstance(value, str) else None
+        return str(int(value)) if value.is_integer() and 0 <= value <= MAX_INTEGER else None
+    return value.strip(WHITESPACE) if isinstance(value, str) else None
 
 
 def classify(document, status, headers, body, received_at):
@@ -330,31 +333,29 @@ def classify(document, status, headers, body, received_at):
     if matched.get("meaning") not in ("throttled", "quotaExhausted"):
         # 0.4.0: blocked, and any meaning this consumer does not recognise, is never resent automatically.
         return {"meaning": "blocked", "bucket": None, "retryAt": None}
-    # role -> [(value, unit), ...]: headers first, then body fields (0.3.0).
+    # role -> [(value, unit, source), ...]: headers first, then body fields (0.3.0).
     roles = {}
     for name, header in root.get("headers", {}).items():
         value = single_header(headers, name)
         if value is not None and value is not _REPEATED:
-            roles.setdefault(header["role"], []).append((value, header.get("unit")))
-    body_values = set()
+            roles.setdefault(header["role"], []).append((value, header.get("unit"), "header"))
     for path, field in root.get("bodyFields", {}).items():
         value = _body_text(body, path)
         if value is not None:
-            entry = (value, field.get("unit"))
-            roles.setdefault(field["role"], []).append(entry)
-            body_values.add((field["role"], entry))
+            roles.setdefault(field["role"], []).append((value, field.get("unit"), "body"))
     date_header = single_header(headers, "date")
     date_header = date_header if isinstance(date_header, str) else None
     def timed(role):
-        for value, unit in roles.get(role, []):
+        for value, unit, source in roles.get(role, []):
             time = parse_time(value, unit, received_at, date_header)
             # A body field that gives no wait counts as absent, so the fallbacks still apply.
-            if time is not None and (role, (value, unit)) in body_values and time <= received_at:
+            # The source decides, not the value: a header with the same value still counts.
+            if time is not None and source == "body" and time <= received_at:
                 continue
             yield time
 
     times = list(timed("retryAfter"))
-    exhausted = matched["meaning"] == "quotaExhausted" or any(_integer(v) == 0 for v, _ in roles.get("remaining", []))
+    exhausted = matched["meaning"] == "quotaExhausted" or any(_integer(v) == 0 for v, _, _ in roles.get("remaining", []))
     if exhausted:
         times.extend(timed("reset"))
     times = [t for t in times if t is not None]
