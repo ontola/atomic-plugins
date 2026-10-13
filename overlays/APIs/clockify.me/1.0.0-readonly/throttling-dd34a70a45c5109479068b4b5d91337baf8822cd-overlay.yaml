@@ -1,0 +1,44 @@
+# Reviewed 2026-10-13 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://docs.clockify.me/ (Rate Limiting)
+#   "The rate limit for requests authenticated with the X-Api-Key header depends on your
+#   workspace plan and are counted per workspace": FREE "30 requests per hour"; TRIAL "20
+#   requests per second"; BASIC, STANDARD and PRO "20 requests per second"; ENTERPRISE "50
+#   requests per second".
+# The catalog authenticates with X-Api-Key (auth-dd34a70a...: clockifyApiKey), so the limit
+# applies to every operation. A consumer that is not told the workspace's plan paces at the
+# FREE tier, 30 requests per hour.
+# Not declared: the add-on limit ("50 requests per second (by addon on one workspace) when
+# accessed using X-Addon-Token"), which the catalog's credential does not use; and any signal
+# or header: the page names no status code, no Retry-After and no rate-limit headers, only the
+# add-on limit's "Too many requests" description.
+# Needs Throttling 0.5.0-draft (openapi-extensions/spec/throttling: tiers).
+overlay: 1.0.0
+info:
+  title: Clockify API throttling
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dd34a70a45c5109479068b4b5d91337baf8822cd/APIs/clockify.me/1.0.0-readonly/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        limits:
+          perWorkspace:
+            partitionBy: [account]
+            description: >-
+              Requests with X-Api-Key, "counted per workspace" (the account
+              here is the Clockify workspace the request addresses), by the
+              workspace's plan. The counting algorithm is not documented.
+            tiers:
+              - name: FREE
+                requests: 30
+                window: { seconds: 3600, kind: unspecified }
+              - name: TRIAL
+                requests: 20
+                window: { seconds: 1, kind: unspecified }
+              - name: BASIC, STANDARD and PRO
+                requests: 20
+                window: { seconds: 1, kind: unspecified }
+              - name: ENTERPRISE
+                requests: 50
+                window: { seconds: 1, kind: unspecified }
+        applies: [perWorkspace]

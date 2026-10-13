@@ -1,0 +1,67 @@
+# Reviewed 2026-10-13 against the pinned OAD and official provider documentation.
+# Source: https://developers.notion.com/reference/request-limits
+#   "The Notion API enforces two rate limits: a per-connection limit and a per-workspace
+#   limit." Per connection: "Business and Enterprise | 600 requests per minute (an average of
+#   10 per second)", "All other plans | 180 requests per minute (an average of 3 per second)";
+#   "Rate limits may change". Over a limit: HTTP 429, the code "rate_limited", a Retry-After of
+#   "an integer number of seconds", and additional_data.rate_limit_reason; for
+#   public_api_request_blocked: "This connection's API access has been restricted. Retrying
+#   won't help. Contact Notion support."
+# v3: v2's header and signals (throttling-v2-0c8e2296..., #533: v1 plus public_api_request_blocked
+# as blocked), plus the per-connection limit as plan tiers (Throttling 0.5.0). A consumer that is
+# not told the workspace's plan paces at 180 per minute.
+# Not declared: the per-workspace limit (no number), and 529 service_overload, since Throttling
+# does not treat a 5xx as a throttling signal.
+# Needs Throttling 0.5.0-draft (openapi-extensions/spec/throttling: blocked, tiers).
+overlay: 1.0.0
+info:
+  title: Notion API 2026-03-11 throttling, with blocked requests and plan tiers
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/0c8e229623efdcc1d4ab50111d17bcca3214a899/APIs/notion.com/2026-03-11/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        limits:
+          perConnection:
+            partitionBy: [credential]
+            description: >-
+              The per-connection limit. A connection (an integration in one
+              workspace) authenticates with its own token, so it is
+              partitioned by credential. Notion gives each rate as "an
+              average" per second, so the window kind is unspecified.
+            tiers:
+              - name: Business and Enterprise
+                requests: 600
+                window: { seconds: 60, kind: unspecified }
+              - name: All other plans
+                requests: 180
+                window: { seconds: 60, kind: unspecified }
+        applies: [perConnection]
+        headers:
+          Retry-After:
+            role: retryAfter
+            unit: deltaSeconds
+            description: >-
+              Sent with a 429; Notion documents its value as "an integer
+              number of seconds".
+        signals:
+          - status: [429]
+            body:
+              pointer: /additional_data/rate_limit_reason
+              equals: public_api_request_blocked
+            meaning: blocked
+            description: >-
+              "This connection's API access has been restricted. Retrying
+              won't help. Contact Notion support." Listed first: the
+              response also carries the code rate_limited, which the next
+              signal matches.
+          - status: [429]
+            body:
+              pointer: /code
+              equals: rate_limited
+            meaning: throttled
+            description: >-
+              Notion's documented rate-limit response. additional_data.rate_limit_reason
+              says which limit was hit (the connection's, the workspace's, an
+              endpoint's, or an upstream one), so no bucket is named.
