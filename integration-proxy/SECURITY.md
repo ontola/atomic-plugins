@@ -435,8 +435,9 @@ provider. What it changes for safety:
   consent page asks for nothing and the owner is whichever agent signs. So
   on such a platform anyone can spend its `sourceIp` bucket and keep other
   tenants' requests refused with `429 provider_quota` for as long as they
-  keep sending. The only bound is the access policy: `ALLOWED_AGENTS`,
-  `REVOKED_SUBJECTS`, or a deployment's own `AccessPolicy`.
+  keep sending. The only bound is the access policy: `ALLOWED_AGENTS` (an
+  allowlist of owners) or a deployment's own `AccessPolicy`;
+  `REVOKED_SUBJECTS` refuses known keys only, and anyone can make a new one.
 - **Bounded memory.** One log per declared bucket, keyed by platform and
   bucket id from the server-owned catalog, never by anything a caller
   sends; each log holds at most `requests` timestamps, and buckets above
