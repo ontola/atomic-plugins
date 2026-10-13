@@ -1,0 +1,51 @@
+# Reviewed 2026-10-12 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://airtable.com/developers/web/api/rate-limits
+#   "The API is limited to 5 requests per second per base."; "Additionally, there is a limit
+#   of 50 requests per second for all traffic using personal access tokens from a given user
+#   or service account."; "If you exceed these rates, you will receive a 429 status code and
+#   will need to wait 30 seconds before subsequent requests will succeed."; "Airtable may
+#   change the enforced API rate limits or enforce additional types of limits in our sole
+#   discretion, including tiered based on pricing plan."
+# Needs Throttling 0.2.0-draft (openapi-extensions/spec/throttling: limits, signals).
+# Not declared: the 50-per-second limit, which the page states for personal access tokens and
+# service accounts only; the catalog connects Airtable through OAuth, which the page does
+# not mention. Retry-After, which the page does not mention. The pinned document is an
+# authored read-only subset and declares no 429 response.
+overlay: 1.0.0
+info:
+  title: Airtable Web API throttling
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/1f5368e0251bfbaa233860dc8131507c38a4f8b3/APIs/airtable.com/1.0-readonly/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        limits:
+          perBase:
+            requests: 5
+            window: { seconds: 1, kind: unspecified }
+            partitionBy: [https://airtable.com/developers/web/api/rate-limits#per-base]
+            description: >-
+              "5 requests per second per base": one counter per Airtable base
+              (the baseId path parameter), shared by every user and
+              integration reading that base. The dimension is not in the
+              extension's vocabulary, so it is named by this URI. The page
+              does not say how the second is counted.
+        applies: []
+        signals:
+          - status: [429]
+            meaning: throttled
+            minDelaySeconds: 30
+            description: >-
+              "you will receive a 429 status code and will need to wait 30
+              seconds before subsequent requests will succeed". The page
+              does not say which limit a 429 reports, so no bucket is named.
+  - target: $.paths['/v0/meta/bases/{baseId}/tables'].get
+    update:
+      x-throttling: [perBase]
+  - target: $.paths['/v0/{baseId}/{tableIdOrName}'].get
+    update:
+      x-throttling: [perBase]
+  - target: $.paths['/v0/{baseId}/{tableIdOrName}/{recordId}'].get
+    update:
+      x-throttling: [perBase]

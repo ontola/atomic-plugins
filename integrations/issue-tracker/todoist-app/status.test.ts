@@ -59,6 +59,7 @@ const summary = (over: Partial<SyncSummary> = {}): SyncSummary => ({
   reappeared: 0,
   checked: 1,
   complete: true,
+  unmapped: [],
   ...over,
 });
 
@@ -210,6 +211,22 @@ describe('syncStatusFor', () => {
     ).toBeUndefined();
     // An incomplete row is not counted again as "added here".
     expect(groups.some(g => /added here/.test(g.reason))).toBe(false);
+  });
+
+  it('names tasks the catalog lens refused as a problem, rows kept', () => {
+    const state = synced({
+      unmapped: [
+        { id: 'task-9', reason: "the record is outside this lens's domain" },
+      ],
+    });
+    const status = syncStatusFor({ state, now: NOW });
+    expect(status.last?.ok).toBe(true);
+    expect(status.problems).toEqual([
+      expect.objectContaining({
+        lead: '1 task could not be read through the catalog lens.',
+        text: expect.stringContaining('Task task-9: the record is outside'),
+      }),
+    ]);
   });
 
   it('names a partial read as a problem over an otherwise good sync, with the last complete read', () => {
