@@ -18,7 +18,11 @@ overlays that a syncables 0.22.0 reader uses:
   emptyWhenAbsent, as its pagination v2 does;
 * Google Calendar: cancelled events as read tombstones (Deletion Feeds
   0.2.0-draft x-read-tombstone) and Throttling 0.2.0-draft limits and
-  signals, last.
+  signals, last;
+* Notion (after its runtime schema) and Spotify: Throttling, last.
+
+Every update in every composition must also name a CRUD Causality rule-5
+`mode`, and a §4.6 `patchFormat` when the mode is `patch`.
 
 The tests check the catalog against its base entry by entry, compose every
 platform of both catalogs (the pinned OADs are downloaded by their full-SHA
@@ -49,6 +53,7 @@ MONEYBIRD = "moneybird.com/v2-readonly/{}-85a6105220036a98ef0d7cd6f228d4aae00365
 NOTION = "notion.com/2026-03-11/{}-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml"
 CLOCKIFY = "clockify.me/1.0.0-readonly/{}-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml"
 TASKS = "googleapis.com/tasks/v1/{}-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml"
+SPOTIFY = "spotify.com/1.0.0-readonly/{}-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml"
 
 
 def url(template, kind):
@@ -68,8 +73,12 @@ CHANGES = {
         ("after", url(MONEYBIRD, "pagination"), url(MONEYBIRD, "pagination-range-window")),
         ("replace", url(MONEYBIRD, "throttling"), url(MONEYBIRD, "throttling-v2")),
     ],
-    "notion": [("after", url(NOTION, "crud-causality"), url(NOTION, "runtime-schema"))],
+    "notion": [
+        ("after", url(NOTION, "crud-causality"), url(NOTION, "runtime-schema")),
+        ("append", url(NOTION, "throttling")),
+    ],
     "clockify": [("append", url(CLOCKIFY, "time-zone"))],
+    "spotify": [("append", url(SPOTIFY, "throttling"))],
     "google-tasks": [
         ("replace", url(TASKS, "crud-causality"), url(TASKS, "crud-causality-v2")),
         ("append", url(TASKS, "throttling")),
@@ -92,7 +101,9 @@ ADDED = {
         ("x-throttling", "headers"),
         ("x-throttling", "signals"),
     },
+    "spotify": {("x-throttling",)},
     "notion": {
+        ("x-throttling",),
         ("components", "crudResources", "page", "references"),
         ("components", "crudResources", "page", "x-runtime-schema"),
         ("components", "schemas", "NotionRichText"),
@@ -116,6 +127,19 @@ ADDED = {
 }
 
 SPECS = ROOT.parent / "openapi-extensions" / "spec"
+
+# Updates with mode patch whose patchFormat is missing (rule 6 SHOULD) or
+# not a §4.6 value, per platform. github-issues' crud-causality v1 declares
+# `merge` for its two PATCHes and nothing for its two label writes; its v2
+# fixes both and replaces this entry once it is selected here.
+KNOWN_PATCH_FORMAT_GAPS = {
+    "github-issues": [
+        ("/repos/{owner}/{repo}/issues/comments/{comment_id}", "patch", "merge"),
+        ("/repos/{owner}/{repo}/issues/{issue_number}", "patch", "merge"),
+        ("/repos/{owner}/{repo}/issues/{issue_number}/labels", "post", None),
+        ("/repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", "delete", None),
+    ],
+}
 
 
 def validator(spec):
@@ -278,6 +302,24 @@ class CatalogCompositionTests(unittest.TestCase):
             with self.subTest(collection=collection):
                 self.assertEqual(collections[resource]["collections"][collection]["envelope"],
                                  {"itemsField": "items", "emptyWhenAbsent": True})
+
+    def test_every_update_names_a_mode_and_a_patch_format(self):
+        # CRUD Causality §9 rule 5 (mode replace or patch), and a §4.6
+        # patchFormat for a patch (rule 6 says SHOULD; this catalog has one
+        # everywhere it can, so a missing one is reported).
+        missing = {}
+        for name, document in self.composed.items():
+            for path, item in document.get("paths", {}).items():
+                for method, operation in item.items():
+                    x_crud = operation.get("x-crud") if isinstance(operation, dict) else None
+                    if not isinstance(x_crud, dict) or x_crud.get("action") != "update":
+                        continue
+                    with self.subTest(platform=name, operation=(path, method)):
+                        self.assertIn(x_crud.get("mode"), ("replace", "patch"))
+                    if x_crud.get("mode") == "patch" and \
+                            x_crud.get("patchFormat") not in ("jsonPatch", "jsonMergePatch", "custom"):
+                        missing.setdefault(name, []).append((path, method, x_crud.get("patchFormat")))
+        self.assertEqual({name: sorted(gaps) for name, gaps in missing.items()}, KNOWN_PATCH_FORMAT_GAPS)
 
     def test_the_fixed_reads_are_standard_list_queries(self):
         tasks = self.composed["google-tasks"]["components"]["crudResources"]["task"]["collections"]["tasks"]

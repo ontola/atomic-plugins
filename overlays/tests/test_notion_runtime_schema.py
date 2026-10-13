@@ -142,7 +142,7 @@ class NotionRuntimeSchemaTests(unittest.TestCase):
                     continue
                 platform = next(p for p in json.loads(text)["platforms"] if p["name"] == "notion")
                 self.assertEqual([url.rsplit("/", 1)[1] for url in platform["overlays"]],
-                                 [f"{kind}-{PIN}-overlay.yaml" for kind in [*PUBLISHED, "runtime-schema"]])
+                                 [f"{kind}-{PIN}-overlay.yaml" for kind in [*PUBLISHED, "runtime-schema", "throttling"]])
 
 
 if __name__ == "__main__":

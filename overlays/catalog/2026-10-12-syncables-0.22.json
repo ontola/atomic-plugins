@@ -105,7 +105,8 @@
       "overlays": [
         "https://ontola.github.io/atomic-plugins/overlays/APIs/spotify.com/1.0.0-readonly/auth-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/spotify.com/1.0.0-readonly/pagination-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml",
-        "https://ontola.github.io/atomic-plugins/overlays/APIs/spotify.com/1.0.0-readonly/crud-causality-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml"
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/spotify.com/1.0.0-readonly/crud-causality-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/spotify.com/1.0.0-readonly/throttling-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml"
       ]
     },
     {
@@ -127,7 +128,8 @@
         "https://ontola.github.io/atomic-plugins/overlays/APIs/notion.com/2026-03-11/auth-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/notion.com/2026-03-11/pagination-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/notion.com/2026-03-11/crud-causality-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml",
-        "https://ontola.github.io/atomic-plugins/overlays/APIs/notion.com/2026-03-11/runtime-schema-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml"
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/notion.com/2026-03-11/runtime-schema-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/notion.com/2026-03-11/throttling-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml"
       ],
       "selection": {
         "oauthSecurityScheme": "notionOAuth"

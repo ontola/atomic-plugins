@@ -102,12 +102,17 @@ class SpotifyThrottlingTests(unittest.TestCase):
                 self.assertIsNone(throttling.classify(self.composed, status, {"Retry-After": "7"},
                                                       {"error": {"status": status, "message": "x"}}, NOW))
 
-    def test_no_dated_catalog_selects_the_overlay(self):
-        # Whoever adds the overlay to a dated catalog changes this test.
+    def test_only_the_syncables_0_22_catalog_selects_the_overlay(self):
+        # catalog/2026-10-12-syncables-0.22.json selects it last for spotify.
         name = OVERLAY.rsplit("/", 1)[1]
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
-                self.assertNotIn(name, catalog.read_text(encoding="utf-8"))
+                text = catalog.read_text(encoding="utf-8")
+                if catalog.name != "2026-10-12-syncables-0.22.json":
+                    self.assertNotIn(name, text)
+                    continue
+                spotify = next(p for p in json.loads(text)["platforms"] if p["name"] == "spotify")
+                self.assertEqual(spotify["overlays"][-1].rsplit("/", 1)[1], name)
 
 
 if __name__ == "__main__":
