@@ -44,6 +44,22 @@ OVERLAYS = [FOLDER + f"crud-causality-{PIN}-overlay.yaml", FOLDER + f"pagination
             FOLDER + f"completeness-{PIN}-overlay.yaml"]
 
 
+# The findings of the published crud-causality v1 (`patchFormat: merge`, and
+# label writes without a patchFormat), as overlays/tests/test_crud_reads_in_catalogs.py
+# lists them.
+KNOWN_V1_ERRORS = {
+    "paths./repos/{owner}/{repo}/issues/{issue_number}.patch.x-crud.patchFormat: "
+    "'merge' is not one of jsonPatch, jsonMergePatch, custom (§4.6)",
+    "paths./repos/{owner}/{repo}/issues/comments/{comment_id}.patch.x-crud.patchFormat: "
+    "'merge' is not one of jsonPatch, jsonMergePatch, custom (§4.6)",
+}
+KNOWN_V1_WARNINGS = {
+    "paths./repos/{owner}/{repo}/issues/{issue_number}/labels.post.x-crud: mode patch without patchFormat (rule 6, SHOULD)",
+    "paths./repos/{owner}/{repo}/issues/{issue_number}/labels/{name}.delete.x-crud: "
+    "mode patch without patchFormat (rule 6, SHOULD)",
+}
+
+
 class GitHubIssuesCompletenessTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -61,7 +77,17 @@ class GitHubIssuesCompletenessTests(unittest.TestCase):
 
     def test_composition_passes_the_validators_in_either_order(self):
         completeness.validate(self.composed)
-        crud.validate(self.composed)
+        # crud-causality v1 is published and cannot change; a CRUD Causality
+        # validator that checks patch formats reports these, and only these
+        # (crud-causality-v2-9c5cfb87… removes them).
+        warnings = []
+        try:
+            crud.validate(self.composed, warnings)
+            errors = []
+        except ValueError as raised:
+            errors = str(raised).splitlines()
+        self.assertLessEqual(set(errors), KNOWN_V1_ERRORS)
+        self.assertLessEqual({w for w in warnings if "patchFormat" in w}, KNOWN_V1_WARNINGS)
         reordered = copy.deepcopy(self.original)
         for overlay in [self.overlays[-1], *self.overlays[:-1]]:
             apply(reordered, overlay)
