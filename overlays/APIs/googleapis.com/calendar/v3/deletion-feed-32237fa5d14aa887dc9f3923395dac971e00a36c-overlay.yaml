@@ -1,0 +1,59 @@
+# Reviewed 2026-10-13 against the pinned OAD and official provider documentation; no live calls.
+# Source: the pinned OAD's calendar.events.list parameter syncToken: "Token obtained from the
+#   nextSyncToken field returned on the last page of results from the previous list request.
+#   It makes the result of this list request contain only entries that have changed since
+#   then. All events deleted since the previous list request will always be in the result set
+#   and it is not allowed to set showDeleted to False."; Event.status "cancelled" - "The event
+#   is cancelled (deleted)".
+# Source: https://developers.google.com/workspace/calendar/api/guides/sync ("If the result set
+#   is too large and the response gets paginated, then the nextSyncToken field is present only
+#   on the very last page."; "The result will always contain deleted entries"; an invalidated
+#   token is answered with "a response code 410", which "should trigger a full wipe of the
+#   client's store and a new full sync"; "Each list request should use the same set of query
+#   parameters, including the initial request.").
+# Needs Deletion Feeds 0.2.0-draft (openapi-extensions/spec/deletion-feeds, x-deletion-feed).
+# Compose with a Calendar crud-causality overlay (app-crud-causality or its v2): this one
+# deep-merges into its `events` collection. Select it with the read-tombstone overlay
+# (read-tombstone-32237fa5...): a tombstone means a deletion that the event's own read
+# reports as a read tombstone (status cancelled), not as a 404 (Deletion Feeds §4.3).
+#
+# The feed is the event list itself, read with the cursor (syncToken) and pageToken only.
+# That fits this version of the extension, whose §8 lists "Google Calendar's showDeleted" as
+# a fixed query parameter a feed would need: with a syncToken the deleted events are in the
+# result whatever showDeleted says, and a cursor-less feed read (the first) may leave
+# deletions out, which §4.1 allows. Every feed read sends the same parameters (none but the
+# cursor and the page token), as the sync guide asks. A cancelled exception of a recurring
+# event (one instance, its own id) is a tombstone for that instance; the series is another
+# event (see the read-tombstone overlay's comment).
+# Not verified, and not documented: that a feed read returns an event at most once (the
+# extension asks that the last item about an object be the newest; with one item per event
+# that holds).
+overlay: 1.0.0
+info:
+  title: Google Calendar v3 event list as a deletion feed
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32237fa5d14aa887dc9f3923395dac971e00a36c/APIs/googleapis.com/calendar/v3/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        event:
+          collections:
+            events:
+              x-deletion-feed:
+                operationId: calendar.events.list
+                envelope:
+                  itemsField: items
+                cursor:
+                  parameter: syncToken
+                  responseField: nextSyncToken
+                  expiredStatuses: [410]
+                tombstone:
+                  field: status
+                  values: [cancelled]
+                description: >-
+                  The event list with syncToken: "All events deleted since the
+                  previous list request will always be in the result set";
+                  nextSyncToken is on the last page; an invalidated token is
+                  answered 410, after which the next read has no cursor.
+                  Cancelled events are the tombstones.

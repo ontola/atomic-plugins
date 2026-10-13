@@ -173,8 +173,8 @@ drive app lists with `showDeleted=true`. It is declared on the operation, so it
 applies with either crud-causality overlay, and no dated catalog selects
 it yet. syncables reads it (`x-read-tombstone`, since #330): when a pending
 edit's event is missing from a complete read and its GET answers
-`status: cancelled`, the edit fails as `deleted` rather than `filtered`. No
-deletion feed over the event list is declared (Deletion Feeds §8).
+`status: cancelled`, the edit fails as `deleted` rather than `filtered`. The
+event list as a deletion feed is declared separately (below).
 `tests/test_calendar_read_tombstone.py` composes it after the catalog's
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
@@ -193,6 +193,26 @@ Calendar overlay through the syncables client. No provider was called.
 | --- | --- | --- |
 | [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
 | [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
+
+## Google Calendar deletion feed
+
+[Google Calendar v3 deletion feed](APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Deletion Feeds 0.2.0-draft](../openapi-extensions/spec/deletion-feeds/README.md)
+`x-deletion-feed` on the `events` collection: the feed is the event list
+itself (`calendar.events.list`), read with the cursor `syncToken` and its
+pages only; the cursor for the next read is `nextSyncToken`, "present only
+on the very last page"; a 410 ("sync tokens are invalidated") drops the
+cursor; cancelled events are the tombstones. The pinned document's
+`syncToken` says "All events deleted since the previous list request will
+always be in the result set and it is not allowed to set showDeleted to
+False", so the feed needs no `showDeleted`, and every feed read sends the
+same parameters, as Google's
+[sync guide](https://developers.google.com/workspace/calendar/api/guides/sync)
+asks. It composes with either Calendar crud-causality overlay and is meant
+to be selected with the read-tombstone overlay above. Not documented: that a
+feed read returns an event at most once. No dated catalog selects it yet.
+`tests/test_calendar_deletion_feed.py` checks the declaration against the
+composed document and the pinned wording. No provider was called.
 
 ## Google Calendar throttling
 

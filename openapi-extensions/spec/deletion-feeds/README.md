@@ -42,11 +42,12 @@ The documents below are the OpenAPI documents that overlays in this
 repository's [`overlays/APIs/`](../../../overlays/APIs/) extend, at the
 `ontola/openapi-directory` commit those overlays pin. What is described here
 is what those documents state; none of it has been checked against the live
-APIs. No overlay declares `x-deletion-feed`; one declares
-`x-read-tombstone`, Google Calendar's
+APIs. Two overlays declare them, both for Google Calendar:
 [`read-tombstone-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
-(`status: cancelled` on the event read, from the document's own
-description), which no dated catalog selects yet.
+(`x-read-tombstone`, `status: cancelled` on the event read, from the
+document's own description) and
+[`deletion-feed-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(`x-deletion-feed`, the event list read with `syncToken`).
 
 | API (document) | Feed | Cursor | Tombstone |
 |----------------|------|--------|-----------|
@@ -66,9 +67,12 @@ nor verified, as for Box below. The others do not fit (yet):
 * Google Calendar's cancelled events are returned by the event's own `get`
   (a 2xx with `status: cancelled`), and an organizer's can be restored. They
   fit §4.3 only when the event resource declares that marker in
-  `x-read-tombstone` (§4.4). Whether its event list then fits
-  `x-deletion-feed` as well is not settled here (§8 lists its `showDeleted`
-  parameter), and neither declaration has live evidence.
+  `x-read-tombstone` (§4.4). Its event list fits `x-deletion-feed` when
+  read with the cursor alone: the document's `syncToken` says "All events
+  deleted since the previous list request will always be in the result
+  set and it is not allowed to set showDeleted to False", so the feed needs
+  no `showDeleted`, and a cursor-less read may leave deletions out (§4.1).
+  Neither declaration has live evidence.
 * Asana's `GET /events` needs the required query parameter `resource`; fixed
   query parameters of a feed are not covered (§8), so a consumer that sends
   only the cursor gets an error.
@@ -437,7 +441,9 @@ declaration for it.
   item (Stripe's `ending_before`).
 * Feeds whose items come newest first.
 * Cursors in a header or a request body, and fixed query parameters that the
-  feed needs (Asana's required `resource`, Google Calendar's `showDeleted`).
+  feed needs (Asana's required `resource`). Google Calendar's `showDeleted`
+  is not one: a read with its `syncToken` returns deleted events whatever it
+  says.
 * Tombstones in responses other than the `read` operation's: a list read
   that returns deleted objects with the marker (Google Calendar's
   `showDeleted`), or a write answered 2xx with one. `x-read-tombstone`
