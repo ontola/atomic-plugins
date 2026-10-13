@@ -28,15 +28,20 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.5.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber`, `pageToken`, `nextLink` and `rangeWindow` types, `linkResolution`, and a scheme's `response.envelope`. Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.7.1 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, and a scheme's `response.envelope` (with `emptyWhenAbsent`). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.5.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
-| [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`. |
+| [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
+| [Filtering](../openapi-extensions/spec/filtering/README.md) | 0.2.0-draft | `x-time-zone` on list query parameters, with their `x-filter` field and operator for the covered spans. Not `x-filter` or `x-collection-scope` otherwise. |
+| [Write Preconditions](../openapi-extensions/spec/write-preconditions/README.md) | 0.1.0-draft | `x-write-precondition` on create, update and delete operations: `ifMatch`, `readVerify` and `refuseWhen` ([below](#write-preconditions-x-write-precondition)). Not on a compound create's follow-up operations. |
+| [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.1-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
+| [Webhook Deliveries](../openapi-extensions/spec/webhook-deliveries/README.md) | 0.1.0-draft | The `events` of `x-webhook-deliveries`, read by `scopedReads` only (the webhook inbox consumer). Not signature checks or hook registration, which are the receiver's. |
+| [Webhook Subscriptions](../openapi-extensions/spec/webhook-subscriptions/README.md) | 0.1.0-draft | The consumer routes, through `InboxClient` and `InboxConsumer`. The root `x-webhook-subscriptions` field is not read. |
 
-The other specifications there (Filtering, the authentication and webhook
-extensions) are not read by Syncables.
+The other specifications there (the authentication extensions) are not read
+by Syncables.
 
 These are sources of descriptions and conventions, not three npm packages
 you must install. Once you have a composed document, Syncables uses it locally;
@@ -230,9 +235,12 @@ changes within two days are not told apart.
 immediately and return, then apply themselves against the server in the
 background. Confirmed provider state is separate from pending local intent;
 refreshes and older write responses replay remaining mutations rather than
-replacing newer local edits. Updates use the item's declared PUT, or PATCH
-when PUT is absent. The chosen operation's CRUD Causality `x-crud` (an
-`update` for the same resource; §4.3 `mode`, §4.6 `patchFormat`) sets the
+replacing newer local edits. Updates use the item path's operation that
+declares CRUD Causality `x-crud: { action: update }` for the record's
+resource: when exactly one of its PUT and PATCH does, that one; when both
+do, the PUT; when neither does (or in a legacy document, without
+`components.crudResources`), the PUT, or the PATCH when there is no PUT.
+The chosen operation's `x-crud` (§4.3 `mode`, §4.6 `patchFormat`) sets the
 body:
 
 - `mode: replace`, no `x-crud`, or a legacy document (no
@@ -254,9 +262,11 @@ body:
 - `patchFormat: custom`, or `mode: patch` without `patchFormat`: the full
   record, as for `replace`. Whether the provider accepts that is not checked.
 
-A declared PUT is chosen even when the item's PATCH is declared as a merge
-patch, so such a document still sends full records; preferring the merge
-patch there is a possible follow-up, not done.
+With both declared, the PUT is chosen even when the PATCH is declared as a
+merge patch, so such a document still sends full records; preferring the
+merge patch there is a possible follow-up, not done. A PATCH declared with
+`patchFormat: jsonPatch` beside an undeclared PUT is followed: `update()`
+throws.
 
 A merge-patch edit records the confirmed values of the top-level fields it
 names, so a remote change anywhere inside a nested object it patches is
@@ -1780,276 +1790,252 @@ collections, as for `readCollections`.
 The main `syncables` entry exports the same functions, with `paginate`
 renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
+### Produced classes (`x-produces`)
+
+A CRUD resource may declare the shared classes its objects can be
+represented as, by subject IRI, each with an optional lens IRI (the draft
+[Produced Classes extension](../openapi-extensions/spec/produced-classes/README.md)
+0.1.0). Syncables reads the declaration as metadata only: it fetches no
+class or lens, and maps no record.
+
+- `producedClasses(document)` lists each resource that declares
+  `x-produces` (in `components.crudResources`, or a Swagger 2.0 document's
+  root `x-crudResources`) with its `classes` (`class`, `lens`?,
+  `description`?; `x-*` fields left out), or, when the declaration breaks
+  §7 rules 2–6, its `errors` and no classes. A declaration anywhere else is
+  not read.
+- `resourcesProducing(document, classIri)` gives the resources whose
+  declaration names that class, compared as §3 says (the scheme and host
+  case-insensitively, the rest exactly): the resources to offer for a table
+  of that class.
+- `ReadCollection.produces` carries a resource's classes on each of its
+  collections, and `ApiClient.produces(name)` returns them for a collection
+  name, a legacy collection path or a CRUD resource key (a copy; empty when
+  none are declared, the declaration does not parse, or the name names
+  nothing).
+- `lensFits(produced, lens, { provider, resource })` checks a lens document
+  the caller fetched itself (§4.2): when it names a target, that must be a
+  `target.class` that is the entry's class; when it names a source, that
+  must be the provider record `source.record.provider` and `.resource`
+  (`provider` is the openapi-directory key, `clockify.me`, as the catalog
+  lenses under `ontology/lenses/` name it). An entry whose lens does not fit
+  is to be treated as having none. The lens document's `@id` is not compared
+  with the entry's `lens`.
+- `checkProduces`, `parseProduces`, `absoluteIri` and `sameSubject` are the
+  spec `validate.py`'s `check_list`, `absolute_uri` and `same_subject`.
+
+Not verified against a real provider: no overlay declares `x-produces` yet.
+
 ## Changelog
 
-- **Unreleased**: Pacing under the quotas `x-throttling` announces
-  (pieces.md K2). Where a Limit Object states `requests`, the client sends
-  at most `paceFraction` (default 0.8) of them per window of each bucket a
-  request's operation selects. A `fixed` window without an `anchor` is
-  paced as sliding. Requests are counted when sent. Reads wait within
-  their time limit, and writes are held without failing or counting an
-  attempt. Only this client's own requests are counted, in memory. On by
-  default; `pace: false` turns it off. `ThrottlingDeclaration` gains
-  `quotas`, and `Pacer` and `Quota` are exported. Behaviour change only
-  for documents whose `x-throttling` limits state `requests`.
-- **Unreleased**: the webhook inbox consumer in `syncables/browser`, for
-  atomic-server's QuickJS sandbox (ontola/atomic-plugins#369 step 4b):
-  `InboxClient`, `InboxConsumer` and `scopedReads` need no `URL`,
-  `Buffer` or `TextDecoder`; `acknowledge: 'next-step'` acknowledges and
-  reports a reconciliation only on the step after the writes landed.
-  `InboxClient` now refuses a base URL
-  that is not canonical (a lower-case host, no default port, no query,
-  fragment, user info, escape or dot segment) and strips every trailing
-  `/` from it, not only one. `InboxError.backoff()` also covers a `409
-  obsolete-generation`, and `parseRetryAfter` follows the client's
-  `Retry-After` rules (`parseHttpDate`, 2^53 − 1).
-- **Unreleased**: An `itemCount` offset read (the default `advance`)
-  without a `totalCount` no longer stops after its first page (#495). It
-  read short, with no error and without being reported incomplete. It now
-  reads on, adding the items each page held, to the first empty page, as
-  Pagination Schemes 0.7.0 §4.3.2 says. With a `totalCount` it ends once
-  the next offset reaches it, as before. The repeat check ends a read
-  whose server ignores the offset.
-
-- **Unreleased**: Pagination Schemes 0.7.1 §4.3.2: in a scheme that
-  declares both an offset and a `nextLink` field, the link leads under
-  either `advance`. The client follows it while there is one. An absent,
-  `null` or empty link ends the read. When the last response's
-  `totalCount` exceeds the items read, the read still ends there, but is
-  not complete (`notComplete`), so nothing is concluded about records it
-  did not return. Before, under `advance: pageSize`, the read stepped from an
-  offset that was not advanced while links were followed. It then asked
-  for a page it already had and ended with an error.
-- **Unreleased**: Pagination Schemes 0.7.0 `emptyWhenAbsent` on an
-  Envelope Object (a scheme's `response.envelope` or a Collection Object's
-  `envelope`): with a non-empty `itemsField`, a body in which that field is
-  absent is a page with no items instead of an error. `paginate` takes
-  `emptyWhenAbsent` next to `itemsField`; `ApiClient.paginate` takes it from
-  the collection envelope it uses. The scheme validator checks rule 23.
-- **Unreleased**: Pagination Schemes 0.7.0 `advance` on an `offset` field:
-  `pageSize` makes the next offset add the page size (a reported
-  `pageSize` field, else the size sent) instead of the items the page held,
-  and ends the read only once it reaches `totalCount` (without one, at an
-  empty page); a short or empty page before that no longer ends it. With
-  neither page size known the read ends with an error. A reported page size
-  counts only as an integer of at least 1 and a `totalCount` as an integer
-  of at least 0, read per response. `itemCount`, the default, steps as
-  before. Every offset read (`paginate` and `ApiClient.paginate` too, not
-  only a collection read) now ends with `PageReadError` at a page holding an
-  item an earlier page returned (by identity, else a page identical to the
-  one before), so a server that ignores the offset is not asked again
-  without end. The scheme validator checks rule 24 and
-  `resolveEffectiveScheme` rule 25.
-- **Unreleased**: Write Preconditions 0.1.0-draft (`x-write-precondition`)
-  on create, update and delete operations: `ifMatch` sends the version
-  (from the record, or an item GET when it is a header) and stops on a
-  `conflictStatus`; `readVerify` reads first, stops on a changed written
-  field and builds a full-record PUT on that read; `refuseWhen` (and its
-  `source` objects, fail closed) stops a write the object refuses; an
-  update's 404/410 stops as `gone`, a delete's settles only when the
-  deletion is confirmed and is otherwise reported `unavailable` with the
-  new `source: 'write'`; an unknown outcome is resolved by a read before
-  anything is sent again (`precondition: 'resolving'`, also after a
-  restart). `PendingWriteInfo.precondition` (`WritePreconditionState`) and
-  the outbox's `precondition` and `sentVersion` (within version `1`) are
-  new; an unusable declaration makes the write call throw. Behaviour
-  change only for documents that declare `x-write-precondition`.
-- **Unreleased**: Throttling values are read more strictly, as the spec
-  follow-up says: only space, tab, CR and LF are trimmed from a header or
-  body value (U+00A0 and other Unicode spaces are kept, so the value does
-  not parse), an integer above 2^53 − 1 does not parse, integral floats
-  included, and an HTTP-date parses only in RFC 9110's exact forms
-  (`parseHttpDate`), not through `Date.parse`. The same applies to the `Retry-After` of a retryable
-  answer outside `x-throttling`, which before took any long digit string
-  and capped the wait at `retry.maxRetryAfterMs`.
-- **Unreleased**: `parseHttpDate` fixes: a leap second (`23:59:60`) reads
-  as the next second instead of failing the day check, a 4-digit year below
-  100 keeps its value (`0050` was read as 1950), and the RFC 850
-  "more than 50 years ahead" rule compares full dates, not only years.
-- **Unreleased**: `PresenceMark.lastSeen`: when a read last returned the
-  record (the start of that sync), stored with the mark in the outbox
-  (within version 1; an older client drops it); absent for a record no read
-  of this client returned.
-- **Unreleased**: Presence marks (K4/K5): under `absent: removed` (and
-  wherever a check will be made) a record a complete read lacks is kept,
-  marked `unconfirmed`, before its check, then marked `unavailable`,
-  removed (`deleted`, `removed`) or left `unconfirmed`; `retainDeleted`
-  keeps deleted records marked; checks of records without writes are capped
-  at `maxMissingRecordChecks` (default 50) and unconfirmed records are
-  checked first next sync; a parent whose nested collection declares
-  `parentAbsent` is checked without writes under it; `client.presence()`
-  lists the marks; `PresenceChange` gains `present`, `unconfirmed`,
-  `unavailable` and `pruned: false`, told once per record per sync. The
-  outbox's `unavailable` entries gain `presence` and `source` (within
-  version 1; an older client reads every kept record as unavailable).
-  Behaviour changes: under `missingRecordChecks: 'all'` a vanished record
-  is kept until its check instead of removed first; a vanished parent
-  without writes under it is now checked by default.
-- **Unreleased**: Tell before prune: a record a complete `sync()` removes
-  from the local copy (no longer returned, no unsettled writes) is told to
-  the new `onPresence` handler, awaited, before it is removed, and listed on
-  the new `SyncResult.presence` (`PresenceChange`: `deleted` under
-  `absent: deleted`, else `removed`, with the last values). A failing
-  handler applies nothing of that read and the next sync tells again.
-  Before, under the default `missingRecordChecks: 'pending'`, the app was
-  never told.
-- **Unreleased**: Compound creates (CRUD Causality 0.5.0 §4.7, K8): a
-  create's `followUps` leave `omit` fields out of the create body and, once
-  the create is bound, queue one follow-up update per field, sent in order
-  with only what the created record does not show (`bind`, `itemKey`). A
-  refused follow-up leaves the create partly applied (`followUp.reason`
-  `refused`, later ones `notSent`), an unknown outcome waits for a read of
-  the record, and the create is never sent again. A follow-up's `403` is a
-  refusal of that follow-up by default, not an auth block
-  (`WriteFailure.followUp`). A `followUps` the client cannot use makes
-  `create()` throw. `PendingWriteInfo.followUp` is new;
-  the outbox stores follow-ups as the write type `followUp` within version
-  `1`. Behaviour change only for documents whose create declares
-  `followUps`. Also: a read waiting out an exhausted bucket no longer
-  sleeps twice for one pause when the clock ticks between two readings
-  (`waitOutPauses` compares the pause's own end).
-- **Unreleased**: Collection Completeness §7: a 404 or 410 for a record
-  whose collection declares an `absent` the client does not recognise is
-  classified by the resource's stated `gone` (a 410), then its stated
-  `notFound`, and otherwise `unavailable` (fail closed), as the reference
-  `classify_read` reads it, not the `deleted` default.
-- **Unreleased**: Collection Completeness 0.3.0 `gone`: a 410 from the GET
-  of a missing record means the resource's stated `gone` (resource-wide,
-  like `notFound`; `route.gone`), else what `notFound` says.
-- **Unreleased**: Throttling 0.3.0-draft `bodyFields` (#454, with #463's
-  follow-up rules): the header roles read from the JSON body of a throttling
-  response, by literal dot-path. A string is trimmed and an integral number
-  (`3.0`) reads as an integer; a body wait of `0`, or a time not after the
-  response, counts as absent; a role from both a header and a body field
-  takes the later time, and `remaining` is exhausted when either is `0`.
-  `ThrottlingDeclaration` gains `bodyFields`. Tested on the spec's cases and
-  the held Todoist overlay's `error_extra.retry_after`.
-- **Unreleased**: `readCollections` (and so `sync()`) sends a
-  `rangeWindow` read's bounds to `x-time-zone` parameters as wall-clock
-  time in their zone, read once before and once after the read; a window
-  format other than `dateTime` on such a parameter fails the read; the
-  coverage is the outer range's, per `x-filter` field (14 hours off the
-  outer ends for an unknown zone), kept with `reason: 'incomplete'` when
-  the read finishes; a zoned `windowRange` parameter gives
-  `noRangePredicate`. Other reads that are not complete still get
-  `spans: null`.
-- **Unreleased**: Declared create results (CRUD Causality §4.3.2,
-  §4.4–4.5): `generated` `addedFields` are not sent in the create body; the
-  created identity is read from the declared `url` source (a header such as
-  `Location`, a body field, or the body for `template`) through the
-  identity template in reverse; a 2xx whose identity cannot be determined
-  leaves the create `uncertain` and `unbound` (stored, `pendingWrites()`),
-  never sent again; `retry` refuses it. Behaviour change only for
-  documents whose create operation declares `x-crud`.
-- **Unreleased**: Collection Completeness 0.2.0 §4.3, `notFound`: a 404
-  or 410 from the GET of a record a complete refresh no longer returned
-  means `deleted` by default, as before, or, when the record's resource
-  states `notFound: unavailable` through any of its collections (or states
-  conflicting or unrecognised values), the new
-  evidence `unavailable`: the caller can no longer read the record and the
-  API does not say why. It is never reported as deleted; the record keeps
-  its last known values, and its queued updates fail with
-  `missingRecord: 'unavailable'` (`lastError` "unavailable at the
-  provider"), held for `resolveWrite` rather than sent. A tombstone in the
-  collection's deletion feed stands over it. `MissingRecordFailure` names
-  the three `missingRecord` values. The outbox stores the new value within
-  version `1`. §4.4, `parentAbsent`, on a nested collection's Collection
-  Object: once a parent record is concluded deleted or unavailable (by its
-  declaration, the GET or a feed tombstone), the records last read under
-  it are concluded `unavailable` (never `deleted`, whatever the value)
-  without a request, unless this sync read them under another parent,
-  reported with
-  `source: 'parent'`, and their held updates fail accordingly; nothing is
-  pruned. The default `missingRecordChecks: 'pending'` now also checks a
-  vanished parent record without writes when such a nested collection has
-  unsettled writes under it. The declaration is ignored with two or more
-  parent resources or an unrecognised `absent`. Under
-  `unavailable`, every write queued for the record fails, deletes included,
-  and a create is parked; a nested scope whose parent is gone is marked
-  until it is read again, and a new `update()` or `create()` into it is
-  concluded at once. An unrecognised `notFound` value is read as
-  `unavailable`. `unavailable` reports carry `record`, the last known
-  values.
-  Follow-ups from the #399 review: an unavailable record is kept with its
-  last known values (also without writes and after a discard), stored in
-  the outbox, until a read settles it, and new writes to it are held;
-  `remove()` into a gone parent's scope is held and concluded; a queued
-  delete of a missing record is checked before it is sent; the parent
-  mark's exemption needs the full identity; a list operation's `notFound`
-  counts for fixed-read collections too.
-- **Unreleased**: `walkPages` takes `windowValue(parameter, bound)`, which
-  converts each query window bound of a `rangeWindow` read before it is
-  sent (a parameter the API reads as wall-clock time in a zone); bounds
-  are still split as instants, and a window whose converted bounds are out
-  of order (inside a repeated hour) ends the read with `WindowReadError`.
-- **Unreleased**: Filtering 0.2.0-draft `x-time-zone` on list query
-  parameters: the zone is read (a fixed name, or another operation's
-  response at a pointer) once per read and again after it, values are sent
-  as wall-clock digits plus `suffix`, and the covered UTC spans (per
-  `x-filter` field, with inclusive ends) are reported
-  on `CollectionSnapshot.coverage` and `SyncResult.coverage` (new), with
-  the 14-hour narrowing when the zone cannot be read and the span discarded
-  when the zone changed. `wallClockParam`, `instantsOf` and `coveredSpan`
-  are exported. Behaviour change only for documents that declare
-  `x-time-zone`: their values are now converted, and a value without `Z`
-  or an offset fails the read.
-- **Unreleased**: Update modes from CRUD Causality 0.4.0 (§4.3 `mode`,
-  §4.6 `patchFormat`) on the chosen update operation's `x-crud` (PUT still
-  preferred, else PATCH; an `x-crud` naming another resource is ignored).
-  `mode: patch, patchFormat: jsonMergePatch` sends the changes alone as an
-  RFC 7396 merge patch (`application/merge-patch+json` when the operation
-  declares it, else `application/json`) and applies RFC 7396 locally
-  (`null` removes a field, nested objects merge) in `update()`'s returned
-  record, the visible record and the queue's replay. `patchFormat:
-  jsonPatch` makes `update()` throw. `replace`, `custom`, `mode: patch`
-  without a `patchFormat`, no `x-crud` and legacy documents keep the full
-  record. `mergePatch` is exported from both entries. Behaviour change only
-  for documents that declare `jsonMergePatch` or `jsonPatch` on their
-  update operation. Conflict checks, superseding and `retry` follow the
-  merge patch's nested members; each update stores its body format
-  (`updateBody`, added within outbox version 1), and one restored under a
-  document that declares another format fails instead of being
-  reinterpreted. `mergePatch` treats a `__proto__` member as data.
-- **Unreleased**: A page size sent is capped at the pageSize parameter's
-  documented `maximum`; `paginate` takes `idField` to keep an item two
-  windows return once (items without it are kept as is); a walk's outcome
-  is not complete until it ends normally; a malformed window bound throws
-  `WindowReadError`; the mock server answers full pages of a numeric
-  `shortPage.size`.
-- **Unreleased**: `sync()` applies reads that ended without an error but
-  are not complete (range windows, short pages whose end is not documented)
-  by adding and updating their records only, never removing or checking an
-  absent one, and lists them in `SyncResult.incomplete` (`IncompleteRead`).
-  `ApiClientOptions.ranges` passes the range for `rangeWindow` collections.
-- **Unreleased**: Zero-based page numbers (`start` on a `page` field) and
-  short-page ends (`shortPage` on a `pageNumber` scheme), Pagination Schemes
-  0.6.0: a short page ends the list, an oversized page or an item an
-  earlier page returned ends the read with `PageReadError`, a short page
-  that `totalPages`/`totalCount` contradicts is an error under `documented`
-  and not complete otherwise, a `totalPages` (a count from `start`) or
-  `totalCount` end on a full page is complete, `currentPage` is numbered
-  like the page field, and only `assurance: documented` makes such a
-  read complete. The validator checks §9 rules 19–21 and
-  `resolveEffectiveScheme` rule 22. Exports `PageReadError` and
-  `ShortPageObject`.
-- **Unreleased**: Runtime Schemas classes in `readPlatform` and `sync()`:
-  `ReadResult.describers` and `ReadRecord.runtime`; `SyncResult.describers`
-  and `ApiClient.runtimeMembers(resource, id, context?)`, the members of a
-  record's latest complete read. A describer that cannot be read is a
-  `SyncResult.warnings` entry, not a reason for `sync()` to throw, and its
-  items' members have `noClass: true`; `CollectionReadResult.describerErrors`
-  names those entries of `errors`.
-- **Unreleased**: Runtime Schemas 0.1.0-draft (`x-runtime-schema`, #398):
-  `readCollections` reads the describer each item's reference names (once
-  per read for each resource and path, at most once more for a member
-  matching no definition) and returns the derived classes
-  (`CollectionReadResult.describers`) and each item's interpreted members
-  (`CollectionSnapshot.runtimeMembers`), keeping unmatched, undescribed,
-  invalid and conflicting members apart and never writing `null` for an
-  absent value. A describer it cannot read is named in `errors`; a
-  declaration it cannot use fails that resource's collections. Both fields
-  are absent for a document without the extension. Types `RuntimeClass`,
-  `RuntimeDescriber`, `RuntimeMembers` and `RuntimeProperty` are exported.
+- **Unreleased**: Produced Classes 0.1.1-draft: an IRI holding a C1
+  control character (U+0080–U+009F) or U+FEFF is not absolute, as the
+  spec's validator now says too (U+FEFF was refused before and U+0085 was
+  accepted; the rest of C1 was accepted). `ApiClient.produces(name)` also
+  takes a CRUD resource key, and returns nothing for an unknown name
+  instead of throwing.
+- **0.22.0**: Consumer support for new extension revisions (CRUD
+  Causality 0.5.0, Collection Completeness 0.2.0 and 0.3.0, Pagination
+  Schemes 0.6.0, 0.7.0 and 0.7.1, Throttling 0.3.0, Filtering 0.2.0
+  `x-time-zone`, Runtime Schemas 0.1.0, Write Preconditions 0.1.0,
+  Produced Classes 0.1.0). Behaviour changes to know before upgrading, most
+  only for documents that declare the field named; the exceptions say so:
+  - a create whose `x-crud` declares `addedFields: generated` leaves those
+    fields out of its body and reads the created identity as declared; a
+    2xx it cannot bind is `uncertain` and `unbound`, never sent again;
+  - a create with `followUps` sends its follow-up updates after it; a
+    `followUps` the client cannot use makes `create()` throw;
+  - an update operation declaring `jsonMergePatch` sends a merge patch, and
+    one declaring `jsonPatch` makes `update()` throw;
+  - updates use the item-path PUT or PATCH whose `x-crud` declares
+    `action: update` for the resource, over an undeclared one (before, any
+    PUT on the item path); with both declared, the PUT; with neither, the
+    PUT, else the PATCH. Google Calendar's events under the catalog's
+    `app-crud-causality` overlay are now updated by PATCH (the full
+    record), not PUT;
+  - a 404 or 410 of a missing record's read is `unavailable`, not
+    `deleted`, under `notFound: unavailable` or `gone: unavailable`, under
+    an unrecognised `notFound`, `gone` or `absent` (a Completeness Object
+    without `absent` counts as unrecognised), or conflicting values;
+    its queued writes fail and are held for `resolveWrite`;
+  - `parentAbsent` concludes the records under a gone parent
+    `unavailable`, and the default `missingRecordChecks: 'pending'` now
+    also reads a vanished parent with unsettled writes under it;
+  - `absent: removed` now keeps a record a complete read lacks, marked
+    `unconfirmed`, and checks it with a GET, also under the default
+    `missingRecordChecks: 'pending'` (0.21.0 did nothing with
+    `absent: removed`);
+  - `x-time-zone` parameters are sent as wall-clock values; a value
+    without `Z` or an offset fails the read;
+  - a `shortPage` end, an oversized page or a repeated item ends a
+    `pageNumber` read as the spec says, and a page size is capped at the
+    parameter's `maximum`;
+  - for every document with an `offset` scheme: an `itemCount` read (the
+    default) without a `totalCount` reads on to the first empty page
+    instead of stopping after its first page, and every offset read
+    (`paginate` in `syncables/browser`, `paginateOperation` in the main
+    entry, and `ApiClient.paginate` too) ends with `PageReadError` at a page
+    holding an item an earlier page returned (or a page identical to the
+    one before). Items are identified by the `idField` option, default
+    `'id'`, so an offset list in which two items on different pages share
+    an id under that field now fails with `PageReadError` where it used to
+    return both; pass the `idField` that is unique (#512).
+    `advance: pageSize` steps by the page size and ends only at
+    `totalCount` or an empty page;
+  - `sync()` now applies reads that ended without an error but are not
+    complete (range windows, undocumented short pages), adding and
+    updating records only, listed in `SyncResult.incomplete`;
+  - requests an `ApiClient` sends are paced under the quotas
+    `x-throttling` announces, where a Limit Object states `requests` (at
+    most `paceFraction`, default 0.8, per window; on by default,
+    `pace: false` turns it off); standalone `paginate`,
+    `paginateOperation`, `readPlatform` and `readCollections` are not
+    paced;
+  - throttling roles are also read from `bodyFields`; throttling values,
+    and, for any document, the `Retry-After` of any retryable answer, are
+    read strictly: only
+    space, tab, CR and LF are trimmed, an integer above 2^53 − 1 does not
+    parse (before, a long `Retry-After` outside `x-throttling` was capped
+    at `retry.maxRetryAfterMs`), and an HTTP-date parses only in RFC 9110's
+    exact forms, not through `Date.parse` (a leap second reads as the next
+    second, a 4-digit year below 100 keeps its value, and the RFC 850
+    50-year rule compares full dates);
+  - an `x-runtime-schema` the client cannot use fails that resource's
+    collections;
+  - a create, update or delete whose operation declares
+    `x-write-precondition` sends `If-Match`, reads first, or refuses as
+    declared; an update's 404/410 stops as `gone`, a delete settles only
+    when the deletion is confirmed, and an unusable declaration makes the
+    write call throw;
+  - for any document (client options): a record a complete `sync()`
+    removes is told to the new `onPresence` handler, awaited, before it is
+    removed (a failing handler applies nothing of that read); under
+    `missingRecordChecks: 'all'` a vanished record is kept, marked, until
+    its check instead of removed first; `maxMissingRecordChecks` (default
+    50) now caps the checks of records without writes per sync, under
+    `'all'` too; and a vanished parent without writes under it is checked
+    by default when a nested collection declares `parentAbsent`.
+  Outbox changes within version `1` that matter for a downgrade: the write
+  value `missingRecord: 'unavailable'` and the write type `followUp` (an
+  older client keeps such a record's writes as unrestorable, neither sent
+  nor lost); the top-level `unavailable` list, with its entries'
+  `presence`, `source` and `lastSeen` (0.21.0, the only published older
+  client, drops the whole list, so its next complete read removes those
+  records locally); `updateBody` (an older client sends a merge-patch
+  update as a full record); `unbound` (an older client's `retry` would send
+  the create again); a write's `precondition` and `sentVersion` (an older client
+  sends it again without its precondition, and does not resolve an unknown
+  outcome by a read first). Settle or discard
+  merge-patch updates, unbound creates, held unavailable writes and
+  compound-create follow-ups and writes under a write precondition before
+  downgrading. Typings: the main entry's declarations now import
+  `node:crypto` (through `signedTransport`), so a TypeScript consumer of
+  `syncables` without `@types/node` and with `skipLibCheck: false` gets
+  TS2307; `syncables/browser` does not import it.
+  - Writes (CRUD Causality 0.4.0 and 0.5.0): declared create results
+    (§4.3.2, §4.4–4.5: `generated` `addedFields` not sent, the identity
+    from the `url` source read through the identity template in reverse,
+    `unbound` creates); update modes (§4.3 `mode`, §4.6 `patchFormat`:
+    RFC 7396 merge patches sent and applied locally, `jsonPatch` refused,
+    `updateBody` stored per update, `mergePatch` exported); compound
+    creates (§4.7: `omit` fields left out, one follow-up per field queued
+    first once the create is bound, sent with only what the created record
+    does not show; a refused follow-up leaves the create partly applied,
+    later ones `notSent`; an unknown outcome is read back before it is sent
+    again; a follow-up's 403 refuses that follow-up, not the credentials;
+    `PendingWriteInfo.followUp`, `WriteFailure.followUp`); the update
+    operation follows `x-crud: { action: update }` (syncables' choice;
+    both declared: PUT).
+  - Write Preconditions 0.1.0-draft (`x-write-precondition`, on create,
+    update and delete operations): `ifMatch` sends the version (from the
+    record, or an item GET when it is a header) and stops on a
+    `conflictStatus`; `readVerify` reads first, stops on a changed written
+    field and builds a full-record PUT on that read; `refuseWhen` (and its
+    `source` objects, fail closed) stops a write the object refuses; an
+    unknown outcome is resolved by a read before anything is sent again
+    (`precondition: 'resolving'`, also after a restart); a delete not
+    confirmed is reported `unavailable` with `source: 'write'`.
+    `PendingWriteInfo.precondition` and `WritePreconditionState` are new.
+  - Missing records (Collection Completeness 0.2.0, 0.3.0, §7): `notFound`
+    and `gone` resource-wide, the evidence `unavailable` (records kept with
+    their last known values, stored, held writes failed, deletes included,
+    creates parked), `parentAbsent` on nested collections (members
+    concluded `unavailable` without a request, `source: 'parent'`), and an
+    unrecognised `absent`, `notFound` or `gone` read as `unavailable`.
+    `MissingRecordFailure` names the three values; reports carry `record`.
+  - Reads and pagination: Pagination Schemes 0.6.0 zero-based page
+    numbers (`start`) and `shortPage` ends (`PageReadError`,
+    `ShortPageObject`, validator rules 19–22); Pagination Schemes 0.7.0
+    `emptyWhenAbsent` on an Envelope Object (a body without the
+    `itemsField` is a page with no items; `paginate` and
+    `ApiClient.paginate` take it), `advance` on an `offset` field
+    (`itemCount`, the default, or `pageSize`; a reported page size counts
+    as an integer of at least 1, a `totalCount` of at least 0; with neither
+    page size known the read ends with an error), the offset repeat check,
+    an `itemCount` read without `totalCount` to the first empty page (#495),
+    validator rules 23–25; Pagination Schemes 0.7.1: in a scheme with both
+    an offset and a `nextLink` field the link leads under either `advance`,
+    an absent, `null` or empty link ends the read, and a read that ends
+    there with `totalCount` above the items read is not complete. The page
+    size capped at the
+    parameter's `maximum`; `paginate` takes `idField` for windowed reads;
+    `walkPages` takes `windowValue`; incomplete reads applied by `sync()`
+    (`SyncResult.incomplete`, `IncompleteRead`, `ApiClientOptions.ranges`);
+    Filtering 0.2.0 `x-time-zone` (the zone read before and after a read,
+    wall-clock values, coverage on `CollectionSnapshot.coverage` and
+    `SyncResult.coverage`, also for `rangeWindow` reads; `wallClockParam`,
+    `instantsOf` and `coveredSpan` exported).
+  - Presence (Collection Completeness K4/K5): tell before prune
+    (`onPresence`, `SyncResult.presence`, `PresenceChange` with `deleted`
+    or `removed` and the last values); presence marks under
+    `absent: removed` and wherever a check will be made (`unconfirmed`,
+    then `unavailable`, removed or left `unconfirmed`; `retainDeleted`;
+    `maxMissingRecordChecks`, default 50, unconfirmed records checked
+    first; `client.presence()`; `PresenceChange` gains `present`,
+    `unconfirmed`, `unavailable` and `pruned: false`); `PresenceMark.lastSeen`,
+    when a read last returned the record.
+  - Throttling 0.3.0: `bodyFields` (roles read from a throttling response's
+    JSON body by literal dot-path; a body wait of no time counts as absent;
+    `ThrottlingDeclaration.bodyFields`); pacing under announced quotas
+    (pieces.md K2: per bucket an operation selects, a `fixed` window
+    without an `anchor` paced as sliding, requests counted when sent, reads
+    waiting within their time limit, writes held without failing or
+    counting an attempt, only this client's own requests counted, in
+    memory; `ThrottlingDeclaration.quotas`, `Pacer` and `Quota` exported);
+    the 2^53 − 1 bound, stripping only
+    SP/HT/CR/LF, and HTTP-dates only in RFC 9110's three exact forms (also
+    for the client's own `Retry-After` and `Date` readings). A read waiting
+    out an exhausted bucket no longer sleeps twice for one pause when the
+    clock ticks between two readings.
+  - Runtime Schemas 0.1.0: `readCollections` reads each describer once (at
+    most once more for an unmatched member) and returns the derived
+    classes (`describers`) and each item's members (`runtimeMembers`:
+    values, unmatched, undescribed, invalid, conflicting; `noClass` without
+    a class); `readPlatform` returns them (`ReadResult.describers`,
+    `ReadRecord.runtime`), and `sync()` returns `describers`, keeps
+    describer errors as `SyncResult.warnings` and offers
+    `ApiClient.runtimeMembers()`. `RuntimeClass`, `RuntimeDescriber`,
+    `RuntimeMembers` and `RuntimeProperty` are exported.
+  - Produced Classes 0.1.0-draft (new, read-only metadata): `x-produces`
+    per CRUD resource through `producedClasses`, `resourcesProducing`
+    (the resources for a class, compared as the spec's §3 says),
+    `ReadCollection.produces` and `ApiClient.produces`, and `lensFits` for a
+    lens document the caller fetched (`target.class`,
+    `source.record.provider` and `.resource`); `checkProduces`,
+    `parseProduces`, `absoluteIri` and `sameSubject` are the spec's checks.
+    Nothing is fetched or mapped.
+  - Webhook inbox consumer (new, ontola/atomic-plugins#369 steps 4 and
+    4b; Webhook Subscriptions draft): `InboxClient` for the receiver's
+    consumer routes (it refuses a base URL that is not canonical),
+    `InboxConsumer.step()` (an event is appended to the caller's durable
+    `InboxJournal` before it is acknowledged; a gap, a new subscription or
+    an expiry is followed by the caller's full reconciliation;
+    `acknowledge: 'next-step'` acknowledges only on the step after the
+    writes landed), `InMemoryInboxJournal`, `scopedReads`, and
+    `parseRetryAfter` with the client's `Retry-After` rules. The main entry
+    also exports `signedTransport` (Atomic v2 signatures, `node:crypto`);
+    `syncables/browser` exports the rest, which needs no `URL`, `Buffer`
+    or `TextDecoder`, for atomic-server's QuickJS sandbox.
 - **0.21.0**: Consumer support for new extension revisions (Pagination
   Schemes 0.4.0 and 0.5.0, CRUD Causality 0.4.0, Throttling 0.2.0), and the
   pagination and envelope fixes their reviews found. Behaviour changes to

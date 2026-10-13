@@ -11,7 +11,13 @@ import sys
 FIELD = "x-produces"
 KNOWN = {"class", "lens", "description"}
 SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
-FORBIDDEN = re.compile(r"[\s\x00-\x1f\x7f<>\"{}|\\^`]")
+# §3: whitespace (Unicode White_Space), control characters (C0, DEL, C1) and
+# U+FEFF, and the ASCII characters RFC 3987 excludes. Listed explicitly, so
+# that consumers in other languages can use the same set (Python's \s and
+# JavaScript's \s differ on U+0085 and U+FEFF).
+FORBIDDEN = re.compile(
+    "[\\x00-\\x20\\x7f-\\x9f<>\"{}|\\\\^`\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]"
+)
 
 
 # Keys whose values are data (examples, defaults, enumerations), not
