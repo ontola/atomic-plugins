@@ -179,6 +179,21 @@ deletion feed over the event list is declared (Deletion Feeds §8).
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
 
+## Write preconditions
+
+Two standalone overlays declare [Write Preconditions 0.1.0-draft](../openapi-extensions/spec/write-preconditions/README.md)
+`x-write-precondition`; no dated catalog selects them.
+`tests/test_write_precondition_overlays.py` composes each with its pinned OAD,
+and Calendar's also after each of its crud-causality overlays, and checks the
+reference client logic against what the drive apps do;
+`syncables/__tests__/unit/client/calendar-recurring-refuse.test.ts` runs the
+Calendar overlay through the syncables client. No provider was called.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
+| [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
+
 ## Google Calendar throttling
 
 [Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
