@@ -275,9 +275,14 @@ export interface PaginateOptions {
    */
   range?: WindowRange;
   /**
-   * The item field that identifies an item, for a windowed read: an item
-   * two windows return is kept once. Default `id`; an item without it is
-   * kept as is.
+   * The item field that identifies an item. Default `id`. A windowed read
+   * keeps an item two windows return once. An offset read (Pagination
+   * Schemes 0.7.0 §4.3.2) and a page-number read with `shortPage` (0.6.0
+   * §4.4.5) end with `PageReadError` at a page holding an id an earlier
+   * page returned, so the field must be unique across the list's pages;
+   * two items sharing an id on one page are not checked. An item without
+   * the field is kept as is (a page of items without it is compared with
+   * the page before instead).
    */
   idField?: string;
   limits?: Partial<ReadLimits>;
