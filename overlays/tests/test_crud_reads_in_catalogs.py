@@ -31,13 +31,13 @@ spec.loader.exec_module(crud)
 # (platform, error or warning, message): the findings of published revisions.
 KNOWN = {
     # googleapis.com/calendar/v3/app-crud-causality-32237fa5…: the event PATCH
-    # declares no mode. Removed by an app-crud-causality-v2-32237fa5… revision
-    # (overlays worker 2) once a dated catalog selects it.
+    # declares no mode. Removed by a later app-crud-causality revision (no PR
+    # yet) once a dated catalog selects it.
     ("google-calendar", "error",
      "paths./calendars/{calendarId}/events/{eventId}.patch.x-crud.mode: required for action update (rule 5)"),
     # github.com/github-issues/1.1.4/crud-causality-9c5cfb87…: patchFormat
-    # `merge` is not a §4.6 value. Removed by a crud-causality-v2-9c5cfb87…
-    # revision (overlays worker 2) once a dated catalog selects it.
+    # `merge` is not a §4.6 value. Removed by the crud-causality-v2-9c5cfb87…
+    # revision of #530 once a dated catalog selects it.
     ("github-issues", "error",
      "paths./repos/{owner}/{repo}/issues/{issue_number}.patch.x-crud.patchFormat: "
      "'merge' is not one of jsonPatch, jsonMergePatch, custom (§4.6)"),

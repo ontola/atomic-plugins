@@ -315,6 +315,8 @@ Describes where the newly created object's URL is found.
 
 When `source: template`, the URL is derived by substituting the created object's fields (request body plus `addedFields`) into the resource's `identity.urlTemplate` (§4.1.1), using `identity.bindings` (§4.1.2) to know which field fills which variable.
 
+_Informative:_ some consumers read the `Location` header when a `source: header` object names none (the reference `created_identity` and syncables do), for documents written before 0.6.0 required `name` (rule 26).
+
 Regardless of `source`, once the object's URL is known, `identity.bindings` MAY also be read in reverse: match the URL against `identity.urlTemplate` and treat the captured value for each bound `{variable}` as authoritative for the corresponding object field, even if that field isn't otherwise listed in `addedFields`.
 
 ### 4.4 Added Field Object
@@ -773,7 +775,7 @@ A conforming implementation MUST enforce:
 23. Every `bind` key is `body`, `body.<dot-path>`, or `path.`, `query.` or `header.` followed by the name of a parameter of the follow-up operation (its own or its path item's); `body` and `body.<…>` need the follow-up operation to declare an `application/json` request body, and `body` excludes every `body.<…>` key. Every BindSource has `from` (`created`, `planned` or `missing`) and a dot-path `field`; `missing` is allowed only when its `field` equals the Follow-up Object's `field`.
 24. Every required path parameter of the follow-up operation is bound by a `path.<name>` key or is a path parameter of the create operation with the same name. Every required query or header parameter of the follow-up operation is bound by a `query.<name>` or `header.<name>` key. Header names compare case-insensitively, here and in rule 23.
 25. A CRUD Resource Object MUST have an `identity` when an operation's `x-crud` names it with action `create`, `read`, `update` or `delete`, or a Reference Object's `resource` names it (§4.1). An Identity Object, where present, MUST have a `urlTemplate` (§4.1.1).
-26. A Url Source Object with `source: header` or `source: bodyField` MUST have a `name` (§4.3.2). Consumers that read a header named by nothing (the reference `created_identity` and syncables read `Location`) do so for documents that predate this rule.
+26. A Url Source Object with `source: header` or `source: bodyField` MUST have a `name` (§4.3.2).
 
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paths./widgets.post.x-crud.url`).
@@ -814,7 +816,7 @@ python3 validate.py examples/*.yaml
 
 ## Changes
 
-- **0.6.0** (2026-10-13): `identity` is optional on a resource that nothing addresses one object of (§4.1): no `x-crud` create, read, update or delete names it and no Reference Object targets it. Such a list-only resource is read-only for a consumer, with no record identity beyond what its list items carry. Validation rule 25 states when `identity` is required. A Url Source Object with `source: header` now names its header (rule 26); no published overlay omitted it. The reference validator now checks every rule of §8. A 0.5.0 document stays valid and means the same.
+- **0.6.0** (2026-10-13): `identity` is optional on a resource that nothing addresses one object of (§4.1): no `x-crud` create, read, update or delete names it and no Reference Object targets it. Such a list-only resource is read-only for a consumer, with no record identity beyond what its list items carry. Validation rule 25 states when `identity` is required. A Url Source Object with `source: header` now names its header (rule 26); no published overlay omitted it. The reference validator now checks every rule of §8. A 0.5.0 document stays valid and means the same, with one exception: a Url Source Object with `source: header` and no `name`, which 0.5.0 allowed, now breaks rule 26 (no published overlay in ontola/atomic-plugins has one).
 - **0.5.0** (2026-10-08): adds compound creates (§4.7): `followUps` on a `create` Operation CRUD Object, each naming a field, whether the create body carries it (`include`, possibly silently dropped, or `omit`), the follow-up update that sets it, and how its request is filled (`bind`); the steps of a compound create and its partly-applied state; validation rules 20–24, `compound_create` in the validator, an example and tests. For ontola/atomic-plugins pieces.md K8 (GitHub's issue create and label add). A 0.4.0 document stays valid and means the same.
 - **0.4.0** (2026-10-08): adds `listMethod`, `listQuery` and `listBody` to the
   Collection Object and defines a read of a collection (§4.2.1), with
@@ -836,9 +838,8 @@ returns (under `absent: removed` it keeps such a record marked
 `unconfirmed`, "the record cannot be checked"; otherwise it removes it),
 throws on `update` and `remove`, and takes no path variable for a nested
 collection from the resource's objects. Unlike §4.1 says, syncables 0.22.0
-still sends a `create` when the collection's URL has a `POST` operation
-(its heuristic for documents without `x-crud`); the syncables change on
-branch `claude/syncables-list-only-no-create`, for syncables 0.22.1, makes
-it throw there too.
+(#526) still sends a `create` when the collection's URL has a `POST`
+operation (its heuristic for documents without `x-crud`); #531, for
+syncables 0.22.1, makes it throw there too.
 
 Beyond that, no implementation yet. The motivating use case is a stateful mock API server, such as [`localthought/syncables`](https://github.com/localthought/syncables), driven entirely by this extension: given `crudResources` and `x-crud` annotations, the server can create objects with server-minted URLs and fields, add them to the right collections, serve single objects and paginated collections, apply replace/patch semantics, and delete objects (removing them from every collection they were added to) — without any hand-written business logic.

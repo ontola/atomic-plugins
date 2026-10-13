@@ -74,6 +74,16 @@ class ValidationTests(unittest.TestCase):
         self.invalid(lambda d: collections(d)[0].update(urlTemplate="/tasks"), "no operation")
         self.invalid(lambda d: collections(d)[0].pop("urlTemplate"), "needs a urlTemplate")
 
+    def test_a_ref_collection_path_item_is_resolved(self):
+        def via_ref(d):
+            d["components"]["pathItems"] = {"tasks": d["paths"]["/lists/{listId}/tasks"]}
+            d["paths"]["/lists/{listId}/tasks"] = {"$ref": "#/components/pathItems/tasks"}
+        document = example()
+        via_ref(document)
+        validate(document)
+        self.invalid(lambda d: (via_ref(d), collections(d)[0]["listQuery"].update(nope="x")),
+                     "listQuery.nope: not a query parameter of GET /lists/{listId}/tasks")
+
     def test_list_body_needs_post_and_a_request_body(self):
         self.invalid(lambda d: collections(d)[0].update(listBody={"a": 1}), "only with listMethod POST")
         self.invalid(lambda d: d["paths"]["/search"]["post"].pop("requestBody"), "declares no JSON request body")

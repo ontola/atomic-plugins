@@ -419,7 +419,7 @@ def validate(document, warnings=None):
             if method not in ("GET", "POST"):
                 errors.append(f"{where}.listMethod: expected GET or POST")
                 continue
-            item = paths.get(template)
+            item = _resolve(document, paths.get(template))
             operation = item.get(method.lower()) if isinstance(item, dict) else None
             if not isinstance(operation, dict):
                 errors.append(f"{where}: no operation at paths[{template!r}].{method.lower()}")
