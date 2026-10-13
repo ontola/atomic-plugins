@@ -6328,16 +6328,29 @@ export function createApiClient(
         Object.keys(r.collection.listQuery).length +
         Object.keys(r.collection.listBody).length;
       const most = Math.max(-1, ...candidates.map(fixedCount));
-      const envelopes = new Set(
+      // The envelope, with its emptyWhenAbsent, when every best candidate
+      // declares the same one.
+      const envelopes = new Map(
         candidates
           .filter((r) => fixedCount(r) === most)
-          .map((r) => r.collection.itemsField),
+          .map((r) => [
+            JSON.stringify([
+              r.collection.itemsField ?? null,
+              r.collection.emptyWhenAbsent === true,
+            ]),
+            r.collection,
+          ]),
       );
-      const envelope = envelopes.size === 1 ? [...envelopes][0] : undefined;
+      const only =
+        envelopes.size === 1 ? [...envelopes.values()][0] : undefined;
+      const envelope = only?.itemsField;
       const deadline = Date.now() + readLimitMs;
       return paginateOperation(doc, {
         ...pagination,
         ...(envelope === undefined ? {} : { itemsField: envelope }),
+        ...(envelope !== undefined && only?.emptyWhenAbsent
+          ? { emptyWhenAbsent: true }
+          : {}),
         path: template,
         // The exhausted buckets hold paginate()'s requests too, within its
         // own read limit (not a sync's budget, even while one runs).
