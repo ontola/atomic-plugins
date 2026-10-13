@@ -1,0 +1,115 @@
+# Reviewed 2026-10-08 against the pinned OAD.
+# Source: the pinned OAD's own parameter descriptions for events.list: showDeleted
+# ("Whether to include deleted events (with status equals "cancelled") in the result ...
+# The default is False") and singleEvents ("Whether to expand recurring events into
+# instances ... The default is False").
+# Source: https://developers.google.com/workspace/calendar/api/v3/reference/events/list
+# Needs CRUD Causality 0.4.0 (openapi-extensions/spec/crud-causality, listQuery).
+# v2 of app-crud-causality-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml, which
+# stays published: the same resources and operations, plus the events collection's
+# fixed read (showDeleted=true, singleEvents=false, as integrations/calendar/app/
+# operations.ts sends) and the event update's mode and patch format.
+# Source: https://developers.google.com/workspace/calendar/api/guides/performance (patch semantics)
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32237fa5d14aa887dc9f3923395dac971e00a36c/APIs/googleapis.com/calendar/v3/openapi.yaml
+info:
+  title: Google Calendar API CRUD Causality
+  version: 2.0.0
+# Declares the CRUD-causality resources this platform needs: which
+# collections exist, how each item is addressed, and (of the many write
+# paths the full base document has, now that it is the generated
+# googleapis.com/calendar/v3 document rather than the old hand-written
+# read-only subset — see catalog.json) the one this platform's OAuth scope
+# and Devonian's lens actually use: a partial update to an event. Mirrors
+# the shape of the GitHub crud-causality overlay in this repo, with one
+# Google-specific point: there is no "list all calendars" operation, so
+# `event`'s `calendarId` context comes from enumerating `calendarListEntry`
+# (via its own identity binding) rather than from a dedicated calendars
+# collection.
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        calendarListEntry:
+          schema:
+            $ref: '#/components/schemas/CalendarListEntry'
+          description: >
+            An entry on the authenticated user's calendar list. Its `id` is
+            also what the `event` resource's collections address a calendar
+            by, so this is where the `calendarId` context comes from.
+          identity:
+            urlTemplate: /users/me/calendarList/{calendarId}
+            bindings:
+              calendarId:
+                field: id
+          collections:
+            calendarList:
+              urlTemplate: /users/me/calendarList
+        event:
+          schema:
+            $ref: '#/components/schemas/Event'
+          description: >
+            An event on a calendar. `calendarId` is supplied by enumerating
+            `calendarList` (see above), not by this resource's own identity.
+          identity:
+            urlTemplate: /calendars/{calendarId}/events/{eventId}
+            bindings:
+              eventId:
+                field: id
+          collections:
+            events:
+              urlTemplate: /calendars/{calendarId}/events
+              description: >-
+                The calendar's events without a time window, with recurring
+                series as their master events rather than expanded into
+                instances (singleEvents=false), and with cancelled events
+                (status cancelled) included (showDeleted=true): cancelled
+                events are members of this collection. With singleEvents=false
+                the list can also return exception instances of recurring
+                series: Google's showDeleted description says individually
+                cancelled instances are listed with singleEvents=false. Whether
+                instances changed but not cancelled are listed too is not
+                verified against a live calendar. This overlay declares no tombstones in the list
+                (Deletion Feeds §8 leaves that out).
+              listQuery:
+                showDeleted: 'true'
+                singleEvents: 'false'
+
+  - target: $.paths['/users/me/calendarList'].get
+    update:
+      x-crud:
+        action: list
+        resource: calendarListEntry
+        collection: calendarList
+  - target: $.paths['/users/me/calendarList/{calendarId}'].get
+    update:
+      x-crud:
+        action: read
+        resource: calendarListEntry
+
+  - target: $.paths['/calendars/{calendarId}/events'].get
+    update:
+      x-crud:
+        action: list
+        resource: event
+        collection: events
+  - target: $.paths['/calendars/{calendarId}/events/{eventId}'].get
+    update:
+      x-crud:
+        action: read
+        resource: event
+  - target: $.paths['/calendars/{calendarId}/events/{eventId}'].patch
+    update:
+      x-crud:
+        action: update
+        mode: patch
+        patchFormat: jsonMergePatch
+        description: >-
+          Google's documented patch semantics
+          (https://developers.google.com/workspace/calendar/api/guides/performance,
+          "Patch semantics") are those of RFC 7396 JSON Merge Patch: a field
+          in the body adds or replaces the stored one, a field set to null is
+          deleted, nested objects are merged, and an array replaces the stored
+          array as a whole. The request's media type is application/json, as
+          the OAD declares, not application/merge-patch+json.
+        resource: event
