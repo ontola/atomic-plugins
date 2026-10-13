@@ -82,7 +82,7 @@ Data flows through four stages, each its own directory under `src/`:
    while any other read that is not complete (failed, or an undocumented
    short-page end) gets `spans: null`.
    `read/read.ts` adds ontology/type projection.
-   `read/produced-classes.ts` reads Produced Classes 0.1.0-draft
+   `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
    `validate.py` (keep them in step), `parseProduces` reads nothing from a
