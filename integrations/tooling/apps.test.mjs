@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   mkdtempSync,
   mkdirSync,
@@ -30,6 +30,7 @@ import {
   buildCatalog,
   dependencyDirs,
   explained,
+  logProblem,
   readBuilds,
   recordedFor,
   versionProblems,
@@ -634,4 +635,65 @@ test("usertest: catalog.mjs installs each app's plugin folders and its lane's sh
   assert.ok(dirs.every(d => !d.startsWith('/') && !d.includes('..')));
   // This repository's lanes resolve too.
   assert.ok(dependencyDirs().includes('integrations/notion/app'));
+});
+
+test('usertest: catalog.mjs refuses an unlogged build unless --no-log or --record says so', () => {
+  const problem = logProblem({}, []);
+  assert.match(
+    problem,
+    /USERTEST_LOG_URL is not set, so calendar would be built/,
+  );
+  assert.match(problem, /--no-log/);
+  assert.equal(logProblem({}, ['--no-log']), undefined);
+  assert.equal(logProblem({}, ['--record']), undefined);
+  assert.equal(
+    logProblem({ USERTEST_LOG_URL: 'https://logs.example/log' }, []),
+    undefined,
+  );
+});
+
+test('usertest: check-live.mjs exits 1 on a module changed under a live version, from a file or stdin', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'usertest-check-live-'));
+  const I = 'https://atomicdata.dev/integrations/properties/';
+  const A = 'https://atomicdata.dev/properties/';
+  const entry = integrity => ({
+    [A + 'shortname']: 'calendar',
+    [I + 'app-module']: 'apps/calendar/usertest-12/ui.js',
+    [I + 'app-module-integrity']: integrity,
+  });
+  const script = join(root, 'usertest/check-live.mjs');
+  const run = (live, input) =>
+    spawnSync(process.execPath, [script, live, join(dir, 'out')], {
+      input,
+      encoding: 'utf8',
+    });
+
+  try {
+    mkdirSync(join(dir, 'out'));
+    writeFileSync(
+      join(dir, 'out/catalog.json'),
+      JSON.stringify([entry('sha384-unlogged')]),
+    );
+    writeFileSync(
+      join(dir, 'same.json'),
+      JSON.stringify([entry('sha384-unlogged')]),
+    );
+    writeFileSync(
+      join(dir, 'live.json'),
+      JSON.stringify([entry('sha384-logged')]),
+    );
+
+    const changed = run(join(dir, 'live.json'));
+    assert.equal(changed.status, 1);
+    assert.match(
+      changed.stderr,
+      /calendar: apps\/calendar\/usertest-12\/ui\.js differs/,
+    );
+    assert.equal(run('-', JSON.stringify([entry('sha384-logged')])).status, 1);
+    assert.equal(run(join(dir, 'same.json')).status, 0);
+    // Nothing live yet (a first deploy): passes.
+    assert.equal(run('-', '').status, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

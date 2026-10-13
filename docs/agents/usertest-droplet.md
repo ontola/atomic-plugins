@@ -40,7 +40,7 @@ From a checkout of this repo, set up as in AGENTS.md:
 ```sh
 USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs
 node usertest/check-live.mjs https://catalog.178-62-223-35.sslip.io/catalog.json
-sh usertest/deploy.sh root@178.62.223.35
+sh usertest/deploy.sh root@178.62.223.35   # checks the droplet's own catalog.json first
 ssh root@178.62.223.35 sh /opt/usertest/moderator/run.sh
 ssh root@178.62.223.35 USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server.sh 178-62-223-35.sslip.io [<sha>]
 ```
@@ -50,11 +50,17 @@ ssh root@178.62.223.35 USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server
   `deploy.sh` does not apply. From a checkout of `main`:
 
   ```sh
-  USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log node usertest/catalog.mjs
-  node usertest/check-live.mjs https://catalog.usertest.michielbdejong.com/catalog.json
-  (cd usertest/out && tar -cf - apps samples) | tar -xf - -C /srv/catalog
-  cat usertest/out/catalog.json > /srv/catalog/catalog.json
+  USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log node usertest/catalog.mjs &&
+    node usertest/check-live.mjs /srv/catalog/catalog.json &&
+    (cd usertest/out && tar -cf - apps samples) | tar -xf - -C /srv/catalog &&
+    cat usertest/out/catalog.json > /srv/catalog/catalog.json
   ```
+
+  Chained with `&&`, a failed build or check copies nothing. `check-live.mjs`
+  reads the live catalog from a file (or `-` for standard input) as well as
+  a URL. `catalog.mjs` refuses to build without `USERTEST_LOG_URL` (exit 2)
+  unless `--no-log` says the build is not for deploying; `--record` alone
+  removes its unlogged `catalog.json`.
 
   `/srv/catalog` itself is owned by root, so `tar` cannot replace
   `catalog.json` there (it deletes the old file first); the file belongs to

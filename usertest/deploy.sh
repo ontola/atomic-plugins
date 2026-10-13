@@ -17,6 +17,14 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 [ -f "$HERE/out/catalog.json" ] ||
   { echo "no usertest/out/catalog.json; run node usertest/catalog.mjs first" >&2; exit 1; }
 
+# Before copying anything: no app module may change under a version the
+# droplet already serves (an unbumped app, or a build without
+# USERTEST_LOG_URL replacing a logged one). check-live compares the built
+# catalog with the droplet's own copy; none yet (a first deploy) passes.
+ssh "$@" "$TARGET" 'cat /srv/catalog/catalog.json 2>/dev/null || true' |
+  node "$HERE/check-live.mjs" - "$HERE/out" ||
+  { echo "deploy stopped before copying: see above" >&2; exit 1; }
+
 # COPYFILE_DISABLE and --no-xattrs keep macOS tar from adding ._ files and
 # extended attributes that GNU tar on the droplet warns about.
 (cd "$HERE/out" && COPYFILE_DISABLE=1 tar --no-xattrs -czf - catalog.json apps samples) |

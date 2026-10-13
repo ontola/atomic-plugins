@@ -4,6 +4,10 @@
  * droplet already serves:
  *
  *   node usertest/check-live.mjs https://catalog.<base-domain>/catalog.json [out]
+ *   ssh <host> cat /srv/catalog/catalog.json | node usertest/check-live.mjs - [out]
+ *
+ * The live catalog is a URL, a file path, or `-` for standard input (what
+ * deploy.sh does, reading the droplet's own copy before it copies anything).
  *
  * It compares the catalog catalog.mjs just built (default out: usertest/out)
  * with the live one. An app whose `app-module` path is the same in both but
@@ -16,7 +20,7 @@
  * A live catalog that can't be fetched (a first deploy, the droplet down) is
  * reported and passes: there is nothing to compare with.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -25,7 +29,7 @@ const A = 'https://atomicdata.dev/properties/';
 const here = dirname(fileURLToPath(import.meta.url));
 const [liveUrl, outArg] = process.argv.slice(2);
 if (!liveUrl) {
-  console.error('usage: check-live.mjs <live catalog URL> [out]');
+  console.error('usage: check-live.mjs <live catalog URL | file | -> [out]');
   process.exit(2);
 }
 const out = resolve(outArg ?? resolve(here, 'out'));
@@ -49,10 +53,27 @@ const built = modules(
 );
 let live;
 
-try {
+/** The live catalog's text: from standard input, a file, or over HTTP. */
+async function liveText() {
+  if (liveUrl === '-') return readFileSync(0, 'utf8');
+
+  if (!/^https?:\/\//.test(liveUrl)) {
+    if (!existsSync(liveUrl)) throw new Error(`no file ${liveUrl}`);
+
+    return readFileSync(liveUrl, 'utf8');
+  }
+
   const response = await fetch(liveUrl, { cache: 'no-store' });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
-  live = modules(await response.json());
+
+  return response.text();
+}
+
+try {
+  const text = await liveText();
+  // An empty answer (no catalog on the droplet yet) is a first deploy.
+  if (!text.trim()) throw new Error('empty');
+  live = modules(JSON.parse(text));
 } catch (error) {
   console.log(`No live catalog to compare with (${error.message}).`);
   process.exit(0);

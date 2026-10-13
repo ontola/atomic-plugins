@@ -11,6 +11,14 @@
  * apps.mjs do through integrations/tooling/deps.mjs); `--no-install` skips
  * that. On CI, where every lockfile is installed first, it does nothing.
  *
+ * Without USERTEST_LOG_URL it refuses to build (exit 2), because an app
+ * marked `report: true` would lose its collector prelude and a deploy would
+ * replace the logged module under the same version (2026-10-13), unless
+ * `--no-log` says an unlogged build is meant (local tries, e2e/samples.mjs).
+ * `--record` alone may build unlogged: it records the hashes (which leave
+ * the prelude out), then removes the unlogged catalog.json so it can't be
+ * deployed.
+ *
  * With USERTEST_LOG_URL set (deploy it with
  * USERTEST_LOG_URL=https://logs.<base-domain>/log), the modules of apps
  * marked `report: true` start with a prelude that defines `globalThis.__USERTEST_REPORT__`, which
@@ -401,12 +409,39 @@ export const recordedFor = modules =>
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   );
 
+/**
+ * Why this build may not run without a log URL, or undefined: an app in it
+ * reports to the collector, USERTEST_LOG_URL is unset, and neither
+ * `--no-log` nor `--record` says an unlogged build is meant.
+ */
+export function logProblem(env, argv) {
+  if (env.USERTEST_LOG_URL) return undefined;
+  if (argv.includes('--no-log') || argv.includes('--record')) return undefined;
+  const reporting = Object.entries(APPS)
+    .filter(([, app]) => app.report)
+    .map(([id]) => id);
+  if (!reporting.length) return undefined;
+
+  return (
+    `USERTEST_LOG_URL is not set, so ${reporting.join(', ')} would be built without the collector prelude, ` +
+    'and deploying that would replace the logged module under the same version. ' +
+    'Set it (USERTEST_LOG_URL=https://logs.<base-domain>/log), or pass --no-log for a build that is not deployed.'
+  );
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const recording = argv.includes('--record');
   const out = resolve(
     argv.find(a => !a.startsWith('--')) ?? resolve(here, 'out'),
   );
+  const unlogged = logProblem(process.env, argv);
+
+  if (unlogged) {
+    console.error(`catalog: ${unlogged}`);
+    process.exit(2);
+  }
+
   if (!argv.includes('--no-install')) installMissing(dependencyDirs());
   const { catalog, modules } = await buildCatalog(out, {
     logUrl: process.env.USERTEST_LOG_URL,
@@ -425,6 +460,13 @@ async function main() {
     console.info(
       `catalog: recorded ${modules.length} build(s) in usertest/builds.json`,
     );
+
+    if (!process.env.USERTEST_LOG_URL && !argv.includes('--no-log')) {
+      rmSync(resolve(out, 'catalog.json'), { force: true });
+      console.warn(
+        'catalog: catalog.json removed: built without USERTEST_LOG_URL, so not for deploying. Rebuild with it to deploy.',
+      );
+    }
   } else for (const line of unrecorded) console.warn(`catalog: ${line}`);
 
   for (const entry of catalog)
