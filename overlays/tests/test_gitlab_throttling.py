@@ -50,10 +50,16 @@ class GitLabThrottlingTests(unittest.TestCase):
         cls.composed = copy.deepcopy(cls.original)
         apply(cls.composed, cls.overlay)
 
+    def selections(self, document):
+        return {path: item["get"]["x-throttling"] for path, item in document["paths"].items()
+                if "x-throttling" in item.get("get", {})}
+
     def test_composition_is_valid_and_adds_only_x_throttling(self):
         throttling.validate(self.composed)
         standard = copy.deepcopy(self.composed)
         standard.pop("x-throttling")
+        for path in self.selections(standard):
+            standard["paths"][path]["get"].pop("x-throttling")
         self.assertEqual(standard, self.original)
 
     def test_composes_after_the_catalogued_gitlab_overlays(self):
@@ -65,14 +71,22 @@ class GitLabThrottlingTests(unittest.TestCase):
         apply(document, self.overlay)
         throttling.validate(document)
         self.assertEqual(document["x-throttling"], self.composed["x-throttling"])
+        self.assertEqual(self.selections(document), self.selections(self.composed))
 
     def test_the_document_is_gitlab_com_and_the_limit_is_its_own(self):
         self.assertEqual([s["url"] for s in self.original["servers"]], ["https://gitlab.com/api/v4"])
         root = self.composed["x-throttling"]
-        self.assertEqual(root["applies"], ["authenticatedApi"])
-        limit = root["limits"]["authenticatedApi"]
-        self.assertEqual((limit["requests"], limit["window"], limit["partitionBy"]),
-                         (2000, {"seconds": 60, "kind": "unspecified"}, ["user"]))
+        self.assertEqual(root["applies"], ["authenticatedApi", "allTrafficPerIp"])
+        self.assertEqual(
+            {name: (limit["requests"], limit["window"]["seconds"], limit.get("partitionBy"))
+             for name, limit in root["limits"].items()},
+            {"authenticatedApi": (2000, 60, ["user"]), "allTrafficPerIp": (2000, 60, ["sourceIp"]),
+             "projectsList": (2000, 600, None), "singleProject": (400, 60, None)})
+        self.assertTrue(all(limit["window"]["kind"] == "unspecified" for limit in root["limits"].values()))
+        self.assertEqual(self.selections(self.composed), {
+            "/projects": ["authenticatedApi", "allTrafficPerIp", "projectsList"],
+            "/projects/{id}": ["authenticatedApi", "allTrafficPerIp", "singleProject"],
+        })
         self.assertEqual({name: header["role"] for name, header in root["headers"].items()},
                          {"RateLimit-Limit": "limit", "RateLimit-Observed": "used", "RateLimit-Remaining": "remaining",
                           "RateLimit-Reset": "reset", "Retry-After": "retryAfter"})

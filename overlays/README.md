@@ -269,16 +269,22 @@ called.
 
 [GitLab.com REST API v4 throttling](APIs/gitlab.com/v4-readonly/throttling-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml)
 declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
-for the read-only GitLab.com document: GitLab.com's
-[authenticated API limit](https://docs.gitlab.com/user/gitlab_com/rate_limits/)
-of "2,000 requests each minute" per user (the limit in effect; the page's
-tier-aware limits are proposed, not in effect), the documented
+for the read-only GitLab.com document, from GitLab.com's
+[rate-limits page](https://docs.gitlab.com/user/gitlab_com/rate_limits/):
+"Authenticated API traffic for a user" ("2,000 requests each minute", per
+user) and "All traffic from an IP address" ("2,000 requests each minute",
+`sourceIp`, shared by everyone behind a proxy) on every operation; the
+project list's own limit ("2,000 requests every 10 minutes") and the single
+project read's ("400 requests each minute") on those two operations, with no
+partition, since the rows do not say per what they count. The page's
+tier-aware limits are proposed, not in effect. Also the documented
 [response headers](https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/)
-`RateLimit-Limit`, `RateLimit-Observed`, `RateLimit-Remaining`,
-`RateLimit-Reset` (Unix time) and, on a 429, `Retry-After` (seconds), and a
-429 as `throttled` with no bucket named, since GitLab.com has several
-throttles. Not declared: `RateLimit-ResetTime` (the same moment as
-`RateLimit-Reset`), `RateLimit-Name`, and the unauthenticated limit. No
+`RateLimit-Limit` (adjusted "to approximately the nearest 60-minute period"
+for a throttle whose period is not a minute), `RateLimit-Observed`,
+`RateLimit-Remaining`, `RateLimit-Reset` (Unix time) and, on a 429,
+`Retry-After` (seconds), and a 429 as `throttled` with no bucket named.
+Not declared: `RateLimit-ResetTime`, `RateLimit-Name` and the
+unauthenticated limit; the page names no limit for the issue reads. No
 dated catalog selects it yet. `tests/test_gitlab_throttling.py` composes it
 alone and after the catalog's GitLab overlays and classifies synthetic
 responses. No provider was called.
