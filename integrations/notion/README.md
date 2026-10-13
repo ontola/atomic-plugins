@@ -93,8 +93,8 @@ proxy. No credential ever reaches the frame.
   (0.4.0; see the limits below for the shape), and the translation between
   option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
   at the host boundary.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 144,024 bytes for
-  0.5.2, with syncables 0.21.0 (125,914 for 0.5.1 with devonian 0.9.0 and
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 145,002 bytes for
+  0.5.3 (144,024 for 0.5.2, with syncables 0.21.0; 125,914 for 0.5.1 with devonian 0.9.0 and
   syncables 0.19.0; 125,712 for 0.5.0; 115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
   document, syncables' read path, devonian's Atomic Data API and the shared
   sync-status card with its `card.css` (through `cssRawPlugin` from
@@ -129,8 +129,13 @@ What it does not do, and what is not verified:
   list with tombstones yet, #177 H6).
 - A value cleared in Notion (empty number, URL, select) is removed from its
   row on the next import, unless the row changed that field itself (see
-  below). A value the lens cannot read losslessly (formatted text) leaves the
-  row's value as it was, is listed in the warnings, and is never sent.
+  below). Formatted text (bold, links, mentions, equations…) is imported as
+  its words without the formatting (from 0.5.3, ontola/usertest-findings#19;
+  before, it was left out), is listed in Sync details ("copied as plain
+  text"), and is never sent: the row follows Notion's words unless it was
+  edited here, and then keeps the edit, which the review refuses to send. Any
+  other value the lens cannot read losslessly leaves the row's value as it
+  was and is listed in the warnings.
 - Select, status and multi-select columns are the host's own select
   columns since 0.4.0 (`app/options.ts`): the Property `isA`
   SelectProperty, datatype `resourceArray`, `classtype` Tag, `allowsOnly`
@@ -318,11 +323,15 @@ after the Notion property (`notionColumns`), and data-source titles.
 and keyed by page id.
 
 - `read` (page to row): sets the name, the fixed columns and every projected
-  value; unsets a property Notion holds empty; leaves a property with no
-  lossless plain value alone.
+  value; unsets a property Notion holds empty; sets formatted text (bold,
+  links, mentions, equations…) to its words without the formatting (from
+  0.5.3, ontola/usertest-findings#19: a tester read the skipped note as a
+  lost one; before, it was left out); leaves any other value with no
+  lossless plain form alone.
 - `write` (row to page): the page with each bound property replaced by the
-  row's value and every other property passed through. It throws rather
-  than overwrite formatted text it never read, and refuses to create pages.
+  row's value and every other property passed through. It passes formatted
+  text through when the row holds the same words, and throws rather than
+  overwrite it with anything else; it refuses to create pages.
   Nothing calls it against Notion yet.
 - The lens store uses its own subjects and property URLs under
   `https://notion-lens.invalid`. devonian accepts only HTTP(S) and DID

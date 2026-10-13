@@ -176,7 +176,7 @@ export function renderDetails(ctx: ViewContext): HTMLElement | null {
       byProperty.set(f.property, (byProperty.get(f.property) ?? 0) + 1);
     for (const f of d.formatted)
       raw.push(
-        `${d.title}: page ${f.page} (${f.title}) property "${f.property}" has formatting`,
+        `${d.title}: page ${f.page} (${f.title}) property "${f.property}" has formatting; copied as plain text`,
       );
     for (const a of d.archived)
       raw.push(`${d.title}: page ${a} is archived or in trash`);
@@ -211,7 +211,7 @@ export function renderDetails(ctx: ViewContext): HTMLElement | null {
         warning(doc, [
           `${plural(n, 'page')} ${n === 1 ? 'has' : 'have'} formatting in `,
           h(doc, 'b', {}, property),
-          `, so ${property} was not copied for ${n === 1 ? 'it' : 'them'}.`,
+          `: ${property} was copied as plain text, without the formatting, and an edit to it here is not sent to Notion.`,
         ]),
       ),
       d.archived.length > 0 &&

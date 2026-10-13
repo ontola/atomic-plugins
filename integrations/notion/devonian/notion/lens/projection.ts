@@ -99,6 +99,44 @@ export function notionPlainText(parts: unknown): string | undefined {
   return text;
 }
 
+/**
+ * The words of a Notion rich-text array without its formatting: each part's
+ * `plain_text` (Notion's own flattening of text, mentions and equations),
+ * joined. `undefined` for a value that is not a rich-text array. Lossy, so
+ * it is only ever read, never written back (usertest-findings#19).
+ */
+export function notionTextWithoutFormatting(
+  parts: unknown,
+): string | undefined {
+  if (!Array.isArray(parts)) return undefined;
+  let text = '';
+
+  for (const part of parts) {
+    const p = object(part);
+    const plain =
+      typeof p.plain_text === 'string' ? p.plain_text : object(p.text).content;
+    if (typeof plain !== 'string') return undefined;
+    text += plain;
+  }
+
+  return text;
+}
+
+/**
+ * For a title or rich_text value that `notionFieldValue` cannot read
+ * losslessly (it has formatting, links, mentions or equations): its text
+ * without the formatting. `undefined` for every other value.
+ */
+export function notionFormattedText(
+  type: NotionFieldType,
+  raw: unknown,
+): string | undefined {
+  if (type !== 'title' && type !== 'rich_text') return undefined;
+  if (notionFieldValue(type, raw) !== undefined) return undefined;
+
+  return notionTextWithoutFormatting(raw);
+}
+
 const optionId = (value: unknown): string | undefined => {
   const id = object(value).id;
 
@@ -317,6 +355,21 @@ export function notionProjection(
         );
       if (!known) fields.set(id, { id, name, type: p.type });
       const value = notionFieldValue(p.type, p[p.type]);
+      const formatted =
+        value === undefined
+          ? notionFormattedText(p.type, p[p.type])
+          : undefined;
+
+      // Formatted text is imported without its formatting, and reported, so
+      // the words are there; the app never writes such a value back.
+      if (formatted !== undefined) {
+        errors.push(
+          `Notion page ${row.id} property "${name}" (${p.type}) has formatting; imported as plain text`,
+        );
+        if (formatted !== '') values[notionFieldShortname(id)] = formatted;
+        if (p.type === 'title') title = formatted.trim();
+        continue;
+      }
 
       if (value === undefined) {
         errors.push(

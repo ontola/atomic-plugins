@@ -11,6 +11,7 @@ import {
   isNotionFieldType,
   notionFieldShortname,
   notionFieldValue,
+  notionFormattedText,
   NotionRowLenses,
   notionColumns,
   notionDataSourceTitles,
@@ -29,6 +30,7 @@ import {
   localValue,
   parseBaseline,
   reconcile,
+  same,
   type Baseline,
   type Conflicts,
   type EditableField,
@@ -115,7 +117,10 @@ export interface DataSourceReport {
   updated: number;
   unchanged: number;
   properties: SchemaProperty[];
-  /** Pages whose formatted text in `property` was not imported. */
+  /**
+   * Pages whose `property` holds formatted text: imported as plain text
+   * (from 0.5.3; before, not imported), and never written back.
+   */
   formatted: { page: string; title: string; property: string }[];
   /** Archived or trashed pages: not imported, and an existing row is kept. */
   archived: string[];
@@ -224,7 +229,7 @@ export async function readNotion(
 
     for (const message of projected.errors ?? []) {
       const formatted =
-        /^Notion page (\S+) property "(.*)" \([\w-]+\) has no lossless plain value/.exec(
+        /^Notion page (\S+) property "(.*)" \([\w-]+\) has formatting; imported as plain text/.exec(
           message,
         );
       const archived = /^Notion page (\S+) is archived or in trash/.exec(
@@ -354,24 +359,34 @@ const OPTION_ID_COLUMN: NotionColumn = {
 const hostDatatype = (column: NotionColumn): string =>
   column.options ? RESOURCE_ARRAY : column.datatype;
 
-/** Notion's value for a field, or `UNREADABLE` (formatted text, no such property). */
+/** Notion's value for a field, or `UNREADABLE` (no such property, no plain form). */
 const UNREADABLE = Symbol('unreadable');
+
+/** Formatted text: its words, readable but never written back. */
+interface Formatted {
+  formatted: string | undefined;
+}
 
 function remoteValue(
   page: FetchedRecord,
   field: EditableField,
-): JSONValue | undefined | typeof UNREADABLE {
+): JSONValue | undefined | Formatted | typeof UNREADABLE {
   for (const raw of Object.values(record(page.values.properties))) {
     const property = record(raw);
     if (property.id !== field.id) continue;
     if (property.type !== field.type) return UNREADABLE;
     const value = notionFieldValue(field.type, property[field.type]);
+    if (value !== undefined) return value ?? undefined;
+    const words = notionFormattedText(field.type, property[field.type]);
 
-    return value === undefined ? UNREADABLE : (value ?? undefined);
+    return words === undefined ? UNREADABLE : { formatted: words || undefined };
   }
 
   return UNREADABLE;
 }
+
+const isFormatted = (value: unknown): value is Formatted =>
+  typeof value === 'object' && value !== null && 'formatted' in value;
 
 /**
  * Compare on sync, per editable field (three-way: the row, Notion, the
@@ -380,7 +395,9 @@ function remoteValue(
  * by Notion's (a local edit, or a conflict), and Notion's value for each
  * conflict. A row without a baseline (new, or imported before 0.2.0) takes
  * Notion's values, as an import always did. A field Notion holds as
- * formatted text is left alone on both sides. Select cells are compared as
+ * formatted text follows Notion's words (plain text) unless the row edited
+ * it since the last import; one with no plain form at all is left alone on
+ * both sides. Select cells are compared as
  * option ids (`options.ts`).
  */
 function compareOnSync(
@@ -422,6 +439,32 @@ function compareOnSync(
       // Left alone on both sides: the row keeps what it holds.
       agreed = before;
       keep.add(property);
+    } else if (isFormatted(remote)) {
+      // Formatted text, read as plain text and never sent (usertest-findings
+      // #19): the row follows Notion's words unless it was edited here since
+      // the last import, and then keeps the edit (which the review refuses
+      // to send: "has formatting in Notion; edit it there").
+      const mine = existing
+        ? localValue(
+            field,
+            local,
+            existing.get(atomic.name),
+            base?.fields ?? {},
+          )
+        : undefined;
+
+      if (
+        !existing ||
+        !base ||
+        mine === undefined ||
+        same(field.type, mine, before)
+      )
+        agreed = remote.formatted;
+      else {
+        agreed = before;
+        keep.add(property);
+        if (field.id === 'title') keep.add(atomic.name);
+      }
     } else if (!base) {
       agreed = remote;
     } else {

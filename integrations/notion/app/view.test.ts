@@ -397,7 +397,7 @@ describe('view (DOM)', () => {
     const details = q('[role=dialog][aria-label="Sync details"]')!;
     expect(details.textContent).toContain('Not copied: Owner people');
     expect(details.textContent).toContain(
-      '1 page has formatting in Notes, so Notes was not copied for it.',
+      '1 page has formatting in Notes: Notes was copied as plain text, without the formatting, and an edit to it here is not sent to Notion.',
     );
     expect(details.querySelector('details summary')?.textContent).toBe(
       'Technical details',
