@@ -117,7 +117,8 @@ for (const id of wanted)
 const out = mkdtempSync(join(tmpdir(), 'usertest-samples-'));
 const built = spawnSync(
   process.execPath,
-  [resolve(repo, 'usertest/catalog.mjs'), out],
+  // Not deployed: no collector to report to.
+  [resolve(repo, 'usertest/catalog.mjs'), '--no-log', out],
   {
     stdio: ['ignore', 'pipe', 'inherit'],
     encoding: 'utf8',

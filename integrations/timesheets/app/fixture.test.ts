@@ -18,6 +18,7 @@ import {
   wallClockToInstant,
   USER,
   WORKSPACE,
+  yesterdayAt,
 } from '../fixtures/clockify/scenario.mjs';
 
 const NOW = Date.parse('2026-09-23T12:00:00Z');
@@ -449,5 +450,94 @@ describe('Clockify mock: behaviour checked live on 2026-09-24', () => {
     expect(user.body).toMatchObject({
       settings: { timeZone: 'Europe/Amsterdam' },
     });
+  });
+});
+
+describe("Clockify mock: yesterday's entries are on yesterday at any hour", () => {
+  /** An instant's calendar date and hh:mm in Europe/Amsterdam. */
+  const local = (at: number) => {
+    const p = Object.fromEntries(
+      new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Amsterdam',
+        hourCycle: 'h23',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+        .formatToParts(at)
+        .map(x => [x.type, x.value]),
+    );
+
+    return {
+      date: `${p.year}-${p.month}-${p.day}`,
+      time: `${p.hour}:${p.minute}`,
+    };
+  };
+
+  const yesterdayOf = (date: string) =>
+    new Date(Date.parse(`${date}T12:00:00Z`) - 86_400_000)
+      .toISOString()
+      .slice(0, 10);
+
+  it.each([
+    // Wednesday 14:00 CEST: the unit tests' NOW, same instants as the old
+    // `now − 28 h …` offsets.
+    ['2026-09-23T12:00:00Z'],
+    // Just after midnight and before 04:00, where those offsets fell on the
+    // day before yesterday.
+    ['2026-09-22T22:30:00Z'],
+    ['2026-09-23T01:59:00Z'],
+    ['2026-09-23T21:59:00Z'],
+    // A Monday at 00:30: yesterday is Sunday, in last week.
+    ['2026-09-27T22:30:00Z'],
+    // The days after the DST changes (25 Oct 2026, 29 Mar 2026) and on them.
+    ['2026-10-26T10:00:00Z'],
+    ['2026-10-25T10:00:00Z'],
+    ['2026-03-30T10:00:00Z'],
+    ['2026-03-29T10:00:00Z'],
+  ])('now %s', iso => {
+    const now = Date.parse(iso);
+    const want = yesterdayOf(local(now).date);
+    const byId = Object.fromEntries(
+      clockifyEntries(now).map(e => [e.id, e.timeInterval]),
+    );
+    const at = (id: string) => [
+      local(Date.parse(byId[id].start)),
+      local(Date.parse(byId[id].end!)),
+    ];
+
+    expect(at('entry-1')).toEqual([
+      { date: want, time: '10:00' },
+      { date: want, time: '12:00' },
+    ]);
+    expect(at('entry-2')).toEqual([
+      { date: want, time: '13:00' },
+      { date: want, time: '14:00' },
+    ]);
+    expect(at('entry-5')).toEqual([
+      { date: want, time: '15:00' },
+      { date: want, time: '16:00' },
+    ]);
+
+    // All in the past, and inside a 7-day look-back.
+    for (const id of ['entry-1', 'entry-2', 'entry-5']) {
+      expect(Date.parse(byId[id].end!)).toBeLessThan(now);
+      expect(Date.parse(byId[id].start)).toBeGreaterThan(now - 7 * 86_400_000);
+    }
+  });
+
+  it("keeps the unit tests' instants at their NOW", () => {
+    const [e1, e2] = clockifyEntries(NOW);
+    expect(e1.timeInterval).toMatchObject({
+      start: '2026-09-22T08:00:00Z',
+      end: '2026-09-22T10:00:00Z',
+    });
+    expect(e2.timeInterval).toMatchObject({
+      start: '2026-09-22T11:00:00Z',
+      end: '2026-09-22T12:00:00Z',
+    });
+    expect(yesterdayAt(NOW, 10)).toBe(Date.parse('2026-09-22T08:00:00Z'));
   });
 });
