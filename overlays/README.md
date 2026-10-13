@@ -141,7 +141,7 @@ entry:
 | `clockify` | [`time-zone`](APIs/clockify.me/1.0.0-readonly/time-zone-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) last | Filtering 0.2.0-draft `x-time-zone` (0.22.0) |
 | `notion` | [`runtime-schema`](APIs/notion.com/2026-03-11/runtime-schema-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) after `crud-causality` | Runtime Schemas 0.1.0-draft (0.22.0) |
 | `google-tasks` | [`completeness`](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) after it; `crud-causality-v2` in place of `crud-causality`, its collection envelopes with `emptyWhenAbsent` as pagination v2's (a reader takes a Collection Object's envelope over the scheme's); `throttling` last | CRUD Causality 0.4.0 `listQuery`, Throttling 0.2.0-draft (0.21.0); `emptyWhenAbsent` (0.22.0) |
-| `google-calendar` | `app-crud-causality-v2` in place of `app-crud-causality`; [`read-tombstone-v2`](APIs/googleapis.com/calendar/v3/read-tombstone-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml), [`deletion-feed`](APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) and [`throttling`](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) last | `listQuery` (0.21.0); the event update's `mode: patch` and `patchFormat` (#419); `x-read-tombstone` (since #330) and `x-deletion-feed`, with Deletion Feeds 0.3.0-draft `except` (unreleased, for 0.23.0; a reader without `except` support may take a cancelled exception of a recurring event as a deletion); Throttling 0.2.0-draft (0.21.0) |
+| `google-calendar` | `app-crud-causality-v2` in place of `app-crud-causality`; [`read-tombstone`](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) and [`throttling`](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) last | `listQuery` (0.21.0); the event update's `mode: patch` and `patchFormat` (#419); `x-read-tombstone` (since #330); Throttling 0.2.0-draft (0.21.0). The first read-tombstone revision, not v2: syncables 0.22.x ignores `except` and reads v2 exactly as v1, so v2, the deletion feed and the list tombstones wait for the catalog released with 0.23.0 |
 | `github-issues` | [`crud-causality-v2`](APIs/github.com/github-issues/1.1.4/crud-causality-v2-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) in place of `crud-causality` (§4.6 patch formats, §4.5 `generated` added fields); [`completeness`](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) and [`compound-create`](APIs/github.com/github-issues/1.1.4/compound-create-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) after it; `throttling` last | `patchFormat`, `addedFields` (0.22.0); Collection Completeness `notFound`, `parentAbsent`; `followUps` (0.22.0); Throttling 0.2.0-draft (0.21.0) |
 | `gitlab`, `discord` | `throttling` last | Throttling 0.2.0-draft and 0.3.0-draft (0.22.0) |
 | `notion` (also) | `throttling` last | Throttling 0.2.0-draft (0.21.0) |
@@ -242,11 +242,10 @@ the first read-tombstone revision,
 [`read-tombstone-32237fa5…`](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
 (#489), which declared cancelled exceptions as deletions of their
 occurrence; that file stays, as published revision files are immutable,
-and no catalog selects it. Both declarations are on operations, so they
-apply with either crud-causality overlay. The
-[syncables 0.22.0 catalog](#syncables-0220-catalog) selects revision 2 (not
-the list tombstones). syncables reads both, with `except` (unreleased, for
-0.23.0). `tests/test_calendar_read_tombstone_v2.py` and
+and only the [syncables 0.22.0 catalog](#syncables-0220-catalog) selects it
+(below). Both declarations are on operations, so they
+apply with either crud-causality overlay, and no dated catalog selects them
+yet. syncables reads both. `tests/test_calendar_read_tombstone_v2.py` and
 `tests/test_calendar_list_tombstone.py` compose them after the catalog's
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
@@ -380,8 +379,7 @@ documented: that a feed read returns an event at most once; what it returns
 for the exceptions of a deleted series; how an event moved to another
 calendar (`events.move`) or an attendee's copy after the attendee is removed
 appears (both may appear cancelled in the source calendar while the event
-still exists elsewhere). The [syncables 0.22.0 catalog](#syncables-0220-catalog)
-selects it, after `read-tombstone-v2`.
+still exists elsewhere). No dated catalog selects it yet.
 `tests/test_calendar_deletion_feed.py` checks the declaration against the
 composed document and the pinned wording. No provider was called.
 

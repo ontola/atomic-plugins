@@ -30,8 +30,7 @@
         "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/app-pagination-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/app-crud-causality-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/identity-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
-        "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/read-tombstone-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
-        "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml"
       ],
       "selection": {

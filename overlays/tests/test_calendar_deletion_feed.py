@@ -153,20 +153,13 @@ class CalendarDeletionFeedTests(unittest.TestCase):
         self.assertEqual(set(events), {"collections"})
         self.assertEqual(set(events["collections"]["events"]), {"x-deletion-feed"})
 
-    def test_only_the_syncables_0_22_catalog_selects_the_overlay(self):
-        # Whoever adds the overlay to another dated catalog changes this test,
-        # and selects read-tombstone-v2 (not the first revision) with it, and
-        # not pagination-v2 ("Full listing only: omit syncToken").
+    def test_no_dated_catalog_selects_the_overlay(self):
+        # Whoever adds the overlay to a dated catalog changes this test, and
+        # selects read-tombstone-v2 (not the first revision) with it, and not
+        # pagination-v2 ("Full listing only: omit syncToken").
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
-                text = catalog.read_text(encoding="utf-8")
-                if catalog.name == "2026-10-12-syncables-0.22.json":
-                    self.assertIn(OVERLAY, text)
-                    self.assertIn(TOMBSTONES[0], text)
-                    self.assertNotIn(f"read-tombstone-{PIN}", text)
-                    self.assertNotIn(f"pagination-v2-{PIN}", text)
-                else:
-                    self.assertNotIn(OVERLAY, text)
+                self.assertNotIn(OVERLAY, catalog.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
