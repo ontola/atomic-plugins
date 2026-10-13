@@ -11,9 +11,11 @@
  *   node integrations/tooling/link-atomic-server.mjs            # set up / update
  *   node integrations/tooling/link-atomic-server.mjs --check    # verify only
  *
- * The checkout lives at ATOMIC_SERVER_CHECKOUT (default /tmp/atomic-server,
- * the same default serve.mjs and run-lane.mjs use), outside this repo, so one
- * checkout — and its pnpm store and cargo cache — is shared by every worktree.
+ * The checkout lives at ATOMIC_SERVER_CHECKOUT (default: this pin's
+ * ~/.cache/atomic-plugins/atomic-server/<sha> when that directory exists,
+ * else /tmp/atomic-server; serve.mjs's serverCheckout(), which run-lane.mjs
+ * uses too), outside this repo, so one checkout — and its pnpm store and
+ * cargo cache — is shared by every worktree on that pin.
  *
  * Steps, each idempotent:
  *   1. Clone (shallow, just the pinned commit) if the checkout is missing;

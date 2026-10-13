@@ -113,6 +113,67 @@ describe('provisioning', () => {
   });
 });
 
+describe('import through the catalog lens', () => {
+  it('reports a task the lens refuses, keeps an existing row, and leaves a new one without shared values', async () => {
+    const { store, sync, rowOf, p } = await setUp();
+    await sync(T1);
+    const before = rowOf('synthetic-task-1');
+    const project = store.todoist.snapshot().tasks[0].project_id;
+    // A due date with a fixed time zone: its day depends on the time zone.
+    store.todoist.updateTask('synthetic-task-1', {
+      content: 'Changed in Todoist',
+      due: { date: '2026-03-02T16:00:00Z', string: 'tomorrow 17:00' },
+    });
+    const fresh = store.todoist.createTask({
+      content: 'New with a fixed zone',
+      project_id: project,
+      due_date: '2026-03-03T09:00:00Z',
+    });
+
+    const summary = await sync(T2);
+    const unmapped = [...summary.unmapped].sort((a, b) =>
+      a.id.localeCompare(b.id),
+    );
+    expect(unmapped.map(u => u.id)).toEqual(
+      ['synthetic-task-1', fresh.id].sort(),
+    );
+    for (const u of unmapped) expect(u.reason).toMatch(/without a time zone/);
+    expect(describeSummary(summary)).toContain(
+      '2 tasks could not be read through the catalog lens',
+    );
+
+    const kept = rowOf('synthetic-task-1');
+    expect(kept[NAME]).toBe(before[NAME]);
+    expect(kept[TASK_DUE_DATE]).toBe(before[TASK_DUE_DATE]);
+    const added = rowOf(fresh.id);
+    expect(added).not.toHaveProperty(NAME);
+    expect(added[p.presence]).toBe('active');
+  });
+});
+
+describe('a row whose stored Todoist source is unreadable', () => {
+  it('keeps its due date when Todoist no longer lists the task', async () => {
+    const { store, sync, rowOf, p } = await setUp();
+    await sync(T1);
+    const withDue = store.todoist
+      .snapshot()
+      .tasks.find(t => t.due && typeof t.due.date === 'string')!;
+    const before = rowOf(withDue.id);
+    expect(before[TASK_DUE_DATE]).toBeTruthy();
+    // The source is not JSON, and the task is deleted in Todoist.
+    store.resources.get(before.subject)![p.source] = 'not json';
+    store.todoist.deleteTask(withDue.id);
+
+    const summary = await sync(T2);
+    const after = rowOf(withDue.id);
+    expect(after[TASK_DUE_DATE]).toBe(before[TASK_DUE_DATE]);
+    expect(after[NAME]).toBe(before[NAME]);
+    expect(after[TASK_BODY]).toBe(before[TASK_BODY]);
+    expect(after[TASK_STATUS]).toEqual(before[TASK_STATUS]);
+    expect(summary.unmapped).toEqual([]);
+  });
+});
+
 describe('import', () => {
   it('writes every active task as an issue-v1 row with shared fields and extras', async () => {
     const { store, sync, rowOf, p } = await setUp();
@@ -139,7 +200,9 @@ describe('import', () => {
       [p.priority]: 'Urgent',
       [p.project]: 'Inbox',
     });
-    expect(plants).not.toHaveProperty(TASK_BODY);
+    // The catalog lens copies an empty description as an empty body
+    // (todoist-task-issue-v2 maps /description by identity).
+    expect(plants[TASK_BODY]).toBe('');
     expect(plants).not.toHaveProperty(p.lastSeen);
     const source = JSON.parse(plants[p.source] as string);
     expect(source).toMatchObject({

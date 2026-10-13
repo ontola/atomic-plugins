@@ -414,9 +414,11 @@ export interface PageWalk {
    */
   range?: WindowRange;
   /**
-   * An item's identity, for a windowed read: an item that a later window
-   * returns again (its field changed during the read) is yielded once
-   * (§4.6.4 rule 3).
+   * An item's identity. A windowed read yields an item that a later window
+   * returns again (its field changed during the read) once (§4.6.4 rule 3);
+   * an offset read and a page-number read with `shortPage` end with
+   * `PageReadError` at a page holding an identity an earlier page returned
+   * (§4.3.2, §4.4.5).
    */
   identity?: (item: Record<string, unknown>) => string;
   /**

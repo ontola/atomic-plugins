@@ -64,12 +64,13 @@ mkdir -p /var/lib/usertest-logs
 Docker publishes the server on `127.0.0.1` only, so ufw's rules are not
 bypassed.
 
-From a checkout of this repo, with the layout from `AGENTS.md`
-(`node integrations/tooling/link-atomic-server.mjs`). `catalog.mjs` first
-installs each app's plugin dependencies that have a lockfile and no
-`node_modules` yet (`pnpm install --frozen-lockfile`, as `run-lane.mjs`
-does; `--no-install` skips it). It does not notice a `node_modules` that is
-present but stale: run `pnpm install --frozen-lockfile` there by hand.
+`catalog.mjs` first installs each app's plugin dependencies that have a
+lockfile and no `node_modules` yet, or one installed from a different
+lockfile (`pnpm install --frozen-lockfile`, as `run-lane.mjs` does;
+`--no-install` skips it).
+
+Run these from a checkout of this repo, with the layout from `AGENTS.md`
+(`node integrations/tooling/link-atomic-server.mjs`):
 
 ```sh
 USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs
@@ -102,7 +103,22 @@ no longer match the hash in the catalog.
 `node usertest/check-live.mjs https://catalog.178-62-223-35.sslip.io/catalog.json`,
 run after `catalog.mjs`, fails when an app was rebuilt into a version the
 droplet already serves with other bytes. The deploy workflow below runs it
-before it touches the droplet.
+before it touches the droplet, and `deploy.sh` runs it too, against the
+droplet's own `/srv/catalog/catalog.json`, before it copies anything.
+Absent passes, unreachable fails: only a definite absence (no
+`catalog.json` on the droplet, HTTP 404 without a redirect) is a first
+deploy; an ssh or network failure or timeout, another HTTP status, a missing
+folder, an empty `catalog.json` or anything else that is not a catalog
+stops the deploy.
+
+`catalog.mjs` refuses to build without `USERTEST_LOG_URL`, or with one not
+shaped `https://<host>/log` (exit 2, and no `catalog.json` is left): Calendar
+reports to the collector, and an unlogged build deployed under the same
+version replaces the logged module (2026-10-13). Pass `--no-log` for a build
+that is not deployed (local tries; `e2e/samples.mjs` and the screenshots do):
+it writes `out/UNLOGGED`, which `check-live.mjs` and `deploy.sh` refuse.
+`--record` alone may build unlogged; it then removes `catalog.json`. A build
+that fails leaves no `catalog.json` either.
 
 ## Deploying from GitHub Actions
 
