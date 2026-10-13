@@ -473,9 +473,10 @@ agent id and retires the old one (README, routes).
   Delegated app agents keep working: delegations name the connection and the
   app, not the owner.
 - **Webhooks.** While the old agent has open webhook subscriptions (keyed
-  by owner) the transfer is refused with `409 transfer_blocked`. The check
-  sits behind `transfer::OpenSubscriptions`; until the webhooks store
-  exposes its owner query, it answers "none".
+  by owner) the transfer is refused with `409 transfer_blocked`: any
+  subscription of the old agent that is not yet closed, live or in cleanup,
+  blocks it (`Store::has_open_subscriptions`, read without locking). With
+  `WEBHOOKS_ENABLED` off there is no inbox and nothing to block.
 - **Not covered.** A connection redeemed by the old key in the same instant
   as its transfer can still end up owned by the retired id (the redeem's
   retired check and the move are not serialized); such a connection can no

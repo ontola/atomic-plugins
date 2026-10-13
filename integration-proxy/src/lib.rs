@@ -281,9 +281,12 @@ pub async fn build_app_with_access(
         key_check_limit: config.key_check_limit_per_hour,
         key_check_window: KEY_CHECK_WINDOW,
         trust_forwarded_for: config.trust_forwarded_for,
+        subscriptions: match &webhooks {
+            Some(webhooks) => webhooks.store.clone(),
+            None => Arc::new(transfer::NoSubscriptions),
+        },
         webhooks,
         pacer: Arc::default(),
-        subscriptions: Arc::new(transfer::NoSubscriptions),
         #[cfg(test)]
         test_upstream: None,
     };

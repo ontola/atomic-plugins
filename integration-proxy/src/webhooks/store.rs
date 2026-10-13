@@ -2387,6 +2387,21 @@ impl Store {
         Ok(view)
     }
 
+    /// Whether `owner` has a subscription that is not yet closed (live, or
+    /// still in cleanup). Read without locking. A key transfer (#410) is
+    /// refused while one exists, because subscriptions, receipts and usage
+    /// are keyed by owner and would be left behind.
+    pub async fn has_open_subscriptions(&self, owner: &str) -> Result<bool> {
+        let client = self.pool.get().await.map_err(InboxError::Database)?;
+        Ok(client
+            .query_one(
+                "SELECT EXISTS (SELECT 1 FROM webhook_subscriptions WHERE owner = $1 AND state <> 'closed')",
+                &[&owner],
+            )
+            .await?
+            .get(0))
+    }
+
     /// A subscription's binding, read without locking, for the routes'
     /// standing and access checks.
     pub async fn binding(&self, id: &str) -> Result<Option<Binding>> {

@@ -52,8 +52,8 @@ pub fn proof_message(from: &str, to: &str, origin: &str, timestamp: &str) -> Str
 
 /// Whether an owner still has open webhook subscriptions, which a transfer
 /// would orphan (they are keyed by owner). A transfer is refused while it
-/// does. Behind a trait so the webhooks store can answer once its query
-/// lands; until then [`NoSubscriptions`] answers.
+/// does. The webhook inbox's store answers when `WEBHOOKS_ENABLED=true`;
+/// without the inbox there are none ([`NoSubscriptions`]).
 pub trait OpenSubscriptions: Send + Sync + 'static {
     fn has_open<'a>(
         &'a self,
@@ -61,8 +61,7 @@ pub trait OpenSubscriptions: Send + Sync + 'static {
     ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + 'a>>;
 }
 
-/// No webhook subscriptions to check: the answer while the webhooks store
-/// exposes no owner query.
+/// No webhook subscriptions to check: the inbox is off.
 pub struct NoSubscriptions;
 
 impl OpenSubscriptions for NoSubscriptions {
@@ -71,6 +70,20 @@ impl OpenSubscriptions for NoSubscriptions {
         _owner: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + 'a>> {
         Box::pin(async { Ok(false) })
+    }
+}
+
+/// The webhook inbox answers from its subscriptions table.
+impl OpenSubscriptions for crate::webhooks::store::Store {
+    fn has_open<'a>(
+        &'a self,
+        owner: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + 'a>> {
+        Box::pin(async move {
+            self.has_open_subscriptions(owner)
+                .await
+                .map_err(|error| error.to_string())
+        })
     }
 }
 
