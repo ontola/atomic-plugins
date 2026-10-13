@@ -411,7 +411,15 @@ is JSON: its dot-path's names are matched literally (a name holding a `.`
 cannot be addressed; `a..b`, `.a` and `a.` are left out of the
 declaration), a string is trimmed, a number counts only when it has no
 fractional part (`3.0` reads as `3`), and a boolean, `null`, an array or
-an object does not parse. A role read from both a header and a body field
+an object does not parse. For headers and body fields alike, only space,
+tab, CR and LF are trimmed (a value carrying U+00A0 or another Unicode
+space does not parse), an integer above 2^53 − 1 does not parse
+(`1e21` in a body, a 400-digit `Retry-After`), and an HTTP-date parses only
+in one of RFC 9110's three exact forms (IMF-fixdate, the obsolete RFC 850
+form, asctime), never through a lenient date parser (so no ISO date, no
+`UTC` for `GMT`, nothing with another whitespace character or a
+byte-order mark); the client's own `Retry-After` reading for other
+retryable answers, and the `Date` header, follow the same rules. A role read from both a header and a body field
 counts once: the later time for `retryAfter` and `reset`, and the bucket is
 exhausted when either `remaining` is `0`. A body `retryAfter` or `reset`
 that gives no wait (`0`, or a time not after the response) counts as
@@ -601,6 +609,80 @@ conflicts that arrive only in a write's own response, and deletes. A refresh
 that no longer returns the record at all is handled below.
 
 ### Records a refresh no longer returns
+
+**Presence: tell before prune, and marks.** When a complete `sync()` no
+longer returns a record that has no unsettled writes, the client either
+removes it from the local copy or keeps it with a presence mark, by the
+collection's declaration:
+
+| Collection | The record is |
+|---|---|
+| `x-completeness: { absent: deleted }` | `deleted` (`source: 'declaration'`): removed, or kept marked `deleted` under `retainDeleted: true` |
+| `x-completeness: { absent: removed }`, or wherever a check will be made (`missingRecordChecks: 'all'`, a parent whose nested collection declares `parentAbsent`) | kept, marked `unconfirmed`, until a check (a GET of the record) settles it |
+| no declaration, default checks | `removed` (no longer returned; whether it still exists is not known): removed |
+
+A check settles an `unconfirmed` record: a 404/410 under `notFound:
+unavailable` marks it `unavailable` (kept); deleted (a 404/410 under the
+default `notFound`, a read tombstone, a feed tombstone) removes it, or keeps
+it marked `deleted` under `retainDeleted`; the record found but not in the
+list (`filtered`) removes it from this collection (`removed`, with the
+record as that check read it); an error or no check leaves it
+`unconfirmed`. The marks persist in the outbox. A retained `deleted` mark
+stays until a read returns the record again or the app removes it (a
+`remove()` is held and checked like any write to a marked record); the
+client does not expire or cap them. A read
+that returns a marked record again drops the mark (`present`). Checks of
+records without writes are capped at `maxMissingRecordChecks` per sync
+(default 50), one limit shared by all collections, spent in the order the
+sync reads them (and within a collection, records left `unconfirmed` by an
+earlier sync before newly vanished ones); the rest stay `unconfirmed`, and
+the next sync checks `unconfirmed` records first, even when the list did
+not change. Only a check that makes a request counts. Records with writes
+are always checked. Under `missingRecordChecks: 'none'`, or without an item
+GET, nothing is checked, reported or counted, and an `absent: removed`
+record stays `unconfirmed` until a read returns it. `client.presence(resource?)`
+lists the current marks (`PresenceMark`: `presence`, `source`, `detail`,
+`record`, and `lastSeen`: when a read last returned the record, the start
+of that sync, absent when no read of this client returned it, such as a
+record kept from storage written before a restart); a record without a mark
+is present as far as the client knows. The read times are kept in memory
+for every record read; only a mark stores its `lastSeen` (in the outbox).
+A new `update()` or `remove()` of a marked record is held for the next
+refresh, which checks it.
+
+**The app is told before anything is removed.** `onPresence(changes)` is
+called, and awaited, before a record is removed from the local copy, with
+one `PresenceChange` per record (`collection`, `context`, `id`, `presence`,
+`source`, `record`, `pruned: true`). Marks set or cleared on kept records
+(`pruned: false`; `present` when a mark is dropped) are held and told at
+the end of the sync. Each record is told once per sync, with its latest
+change (a record marked `unconfirmed` and settled in the same sync is told
+only as settled; a removal replaces a held mark change of the same
+record). Held changes that are not told (the sync throws, the handler
+throws at the end, or it threw earlier in the sync, which skips the end
+call) are kept, the latest per record, and told at the end of a later
+sync; they are kept in memory only, so a restart loses them though not the
+marks. A removal the handler refused keeps the record and its mark; an
+`unconfirmed` one is checked again by a later sync. A mark dropped because
+a read returned the record, a write to the record settled, or a check
+found the record while a write or confirmed copy keeps it, drops its held
+change too; if the app had
+been told a mark of the record (or the mark was restored from storage), it
+is told `present` instead (not after a delete the app made). The same changes are on
+`SyncResult.presence` (absent when there are none). If the handler throws
+or rejects, the records are not removed (for the read's own removals, that
+collection's read is not applied: its records do not replace the confirmed
+copy, though marks the read settles still clear), its held writes do not
+count a refresh miss, `sync()` rejects with the error, and a later sync
+tells again. A write that settles while the handler runs makes the read
+older than it: its records are then only added or updated and nothing is
+removed. A record that has a write when the handler returns (queued during
+the handler, or still being stored) is not removed: its change is listed
+with `pruned: false`, although the handler was told `pruned: true`. A
+removal after a check, for a record kept earlier (`unconfirmed`,
+`unavailable`) that a check, the deletion feed or its parent now settles,
+is told the same way, with that `source` (`read`, `feed`, `parent`). A
+read that fails or is incomplete removes nothing and tells nothing.
 
 A complete `sync()` of a collection (every page read, within the read budget)
 can lack a record that has queued updates. The provider may have deleted it,
@@ -1112,6 +1194,92 @@ push access and `POST …/issues/{issue_number}/labels` then adds).
 Write Preconditions on a follow-up operation are not read. Not verified
 against a live provider.
 
+### Write preconditions (`x-write-precondition`)
+
+A create, update or delete operation may declare `x-write-precondition`
+(the draft Write Preconditions extension 0.1.0-draft,
+[`openapi-extensions/spec/write-preconditions/`](../openapi-extensions/spec/write-preconditions/README.md)).
+The client then checks it before each send, and handles the write's own
+answers as the extension says. An operation without one is unchanged.
+
+- **`kind: ifMatch`**: the write carries the object's version in `header`
+  (`If-Match` by default). A version `in: body` comes from the record as last
+  read, with no extra request; a version `in: header` (an `ETag`), or a record
+  that has no version field, is read with the item GET first. An answer in
+  `conflictStatus` (default `[412]`) stops the write with
+  `precondition: 'conflict'` in `pendingWrites()` (state `failed`). It is not
+  sent again. A version that is neither a string nor a number (an object,
+  say) is never sent as text: the write fails with a `lastError` saying so.
+- **`kind: readVerify`**: the item GET is read before every send. If a field
+  the update writes changed since it was last read (for a delete, any field
+  the client holds), the write is not sent. It stops as a `conflict`, and each
+  field becomes a `WriteConflict` (`onConflict`). Otherwise a full-record PUT
+  is built on that read, so a field changed elsewhere is not reverted.
+- **`refuseWhen`**: a Refusal Object that matches the object as last read (or
+  read for the check) stops the write with `precondition: 'refused'`. Its
+  `description` goes into `lastError`. A Refusal Object with a `source` reads
+  that resource's object through its item GET, with path variables taken from
+  the write's context. The source is read once per sync pass. While it cannot
+  be read, the write stays `pending` with `precondition: 'source-unknown'` and
+  is retried (fail closed). Nothing is sent. A DELETE has no body, so a
+  `when` cannot be ruled out for it: the Refusal Object applies on its own
+  field (fail closed).
+- **The write's own 404 or 410**: an update stops with
+  `precondition: 'gone'` and is not sent again, since that could recreate
+  the object. A delete settles when the deletion is confirmed, by any of:
+  - a stored feed tombstone for the record;
+  - `absent: deleted` on the collection it was read in;
+  - `notFound: deleted` on the resource;
+  - for a 410, the resource's stated `gone`, which then decides alone.
+
+  Otherwise the record is kept with its last known values and reported to
+  `onMissingRecord` as `unavailable`, with `source: 'write'`.
+- **Unknown outcomes** (no answer, or a 5xx): an update or delete that may
+  not be resent blind (`readVerify`, or `idempotent: false`, or a PATCH
+  without `idempotent: true`) gets `precondition: 'resolving'`. The next
+  attempt first reads the object, then does one of these:
+  - settles the write, if it was applied;
+  - sends it again, if it was not applied;
+  - stops as `conflict`, `refused` or `gone`;
+  - waits, while the read cannot tell.
+
+  The same holds for such a write found in flight at a restart. The version
+  an `ifMatch` write sent is stored (`sentVersion`) for this comparison.
+
+A declaration this client cannot use makes `create()`, `update()` or
+`remove()` of that type throw, rather than send the write unconditionally.
+That is anything the spec's `validate()` refuses, for example:
+
+- an unknown `kind` or an unknown field;
+- an `ifMatch` without a usable `version`;
+- a `header`, `conflictStatus` or `idempotent` that is not well-formed, or
+  that sits where the kind does not allow it;
+- a Refusal Object or `when` it cannot read;
+- a create with anything but `kind: none` and source refusals;
+- a source that is not a `crudResources` key, or whose identity variables
+  are not path parameters of the operation.
+
+Nothing falls back to a default.
+
+`resolveWrite` `retry` clears a `conflict`, `refused`, `gone` or
+`source-unknown` verdict, so the precondition is checked again when the
+write is sent. It keeps `resolving`, so the object is still read before
+anything is sent again. A stored state this client does not know (a later
+client's) is read as `resolving`.
+
+The reads a precondition needs (the object, a source object) are handled
+like the write's own answers:
+
+- a throttling answer holds the write until its time, and pauses an
+  exhausted bucket;
+- refused credentials (a `401`, say) block the client until
+  `authRenewed()`.
+
+A follow-up of a compound create is not checked against the update
+operation's declaration: compound writes are outside the extension's
+scope. Not verified against a live provider; the tests use invented
+transports.
+
 ### Durable outbox and restarts
 
 When a `storage` adapter is passed, the client keeps every unsettled write in
@@ -1289,7 +1457,14 @@ create again. An older client also does not know the write value
 unrestorable and writes it back unchanged, so the held writes are neither
 sent nor lost) nor the top-level `unavailable` (the kept records, which it
 drops: their marks are lost, and its next complete read removes the records
-from its local copy). The version stays `1` because an older client can
+from its local copy). A client from before the presence marks, which already
+keeps unavailable records, keeps the kept records but not their `presence`
+or `source`: once it
+stores the outbox again, `unconfirmed` and retained `deleted` marks come
+back after an upgrade as `unavailable` for good (kept, not checked again by
+themselves). A `presence` value this client does not know is read as
+`unavailable` in the same way. A client from before `lastSeen` drops it
+the same way. The version stays `1` because an older client can
 read every write it holds and either sends it or keeps it unchanged, with
 those caveats: settle or discard merge-patch updates, unbound creates and
 writes held as unavailable before downgrading. Set `outboxNamespace` to
@@ -1465,7 +1640,12 @@ const { records, ontology, errors } = await readPlatform(document, {
   Object's `envelope: { itemsField: <dot-path> }`
   (CRUD Causality §4.2) says where each list response holds its array of
   items (`data.transactions`, say); a body without an array there fails that
-  collection's read with "No items array at <path>", never an empty read.
+  collection's read with "No items array at <path>", never an empty read,
+  unless the envelope (the Collection Object's or the scheme's) declares
+  `emptyWhenAbsent: true` (Pagination Schemes 0.7.0): then a body in which
+  the field is absent (an object along the path lacks the next segment) is
+  a page with no items, for providers that leave an empty array out. A
+  present `null` or other non-array still fails the read.
   `itemsField: null` (or `""`) says the body root is the array, and an item
   that is not an object fails the read ("Item <n> at <path> is not an
   object") instead of being dropped. Without an envelope, the pagination
@@ -1612,6 +1792,107 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   default; `pace: false` turns it off. `ThrottlingDeclaration` gains
   `quotas`, and `Pacer` and `Quota` are exported. Behaviour change only
   for documents whose `x-throttling` limits state `requests`.
+- **Unreleased**: the webhook inbox consumer in `syncables/browser`, for
+  atomic-server's QuickJS sandbox (ontola/atomic-plugins#369 step 4b):
+  `InboxClient`, `InboxConsumer` and `scopedReads` need no `URL`,
+  `Buffer` or `TextDecoder`; `acknowledge: 'next-step'` acknowledges and
+  reports a reconciliation only on the step after the writes landed.
+  `InboxClient` now refuses a base URL
+  that is not canonical (a lower-case host, no default port, no query,
+  fragment, user info, escape or dot segment) and strips every trailing
+  `/` from it, not only one. `InboxError.backoff()` also covers a `409
+  obsolete-generation`, and `parseRetryAfter` follows the client's
+  `Retry-After` rules (`parseHttpDate`, 2^53 − 1).
+- **Unreleased**: An `itemCount` offset read (the default `advance`)
+  without a `totalCount` no longer stops after its first page (#495). It
+  read short, with no error and without being reported incomplete. It now
+  reads on, adding the items each page held, to the first empty page, as
+  Pagination Schemes 0.7.0 §4.3.2 says. With a `totalCount` it ends once
+  the next offset reaches it, as before. The repeat check ends a read
+  whose server ignores the offset.
+
+- **Unreleased**: Pagination Schemes 0.7.1 §4.3.2: in a scheme that
+  declares both an offset and a `nextLink` field, the link leads under
+  either `advance`. The client follows it while there is one. An absent,
+  `null` or empty link ends the read. When the last response's
+  `totalCount` exceeds the items read, the read still ends there, but is
+  not complete (`notComplete`), so nothing is concluded about records it
+  did not return. Before, under `advance: pageSize`, the read stepped from an
+  offset that was not advanced while links were followed. It then asked
+  for a page it already had and ended with an error.
+- **Unreleased**: Pagination Schemes 0.7.0 `emptyWhenAbsent` on an
+  Envelope Object (a scheme's `response.envelope` or a Collection Object's
+  `envelope`): with a non-empty `itemsField`, a body in which that field is
+  absent is a page with no items instead of an error. `paginate` takes
+  `emptyWhenAbsent` next to `itemsField`; `ApiClient.paginate` takes it from
+  the collection envelope it uses. The scheme validator checks rule 23.
+- **Unreleased**: Pagination Schemes 0.7.0 `advance` on an `offset` field:
+  `pageSize` makes the next offset add the page size (a reported
+  `pageSize` field, else the size sent) instead of the items the page held,
+  and ends the read only once it reaches `totalCount` (without one, at an
+  empty page); a short or empty page before that no longer ends it. With
+  neither page size known the read ends with an error. A reported page size
+  counts only as an integer of at least 1 and a `totalCount` as an integer
+  of at least 0, read per response. `itemCount`, the default, steps as
+  before. Every offset read (`paginate` and `ApiClient.paginate` too, not
+  only a collection read) now ends with `PageReadError` at a page holding an
+  item an earlier page returned (by identity, else a page identical to the
+  one before), so a server that ignores the offset is not asked again
+  without end. The scheme validator checks rule 24 and
+  `resolveEffectiveScheme` rule 25.
+- **Unreleased**: Write Preconditions 0.1.0-draft (`x-write-precondition`)
+  on create, update and delete operations: `ifMatch` sends the version
+  (from the record, or an item GET when it is a header) and stops on a
+  `conflictStatus`; `readVerify` reads first, stops on a changed written
+  field and builds a full-record PUT on that read; `refuseWhen` (and its
+  `source` objects, fail closed) stops a write the object refuses; an
+  update's 404/410 stops as `gone`, a delete's settles only when the
+  deletion is confirmed and is otherwise reported `unavailable` with the
+  new `source: 'write'`; an unknown outcome is resolved by a read before
+  anything is sent again (`precondition: 'resolving'`, also after a
+  restart). `PendingWriteInfo.precondition` (`WritePreconditionState`) and
+  the outbox's `precondition` and `sentVersion` (within version `1`) are
+  new; an unusable declaration makes the write call throw. Behaviour
+  change only for documents that declare `x-write-precondition`.
+- **Unreleased**: Throttling values are read more strictly, as the spec
+  follow-up says: only space, tab, CR and LF are trimmed from a header or
+  body value (U+00A0 and other Unicode spaces are kept, so the value does
+  not parse), an integer above 2^53 − 1 does not parse, integral floats
+  included, and an HTTP-date parses only in RFC 9110's exact forms
+  (`parseHttpDate`), not through `Date.parse`. The same applies to the `Retry-After` of a retryable
+  answer outside `x-throttling`, which before took any long digit string
+  and capped the wait at `retry.maxRetryAfterMs`.
+- **Unreleased**: `parseHttpDate` fixes: a leap second (`23:59:60`) reads
+  as the next second instead of failing the day check, a 4-digit year below
+  100 keeps its value (`0050` was read as 1950), and the RFC 850
+  "more than 50 years ahead" rule compares full dates, not only years.
+- **Unreleased**: `PresenceMark.lastSeen`: when a read last returned the
+  record (the start of that sync), stored with the mark in the outbox
+  (within version 1; an older client drops it); absent for a record no read
+  of this client returned.
+- **Unreleased**: Presence marks (K4/K5): under `absent: removed` (and
+  wherever a check will be made) a record a complete read lacks is kept,
+  marked `unconfirmed`, before its check, then marked `unavailable`,
+  removed (`deleted`, `removed`) or left `unconfirmed`; `retainDeleted`
+  keeps deleted records marked; checks of records without writes are capped
+  at `maxMissingRecordChecks` (default 50) and unconfirmed records are
+  checked first next sync; a parent whose nested collection declares
+  `parentAbsent` is checked without writes under it; `client.presence()`
+  lists the marks; `PresenceChange` gains `present`, `unconfirmed`,
+  `unavailable` and `pruned: false`, told once per record per sync. The
+  outbox's `unavailable` entries gain `presence` and `source` (within
+  version 1; an older client reads every kept record as unavailable).
+  Behaviour changes: under `missingRecordChecks: 'all'` a vanished record
+  is kept until its check instead of removed first; a vanished parent
+  without writes under it is now checked by default.
+- **Unreleased**: Tell before prune: a record a complete `sync()` removes
+  from the local copy (no longer returned, no unsettled writes) is told to
+  the new `onPresence` handler, awaited, before it is removed, and listed on
+  the new `SyncResult.presence` (`PresenceChange`: `deleted` under
+  `absent: deleted`, else `removed`, with the last values). A failing
+  handler applies nothing of that read and the next sync tells again.
+  Before, under the default `missingRecordChecks: 'pending'`, the app was
+  never told.
 - **Unreleased**: Compound creates (CRUD Causality 0.5.0 §4.7, K8): a
   create's `followUps` leave `omit` fields out of the create body and, once
   the create is bound, queue one follow-up update per field, sent in order

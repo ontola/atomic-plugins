@@ -443,6 +443,67 @@ describe('compound creates (CRUD Causality 0.5.0 §4.7)', () => {
     ]);
   });
 
+  it('a retry of another failed write of the record leaves a queued unknown follow-up waiting for its read (#480 S1, queued branch)', async () => {
+    let labelsCalls = 0;
+    const fake = github({
+      pushAccess: false,
+      labelsAnswer: () => {
+        labelsCalls += 1;
+        return 502;
+      },
+    });
+    const storage = new InMemoryStorageAdapter();
+    const first = client(fake, compoundDocument(), storage);
+    const created = await first.create('issues', {
+      title: 'Bug',
+      labels: ['bug'],
+    });
+    await first.update('issues', String(created['number']), {
+      title: 'Retitled',
+    });
+    await vi.waitFor(() =>
+      expect(first.pendingWrites()).toMatchObject([
+        { followUp: { reason: 'unknown' }, awaitingRefresh: true },
+        { type: 'update', state: 'pending' },
+      ]),
+    );
+    // A stored state where the record has a failed write and the unknown
+    // follow-up queued: the app's edit is moved to the failed writes.
+    const outbox = structuredClone(
+      (await storage.get('syncables:outbox', 'outbox')) as {
+        records: {
+          failed: Record<string, unknown>[];
+          queue: Record<string, unknown>[];
+        }[];
+      },
+    );
+    const entry = outbox.records[0]!;
+    const edit = entry.queue.pop()!;
+    entry.failed.push({
+      ...edit,
+      state: 'failed',
+      lastStatus: 422,
+      lastError: 'refused',
+      seq: -1,
+    });
+    const copy = new InMemoryStorageAdapter();
+    await copy.put('syncables:outbox', 'outbox', outbox);
+    const second = client(fake, compoundDocument(), copy);
+    await second.ready();
+    expect(second.pendingWrites()).toMatchObject([
+      { type: 'update', state: 'failed' },
+      { followUp: { reason: 'unknown' }, awaitingRefresh: true },
+    ]);
+    // Retrying the failed edit must not release the follow-up unread.
+    await second.resolveWrite('issues', '7', { action: 'retry' });
+    await settle(30);
+    expect(second.pendingWrites().find((w) => w.followUp)).toMatchObject({
+      followUp: { reason: 'unknown' },
+      awaitingRefresh: true,
+    });
+    expect(labelsCalls).toBe(1);
+  });
+
   it('a 401 on a follow-up still goes through the auth handling', async () => {
     const fake = github({ pushAccess: false, labelsAnswer: () => 401 });
     const c = client(fake);
@@ -675,5 +736,24 @@ describe('compound creates (CRUD Causality 0.5.0 §4.7)', () => {
     await c.create('issues', { title: 'Bug', labels: ['bug'] });
     await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
     expect(lines(fake)).toEqual(['POST /repos/o/r/issues']);
+  });
+});
+
+describe('compound creates and Write Preconditions (#490 review)', () => {
+  it("does not apply the update operation's x-write-precondition to a follow-up", async () => {
+    const document = compoundDocument();
+    const patch = document.paths['/repos/{owner}/{repo}/issues/{issue_number}']!
+      .patch as Record<string, unknown>;
+    patch['x-write-precondition'] = { kind: 'readVerify' };
+    const fake = github({ pushAccess: false });
+    const c = client(fake, document);
+    await c.create('issues', { title: 'Bug', labels: ['bug'] });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]));
+    // No read of the issue before the follow-up: readVerify is the
+    // update's, and a follow-up is outside Write Preconditions' scope.
+    expect(fake.requests.map((r) => r.line)).toEqual([
+      'POST /repos/o/r/issues',
+      'POST /repos/o/r/issues/7/labels',
+    ]);
   });
 });

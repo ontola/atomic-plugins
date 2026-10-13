@@ -232,6 +232,11 @@ export interface PaginateOptions {
    * `response.envelope` applies, else the array is located.
    */
   itemsField?: string;
+  /**
+   * With `itemsField`: a body without that field is a page with no items
+   * (an Envelope Object's `emptyWhenAbsent`, Pagination Schemes 0.7.0).
+   */
+  emptyWhenAbsent?: boolean;
   /** A path template from `document.paths`, e.g. `/v1/search`. */
   path: string;
   /** Default `GET`. */
@@ -294,6 +299,9 @@ export async function paginate(
     ...(options.itemsField === undefined
       ? {}
       : { itemsField: options.itemsField }),
+    ...(options.itemsField !== undefined && options.emptyWhenAbsent
+      ? { emptyWhenAbsent: true }
+      : {}),
     ...(options.range ? { range: options.range } : {}),
     identity: (item) => asText(item[options.idField ?? 'id']),
   })) {

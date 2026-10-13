@@ -2,7 +2,10 @@
 /**
  * Week view (#89 frames A, L, O): a project × day `<table>`, today tinted,
  * zero as a muted en dash, row and day totals, days before the import
- * window hatched. A non-empty cell is a button that opens Entries at that
+ * window hatched. Under the day totals, a "Billable" row gives each day's
+ * billable time and the week's (0.7.2, usertest-findings#13: a tester
+ * looking for a day's billable hours did not find the totals under the
+ * grid). A non-empty cell is a button that opens Entries at that
  * day with the project's rows highlighted.
  */
 import {
@@ -152,6 +155,15 @@ export function weekTable(h: H, { grid, week, onCell }: WeekProps) {
             ms ? h('td', { class: dayClass(i) }, ...duration(h, ms)) : zero(i),
           ),
           h('td', { class: 'tot' }, ...duration(h, grid.total)),
+        ),
+        h(
+          'tr',
+          { class: 'bill' },
+          h('th', { scope: 'row' }, 'Billable'),
+          ...grid.dayBillable.map((ms, i) =>
+            ms ? h('td', { class: dayClass(i) }, ...duration(h, ms)) : zero(i),
+          ),
+          h('td', { class: 'tot' }, ...duration(h, grid.billable)),
         ),
       ),
     ),

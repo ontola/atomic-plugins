@@ -212,6 +212,55 @@ describe('Calendar views: agenda and week', () => {
   });
 });
 
+describe('Calendar views: an imported calendar with nothing this week (usertest-findings#3)', () => {
+  // The session imported 14 events, all months back, and the app opened on
+  // the current week; the tester read "No events this week" as a failed
+  // import. The empty week names where the events are and jumps there, and
+  // the sync-status card above it still counts what was imported.
+  const emptyWeek = (root: HTMLElement) =>
+    root.querySelector<HTMLElement>('main .center .card');
+
+  it('weeks after the events: names the latest one and jumps back to it', async () => {
+    const { root } = await chosen(1120);
+    vi.setSystemTime(new Date('2026-10-21T12:00:00Z'));
+    await click(root.querySelector<HTMLElement>('[data-key="today"]')!);
+    const empty = emptyWeek(root)!;
+    expect(empty.querySelector('h2')!.textContent).toBe('No events this week');
+    // The timed event (09:30) is the latest of that day's two.
+    expect(empty.querySelector('p')!.textContent).toBe(
+      'Your latest event is Calendar timed fixture on Thursday 24 September.',
+    );
+    const card = one(root, 'region', 'Sync status');
+    expect(card.textContent).toContain(
+      'Last sync: 3 added, 0 updated, 0 unchanged',
+    );
+    expect(byRole(root, 'button', 'Jump to next event')).toHaveLength(0);
+    await click(one(root, 'button', 'Jump to latest event'));
+    expect(emptyWeek(root)).toBeNull();
+    const thursday = one(root, 'region', 'Thursday 24 September');
+    expect(thursday.textContent).toContain('Calendar timed fixture');
+  });
+
+  it('weeks before the events: names the next one and jumps ahead to it', async () => {
+    const { root } = await chosen(1120);
+    vi.setSystemTime(new Date('2026-09-02T12:00:00Z'));
+    await click(root.querySelector<HTMLElement>('[data-key="today"]')!);
+    const empty = emptyWeek(root)!;
+    expect(empty.querySelector('h2')!.textContent).toBe('No events this week');
+    // The fixture's three-day event (10–12 September) comes first.
+    expect(empty.querySelector('p')!.textContent).toBe(
+      'Your next event is Calendar three-day fixture on Thursday 10 September.',
+    );
+    expect(byRole(root, 'button', 'Jump to latest event')).toHaveLength(0);
+    await click(one(root, 'button', 'Jump to next event'));
+    expect(emptyWeek(root)).toBeNull();
+    expect(one(root, 'region', 'Thursday 10 September')).toBeTruthy();
+    expect(one(root, 'group', 'All-day events').textContent).toContain(
+      'Calendar three-day fixture',
+    );
+  });
+});
+
 describe('Calendar views: edit, review, send', () => {
   it('5.9: edits five fields locally, validates like the adapter, sends nothing', async () => {
     const { root, store } = await chosen(1120);

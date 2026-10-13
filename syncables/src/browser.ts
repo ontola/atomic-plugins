@@ -51,6 +51,7 @@ export type {
   PendingWriteInfo,
   PendingWriteState,
   PendingWriteType,
+  WritePreconditionState,
   WriteConflict,
   WriteResolution,
   WriteFailure,
@@ -58,6 +59,9 @@ export type {
   AuthBlock,
   MissingRecord,
   MissingRecordEvidence,
+  PresenceChange,
+  PresenceMark,
+  PresenceMarkValue,
   MissingRecordFailure,
   PaginateOptions as ClientPaginateOptions,
   PollingHandle,
@@ -154,3 +158,35 @@ export type {
   ResponseRole,
   SchemeType,
 } from './pagination/types.js';
+
+// The webhook inbox consumer (ontola/atomic-plugins#369), without signing
+// (`signedTransport` needs `node:crypto`; a host that signs for the caller,
+// such as atomic-server's sandbox, does not need it). Nothing here needs
+// `URL`, `Buffer` or `TextDecoder`.
+export {
+  DEFAULT_BACKOFF_SECONDS,
+  InboxClient,
+  InboxError,
+  parseRetryAfter,
+} from './inbox/client.js';
+export type {
+  GapMarker,
+  InboxEvent,
+  InboxEventPage,
+  InboxSubscription,
+  ReconciliationRequired,
+  SubscribeRequest,
+} from './inbox/client.js';
+export {
+  DEFAULT_WAIT_SECONDS,
+  InboxConsumer,
+  InMemoryInboxJournal,
+} from './inbox/consumer.js';
+export type {
+  InboxConsumerOptions,
+  InboxJournal,
+  StepResult,
+  StoredSubscription,
+} from './inbox/consumer.js';
+export { decodeBase64Utf8, pathSegment, scopedReads } from './inbox/reads.js';
+export type { ScopedRead } from './inbox/reads.js';

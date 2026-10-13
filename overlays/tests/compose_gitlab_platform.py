@@ -42,7 +42,10 @@ def main(platform="gitlab"):
         document, errors = apply_overlay(document, overlay, str(overlay_path))
         if errors:
             raise RuntimeError("\n".join(errors))
-    print(json.dumps(document, separators=(",", ":")))
+    # YAML dates and times (unquoted examples, as in Box's OAD) as ISO 8601
+    # text. Only such values reach `default`, so every document that composed
+    # before composes to the same bytes.
+    print(json.dumps(document, separators=(",", ":"), default=lambda value: value.isoformat()))
 
 
 if __name__ == "__main__":

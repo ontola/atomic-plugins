@@ -97,6 +97,16 @@ function checkShortPage(
       field,
     })),
   );
+  // Spec 0.7.0 §9 rule 24: `advance` only on an offset field.
+  for (const { at, field } of fields) {
+    const advance = (field as { advance?: unknown }).advance;
+    if (advance === undefined) continue;
+    if (field.role !== 'offset') {
+      errors.push(`${at}.advance is allowed only on an offset field`);
+    } else if (advance !== 'itemCount' && advance !== 'pageSize') {
+      errors.push(`${at}.advance must be itemCount or pageSize`);
+    }
+  }
   for (const { at, field } of fields) {
     if (field.start === undefined) continue;
     if (field.role !== 'page') {
@@ -337,6 +347,14 @@ function checkEnvelope(
   const field = (envelope as Record<string, unknown>)['itemsField'];
   if (field !== undefined && field !== null && typeof field !== 'string')
     errors.push(`${path}.envelope.itemsField must be a string or null`);
+  // Rule 23 (0.7.0).
+  const empty = (envelope as Record<string, unknown>)['emptyWhenAbsent'];
+  if (empty !== undefined && typeof empty !== 'boolean')
+    errors.push(`${path}.envelope.emptyWhenAbsent must be a boolean`);
+  if (empty !== undefined && (typeof field !== 'string' || field === ''))
+    errors.push(
+      `${path}.envelope.emptyWhenAbsent needs an itemsField that is a non-empty string (rule 23)`,
+    );
 }
 
 /**
