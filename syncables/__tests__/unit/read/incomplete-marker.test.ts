@@ -4,6 +4,7 @@ import {
   createApiClient,
   paginate,
   readCollections,
+  invalidAutoDetected,
   readPlatform,
   resolveEffectiveScheme,
   responseIncomplete,
@@ -387,7 +388,7 @@ describe('a read with a marked response is not complete', () => {
     expect(outcome).toEqual({ complete: true });
   });
 
-  it('skips an autoDetect scheme whose marker the validator refuses, without failing the read', async () => {
+  it('reads an auto-detected scheme whose marker the validator refuses as not complete', async () => {
     const scheme = {
       ...capped({ field: 'request_status.type' }),
       autoDetect: true,
@@ -396,18 +397,33 @@ describe('a read with a marked response is not complete', () => {
     const doc = document({ scheme });
     const operation = doc.paths['/data_sources/{data_source_id}/query']!.post!;
     delete (operation as Record<string, unknown>)['x-pagination'];
+    // The body declares the scheme's fields, so it would be auto-detected.
+    operation.requestBody!.content!['application/json']!.schema = {
+      type: 'object',
+      properties: {
+        start_cursor: { type: 'string' },
+        page_size: { type: 'integer' },
+      },
+    };
     expect(resolveEffectiveScheme(doc, operation)).toBeUndefined();
+    expect(invalidAutoDetected(doc, operation)).toMatchObject({
+      schemeName: 'cappedQuery',
+    });
+    // Two pages; without a scheme only the first is read, and it is not
+    // taken for the whole collection.
     const fake = server();
-    fake.set([[a, b]]);
+    fake.set([[a, b], [c]]);
     const result = await readCollections(doc, {
       transport: fake.transport,
       constants: context,
     });
-    expect(result.collections[0]!.error).toBeUndefined();
-    expect(result.collections[0]!.items.map((r) => r['id'])).toEqual([
-      'a',
-      'b',
-    ]);
+    const snapshot = result.collections[0]!;
+    expect(snapshot.error).toBeUndefined();
+    expect(snapshot.items.map((r) => r['id'])).toEqual(['a', 'b']);
+    expect(snapshot.complete).toBe(false);
+    expect(snapshot.notComplete).toMatch(
+      /"cappedQuery" matches this operation by auto-detection but is invalid/,
+    );
   });
 });
 

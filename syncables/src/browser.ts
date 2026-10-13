@@ -121,6 +121,7 @@ export type {
 
 export {
   PaginationSchemeError,
+  invalidAutoDetected,
   resolveEffectiveScheme,
 } from './pagination/autodetect.js';
 export type { EffectiveScheme } from './pagination/autodetect.js';
