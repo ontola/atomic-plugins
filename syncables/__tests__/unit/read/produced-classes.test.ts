@@ -36,6 +36,14 @@ const lensFile = (name: string): unknown =>
     readFileSync(new URL(`ontology/lenses/${name}`, repository), 'utf8'),
   );
 
+// The ontology base, read from ontology-kit/base.json so a domain move stays
+// one edit (ontology-kit's check refuses the base written out here).
+const BASE = (
+  JSON.parse(
+    readFileSync(new URL('ontology-kit/base.json', repository), 'utf8'),
+  ) as { base: string }
+).base;
+
 const example = (): OpenApiDocument => structuredClone(EXAMPLE);
 type Entry = Record<string, unknown>;
 const produces = (document: OpenApiDocument): Entry[] =>
@@ -312,9 +320,8 @@ describe('the read model and the client', () => {
 
 describe('lensFits (§4.2) on the published catalog lenses', () => {
   const clockify = {
-    class:
-      'https://ontola.github.io/atomic-plugins/ontology/classes/time-entry-v1',
-    lens: 'https://ontola.github.io/atomic-plugins/ontology/lenses/clockify-time-entry-v2',
+    class: `${BASE}/classes/time-entry-v1`,
+    lens: `${BASE}/lenses/clockify-time-entry-v2`,
   };
   const source = { provider: 'clockify.me', resource: 'timeEntry' };
 
@@ -342,8 +349,7 @@ describe('lensFits (§4.2) on the published catalog lenses', () => {
       lensFits(
         {
           ...clockify,
-          class:
-            'https://ontola.github.io/atomic-plugins/ontology/classes/issue-v1',
+          class: `${BASE}/classes/issue-v1`,
         },
         lens,
         source,
@@ -366,7 +372,7 @@ describe('lensFits (§4.2) on the published catalog lenses', () => {
       lensFits(
         {
           class: 'https://atomicdata.dev/class/Bookmark',
-          lens: 'https://ontola.github.io/atomic-plugins/ontology/lenses/solid-bookmark-v1',
+          lens: `${BASE}/lenses/solid-bookmark-v1`,
         },
         lensFile('solid-bookmark-v1'),
         { provider: 'raindrop.io', resource: 'raindrop' },
