@@ -7,8 +7,9 @@
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/auth-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/pagination-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/repositories-read-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
-        "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/crud-causality-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/crud-causality-v2-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/compound-create-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/canonical-paths-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/identity-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/github-issues/1.1.4/throttling-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml"
@@ -116,7 +117,8 @@
       "overlays": [
         "https://ontola.github.io/atomic-plugins/overlays/APIs/discord.com/10/auth-v2-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/discord.com/10/pagination-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml",
-        "https://ontola.github.io/atomic-plugins/overlays/APIs/discord.com/10/crud-causality-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml"
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/discord.com/10/crud-causality-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/discord.com/10/throttling-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml"
       ],
       "selection": {
         "authenticationProfile": "discordUser"
@@ -184,7 +186,8 @@
       "overlays": [
         "https://ontola.github.io/atomic-plugins/overlays/APIs/gitlab.com/v4-readonly/auth-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml",
         "https://ontola.github.io/atomic-plugins/overlays/APIs/gitlab.com/v4-readonly/pagination-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml",
-        "https://ontola.github.io/atomic-plugins/overlays/APIs/gitlab.com/v4-readonly/crud-causality-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml"
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/gitlab.com/v4-readonly/crud-causality-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/gitlab.com/v4-readonly/throttling-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml"
       ],
       "selection": {
         "authenticationProfile": "gitlabReadOnly",

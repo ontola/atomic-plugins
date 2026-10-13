@@ -15,6 +15,7 @@ downloaded.
 """
 import argparse
 import copy
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -119,10 +120,17 @@ class GitHubCompoundCreateTests(unittest.TestCase):
         self.assertEqual([(p["operation"], p["reason"]) for p in result["pending"]], [("issues-add-labels", "refused")])
         self.assertEqual([s[0] for s in sent].count("issues-create"), 1)
 
-    def test_no_dated_catalog_selects_the_overlay(self):
+    def test_only_the_syncables_0_22_catalog_selects_the_overlay(self):
+        # catalog/2026-10-12-syncables-0.22.json selects it after crud-causality v2.
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
-                self.assertNotIn(OVERLAY, catalog.read_text(encoding="utf-8"))
+                text = catalog.read_text(encoding="utf-8")
+                if catalog.name != "2026-10-12-syncables-0.22.json":
+                    self.assertNotIn(OVERLAY, text)
+                    continue
+                issues = next(p for p in json.loads(text)["platforms"] if p["name"] == "github-issues")
+                names = [url.rsplit("/", 1)[1] for url in issues["overlays"]]
+                self.assertLess(names.index(f"crud-causality-v2-{PIN}-overlay.yaml"), names.index(OVERLAY))
 
 
 if __name__ == "__main__":

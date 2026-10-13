@@ -142,7 +142,8 @@ entry:
 | `notion` | [`runtime-schema`](APIs/notion.com/2026-03-11/runtime-schema-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) after `crud-causality` | Runtime Schemas 0.1.0-draft (0.22.0) |
 | `google-tasks` | [`completeness`](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) after it; `crud-causality-v2` in place of `crud-causality`, its collection envelopes with `emptyWhenAbsent` as pagination v2's (a reader takes a Collection Object's envelope over the scheme's); `throttling` last | CRUD Causality 0.4.0 `listQuery`, Throttling 0.2.0-draft (0.21.0); `emptyWhenAbsent` (0.22.0) |
 | `google-calendar` | `app-crud-causality-v2` in place of `app-crud-causality`; [`read-tombstone`](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) and [`throttling`](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) last | `listQuery` (0.21.0); the event update's `mode: patch` and `patchFormat` (#419); `x-read-tombstone` (since #330); Throttling 0.2.0-draft (0.21.0) |
-| `github-issues` | [`completeness`](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) after `crud-causality`; `throttling` last | Collection Completeness `notFound`, `parentAbsent`; Throttling 0.2.0-draft (0.21.0) |
+| `github-issues` | [`crud-causality-v2`](APIs/github.com/github-issues/1.1.4/crud-causality-v2-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) in place of `crud-causality` (§4.6 patch formats, §4.5 `generated` added fields); [`completeness`](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) and [`compound-create`](APIs/github.com/github-issues/1.1.4/compound-create-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) after it; `throttling` last | `patchFormat`, `addedFields` (0.22.0); Collection Completeness `notFound`, `parentAbsent`; `followUps` (0.22.0); Throttling 0.2.0-draft (0.21.0) |
+| `gitlab`, `discord` | `throttling` last | Throttling 0.2.0-draft and 0.3.0-draft (0.22.0) |
 | `notion` (also) | `throttling` last | Throttling 0.2.0-draft (0.21.0) |
 | `spotify`, `airtable`, `asana` | `throttling` last | Throttling 0.2.0-draft (0.21.0) |
 
@@ -164,9 +165,8 @@ compositions differ from the base ones only by the listed additions. No
 provider was called. `tests/google_tasks_empty_lists_syncables.test.ts` also
 reads an empty task list through this catalog with syncables. The same test checks that every
 update in every composition names a CRUD Causality rule-5 `mode` and, for a
-patch, a §4.6 `patchFormat`; the only gaps are github-issues' v1 (two
-PATCHes declare `merge`, its label writes none), which its crud-causality v2
-fixes once that is selected here.
+patch, a §4.6 `patchFormat`; there are no gaps since github-issues'
+crud-causality v2 is selected.
 
 ## Pagination Schemes 0.7.0 catalog: Google Tasks empty lists and Box offsets
 

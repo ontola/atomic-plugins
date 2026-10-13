@@ -22,7 +22,10 @@ overlays that a syncables 0.22.0 reader uses:
 * Notion (after its runtime schema), Spotify, Airtable and Asana:
   Throttling, last;
 * Google Tasks and GitHub Issues: Collection Completeness (after their
-  crud-causality overlay).
+  crud-causality overlay);
+* GitHub Issues: crud-causality v2 (§4.6 patch formats, §4.5 added-field
+  sources) in place of v1, and the compound create after completeness;
+* GitLab and Discord: Throttling, last.
 
 Every update in every composition must also name a CRUD Causality rule-5
 `mode`, and a §4.6 `patchFormat` when the mode is `patch`.
@@ -59,6 +62,8 @@ TASKS = "googleapis.com/tasks/v1/{}-7ca47c73cf2308c9812692b482b3713b397bc88c-ove
 SPOTIFY = "spotify.com/1.0.0-readonly/{}-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml"
 AIRTABLE = "airtable.com/1.0-readonly/{}-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml"
 ASANA = "asana.com/1.0/{}-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml"
+GITLAB = "gitlab.com/v4-readonly/{}-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml"
+DISCORD = "discord.com/10/{}-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml"
 
 
 def url(template, kind):
@@ -69,9 +74,13 @@ def url(template, kind):
 # ("after", anchor, new) or ("append", new), applied in this order.
 CHANGES = {
     "github-issues": [
-        ("after", url(GITHUB, "crud-causality"), url(GITHUB, "completeness")),
+        ("replace", url(GITHUB, "crud-causality"), url(GITHUB, "crud-causality-v2")),
+        ("after", url(GITHUB, "crud-causality-v2"), url(GITHUB, "completeness")),
+        ("after", url(GITHUB, "completeness"), url(GITHUB, "compound-create")),
         ("append", url(GITHUB, "throttling")),
     ],
+    "gitlab": [("append", url(GITLAB, "throttling"))],
+    "discord": [("append", url(DISCORD, "throttling"))],
     "google-calendar": [
         ("replace", url(CALENDAR, "app-crud-causality"), url(CALENDAR, "app-crud-causality-v2")),
         ("append", url(CALENDAR, "read-tombstone")),
@@ -96,6 +105,35 @@ CHANGES = {
     ],
 }
 
+# Warnings a CRUD Causality validator that checks rule 10 (a SHOULD) reports for
+# Moneybird's published crud-causality: one-per-parent resources whose identity
+# variables no binding or collection supplies; the records carry no field to
+# bind them to. Allow-listed, as overlays/tests/test_crud_reads_in_catalogs.py
+# does.
+ALLOWED_WARNINGS = {
+    ("moneybird", "crudResources.verification.identity.urlTemplate: {administration_id} is neither bound nor "
+     "in a collection's urlTemplate (rule 10, SHOULD)"),
+    ("moneybird", "crudResources.moneybird_payments_mandate.identity.urlTemplate: {administration_id} is "
+     "neither bound nor in a collection's urlTemplate (rule 10, SHOULD)"),
+    ("moneybird", "crudResources.moneybird_payments_mandate.identity.urlTemplate: {contact_id} is neither "
+     "bound nor in a collection's urlTemplate (rule 10, SHOULD)"),
+}
+
+# Values a selected revision changes (not adds), by full path: github-issues'
+# crud-causality v2 corrects v1's patch formats (§4.6), added-field sources
+# (§4.5) and the two PATCH descriptions.
+CHANGED = {
+    "github-issues": [
+        ("paths", "/repos/{owner}/{repo}/issues", "post", "x-crud", "addedFields", "number", "source"),
+        ("paths", "/repos/{owner}/{repo}/issues/comments/{comment_id}", "patch", "x-crud", "description"),
+        ("paths", "/repos/{owner}/{repo}/issues/comments/{comment_id}", "patch", "x-crud", "patchFormat"),
+        ("paths", "/repos/{owner}/{repo}/issues/{issue_number}", "patch", "x-crud", "description"),
+        ("paths", "/repos/{owner}/{repo}/issues/{issue_number}", "patch", "x-crud", "patchFormat"),
+        ("paths", "/repos/{owner}/{repo}/issues/{issue_number}/comments", "post", "x-crud", "addedFields", "id",
+         "source"),
+    ],
+}
+
 # Where each composition may differ from the base one: added keys only, named
 # by their path cut at four keys. Platforms not listed must not differ.
 ADDED = {
@@ -103,6 +141,12 @@ ADDED = {
         ("x-throttling",),
         ("components", "crudResources", "issue", "collections"),
         ("components", "crudResources", "issueComment", "collections"),
+        # The compound create: labels in the create body and the followUps.
+        ("paths", "/repos/{owner}/{repo}/issues", "post", "requestBody"),
+        ("paths", "/repos/{owner}/{repo}/issues", "post", "x-crud"),
+        # crud-causality v2: patchFormat custom on the two label writes.
+        ("paths", "/repos/{owner}/{repo}/issues/{issue_number}/labels", "post", "x-crud"),
+        ("paths", "/repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", "delete", "x-crud"),
     },
     "google-calendar": {
         ("components", "crudResources", "event", "collections"),
@@ -117,6 +161,12 @@ ADDED = {
         ("x-throttling", "signals"),
     },
     "spotify": {("x-throttling",)},
+    "discord": {("x-throttling",)},
+    "gitlab": {
+        ("x-throttling",),
+        ("paths", "/projects", "get", "x-throttling"),
+        ("paths", "/projects/{id}", "get", "x-throttling"),
+    },
     "asana": {
         ("x-throttling",),
         ("paths", "/workspaces/{workspace_gid}/tasks/search", "get", "x-throttling"),
@@ -155,17 +205,9 @@ ADDED = {
 SPECS = ROOT.parent / "openapi-extensions" / "spec"
 
 # Updates with mode patch whose patchFormat is missing (rule 6 SHOULD) or
-# not a §4.6 value, per platform. github-issues' crud-causality v1 declares
-# `merge` for its two PATCHes and nothing for its two label writes; its v2
-# fixes both and replaces this entry once it is selected here.
-KNOWN_PATCH_FORMAT_GAPS = {
-    "github-issues": [
-        ("/repos/{owner}/{repo}/issues/comments/{comment_id}", "patch", "merge"),
-        ("/repos/{owner}/{repo}/issues/{issue_number}", "patch", "merge"),
-        ("/repos/{owner}/{repo}/issues/{issue_number}/labels", "post", None),
-        ("/repos/{owner}/{repo}/issues/{issue_number}/labels/{name}", "delete", None),
-    ],
-}
+# not a §4.6 value, per platform. None since github-issues' crud-causality v2
+# is selected here (v1 declared `merge`, and nothing for its label writes).
+KNOWN_PATCH_FORMAT_GAPS = {}
 
 
 def validator(spec):
@@ -288,23 +330,28 @@ class CatalogCompositionTests(unittest.TestCase):
         for name in CHANGES:
             for spec in VALIDATORS:
                 with self.subTest(platform=name, spec=spec):
-                    self.assertEqual(problems(spec, self.composed[name]), [])
+                    found = [p for p in problems(spec, self.composed[name])
+                             if (name, p) not in ALLOWED_WARNINGS]
+                    self.assertEqual(found, [])
 
     def test_no_composition_fails_a_validator_its_base_composition_passes(self):
         # Every platform this catalog does not change must fail no validator
         # it did not fail in the base catalog (Box, with pagination v3 since
         # 2026-10-12-box-pagination-v2, now passes them all).
+        # A changed platform may fix a finding of its base (github-issues'
+        # crud-causality v2, Calendar's app-crud-causality v2), never add one.
         for name, document in self.composed.items():
             for spec in VALIDATORS:
                 with self.subTest(platform=name, spec=spec):
-                    self.assertEqual(problems(spec, document), problems(spec, self.base[name]))
+                    self.assertLessEqual(set(problems(spec, document)), set(problems(spec, self.base[name])))
 
     def test_compositions_differ_from_the_base_only_by_the_declared_additions(self):
         for name, document in self.composed.items():
             with self.subTest(platform=name):
                 found = list(differences(self.base[name], document))
-                self.assertEqual([d for d in found if d[0] != "+"], [])
-                self.assertEqual({path[:4] for _, path in found}, ADDED.get(name, set()))
+                self.assertEqual(sorted(path for kind, path in found if kind != "+"),
+                                 sorted(CHANGED.get(name, [])))
+                self.assertEqual({path[:4] for kind, path in found if kind == "+"}, ADDED.get(name, set()))
 
     def test_moneybird_reads_financial_mutations_by_period_windows(self):
         document = self.composed["moneybird"]

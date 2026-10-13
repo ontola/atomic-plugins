@@ -139,13 +139,20 @@ class GitHubPatchFormatTests(unittest.TestCase):
                 crud.validate(copy.deepcopy(document), warnings)
                 self.assertEqual(warnings, [])
 
-    def test_no_dated_catalog_selects_v2(self):
-        # Whoever adds v2 to a dated catalog changes this test.
+    def test_only_the_syncables_0_22_catalog_selects_v2(self):
+        # catalog/2026-10-12-syncables-0.22.json selects github-issues' v2 in place of v1; no catalog
+        # selects api.github.com's (it has no catalog platform).
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             text = catalog.read_text(encoding="utf-8")
             with self.subTest(catalog=catalog.name):
-                self.assertNotIn(f"crud-causality-v2-{ISSUES_PIN}", text)
                 self.assertNotIn(f"crud-causality-v2-{REST_PIN}", text)
+                if catalog.name != "2026-10-12-syncables-0.22.json":
+                    self.assertNotIn(f"crud-causality-v2-{ISSUES_PIN}", text)
+                    continue
+                issues = next(p for p in json.loads(text)["platforms"] if p["name"] == "github-issues")
+                names = [url.rsplit("/", 1)[1] for url in issues["overlays"]]
+                self.assertIn(f"crud-causality-v2-{ISSUES_PIN}-overlay.yaml", names)
+                self.assertNotIn(f"crud-causality-{ISSUES_PIN}-overlay.yaml", names)
 
 
 if __name__ == "__main__":
