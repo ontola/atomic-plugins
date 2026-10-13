@@ -7,7 +7,8 @@
  *   node usertest/catalog.mjs --record [out]   # after a version bump
  *
  * It first installs each app's plugin dependencies that have a lockfile and
- * no node_modules yet (`pnpm install --frozen-lockfile`, as run-lane.mjs and
+ * no node_modules yet, or a stale one installed from a different
+ * pnpm-lock.yaml (`pnpm install --frozen-lockfile`, as run-lane.mjs and
  * apps.mjs do through integrations/tooling/deps.mjs); `--no-install` skips
  * that. On CI, where every lockfile is installed first, it does nothing.
  *

@@ -134,7 +134,7 @@ test('an existing node_modules is left alone, as on CI', () => {
   }
 });
 
-test('a node_modules installed from an older lockfile is installed again, and says so', () => {
+test('a node_modules installed from a different lockfile is installed again, and says so', () => {
   const base = fixture({
     'integrations/notion': { installed: true, from: 'lockfileVersion: 8\n' },
     'integrations/pets': { installed: true },
@@ -155,7 +155,7 @@ test('a node_modules installed from an older lockfile is installed again, and sa
     // Up to date, or without pnpm's copy to compare: left alone.
     assert.deepEqual(calls, ['integrations/notion']);
     assert.deepEqual(lines, [
-      'Installing integrations/notion dependencies again: node_modules was installed from an older pnpm-lock.yaml (pnpm install --frozen-lockfile)',
+      'Installing integrations/notion dependencies again: node_modules was installed from a different pnpm-lock.yaml (pnpm install --frozen-lockfile)',
     ]);
     assert.equal(installReason('integrations/notion', base), 'stale');
     assert.equal(installReason('integrations/pets', base), undefined);

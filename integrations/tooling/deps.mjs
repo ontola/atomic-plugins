@@ -93,7 +93,7 @@ export function installMissing(
   for (const dir of missingInstalls(dirs, base)) {
     log(
       installReason(dir, base) === 'stale'
-        ? `Installing ${dir} dependencies again: node_modules was installed from an older pnpm-lock.yaml (pnpm install --frozen-lockfile)`
+        ? `Installing ${dir} dependencies again: node_modules was installed from a different pnpm-lock.yaml (pnpm install --frozen-lockfile)`
         : `Installing ${dir} dependencies (pnpm install --frozen-lockfile)`,
     );
     const result = install(resolve(base, dir));
