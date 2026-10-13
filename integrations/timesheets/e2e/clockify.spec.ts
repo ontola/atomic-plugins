@@ -43,7 +43,7 @@ import { cssRawPlugin } from '../app/build.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
 /** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.7.1';
+const VERSION = '0.7.2';
 /** The shared classes and fields, as the bundle has them (#177). */
 const TIME_ENTRY = sharedClasses['time-entry-v1'].subject;
 const WORK_PROJECT = sharedClasses['work-project-v1'].subject;
@@ -203,6 +203,16 @@ test.describe('timesheets drive app', () => {
     await expect(detail).toHaveCount(0);
     await expect(weekly).toBeFocused();
     await app.getByRole('tab', { name: 'Week' }).click();
+    // The week grid's Billable row (0.7.2, usertest-findings#13): yesterday's
+    // two entries are 2 h billable (Fix plugin source loading) of 3 h.
+    const grid = app.getByRole('table', { name: /^Hours per project/ });
+    const totals = grid.locator('tfoot tr').first();
+    const bill = grid.locator('tfoot tr.bill');
+    if ((await totals.locator('td.tot [aria-hidden]').textContent()) !== '3:00')
+      await app.getByRole('button', { name: 'Previous week' }).click();
+    await expect(totals.locator('td.tot [aria-hidden]')).toHaveText('3:00');
+    await expect(bill.getByRole('rowheader')).toHaveText('Billable');
+    await expect(bill.locator('td.tot [aria-hidden]')).toHaveText('2:00');
 
     const table = await tableOf(page);
 

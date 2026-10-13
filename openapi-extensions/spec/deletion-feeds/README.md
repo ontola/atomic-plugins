@@ -42,7 +42,11 @@ The documents below are the OpenAPI documents that overlays in this
 repository's [`overlays/APIs/`](../../../overlays/APIs/) extend, at the
 `ontola/openapi-directory` commit those overlays pin. What is described here
 is what those documents state; none of it has been checked against the live
-APIs, and no overlay declares `x-deletion-feed` or `x-read-tombstone`.
+APIs. No overlay declares `x-deletion-feed`; one declares
+`x-read-tombstone`, Google Calendar's
+[`read-tombstone-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(`status: cancelled` on the event read, from the document's own
+description), which no dated catalog selects yet.
 
 | API (document) | Feed | Cursor | Tombstone |
 |----------------|------|--------|-----------|

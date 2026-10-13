@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.6.0: schema, document validator, examples, link resolution and range windows."""
+"""Pagination Schemes 0.7.1: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -6,10 +6,10 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import LinkRefused, PageReadError, WindowReadError, halves, read_pages, read_range, resolve_link, rfc3986_resolve, validate, window_request
+from validate import LinkRefused, PageReadError, WindowReadError, halves, page_items, read_offsets, read_pages, read_range, resolve_link, rfc3986_resolve, validate, window_request
 
 ROOT = pathlib.Path(__file__).parent
-EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml")
+EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml", "empty-when-absent.yaml", "offset-advance.yaml")
 
 
 def example(name):
@@ -748,3 +748,217 @@ class ReadPagesSmallerPageSizeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EmptyWhenAbsentTests(unittest.TestCase):
+    """0.7.0: emptyWhenAbsent on the Envelope Object (§4.4.2, rule 23)."""
+
+    def document(self):
+        return example("empty-when-absent.yaml")
+
+    def scheme(self, document):
+        return document["components"]["paginationSchemes"]["googleTasks"]
+
+    def assertInvalid(self, document, fragment):
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_only_a_boolean_with_a_non_empty_items_field(self):
+        for mutate in (lambda e: e.update(emptyWhenAbsent="true"), lambda e: e.pop("itemsField"),
+                       lambda e: e.update(itemsField=None), lambda e: e.update(itemsField="")):
+            document = self.document()
+            mutate(self.scheme(document)["response"]["envelope"])
+            self.assertInvalid(document, "googleTasks")
+        document = self.document()
+        self.scheme(document)["response"]["envelope"]["emptyWhenAbsent"] = False
+        validate(document)
+
+    def test_0_6_documents_stay_valid(self):
+        for name in ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml"):
+            validate(example(name))
+
+    def test_an_absent_field_is_a_page_with_no_items_only_when_declared(self):
+        scheme = self.scheme(self.document())
+        self.assertEqual(page_items({"kind": "tasks#tasks", "etag": "e1"}, scheme), [])
+        self.assertEqual(page_items({"items": [{"id": "t1"}]}, scheme), [{"id": "t1"}])
+        del scheme["response"]["envelope"]["emptyWhenAbsent"]
+        with self.assertRaises(PageReadError):
+            page_items({"kind": "tasks#tasks"}, scheme)
+
+    def test_a_present_value_that_is_not_an_array_is_an_error_either_way(self):
+        scheme = self.scheme(self.document())
+        for body in ({"items": None}, {"items": {}}, {"items": "t1"}, ["t1"], None):
+            with self.subTest(body=body):
+                with self.assertRaises(PageReadError):
+                    page_items(body, scheme)
+
+    def test_a_dot_path_is_absent_where_an_object_lacks_the_next_segment(self):
+        scheme = {"response": {"envelope": {"itemsField": "data.items", "emptyWhenAbsent": True}}}
+        self.assertEqual(page_items({}, scheme), [])
+        self.assertEqual(page_items({"data": {}}, scheme), [])
+        for body in ({"data": None}, {"data": []}, {"data": "x"}):
+            with self.subTest(body=body):
+                with self.assertRaises(PageReadError):
+                    page_items(body, scheme)
+
+    def test_read_pages_ends_on_an_absent_items_field(self):
+        scheme = {
+            "type": "pageNumber",
+            "request": {"queryParameters": {"page": {"role": "page"}}},
+            "response": {"envelope": {"itemsField": "items", "emptyWhenAbsent": True},
+                         "shortPage": {"size": 2, "assurance": "documented"}},
+        }
+        pages = {1: {"items": [{"id": "a"}, {"id": "b"}]}, 2: {"kind": "list"}}
+        result = read_pages(scheme, lambda values: pages[values[("queryParameters", "page")]])
+        self.assertEqual([item["id"] for item in result["items"]], ["a", "b"])
+        self.assertTrue(result["complete"])
+
+
+class OffsetAdvanceTests(unittest.TestCase):
+    """0.7.0: advance on an offset field (§4.3.2, rules 24 and 25)."""
+
+    def document(self):
+        return example("offset-advance.yaml")
+
+    def scheme(self, document, name="limitPages"):
+        return document["components"]["paginationSchemes"][name]
+
+    def assertInvalid(self, document, fragment):
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_advance_only_on_offset_and_only_two_values(self):
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["offset"]["advance"] = "limit"
+        self.assertInvalid(document, "limitPages")
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["limit"]["advance"] = "pageSize"
+        self.assertInvalid(document, "limitPages")
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["offset"]["advance"] = "itemCount"
+        validate(document)
+
+    def test_page_size_advance_needs_a_page_size_field(self):
+        document = self.document()
+        del self.scheme(document)["request"]["queryParameters"]["limit"]
+        validate(document)  # the response's limit field still gives it
+        del self.scheme(document)["response"]["bodyFields"]["limit"]
+        self.assertInvalid(document, "rule 25")
+
+    def test_0_6_documents_stay_valid(self):
+        for name in ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml"):
+            validate(example(name))
+
+    def provider(self, entries, limit, total=None, holes=()):
+        """`entries` items, `limit` offsets per page; offsets in `holes` hold no item."""
+        def request(values):
+            offset = values[("queryParameters", "offset")]
+            page = [{"id": str(i)} for i in range(offset, min(entries, offset + limit)) if i not in holes]
+            return {"entries": page, "limit": limit, "offset": offset,
+                    "total_count": entries if total is None else total}
+        return request
+
+    def test_page_size_advance_steps_by_the_limit_over_short_and_empty_pages(self):
+        scheme = self.scheme(self.document())
+        # Offsets 2-5 hold nothing the caller may see: page 0 is short and page 4 empty.
+        result = read_offsets(scheme, self.provider(10, 4, holes={2, 3, 4, 5, 6, 7}), page_size=4)
+        self.assertEqual(result["offsets"], [0, 4, 8])
+        self.assertEqual([item["id"] for item in result["items"]], ["0", "1", "8", "9"])
+
+    def test_page_size_advance_runs_to_a_total_count_above_the_items(self):
+        scheme = self.scheme(self.document())
+        result = read_offsets(scheme, self.provider(5, 2, total=8), page_size=2)
+        self.assertEqual(result["offsets"], [0, 2, 4, 6])
+        self.assertEqual(len(result["items"]), 5)
+
+    def test_item_count_advance_reads_a_short_page_again_and_stops_at_an_empty_one(self):
+        scheme = self.scheme(self.document())
+        del scheme["request"]["queryParameters"]["offset"]["advance"]
+        with self.assertRaises(PageReadError):
+            read_offsets(scheme, self.provider(10, 4, holes={2, 3}), page_size=4)
+        result = read_offsets(scheme, self.provider(10, 4, holes={4, 5, 6, 7}), page_size=4)
+        self.assertEqual([item["id"] for item in result["items"]], ["0", "1", "2", "3"])
+
+    def test_page_size_advance_without_any_page_size_is_an_error(self):
+        scheme = self.scheme(self.document())
+        del scheme["response"]["bodyFields"]["limit"]
+        with self.assertRaises(PageReadError):
+            read_offsets(scheme, lambda values: {"entries": [{"id": "a"}], "total_count": 5})
+
+
+class OffsetAdvanceValueTests(unittest.TestCase):
+    """0.7.0 review: reported values are integers, read per response (§4.3.2)."""
+
+    def scheme(self):
+        return example("offset-advance.yaml")["components"]["paginationSchemes"]["limitPages"]
+
+    def test_a_reported_page_size_that_is_not_an_integer_of_at_least_1_is_not_used(self):
+        for reported in (2.5, "2", 0, -2, True):
+            with self.subTest(reported=reported):
+                offsets = []
+
+                def request(values):
+                    offset = values[("queryParameters", "offset")]
+                    offsets.append(offset)
+                    page = [{"id": str(i)} for i in range(offset, min(6, offset + 3))]
+                    return {"entries": page, "limit": reported, "total_count": 6}
+
+                read_offsets(self.scheme(), request, page_size=3)
+                self.assertEqual(offsets, [0, 3])
+
+    def test_a_total_count_that_is_not_an_integer_is_not_carried(self):
+        def request(values):
+            offset = values[("queryParameters", "offset")]
+            page = [{"id": str(i)} for i in range(offset, min(4, offset + 2))]
+            return {"entries": page, "limit": 2, "total_count": "4"}
+
+        result = read_offsets(self.scheme(), request)
+        self.assertEqual(result["offsets"], [0, 2, 4])
+
+    def test_a_declared_next_link_leads_and_a_null_link_ends_the_read_under_either_rule(self):
+        # 0.7.1: offsets are not used after the first request; the link leads.
+        for advance in ("pageSize", "itemCount"):
+            for total in (None, 6):
+                with self.subTest(advance=advance, total=total):
+                    scheme = self.scheme()
+                    scheme["request"]["queryParameters"]["offset"]["advance"] = advance
+                    scheme["response"]["bodyFields"]["next"] = {"role": "nextLink"}
+
+                    def body(offset):
+                        page = [{"id": str(i)} for i in range(offset, min(6, offset + 2))]
+                        following = offset + 2
+                        answer = {"entries": page, "limit": 2,
+                                  "next": f"https://api.example.com/items?offset={following}" if following < 6 else None}
+                        if total is not None:
+                            answer["total_count"] = total
+                        return answer
+
+                    result = read_offsets(scheme, lambda values: body(values[("queryParameters", "offset")]),
+                                          follow=lambda link: body(int(link.rsplit("=", 1)[1])), max_pages=10)
+                    self.assertEqual([item["id"] for item in result["items"]], ["0", "1", "2", "3", "4", "5"])
+                    self.assertEqual(result["offsets"], [0])
+                    self.assertEqual(len(result["links"]), 2)
+                    self.assertTrue(result["complete"])
+        # An absent link while totalCount says more: ends, not complete.
+        scheme = self.scheme()
+        scheme["response"]["bodyFields"]["next"] = {"role": "nextLink"}
+        result = read_offsets(scheme, lambda values: {"entries": [{"id": "a"}], "limit": 2, "total_count": 5},
+                              follow=lambda link: {"entries": []})
+        self.assertEqual(result["offsets"], [0])
+        self.assertFalse(result["complete"])
+        with self.assertRaises(ValueError):
+            scheme = self.scheme()
+            scheme["response"]["bodyFields"]["next"] = {"role": "nextLink"}
+            read_offsets(scheme, lambda values: {"entries": []})
+
+    def test_a_server_that_ignores_the_offset_ends_the_read_under_either_rule(self):
+        for advance in ("pageSize", "itemCount"):
+            with self.subTest(advance=advance):
+                scheme = self.scheme()
+                scheme["request"]["queryParameters"]["offset"]["advance"] = advance
+                del scheme["response"]["bodyFields"]["total_count"]
+                with self.assertRaises(PageReadError):
+                    read_offsets(scheme, lambda values: {"entries": [{"id": "a"}, {"id": "b"}], "limit": 2},
+                                 max_pages=50)

@@ -15,7 +15,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { layoutProblems } from './link-atomic-server.mjs';
+import { layoutProblems, movePinProblem } from './link-atomic-server.mjs';
 
 function fixture({ installed = true, git = true } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'atomic-layout-'));
@@ -108,4 +108,28 @@ test('a missing browser link is reported', () => {
   } finally {
     f.done();
   }
+});
+
+test('movePinProblem: a checkout named after another commit is never moved', () => {
+  const a = 'a'.repeat(40);
+  const b = 'b'.repeat(40);
+  const cache = '/home/x/.cache/atomic-plugins/atomic-server';
+
+  // Named after this pin, or not named after a commit: free to move.
+  assert.equal(movePinProblem(`${cache}/${a}`, a), undefined);
+  assert.equal(movePinProblem('/tmp/atomic-server', a), undefined);
+  assert.equal(movePinProblem(cache, a), undefined);
+  // Another commit's checkout: refused, with this pin's own path.
+  const problem = movePinProblem(`${cache}/${b}`, a);
+  assert.match(
+    problem,
+    /is the checkout for bbbbbbbbbbbb, not this branch's pin aaaaaaaaaaaa/,
+  );
+  assert.ok(problem.includes(`ATOMIC_SERVER_CHECKOUT=${cache}/${a} `));
+  // A variant keeps its suffix.
+  assert.ok(
+    movePinProblem(`${cache}/${b}-plugin-routes`, a).includes(
+      `ATOMIC_SERVER_CHECKOUT=${cache}/${a}-plugin-routes `,
+    ),
+  );
 });

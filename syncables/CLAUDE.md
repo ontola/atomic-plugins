@@ -66,7 +66,22 @@ Data flows through four stages, each its own directory under `src/`:
    the collection read passes to `walkPages`; without it `pageItems`
    locates the array, see "Pagination" below). `read/collections.ts`
    owns traversal and returns raw per-context collections with explicit
-   completion/error status. `read/read.ts` adds ontology/type projection.
+   completion/error status. `read/time-zone.ts` implements Filtering
+   0.2.0-draft `x-time-zone` on list query parameters (the spec's
+   `validate.py` client steps, with `Intl`): `zoneReader` reads each zone
+   source once per `readCollections` through its budget and re-checks it at
+   the end, `wallClockQuery` rewrites the query and computes the
+   `ReadCoverage` set on `CollectionSnapshot.coverage` (and the client's
+   `SyncResult.coverage`). For a `rangeWindow` read with a range whose
+   window fields include such parameters, `wallClockWindows` gives
+   `walkPages` the `windowValue` hook (wall-clock digits per zoned window
+   parameter, from the same cached zone reads) and the outer range's
+   coverage (`wallClockQuery` on the query with the range's ends in the
+   window fields; a zoned `windowRange` field gives `noRangePredicate`);
+   a finished windowed read keeps its spans with reason `incomplete`,
+   while any other read that is not complete (failed, or an undocumented
+   short-page end) gets `spans: null`.
+   `read/read.ts` adds ontology/type projection.
    `read/runtime-schemas.ts` is the consumer of the draft Runtime Schemas
    extension (`x-runtime-schema`, `openapi-extensions/spec/runtime-schemas/`,
    #398; the spec's `validate.py` `derive_class`/`read_members` are its
@@ -120,7 +135,53 @@ Data flows through four stages, each its own directory under `src/`:
    whole scope skipped when one settled on the scope), `lastSyncedItems` is
    dropped for the scope so a later complete read still prunes, and nothing
    is removed, held (`holdMissing`), checked or fed to a deletion feed. Each
-   such collection is listed in `SyncResult.incomplete`. GET validators reuse raw cached response bodies.
+   such collection is listed in `SyncResult.incomplete`.
+   Tell before prune: in `performSync`, the records a
+   complete read removes (not returned, no writes, not in
+   `unavailableKept`, including ones a reused storage held) are passed to
+   `options.onPresence` (awaited) before `confirmed` is replaced and the
+   rebuild removes them; a throwing handler skips that snapshot
+   (`SyncRound.presenceError`, thrown at the end; `skipped`, so
+   `countRefreshMisses` does not count its held writes) so the next sync
+   tells again; after the handler, a write that settled on the scope sends
+   the snapshot down the stale path (upsert only); a record whose writes are
+   all non-durable is not rebuilt there. Removals after a check
+   (`releaseRefreshed`, `finishFeeds`, parent members) go through
+   `rebuildTelling`, which tells each record the rebuild would remove (no
+   confirmed copy, no kept mark, no durable write, stored now) first. The
+   changes go on `SyncResult.presence` (`SyncRound.presence`). Presence
+   marks (K4/K5): `keptMarks` (was `unavailableKept`; `presence`
+   `unconfirmed`/`unavailable`/`deleted`, stored as the outbox's
+   `unavailable` entries with `presence`/`source`) is the one map `rebuild`
+   falls back to. In the candidate loop a vanished write-less record is
+   `deleted` under `absent: deleted` (removed, or `setMark` under
+   `retainDeleted`), `unconfirmed` (kept) when `lookupPlanned` or
+   `route.absentRemoved`, else `removed`; `lookupPlanned` is the check gate
+   (not `'none'`, an item GET or a declaration, and `absent: removed`,
+   `'all'`, a parent of a `parentAbsent` collection, or nested writes). The
+   lookups (previously unconfirmed first, also when `!differs`) run in
+   `releaseRefreshed`'s vanished loop, counted against
+   `maxMissingRecordChecks` (`SyncRound.lookups`); `reportMissing` turns
+   the evidence into marks (`setMark`: changes go to the client-level
+   `untoldMarks`, the latest per record, kept across syncs until told).
+   `tell()` sends removals at once (dropping a held change of the same
+   record) and the held mark changes at the end of a sync (skipped when the
+   handler already threw in it); after a removal, records that gained a
+   write or a confirmed copy get `pruned: false`. A `deleted` or `filtered`
+   conclusion sets `clearing` on the mark: `rebuildTelling` drops it once
+   the removal is told, or keeps the mark (not clearing) when the handler
+   throws, so the record is checked again. `dropMark` drops a mark outside
+   `tell`/`setMark` (a read returning the record, `settled`, a clearing
+   mark on a record that stays) and
+   its held change, replaced by `present` when the mark is `told` (set by
+   a successful end tell and on restored marks; `setMark` keeps it from
+   the mark before, or sets it when the change it replaces is a held
+   `present`, the only trace of a told mark once that mark is dropped).
+   `client.presence()` lists
+   `keptMarks`. `seenAt` (in
+   memory, set for every record a sync's reads return to that sync's start,
+   dropped when `rebuild` removes the record) gives a new mark its
+   `lastSeen`, which the mark keeps and stores. GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
    over supplied/global fetch. `auth.ts` holds credentials and an injected
@@ -139,6 +200,27 @@ Data flows through four stages, each its own directory under `src/`:
    identical IDs in sibling parents stay separate. Legacy names remain paths.
    Writes are serialized per scoped record and retry with exponential backoff
    (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
+   a declared `x-crud` create (`ClientRoute.create`, `created-identity.ts`)
+   leaves `generated` `addedFields` out of the body (`createBody`) and reads
+   the identity from its `url` source through the identity template in
+   reverse (`createdIdentity`, after CRUD Causality 0.5.0's
+   `created_identity()`); without one the 2xx create is `uncertain` with
+   `unbound` (stored), never resent, and `resolveWrite` `retry` throws;
+   a create's `followUps` (CRUD Causality 0.5.0 §4.7, `compound-create.ts`
+   after the reference `missing_value`/`follow_up_request`, parsed into
+   `CreateDeclaration.followUps`; one it cannot use sets
+   `route.createRefused`) drop `omit` fields from the body, and once the
+   create settles bound `drainQueue` puts `followUpWrites` (updates with
+   `QueuedWrite.followUp`, stored as type `followUp`) at the head of the
+   record's queue; `attemptWrite` computes the missing value against the
+   confirmed record at send time (nothing missing: settled without a
+   request), a refusal fails it `refused` and the following follow-ups
+   `notSent` (a 403 is `permanent` by default for a follow-up,
+   `WriteFailure.followUp`; `supersedesFollowUp` drops a failed follow-up
+   once a settled write, in `supersede`, or a newer queued one, in
+   `resolveWrite` `retry`, sets its field's first segment or deletes the
+   record; `retry` refuses an `unknown` follow-up), an unknown outcome sets `awaitingRefresh` (read back first),
+   and a `confirm`ed uncertain create queues them `awaitingRefresh`;
    updates select declared PUT, otherwise PATCH; the chosen operation's
    `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
    `merge-patch.ts`): `jsonMergePatch` sends the changes alone and applies
@@ -151,6 +233,39 @@ Data flows through four stages, each its own directory under `src/`:
    writes, `detectConflicts` compares with the field after the patches
    (`patchedField`, in order) and `supersede`/`retry` strip nested members
    (`withoutSetBy`, `withoutPatched`). Read-only operations fail before local edits.
+   `preconditions.ts` is the pure logic of the draft Write Preconditions
+   extension (`x-write-precondition`,
+   `openapi-extensions/spec/write-preconditions/`): `parsePrecondition`
+   (defaults, or `{ refused }` for a declaration it cannot read),
+   `versionOf`, `refusalOf`, `maySend`, `writeAnswer` and `resolveUnknown`,
+   ports of the spec's `validate.py` functions of the same names; keep them
+   in step (`unit/client/preconditions.test.ts` mirrors its `ClientTests`,
+   and its `ValidationTests` through `parsePrecondition`, which refuses
+   whatever `validate()` refuses, placement rules included when given a
+   `PreconditionPlace`; it never falls back to a default on bad input).
+   The client reads each write operation's declaration into
+   `route.preconditions` (or `route.preconditionRefused`, which makes the
+   write call throw). `attemptWrite` first runs `resolveByRead` for a write
+   with `precondition: 'resolving'`, then `precheck`. `precheck` reads the
+   object when the declaration needs it (`readObject`) and reads the source
+   objects (`sourceObject`, cached per sync pass in `sourceCache`). It then
+   calls `maySend` and gives the headers, plus the read under `readVerify`,
+   which the full-record body is built on. In the catch, a `conflictStatus`
+   answer or a `writeAnswer` 404/410 stops the write (`stopWrite`, gaveUp
+   with `QueuedWrite.precondition`, stored). Otherwise
+   `goneUnconfirmed` keeps the record and reports it `unavailable` with
+   `source: 'write'`. `deletionConfirmed` takes a feed tombstone,
+   `absentMeansDeleted` or `notFound: deleted`, and `route.gone` decides a
+   410. An unknown outcome sets `resolving`, also on restore of an in-flight
+   update or delete (not a follow-up, which preconditions skip). An unknown
+   stored state reads as `resolving`. `sentVersion` is the raw version
+   (string or number), stored for its rule 5. `resolveWrite` `retry` clears
+   every state but `resolving`. A refused precondition read goes through
+   `readRefused`: throttling sets `notBefore` and pauses buckets, and
+   `auth` blocks, unless the read was sent before the latest renewal
+   (then it is sent again). A source read's refusal is kept in
+   `sourceErrors` by URL, with its epoch, and is not cached. The restore
+   check `missingSources` includes `write`.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone
@@ -174,7 +289,9 @@ Data flows through four stages, each its own directory under `src/`:
    `classifyWriteFailure`): `retry` (408/425/5xx; and any response that is
    throttling under the document's root `x-throttling`, draft Throttling
    extension, `src/throttling/throttling.ts`: `declaredThrottling` reads
-   `headers` (roles and time units) and `signals`, `classifyThrottling`
+   `headers` (roles and time units), `bodyFields` (0.3.0: the same roles by
+   literal JSON dot-path, read from a throttling JSON body; a body wait of
+   no time counts as absent) and `signals`, `classifyThrottling`
    gives the verdict the client attaches as `WriteFailure.throttling`, a
    matching signal or any 429; with `signalsDeclared` the old 403 header
    heuristic is off. The delay is max(backoff, the verdict's `retryAt`,
@@ -240,10 +357,23 @@ Data flows through four stages, each its own directory under `src/`:
    on each update up to the first create, never on one with `sending`), at
    once in `performSync` and again in `releaseRefreshed`. When the record's
    queue head is such an update, idle (`evidenceHead`), `findEvidence` asks
-   the route's `x-completeness: { absent: deleted }` (`declaredAbsence`,
+   the route's `x-completeness: { absent: deleted }` (`declaredCompleteness`,
    draft spec in `openapi-extensions/spec/collection-completeness/`), else
    GETs the item through the sync's shared `Budget` (passed to
-   `readCollections` as `budget`): 404/410 `deleted`, 2xx with the record
+   `readCollections` as `budget`): 404/410 `deleted`, or `unavailable` when
+   the record's resource states `notFound: unavailable` through any
+   collection (a 410: its `gone`, `route.gone`, Collection Completeness
+   0.3.0, when stated; `route.notFound`, resource-wide, from `resourceNotFound`
+   over every collection's `rawCompleteness`, after the reference
+   `resource_not_found`; conflicting or unrecognised values are
+   `unavailable`, a value beside an unrecognised `absent` counts; undefined
+   when not stated, which the Write Preconditions consumer must not take as
+   a confirmed deletion; a route whose own Completeness Object has an
+   unrecognised `absent` has `unrecognisedAbsent`, and what neither `gone`
+   (a 410) nor `notFound` classifies is then `unavailable` (§7, after
+   `classify_read`); 0.2.0 §4.3; `declaredCompleteness` parses `absent`
+   and `parentAbsent`, and ignores a declaration with an unrecognised
+   `absent`), 2xx with the record
    and the resource's `x-read-tombstone` marker (`declaredReadTombstone`,
    on the CRUD Resource Object, else, or when that one does not parse, the
    item GET operation, a Tombstone Object of the deletion-feeds draft; not
@@ -261,7 +391,9 @@ Data flows through four stages, each its own directory under `src/`:
    settled on during the sync, or whose stored tombstone a read dropped
    earlier in it, `SyncRound.superseded`) goes to `SyncRound.undecided` with
    `stored`
-   and no GET; unchecked and `unknown` GET answers go there too.
+   and no GET; unchecked, `unknown` and `unavailable` GET answers go there
+   too (a feed tombstone stands over `unavailable`; without one, that
+   answer applies).
    `finishFeeds`, after every collection's checks, reads each feed once
    (`readFeed`: `walkPages` through the same `Budget`, from the cursor in
    `feedCursors`, items counted per read against `maxRecords`;
@@ -279,12 +411,45 @@ Data flows through four stages, each its own directory under `src/`:
    a later complete read that returns the record, or `resolveWrite` `retry`
    on the record, clears the flag.
    `failWrite` and the waiting-path `discard` wake a removed head's drain.
-   `deleted`/`unknown` fail the head and each following held update
-   (`failWrite`, `missingRecord`, stored; a sleeping drain is woken through
-   `wakers`); `filtered` takes the returned record as confirmed (conflicts
+   `deleted`/`unavailable`/`unknown` fail the head and each following held
+   update (`failWrite`, `missingRecord`, stored; a sleeping drain is woken
+   through `wakers`); `filtered` takes the returned record as confirmed (conflicts
    checked) and releases. A record settled on during the check (up to the
    end-of-sync feed read) is left to the next sync. `onMissingRecord` reports evidence; `missingRecordChecks`
    `'all'` also GETs `vanished` records without writes, `'none'` never GETs.
+   For a nested collection whose Collection Object declares
+   `parentAbsent` (`declaredCompleteness`, `route.parentAbsent`; mapped by
+   the collection that supplies its path variable in `nestedUnder`, from
+   `model.providers`, skipping variables `constants` fix; dropped with two
+   or more parent resources), every parent
+   record concluded `deleted` or `unavailable` (declaration, GET or feed, at
+   the same three points as `reportMissing`) has `applyParentAbsent` conclude
+   the records last read under it (`nestedScopes`: confirmed records and
+   writes in scopes whose variable is the parent id) as `unavailable`,
+   never `deleted` (any `parentAbsent` value), with `source: 'parent'` and
+   the last known values as `record`, failing their heads through
+   `failMissing` and skipping a member a write settled on since the sync
+   began, or one this sync's read returned in the same scope
+   (`SyncRound.returned`, by scope: a bare id under another parent is
+   still marked); nothing is pruned. Records concluded `unavailable`
+   (`reportMissing`) are kept in `unavailableKept` (stored as the outbox's
+   `unavailable`) and `rebuild` falls back to them, so neither a vanished
+   write-less record nor one whose writes were discarded is pruned; a read
+   returning the record, a `filtered` or a `deleted` conclusion clears it.
+   `update()`/`remove()` of a kept record are held (`awaitingRefresh`) for
+   the next refresh. `holdMissing` and `evidenceHead` include deletes: a
+   held delete is released (and woken) unless the evidence is
+   `unavailable`, which fails it. `failMissing` on
+   `unavailable` also fails the rest of the record's queue in order,
+   deletes included, and parks a create in place (state `failed`,
+   `missingRecord`), stopping at a head in flight, not stored or already
+   parked. Each concluded nested scope is marked in `goneParents` (in
+   memory, cleared by a complete read of the scope); `update()` into a
+   marked scope, `remove()` into one, and `create()` into one, are
+   enqueued held and concluded at once (`concludeNew`). An unrecognised
+   `notFound` value is `unavailable`. Under `'pending'`, a `vanished`
+   parent is GETed when `nestedWritesUnder` finds unsettled writes under
+   it, with a revision check around the GET.
    `update()` holds a new edit of a record whose failed writes carry
    `missingRecord` and that `confirmed` lacks. `lastKnown` keeps the newest
    confirmed copy (`setLastKnown` on every refresh and settled response;
@@ -368,7 +533,12 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `read/pages.ts`), which needs `PageWalk.range`, splits full answers depth
   first, throws `WindowReadError` for a full window it cannot split, keeps an
   item once through `PageWalk.identity`, and sets `PageWalk.outcome` to not
-  complete: `readCollections` turns that into `complete: false` with
+  complete. `PageWalk.windowValue(parameter, bound)` converts each query
+  window bound before it is sent (for a parameter read as wall-clock time,
+  `x-time-zone`; the caller supplies it), each bound separately before a
+  template is filled; converted bounds on one clock that end up out of
+  order (a window inside a repeated hour) throw `WindowReadError`.
+  `readCollections` turns a windowed read into `complete: false` with
   `notComplete`, and the client never applies such a snapshot. The
   validator checks §9 rules 12–16, `resolveEffectiveScheme` rule 17 (and
   never auto-detects a `rangeWindow` scheme); rule 18 is not checked here.
@@ -387,6 +557,30 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `page` field (`deriveHasNextPage`'s `firstPage`). The page size sent is
   capped at the parameter's `maximum`. The validator checks §9 rules
   19–21, `resolveEffectiveScheme` rule 22.
+- Pagination Schemes 0.7.0: an Envelope Object's `emptyWhenAbsent`
+  (`declaredEnvelope` in `read/pages.ts`, from `PageWalk.itemsField`/
+  `emptyWhenAbsent`, which a Collection Object's envelope sets through
+  `ReadCollection.emptyWhenAbsent`, else the scheme's `response.envelope`)
+  makes `itemsAt` return no items when the field is absent (`isAbsent`: an
+  object along the path lacks the next segment); a present non-array is
+  still an error. The validator checks rule 23. Tests:
+  `unit/read/empty-when-absent.test.ts`. An `offset` field's `advance`
+  (§4.3.2; `offsetAdvance` in `read/pages.ts`): `pageSize` steps the
+  offset by `state.pageSize` (≥ 1), else the page size sent
+  (`sendsPageSize`), ends at `totalCount` (without one, at an empty page)
+  and throws `PageReadError` with neither (`integerRole`: a reported
+  `pageSize` counts as an integer ≥ 1, `totalCount` as an integer ≥ 0, read
+  from the body per response); `itemCount` (default) steps by the items
+  the page held and ends at an empty page or `totalCount` (#495: before,
+  without a `totalCount`, `hasNextPage` ended it after one page), unless
+  the scheme declares a `nextLink` (`declaresRole`), which then leads under
+  either advance (0.7.1): the offset cursor is not advanced while links
+  are followed, so neither advance branch runs for such a scheme, and an
+  absent or `null` link ends the read before `hasNextPage` is asked (not
+  complete when that response's `totalCount` exceeds the items read). The repeat check (`seenIds` by `PageWalk.identity`,
+  else the previous page's fingerprint when no item has an id) runs on
+  every offset walk as well as on short-page walks. The validator checks rule 24,
+  `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
@@ -453,6 +647,41 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   longer returns: the in-flight-head ordering case, PUT and PATCH, the
   evidence GET's 404/410/2xx/other answers, `x-completeness` declarations,
   the shared read budget, `missingRecordChecks`, and restarts.
+- `unit/client/completeness-outcomes.test.ts` covers Collection Completeness
+  0.2.0 §4.3, `notFound`: a 404 or 410 as `unavailable` (PUT and PATCH, the
+  held write, the kept values, the report), the `deleted` default (no field,
+  `deleted`, an unrecognised value, no declaration), the operation and
+  legacy placements, no GET under `absent: deleted`, a later list or GET
+  superseding the mark for new updates, the stored value across a restart,
+  `missingRecordChecks: 'all'`, and precedence against a deletion feed; and
+  §4.4, `parentAbsent`, on the spec's §6.1 task lists
+  (`nestedTaskLists` in `__tests__/fixtures/deletion-declarations.ts`): the
+  tasks of a list that answers 404 concluded unavailable without a request,
+  a queued task update under a vanished list (the list GETed under the
+  default checks, the update failed as unavailable, the list's return), no
+  GET for a vanished list without writes under it, tasks unavailable (never
+  deleted) under a declared-deleted parent (no GET at all), any
+  `parentAbsent` value under parents concluded three ways, a moved member
+  not marked, a resource-wide `notFound` through an undeclared collection
+  (another collection, conflicting values, an unrecognised `absent`, an
+  `x-crud` list operation, none stated), no parent marks under an
+  unrecognised `absent`, `resourceNotFound` itself (wp-consumer R2), and no
+  conclusion for a parent that still exists, without the field, or with it
+  on the list operation; the #399 review:
+  a DELETE behind an unavailable record's update failed rather than sent, a
+  create into an unavailable parent's scope parked, a new edit of a member
+  under an unavailable parent concluded at once and sent again after the
+  parent returns, `record` on unavailable reports, and an unrecognised
+  `notFound` read as `unavailable`.
+- `unit/client/write-preconditions.test.ts` covers the client side of
+  Write Preconditions: `ifMatch` (body version without a read, header
+  version with one, `conflictStatus` and `header`), `refuseWhen`,
+  `readVerify` (conflict, the body built on the read, a delete),
+  unknown outcomes (applied, not applied, another change, an idempotent
+  PUT resent, a restart), a write's own 404/410 (unconfirmed, confirmed
+  three ways, `gone` over `notFound`, an update stopped), source objects
+  (refused, unreadable then sent), `kind: none`, an unusable declaration
+  and an unknown stored state.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored
@@ -470,7 +699,8 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   declarations as the draft specs' own examples
   (`__tests__/fixtures/deletion-declarations.ts`: Deletion Feeds §2,
   §7.1–§7.4 and the §6 overlays; Collection Completeness §2, §4.1, §6 and
-  the §5 overlay), each test naming the spec statement it checks, plus
+  the §5 overlay; its §6.1 `nestedTaskLists` is used by
+  `completeness-outcomes.test.ts`), each test naming the spec statement it checks, plus
   pending-edit recovery on those documents (a PUT in flight across a
   restart, with and without the record deleted meanwhile; a lost answer on
   a PUT and a POST; a refused write: 422, a delete's 404, a 403 block). The
@@ -479,6 +709,16 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   collection read and the feed read share that envelope (#373), with the
   numeric cursor sent back in decimal form, a `deleted: true` tombstone
   found through the identity binding, and `"true"` not taken for `true`.
+- `unit/client/compound-create.test.ts` covers compound creates on a
+  GitHub-issues-shaped document after the held overlay
+  (`__tests__/fixtures/compound-create.ts`): labels applied, dropped and
+  added, an `omit` field, a refused follow-up (403 and 422: partly
+  applied, the next `notSent`, no auth block, later writes going on, a
+  401 still blocking, a custom classifier deciding, superseded by an update
+  of its field) and its retry, an unknown outcome skipped or resent after the
+  read, a restart, an unresolved bind, a refused declaration, a confirmed
+  uncertain create, and no `followUps`; `compound-create-core.test.ts`
+  the pure parts.
 - `unit/client/runtime-classes.test.ts` covers the classes in
   `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
   `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,
@@ -506,6 +746,10 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   and `unit/pagination/links-conformance.test.ts` items 3, 4, 5 and 8 (raw
   userinfo, non-http(s) origins, the declared-url pattern, bracket-escaped
   dot-paths).
+- `unit/throttling/body-fields.test.ts` mirrors the Throttling spec's
+  `BodyFieldTests` and `BodyFieldFollowUpTests` (0.3.0 `bodyFields`, #463's
+  rules) and the held Todoist overlay's test, on `bodyFieldsExample` and
+  `todoistThrottling` in `__tests__/fixtures/throttling.ts`.
 - `unit/throttling/throttling.test.ts` mirrors the Throttling spec's
   `ClassifyTests` on its synthetic example (`__tests__/fixtures/throttling.ts`,
   which also holds the GitHub, Google and Moneybird snippets), plus
@@ -534,6 +778,33 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   isn't a valid scheme type — which was fixed upstream in
   https://github.com/localthought/overlays/pull/139; the vendored copy
   reflects that fix.)
+
+### Webhook inbox consumer (`src/inbox/`)
+
+The daemon side of a webhook receiver (ontola/atomic-plugins#369 step 4,
+`openapi-extensions/spec/webhook-subscriptions`). `sign.ts` uses
+`node:crypto` and is exported from the Node entry only; `client.ts`,
+`consumer.ts` and `reads.ts` are in `syncables/browser` too, and must run in
+atomic-server's QuickJS sandbox, which has no `URL`, `URLSearchParams`,
+`Buffer`, `TextDecoder` or `atob`: `url.ts` builds request URLs as strings
+(a stand-in object where `URL` is missing), `reads.ts` decodes base64 UTF-8
+itself, and `unit/inbox/sandbox.test.ts` runs the bundle in a bare `vm`
+context. `acknowledge: 'next-step'` is for hosts whose writes become
+durable only after the step (a scheduled sandbox run's intents): the cursor
+to acknowledge and a finished reconciliation are stored with the step's
+writes (`StoredSubscription.unacknowledged`, `.unconfirmedReconciliation`)
+and sent at the start of the next step (`unit/inbox/deferred.test.ts`).
+`sign.ts` signs requests with Atomic v2
+signatures (`signedTransport`; tested against atomic-server's golden vectors
+in `__tests__/fixtures/atomic-request-v2-vectors.json`, the copy
+`integration-proxy` verifies). `client.ts` is `InboxClient` for the consumer
+routes. `consumer.ts` is `InboxConsumer.step()`: an event is appended to the
+caller's durable `InboxJournal` before it is acknowledged; a gap, a new
+subscription or an expiry (410) is recorded and followed by the caller's full
+`reconcile()` before `reconciled`. `reads.ts` (`scopedReads`) lists the paths
+an event names in `x-webhook-deliveries`. Tests in `unit/inbox/` run against
+`fake-inbox.ts`, an in-memory receiver with generations, barriers, a
+retention limit and leases on a simulated clock.
 
 ## Conventions
 

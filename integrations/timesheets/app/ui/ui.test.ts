@@ -99,6 +99,16 @@ describe('frames', () => {
       'Thursday 24 Sep, today',
     );
     expect(text(root.querySelector('.note'))).toContain('1 timer is running');
+    // Each day's billable time, in a labelled row under the day totals
+    // (usertest-findings#13), the week's in its Total cell.
+    const bill = table.querySelector('tfoot tr.bill')!;
+    expect(text(bill.querySelector('th[scope="row"]'))).toBe('Billable');
+    expect(
+      [...bill.querySelectorAll('td')].map(td =>
+        text(td.querySelector('[aria-hidden]')),
+      ),
+    ).toEqual(['5:00', '5:30', '6:00', '4:45', '–', '–', '–', '21:15']);
+    expect(text(bill.querySelector('td.tot .sr'))).toBe('21 hours 15 minutes');
     expect(
       [...root.querySelectorAll('.foot > span')].map(n => text(n)),
     ).toEqual([
