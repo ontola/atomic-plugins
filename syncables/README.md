@@ -763,10 +763,16 @@ known values stay visible, marked by the `onMissingRecord` report and
 stored in the outbox (`unavailable`, added within version 1), until a later
 read settles it (a complete read that returns it, a GET that answers 2xx,
 or evidence of its deletion, after which the record is removed again; a
-write to it that the provider accepts also ends the mark). Not yet: a kept
-record without writes is not looked up again by itself, so it stays kept
-until a read returns it or a new write to it is checked (lookups of such
-records are the next step). A new `update()` or `remove()` of a kept record
+write to it that the provider accepts also ends the mark). A kept record
+without writes is read again by later syncs wherever the collection makes
+checks (the same rule as for a vanished record: `missingRecordChecks:
+'all'`, `absent: removed`, or a parent of a `parentAbsent` collection;
+never under `'none'`), after the unconfirmed records and the ones the read
+newly lacks, within `maxMissingRecordChecks`: a 404 under
+`notFound: unavailable` keeps it kept, and tells nothing again; a 2xx shows
+it exists outside the collection, so it leaves the copy (told `removed`);
+an answer the document concludes as deletion removes it (told `deleted`).
+A new `update()` or `remove()` of a kept record
 is held for the next refresh, which checks the record again. A queued
 delete of a record a complete read no longer returns is held like an update
 and checked first: released and sent when the read says deleted, present
@@ -1828,6 +1834,16 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: A record kept `unavailable` without writes is read
+  again by later syncs wherever its collection makes checks
+  (`missingRecordChecks: 'all'`, `absent: removed`, a `parentAbsent`
+  parent), after unconfirmed and newly missing records, within
+  `maxMissingRecordChecks`. Before, it stayed kept until a list read
+  returned it. A 2xx now removes it from the copy (it exists outside the
+  collection), and an answer concluding deletion removes it; a 404 under
+  `notFound: unavailable` keeps it without telling again. Behaviour
+  change: more item GETs where such records are kept, and
+  `onMissingRecord` reports each re-check.
 - **Unreleased**: Produced Classes 0.1.1-draft: an IRI holding a C1
   control character (U+0080–U+009F) or U+FEFF is not absolute, as the
   spec's validator now says too (U+FEFF was refused before and U+0085 was

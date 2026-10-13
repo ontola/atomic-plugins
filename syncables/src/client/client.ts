@@ -5771,6 +5771,7 @@ export function createApiClient(
         // handler fails, this read is not applied.
         const pruning: PresenceChange[] = [];
         const recheck: string[] = [];
+        const unavailable: string[] = [];
         const lookups: string[] = [];
         for (const id of before) {
           if (records.has(id) || written.has(id)) continue;
@@ -5778,6 +5779,15 @@ export function createApiClient(
           if (mark) {
             if (mark.presence === 'unconfirmed' && lookupPlanned(route, id))
               recheck.push(id);
+            // A kept unavailable record is read again where checks are
+            // made, after the others: a 2xx now shows it exists outside
+            // this collection (removed from the copy), or the answer may
+            // conclude it deleted.
+            else if (
+              mark.presence === 'unavailable' &&
+              lookupPlanned(route, id)
+            )
+              unavailable.push(id);
             else if (remote(scope).has(id) && lookupPlanned(route, id))
               lookups.push(id);
             continue;
@@ -5827,7 +5837,9 @@ export function createApiClient(
               presenceChange(route, context, id, 'removed', 'read', last, true),
             );
         }
-        vanished.push(...recheck, ...lookups);
+        // Unconfirmed records first, then records this read newly lacks,
+        // then kept unavailable ones (the least likely to have changed).
+        vanished.push(...recheck, ...lookups, ...unavailable);
         if (pruning.length) {
           if (!(await tell(round, pruning))) {
             round.skipped.add(scope);
@@ -5896,18 +5908,19 @@ export function createApiClient(
         // Confirmed records and conflict bases of pending writes moved on.
         if (writeQueues.size || gaveUpWrites.size) await persistLater();
       }
-      // An unchanged read rebuilds nothing, but unconfirmed records are
-      // still checked.
+      // An unchanged read rebuilds nothing, but unconfirmed records, then
+      // unavailable ones, are still checked.
       if (!differs)
-        for (const mark of keptMarks.values())
-          if (
-            mark.scope === scope &&
-            mark.presence === 'unconfirmed' &&
-            !records.has(mark.id) &&
-            !writeQueues.has(keyFor(scope, mark.id)) &&
-            lookupPlanned(route, mark.id)
-          )
-            vanished.push(mark.id);
+        for (const presence of ['unconfirmed', 'unavailable'] as const)
+          for (const mark of keptMarks.values())
+            if (
+              mark.scope === scope &&
+              mark.presence === presence &&
+              !records.has(mark.id) &&
+              !writeQueues.has(keyFor(scope, mark.id)) &&
+              lookupPlanned(route, mark.id)
+            )
+              vanished.push(mark.id);
       // isFresh: a write that settled on a record during the rebuild above
       // makes this read too old to judge that record.
       await releaseRefreshed(

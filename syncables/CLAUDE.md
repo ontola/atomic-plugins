@@ -170,7 +170,9 @@ Data flows through four stages, each its own directory under `src/`:
    `route.absentRemoved`, else `removed`; `lookupPlanned` is the check gate
    (not `'none'`, an item GET or a declaration, and `absent: removed`,
    `'all'`, a parent of a `parentAbsent` collection, or nested writes). The
-   lookups (previously unconfirmed first, also when `!differs`) run in
+   lookups (previously unconfirmed first, then the read's new candidates, then kept
+   `unavailable` marks without writes, re-read where `lookupPlanned`; the
+   same order also when `!differs`) run in
    `releaseRefreshed`'s vanished loop, counted against
    `maxMissingRecordChecks` (`SyncRound.lookups`); `reportMissing` turns
    the evidence into marks (`setMark`: changes go to the client-level

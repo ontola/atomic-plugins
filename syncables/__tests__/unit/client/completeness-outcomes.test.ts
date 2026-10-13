@@ -687,6 +687,8 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
     // §4.3: kept with its last known values, not pruned, until a later
     // read settles it.
     expect(await client.get('/pets', '2')).toEqual(tom);
+    // The next sync reads it again (a kept unavailable record is re-checked
+    // where checks are made): still 404, still kept.
     await client.sync();
     expect(await client.get('/pets', '2')).toEqual(tom);
     // A new update of it is held for the next refresh, not sent.
@@ -711,6 +713,7 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
     fake.pets.delete('2');
     await client.sync();
     expect(reports.map((r) => [r.id, r.evidence])).toEqual([
+      ['2', 'unavailable'],
       ['2', 'unavailable'],
       ['2', 'unavailable'],
       ['2', 'unavailable'],
