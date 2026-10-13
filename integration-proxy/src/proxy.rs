@@ -280,6 +280,7 @@ async fn refresh_connection(
 #[derive(Debug, PartialEq, Eq)]
 enum Caller {
     Owner,
+    Device,
     Delegate(String),
     Runtime { agent: String, app: String },
     Frame { app: String },
@@ -308,6 +309,16 @@ async fn authenticate(
         })
         .transpose()?;
     let caller = match authorization {
+        Some(_) if crate::device::bearer(headers)?.is_some() => {
+            let principal =
+                crate::device::principal(state, crate::device::bearer(headers)?.unwrap()).await?;
+            if principal.owner != owner
+                || !crate::device::store::may_read(&principal, &record.connection_id, method)
+            {
+                return Err(ApiError::TokenScope);
+            }
+            Caller::Device
+        }
         Some(value) => {
             let token = value
                 .strip_prefix("Capability ")
@@ -453,7 +464,7 @@ async fn forward_inner(
     .await?;
     // Only an authenticated use keeps a connection alive.
     let (delegate, runtime) = match &caller {
-        Caller::Owner => (None, None),
+        Caller::Owner | Caller::Device => (None, None),
         Caller::Delegate(agent) => (Some(agent.as_str()), None),
         Caller::Runtime { agent, app } => (
             Some(app.as_str()),

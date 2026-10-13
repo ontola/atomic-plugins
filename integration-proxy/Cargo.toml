@@ -18,6 +18,7 @@ include = [
     "/src/**/*.rs",
     "/static/index.html",
     "/static/logo.png",
+    "/static/device-approval.mjs",
     "/Cargo.toml",
     "/Cargo.lock",
     "/README.md",
