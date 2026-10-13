@@ -148,28 +148,6 @@ fails through 2026-10-11 and reads as empty through this catalog;
 and stepped over under v3); run them from `syncables/` with
 `npx vitest run --root .. overlays/tests/<file>`.
 
-## Google Calendar throttling
-
-[Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
-declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
-for the Calendar document the catalogs select: the default quotas of
-Google's [quota page](https://developers.google.com/workspace/calendar/api/guides/quota)
-("Per minute per project": "10,000 requests", partitioned by application;
-"Per minute per user per project": "600 requests", by application and user;
-window kind `unspecified`, since Google lets a burst carry into "the next
-window"), and one signal: a 403 or 429 whose `error.errors[].reason` is
-`rateLimitExceeded` or `userRateLimitExceeded` is `throttled`, as the
-[error guide](https://developers.google.com/workspace/calendar/api/guides/errors)
-documents, with no bucket named. Not declared: `Retry-After` (not
-documented), `quotaExceeded` (Calendar usage limits against abuse, not a
-rate to wait out), the per-calendar and operational limits, which have
-no numbers, and the quota page's 1,000,000 requests per day per project,
-which is a billing threshold ("Usage under this threshold doesn't incur
-extra charges"), not a limit at which requests are refused. A project's own quota may differ from the defaults. No dated
-catalog selects it yet. `tests/test_calendar_throttling.py` composes it
-alone and after the catalog's Calendar overlays, and classifies synthetic
-errors in the guide's shape. No provider was called.
-
 ## Read tombstones
 
 [Google Calendar v3 read tombstones](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
@@ -201,6 +179,28 @@ deletion feed over the event list is declared (Deletion Feeds §8).
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
 
+## Google Calendar throttling
+
+[Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the Calendar document the catalogs select: the default quotas of
+Google's [quota page](https://developers.google.com/workspace/calendar/api/guides/quota)
+("Per minute per project": "10,000 requests", partitioned by application;
+"Per minute per user per project": "600 requests", by application and user;
+window kind `unspecified`, since Google lets a burst carry into "the next
+window"), and one signal: a 403 or 429 whose `error.errors[].reason` is
+`rateLimitExceeded` or `userRateLimitExceeded` is `throttled`, as the
+[error guide](https://developers.google.com/workspace/calendar/api/guides/errors)
+documents, with no bucket named. Not declared: `Retry-After` (not
+documented), `quotaExceeded` (Calendar usage limits against abuse, not a
+rate to wait out), the per-calendar and operational limits, which have
+no numbers, and the quota page's 1,000,000 requests per day per project,
+which is a billing threshold ("Usage under this threshold doesn't incur
+extra charges"), not a limit at which requests are refused. A project's own quota may differ from the defaults. No dated
+catalog selects it yet. `tests/test_calendar_throttling.py` composes it
+alone and after the catalog's Calendar overlays, and classifies synthetic
+errors in the guide's shape. No provider was called.
+
 ## Spotify throttling
 
 [Spotify Web API throttling](APIs/spotify.com/1.0.0-readonly/throttling-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml)
@@ -217,6 +217,22 @@ extends). No dated catalog selects
 it yet. `tests/test_spotify_throttling.py` composes it alone and after the
 catalog's Spotify overlays and classifies synthetic responses. No provider
 was called.
+
+## Airtable throttling
+
+[Airtable Web API throttling](APIs/airtable.com/1.0-readonly/throttling-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Airtable's [rate-limits page](https://airtable.com/developers/web/api/rate-limits):
+"5 requests per second per base", selected by the three operations that
+address a base (partitioned by a URI-named base dimension, since the
+extension's vocabulary has none), and a 429 as `throttled` with
+`minDelaySeconds: 30` ("will need to wait 30 seconds before subsequent
+requests will succeed"). Not declared: the 50-per-second limit, which the
+page states for personal access tokens and service accounts while the
+catalog connects through OAuth, and `Retry-After`, which the page does not
+mention. No dated catalog selects it yet. `tests/test_airtable_throttling.py`
+composes it alone and after the catalog's Airtable overlays and classifies
+a synthetic 429. No provider was called.
 
 ## Directory layout and OAD revisions
 
