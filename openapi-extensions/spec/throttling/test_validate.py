@@ -57,7 +57,7 @@ import pathlib
 
 import yaml
 
-from validate import classify
+from validate import classify, select_tier
 
 EXAMPLES = pathlib.Path(__file__).parent / "examples"
 NOW = 1_800_000_000
@@ -393,6 +393,64 @@ class BlockedTests(unittest.TestCase):
         # classify on an unvalidated document: the unknown meaning reads as blocked.
         self.assertEqual(classify(d, 429, {"Retry-After": "2"}, self.body("public_api_request_blocked"), NOW),
                          {"meaning": "blocked", "bucket": None, "retryAt": None})
+
+
+class PlanTierTests(unittest.TestCase):
+    """0.5.0: a Limit Object with tiers (Clockify-, Asana- and Notion-shaped)."""
+
+    def document(self):
+        return example("plan-tiers.yaml")
+
+    def limit(self, document):
+        return document["x-throttling"]["limits"]["workspace"]
+
+    def test_example_is_valid(self):
+        validate(self.document())
+
+    def test_shape(self):
+        for mutate in (lambda l: l.update(window={"seconds": 1, "kind": "fixed"}),
+                       lambda l: l.update(requests=5),
+                       lambda l: l.update(tiers=[]),
+                       lambda l: l["tiers"].append(dict(l["tiers"][0])),
+                       lambda l: l["tiers"][0].pop("window"),
+                       lambda l: l["tiers"][0].pop("requests"),
+                       lambda l: l["tiers"][0].update(name=""),
+                       lambda l: l["tiers"][0].update(requests=0),
+                       lambda l: l["tiers"][0]["window"].update(kind="rolling"),
+                       lambda l: l["tiers"][0].update(extra=1)):
+            d = self.document()
+            mutate(self.limit(d))
+            with self.subTest(), self.assertRaises(ValueError):
+                validate(d)
+        d = self.document()
+        del self.limit(d)["tiers"]
+        with self.assertRaises(ValueError):  # neither window nor tiers
+            validate(d)
+
+    def test_select_tier(self):
+        limit = self.limit(self.document())
+        self.assertEqual(select_tier(limit, "ENTERPRISE")["requests"], 50)
+        # Unknown or no tier: the most restrictive, 30 per hour.
+        for tier in (None, "PREMIUM"):
+            chosen = select_tier(limit, tier)
+            self.assertEqual((chosen["requests"], chosen["window"]["seconds"]), (30, 3600))
+        # Equal rates: the longer window.
+        tied = {"tiers": [{"name": "a", "requests": 1, "window": {"seconds": 1, "kind": "fixed"}},
+                          {"name": "b", "requests": 60, "window": {"seconds": 60, "kind": "fixed"}}]}
+        self.assertEqual(select_tier(tied)["window"]["seconds"], 60)
+        # Without tiers, the limit itself.
+        plain = {"requests": 5, "window": {"seconds": 10, "kind": "fixed"}}
+        self.assertEqual(select_tier(plain, "x"), plain)
+
+    def test_quota_exhausted_falls_back_to_the_tier_window(self):
+        d = self.document()
+        self.assertEqual(classify(d, 429, {}, None, NOW),
+                         {"meaning": "quotaExhausted", "bucket": "workspace", "retryAt": NOW + 3600})
+        self.assertEqual(classify(d, 429, {}, None, NOW, tier="ENTERPRISE")["retryAt"], NOW + 1)
+
+    def test_0_4_documents_stay_valid(self):
+        for name in ("windowed.yaml", "response-signals.yaml", "body-fields.yaml", "blocked.yaml"):
+            validate(example(name))
 
 
 if __name__ == "__main__": unittest.main()

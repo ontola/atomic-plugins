@@ -9,6 +9,7 @@ import email.utils
 import json
 import re
 import sys
+from fractions import Fraction
 from urllib.parse import urlparse
 
 DIMENSIONS = {"sourceIp", "user", "session", "application", "credential", "account", "operation"}
@@ -73,13 +74,51 @@ def validate(document):
 
 def validate_limit(name, limit):
     require(isinstance(name, str) and name, "empty bucket identifier")
-    require(isinstance(limit, dict) and "window" in limit, f"{name}: window required")
-    require(set(limit) <= {"requests", "window", "partitionBy", "description"}, f"{name}: unknown field")
-    if "requests" in limit:
-        positive(limit["requests"], f"{name}.requests")
+    require(isinstance(limit, dict), f"{name}: expected object")
+    require(set(limit) <= {"requests", "window", "partitionBy", "description", "tiers"}, f"{name}: unknown field")
     if "description" in limit:
         require(isinstance(limit["description"], str), f"{name}.description: expected string")
-    window = limit["window"]
+    if "tiers" in limit:  # 0.5.0
+        require("window" not in limit and "requests" not in limit, f"{name}: tiers replace requests and window")
+        tiers = limit["tiers"]
+        require(isinstance(tiers, list) and tiers, f"{name}.tiers: expected nonempty array")
+        names = []
+        for index, tier in enumerate(tiers):
+            label = f"{name}.tiers[{index}]"
+            require(isinstance(tier, dict) and {"name", "requests", "window"} <= set(tier)
+                    <= {"name", "requests", "window", "description"}, f"{label}: name, requests and window required")
+            require(isinstance(tier["name"], str) and tier["name"], f"{label}.name: expected nonempty string")
+            names.append(tier["name"])
+            positive(tier["requests"], f"{label}.requests")
+            if "description" in tier:
+                require(isinstance(tier["description"], str), f"{label}.description: expected string")
+            validate_window(label, tier["window"])
+        require(len(set(names)) == len(names), f"{name}.tiers: duplicate names")
+    else:
+        require("window" in limit, f"{name}: window required")
+        validate_window(name, limit["window"])
+    if "requests" in limit:
+        positive(limit["requests"], f"{name}.requests")
+    if "partitionBy" in limit:
+        strings(limit["partitionBy"], f"{name}.partitionBy")
+        for dimension in limit["partitionBy"]:
+            uri = urlparse(dimension)
+            require(dimension in DIMENSIONS or (uri.scheme and (uri.path or uri.netloc)), f"{name}: unknown non-URI dimension")
+
+
+def select_tier(limit, tier=None):
+    """0.5.0: the {requests, window} in force: the limit itself, its tier named `tier`, else its most restrictive tier."""
+    tiers = limit.get("tiers")
+    if not tiers:
+        return {k: limit[k] for k in ("requests", "window") if k in limit}
+    for candidate in tiers:
+        if candidate["name"] == tier:
+            return {"requests": candidate["requests"], "window": candidate["window"]}
+    strictest = min(tiers, key=lambda t: (Fraction(t["requests"], t["window"]["seconds"]), -t["window"]["seconds"]))
+    return {"requests": strictest["requests"], "window": strictest["window"]}
+
+
+def validate_window(name, window):
     require(isinstance(window, dict) and {"seconds", "kind"} <= set(window) <= {"seconds", "kind", "anchor"}, f"{name}.window: invalid fields")
     positive(window["seconds"], f"{name}.window.seconds")
     require(window["kind"] in ("fixed", "sliding", "unspecified"), f"{name}: invalid window kind")
@@ -88,11 +127,6 @@ def validate_limit(name, limit):
         require(window["kind"] == "fixed", f"{name}: anchor only valid for fixed windows")
         require(isinstance(anchor, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)", anchor), f"{name}: anchor must be RFC3339 timestamp")
         datetime.datetime.fromisoformat(anchor.replace("Z", "+00:00"))
-    if "partitionBy" in limit:
-        strings(limit["partitionBy"], f"{name}.partitionBy")
-        for dimension in limit["partitionBy"]:
-            uri = urlparse(dimension)
-            require(dimension in DIMENSIONS or (uri.scheme and (uri.path or uri.netloc)), f"{name}: unknown non-URI dimension")
 
 def validate_headers(headers):
     validate_roles(headers, "headers", case_insensitive=True)
@@ -304,7 +338,7 @@ def _body_text(body, path):
     return value.strip(WHITESPACE) if isinstance(value, str) else None
 
 
-def classify(document, status, headers, body, received_at):
+def classify(document, status, headers, body, received_at, tier=None):
     """Classify one response under the document's x-throttling.
 
     `headers` maps names (any case) to a value, or to a list of values when the
@@ -365,7 +399,7 @@ def classify(document, status, headers, body, received_at):
     elif "minDelaySeconds" in matched:
         retry_at = received_at + matched["minDelaySeconds"]
     elif matched["meaning"] == "quotaExhausted" and bucket in root.get("limits", {}):
-        retry_at = received_at + root["limits"][bucket]["window"]["seconds"]
+        retry_at = received_at + select_tier(root["limits"][bucket], tier)["window"]["seconds"]
     else:
         retry_at = None
     return {"meaning": matched["meaning"], "bucket": bucket, "retryAt": retry_at}
