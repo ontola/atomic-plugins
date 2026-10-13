@@ -1,0 +1,57 @@
+# Reviewed 2026-10-09 against the pinned OAD and official provider documentation.
+# Source: https://docs.github.com/en/rest/issues/issues?apiVersion=2022-11-28#get-an-issue
+# ("The API returns a 301 Moved Permanently status if the issue was transferred to another
+# repository. If the issue was transferred to or deleted from a repository where the
+# authenticated user lacks read access, the API returns a 404 Not Found status. If the issue
+# was deleted from a repository where the authenticated user has read access, the API returns
+# a 410 Gone status.")
+# Source: same page, "List repository issues": only open issues by default; state=all lists
+# open and closed ones (the crud-causality overlay fixes state=all for the issues collection).
+# GitHub also answers 410 for every issue of a repository whose issues are turned off (body:
+# "Issues are disabled for this repo"), which the owner can switch back, so a 410 is not
+# declared a deletion (no gone: deleted).
+# Needs Collection Completeness 0.2.0-draft (notFound, parentAbsent). Meant to compose with
+# crud-causality-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml in either order: it
+# deep-merges into components.crudResources.
+overlay: 1.0.0
+info:
+  title: GitHub Issues API collection completeness
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9c5cfb87b3f8b64e11069373a73e3fc85de0de5e/APIs/github.com/github-issues/1.1.4/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        issue:
+          collections:
+            issues:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                description: >-
+                  With state=all (the collection's fixed read) every page
+                  returns every issue and pull request of the repository,
+                  open and closed. An issue leaves it when transferred to
+                  another repository or deleted, so absence is removed. Its
+                  own read then answers 301 (transferred), 404 (transferred
+                  or deleted where the caller lacks read access) or 410
+                  (deleted where the caller has read access), and also 410
+                  for every issue of a repository whose issues are turned
+                  off ("Issues are disabled for this repo"), which can be
+                  switched back. A 404 may be a transfer and a 410 may be
+                  disabled issues, so both are unavailable; no gone is
+                  declared.
+        issueComment:
+          collections:
+            issueComments:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                parentAbsent: unavailable
+                description: >-
+                  Every comment of the issue. A comment leaves it when
+                  deleted, or the whole collection moves when its issue is
+                  transferred; GitHub does not document what a 404 from
+                  reading one comment means beyond "not found", so it is
+                  unavailable. When the issue itself is concluded gone, its
+                  comments are unavailable.

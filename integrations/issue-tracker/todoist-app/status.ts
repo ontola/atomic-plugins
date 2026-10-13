@@ -184,6 +184,16 @@ export function syncStatusFor(input: StatusInput): SyncStatus | undefined {
         at: state.at.getTime(),
         counts: { added: s.added, updated: s.updated, unchanged: s.unchanged },
       };
+      if (s.unmapped.length)
+        problems.push({
+          lead: `${s.unmapped.length} task${s.unmapped.length === 1 ? '' : 's'} could not be read through the catalog lens.`,
+          text: `${s.unmapped.length === 1 ? 'Its row keeps' : 'Their rows keep'} the name, description, status and due date they had. ${s.unmapped
+            .slice(0, 3)
+            .map(u => `Task ${u.id}: ${u.reason}`)
+            .join(
+              ' ',
+            )}${s.unmapped.length > 3 ? ` And ${s.unmapped.length - 3} more.` : ''}`,
+        });
       if (!s.complete)
         problems.push({
           lead: 'The read was partial, so no missing task was checked.',

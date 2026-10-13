@@ -110,20 +110,6 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
-## Collections with fixed reads
-
-Two standalone overlays declare [CRUD Causality 0.4.0](../openapi-extensions/spec/crud-causality/README.md#421-reading-a-collection)
-`listQuery`; the [syncables 0.22.0 catalog](#syncables-0220-catalog) is the
-first to select them, in place of v1.
-`tests/test_crud_fixed_query_overlays.py` composes each with its pinned OAD and
-pagination overlay, runs the collection-read validator, and checks that each
-fixed read is the request the drive app sends. No provider was called.
-
-| Overlay | Fixed read | Evidence |
-| --- | --- | --- |
-| [Google Tasks v1, crud-causality v2](APIs/googleapis.com/tasks/v1/crud-causality-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | v1 (#378) plus envelopes, the task-list read and descriptions; task lists and tasks, read only; the `tasks` collection fixes `showCompleted=true` and `showHidden=true`. Deleted tasks stay excluded. | The pinned OAD's parameter descriptions; [tasks.list](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
-| [Google Calendar v3 app v2](APIs/googleapis.com/calendar/v3/app-crud-causality-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | v1's resources and operations; the `events` collection fixes `showDeleted=true` and `singleEvents=false`, and the event update declares `mode: patch` with `patchFormat: jsonMergePatch`. | The pinned OAD's parameter descriptions; [events.list](https://developers.google.com/workspace/calendar/api/v3/reference/events/list); [patch semantics](https://developers.google.com/workspace/calendar/api/guides/performance) |
-
 ## Throttling response signals
 
 Three standalone overlays declare [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md#throttling-signals)
@@ -251,6 +237,21 @@ deletion feed over the event list is declared (Deletion Feeds §8).
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
 
+## Write preconditions
+
+Two standalone overlays declare [Write Preconditions 0.1.0-draft](../openapi-extensions/spec/write-preconditions/README.md)
+`x-write-precondition`; no dated catalog selects them.
+`tests/test_write_precondition_overlays.py` composes each with its pinned OAD,
+and Calendar's also after each of its crud-causality overlays, and checks the
+reference client logic against what the drive apps do;
+`syncables/__tests__/unit/client/calendar-recurring-refuse.test.ts` runs the
+Calendar overlay through the syncables client. No provider was called.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
+| [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
+
 ## Google Calendar throttling
 
 [Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
@@ -321,6 +322,41 @@ version of the extension does not describe. No dated catalog selects it
 yet. `tests/test_asana_throttling.py` composes it alone and after the
 catalog's Asana overlays and classifies a synthetic 429. No provider was
 called.
+
+## Collections with fixed reads
+
+Two standalone overlays declare [CRUD Causality 0.4.0](../openapi-extensions/spec/crud-causality/README.md#421-reading-a-collection)
+`listQuery`; the [syncables 0.22.0 catalog](#syncables-0220-catalog) is the
+first to select them, in place of v1.
+`tests/test_crud_fixed_query_overlays.py` composes each with its pinned OAD and
+pagination overlay, runs the collection-read validator, and checks that each
+fixed read is the request the drive app sends. No provider was called.
+
+| Overlay | Fixed read | Evidence |
+| --- | --- | --- |
+| [Google Tasks v1, crud-causality v2](APIs/googleapis.com/tasks/v1/crud-causality-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | v1 (#378) plus envelopes (with `emptyWhenAbsent`, as pagination v2's), the task-list read and descriptions; task lists and tasks, read only; the `tasks` collection fixes `showCompleted=true` and `showHidden=true`. Deleted tasks stay excluded. | The pinned OAD's parameter descriptions; [tasks.list](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
+| [Google Calendar v3 app v2](APIs/googleapis.com/calendar/v3/app-crud-causality-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | v1's resources and operations; the `events` collection fixes `showDeleted=true` and `singleEvents=false`, and the event update declares `mode: patch` with `patchFormat: jsonMergePatch` (v1 declares no `mode`, against CRUD Causality rule 5). | The pinned OAD's parameter descriptions; [events.list](https://developers.google.com/workspace/calendar/api/v3/reference/events/list); [patch semantics](https://developers.google.com/workspace/calendar/api/guides/performance) |
+
+## Collection completeness
+
+Two standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
+`x-completeness`, which syncables reads (`absent`, `notFound`, `gone`,
+`parentAbsent`). The [syncables 0.22.0 catalog](#syncables-0220-catalog) is
+the first to select them.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [Google Tasks v1 completeness](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks `absent: removed`, `notFound: unavailable`; tasks `parentAbsent: unavailable`; the task read tombstone `deleted: true`. Needs crud-causality v2 (the fixed read that returns hidden tasks). | The pinned OAD (tasklists.list "Returns all the authenticated user's task lists"; Task.deleted "Flag indicating whether the task has been deleted"); what a 404 means is not documented |
+| [GitHub Issues completeness](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | Issues `absent: removed`, `notFound: unavailable`, no `gone`; comments the same plus `parentAbsent: unavailable`. | [Get an issue](https://docs.github.com/en/rest/issues/issues#get-an-issue): 301 when transferred, 404 when transferred or deleted out of the caller's reach, 410 when deleted where the caller can read, and 410 for every issue when issues are turned off, so neither a 404 nor a 410 is declared a deletion |
+
+A Todoist overlay drafted with these is left out: Todoist's API reference
+could not be read for the task fields and single-task read it relies on,
+and its pinned OAD is an authored subset without descriptions.
+`tests/test_completeness_overlays.py` and
+`tests/test_github_issues_completeness.py` compose each overlay with the
+overlays it needs, run the Collection Completeness and CRUD Causality
+validators, and classify synthetic reads with the spec's `classify_read`.
+No provider was called.
 
 ## Directory layout and OAD revisions
 
