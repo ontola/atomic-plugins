@@ -767,9 +767,18 @@ write to it that the provider accepts also ends the mark). A kept record
 without writes is read again by later syncs wherever the collection makes
 checks (the same rule as for a vanished record: `missingRecordChecks:
 'all'`, `absent: removed`, or a parent of a `parentAbsent` collection;
-never under `'none'`), after the unconfirmed records and the ones the read
-newly lacks, within `maxMissingRecordChecks`: a 404 under
-`notFound: unavailable` keeps it kept, and tells nothing again; a 2xx shows
+never under `'none'`). A kept record with queued or failed writes is not:
+its writes say what became of it, and a failed one is resolved with
+`resolveWrite`. The re-reads come in a second pass, after every
+collection's unconfirmed records and the records its read newly lacks
+(those go first within each collection), and share what is left of
+`maxMissingRecordChecks`, a limit per sync across all collections. Within
+that pass the record checked longest ago goes first (one never checked
+before any other; the time is stored with the mark), so a small limit
+reads each kept record in turn rather than the same one every sync. Each
+re-read is reported to `onMissingRecord` again, whatever it finds. A 404
+under `notFound: unavailable` keeps it kept, and tells `onPresence` nothing
+again; a 2xx shows
 it exists outside the collection, so it leaves the copy (told `removed`);
 an answer the document concludes as deletion removes it (told `deleted`).
 A new `update()` or `remove()` of a kept record
@@ -1477,10 +1486,11 @@ from its local copy). A client from before the presence marks, which already
 keeps unavailable records, keeps the kept records but not their `presence`
 or `source`: once it
 stores the outbox again, `unconfirmed` and retained `deleted` marks come
-back after an upgrade as `unavailable` for good (kept, not checked again by
-themselves). A `presence` value this client does not know is read as
-`unavailable` in the same way. A client from before `lastSeen` drops it
-the same way. The version stays `1` because an older client can
+back after an upgrade as `unavailable` (kept, and read again only where
+the collection makes checks). A `presence` value this client does not know
+is read as `unavailable` in the same way. A client from before `lastSeen`
+drops it the same way, and one from before `checked` (when a re-read last
+checked a kept record) drops that, so its records count as never checked. The version stays `1` because an older client can
 read every write it holds and either sends it or keeps it unchanged, with
 those caveats: settle or discard merge-patch updates, unbound creates and
 writes held as unavailable before downgrading. Set `outboxNamespace` to
@@ -1837,13 +1847,17 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 - **Unreleased**: A record kept `unavailable` without writes is read
   again by later syncs wherever its collection makes checks
   (`missingRecordChecks: 'all'`, `absent: removed`, a `parentAbsent`
-  parent), after unconfirmed and newly missing records, within
-  `maxMissingRecordChecks`. Before, it stayed kept until a list read
-  returned it. A 2xx now removes it from the copy (it exists outside the
-  collection), and an answer concluding deletion removes it; a 404 under
-  `notFound: unavailable` keeps it without telling again. Behaviour
-  change: more item GETs where such records are kept, and
-  `onMissingRecord` reports each re-check.
+  parent), unless it has queued or failed writes. Before, it stayed kept
+  until a list read returned it. The re-reads run in a second pass, after
+  every collection's unconfirmed and newly missing records, within what is
+  left of `maxMissingRecordChecks` (a limit per sync, across collections),
+  the record checked longest ago first; the outbox stores that time with
+  the mark (`checked`, added within version 1). A 2xx now removes it from
+  the copy (it exists outside the collection), and an answer concluding
+  deletion removes it; a 404 under `notFound: unavailable` keeps it
+  without telling `onPresence` again. Behaviour change: more item GETs
+  where such records are kept, and `onMissingRecord` is called again on
+  every re-check.
 - **Unreleased**: Produced Classes 0.1.1-draft: an IRI holding a C1
   control character (U+0080–U+009F) or U+FEFF is not absolute, as the
   spec's validator now says too (U+FEFF was refused before and U+0085 was

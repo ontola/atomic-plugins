@@ -26,3 +26,29 @@ change with it (one more report and the third sync's 50 checks). New
 tests: both check settings, a 410 under `gone: deleted`, no re-read under
 `'none'`, and the order under a limit of one; three fail on the code
 before.
+
+## Review fixes (#553)
+
+The coordinator relayed two blockers from #553's review, both confirmed
+with probes. (1) Held writes: the unchanged-read path and the vanished
+loop skipped only records with queued writes, so a record with a failed
+write held as unavailable (`failMissing`) was re-read, its mark cleared
+and `present` told while the failed write still said
+`missingRecord: 'unavailable'`. Both now skip `unsettled` records (queued
+or failed writes). (2) Starvation under `maxMissingRecordChecks`: the
+unavailable set was read in a fixed order and a 404 keeps the mark, so a
+limit of one re-read the same record every sync; and the per-sync limit
+let one collection's unavailable re-checks take the checks of later
+collections' unconfirmed and newly missing records (a regression of this
+PR). Each mark now has `checked` (an ISO time, strictly increasing,
+stored in the outbox), and the re-reads moved to a second pass,
+`recheckUnavailable`, after every collection's other checks and before
+`finishFeeds`, oldest-checked first across collections. The vanished
+loop's body became `checkVanished`, shared by both passes. Docs: the
+order per collection and the limit per sync, held writes excluded, the
+"least likely to have changed" comment dropped, and `onMissingRecord`
+called again on every re-check. New tests
+(`recheck-unavailable-fairness.test.ts`): held writes on an unchanged and
+a changed read, rotation with a limit of one across a restart, and a
+later collection's newly missing record checked before an earlier
+collection's unavailable one; three fail on the code before.
