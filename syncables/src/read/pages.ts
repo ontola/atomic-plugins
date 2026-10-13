@@ -3,7 +3,10 @@ import type {
   OperationObject,
   SchemaObject,
 } from '../openapi/types.js';
-import { resolveEffectiveScheme } from '../pagination/autodetect.js';
+import {
+  invalidAutoDetected,
+  resolveEffectiveScheme,
+} from '../pagination/autodetect.js';
 import { locateItemsField } from '../pagination/items.js';
 import { resolveLink } from '../pagination/links.js';
 import {
@@ -535,6 +538,8 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
   if (outcome) {
     outcome.complete = false;
     delete outcome.reason;
+    // An outcome passed again: an earlier walk's mark is not this one's.
+    delete outcome.marked;
   }
   const result: WalkOutcome = { complete: true };
   yield* walkAllPages({ ...walk, outcome: result });
@@ -740,6 +745,14 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
     yield { url, items, body };
 
     if (!scheme) {
+      // A scheme that would have been auto-detected but is invalid: the
+      // operation presumably pages, so this one page is not the whole
+      // collection. Its items stand; nothing is concluded from absence.
+      const invalid = invalidAutoDetected(document, operation);
+      if (invalid && walk.outcome) {
+        walk.outcome.complete = false;
+        walk.outcome.reason = `the pagination scheme "${invalid.schemeName}" matches this operation by auto-detection but is invalid (${invalid.problems.join('; ')}), so only its first response was read: not a complete read`;
+      }
       return;
     }
     const state =

@@ -1802,7 +1802,17 @@ const { records, ontology, errors } = await readPlatform(document, {
   of `equals` and `in`, a value that is not a JSON scalar, or a scheme
   other than pageNumber, pageToken or nextLink) makes the scheme
   invalid, so a read that applies it explicitly fails rather than being
-  taken as complete.
+  taken as complete. A scheme that auto-detection would apply but that is
+  invalid for any reason (such a declaration included) is not applied;
+  when no valid scheme matches the operation instead, the read makes one
+  request and is not complete: `readCollections` gives `complete: false`
+  with a `notComplete` naming the scheme and its problems, `paginate`
+  fills an `outcome`, and `sync()` applies it as an incomplete read
+  (nothing removed, checked or concluded from absence). Apply such a
+  scheme with an explicit `x-pagination` entry to have the read fail
+  instead.
+  An `outcome` passed to `paginate` again starts clean: an earlier walk's
+  mark does not carry over.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -1998,6 +2008,15 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   without telling `onPresence` again. Behaviour change: more item GETs
   where such records are kept, and `onMissingRecord` is called again on
   every re-check.
+- **Unreleased**: Behaviour fix: a pagination scheme that auto-detection
+  would apply to an operation but that fails validation was dropped, and
+  the read made one request and took that page as the whole collection,
+  so `absent: removed` or `deleted` (or `missingRecordChecks`) could
+  remove or conclude records that were on later pages. When no valid
+  scheme matches, such a read is now not complete (`notComplete` names the
+  scheme; `sync()` lists it in `SyncResult.incomplete` and removes
+  nothing). `invalidAutoDetected` (exported) tells whether an operation is
+  in that case.
 - **Unreleased**: `matchUnboundCreates` (off by default): an unbound
   create (CRUD Causality 0.5.0 §4.3.2: a 2xx that did not identify the
   record) is bound from the next complete read of its collection when it
