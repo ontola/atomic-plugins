@@ -436,6 +436,26 @@ export function logProblem(env, argv) {
   );
 }
 
+/** Removes `out`'s catalog.json and UNLOGGED marker, if any. */
+export function clearOut(out) {
+  rmSync(resolve(out, 'catalog.json'), { force: true });
+  rmSync(resolve(out, 'UNLOGGED'), { force: true });
+}
+
+/**
+ * Marks `out` UNLOGGED when the build will have no collector prelude, before
+ * any catalog.json exists there, so no moment has an unmarked unlogged
+ * catalog on disk: check-live.mjs and deploy.sh refuse a marked one.
+ */
+export function markOut(out, env) {
+  if (env.USERTEST_LOG_URL) return;
+  mkdirSync(out, { recursive: true });
+  writeFileSync(
+    resolve(out, 'UNLOGGED'),
+    'Built without USERTEST_LOG_URL (catalog.mjs --no-log or --record): not for deploying.\n',
+  );
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const recording = argv.includes('--record');
@@ -444,18 +464,17 @@ async function main() {
   );
   const unlogged = logProblem(process.env, argv);
 
-  // Whatever happens below, no catalog.json from an earlier build stays to
-  // be deployed by mistake; a successful build writes a new one.
-  const clear = () => {
-    rmSync(resolve(out, 'catalog.json'), { force: true });
-    rmSync(resolve(out, 'UNLOGGED'), { force: true });
-  };
+  const clear = () => clearOut(out);
+  // Whatever happens below (a refusal, a failed install or build), no
+  // catalog.json from an earlier build stays to be deployed by mistake.
+  clear();
 
   if (unlogged) {
-    clear();
     console.error(`catalog: ${unlogged}`);
     process.exit(2);
   }
+
+  markOut(out, process.env);
 
   if (!argv.includes('--no-install')) installMissing(dependencyDirs());
   let built;
@@ -468,14 +487,6 @@ async function main() {
   }
 
   const { catalog, modules } = built;
-  // A build without the collector prelude is marked, so check-live.mjs and
-  // deploy.sh refuse it.
-  if (!process.env.USERTEST_LOG_URL)
-    writeFileSync(
-      resolve(out, 'UNLOGGED'),
-      'Built without USERTEST_LOG_URL (catalog.mjs --no-log or --record): not for deploying.\n',
-    );
-  else rmSync(resolve(out, 'UNLOGGED'), { force: true });
   const { changed, unrecorded } = versionProblems(modules, readBuilds());
 
   if (changed.length) {

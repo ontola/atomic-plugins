@@ -59,8 +59,8 @@ ssh root@178.62.223.35 USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server
   Chained with `&&`, a failed build or check copies nothing. `check-live.mjs`
   reads the live catalog from a file (or `-` for standard input) as well as
   a URL; absent passes, unreachable fails (a mistyped path fails, a missing
-  `catalog.json` in `/srv/catalog` is a first deploy). `--served /srv/catalog`
-  also compares each built module with the `ui.js` already on disk, which
+  `catalog.json` in `/srv/catalog` is a first deploy, an empty one fails).
+  `--served /srv/catalog` (which must exist) also compares each built module with the `ui.js` already on disk, which
   catches a version the live catalog no longer lists. `catalog.mjs` refuses
   to build without a well-formed `USERTEST_LOG_URL` (exit 2) unless
   `--no-log` says the build is not for deploying; that writes

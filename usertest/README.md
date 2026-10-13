@@ -105,9 +105,10 @@ droplet already serves with other bytes. The deploy workflow below runs it
 before it touches the droplet, and `deploy.sh` runs it too, against the
 droplet's own `/srv/catalog/catalog.json`, before it copies anything.
 Absent passes, unreachable fails: only a definite absence (no
-`catalog.json` on the droplet, HTTP 404, an empty answer) is a first deploy;
-an ssh or network failure, another HTTP status, a missing folder or anything
-that is not a catalog stops the deploy.
+`catalog.json` on the droplet, HTTP 404 without a redirect) is a first
+deploy; an ssh or network failure or timeout, another HTTP status, a missing
+folder, an empty `catalog.json` or anything else that is not a catalog
+stops the deploy.
 
 `catalog.mjs` refuses to build without `USERTEST_LOG_URL`, or with one not
 shaped `https://<host>/log` (exit 2, and no `catalog.json` is left): Calendar

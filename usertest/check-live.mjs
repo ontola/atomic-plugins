@@ -25,11 +25,13 @@
  * lists but whose ui.js is still served.
  *
  * Absent passes, unreachable fails. Only a definite absence counts as a
- * first deploy: empty standard input or the line `NONE` (deploy.sh's marker
- * for "no catalog.json on the droplet"), a file that does not exist in a
- * folder that does, or HTTP 404. A network error, any other HTTP status, a
- * read error, a missing folder (a mistyped path) and anything that is not a
- * JSON array of catalog entries exit 1. So does a build made with
+ * first deploy: the line `NONE` on standard input (deploy.sh's marker for
+ * "no catalog.json on the droplet"), a file that does not exist in a folder
+ * that does, or HTTP 404 (not after a redirect: a 3xx fails). A network
+ * error or timeout, any other HTTP status, a read error, a missing folder (a
+ * mistyped path), empty input or an empty file, and anything that is not a
+ * JSON array of catalog entries exit 1; `[]` is a real, empty catalog. A
+ * `--served` folder that does not exist exits 1 too. So does a build made with
  * `catalog.mjs --no-log` (its `out/UNLOGGED` marker): it is not for deploying.
  */
 import { createHash } from 'node:crypto';
@@ -70,7 +72,9 @@ async function liveText(live) {
   if (live === '-') {
     const text = readFileSync(0, 'utf8');
 
-    return !text.trim() || text.trim() === ABSENT ? undefined : text;
+    // Empty input is not absence: deploy.sh says NONE for that, so empty
+    // means the droplet's catalog.json is empty or the read went wrong.
+    return text.trim() === ABSENT ? undefined : text;
   }
 
   if (!/^https?:\/\//.test(live)) {
@@ -85,7 +89,13 @@ async function liveText(live) {
     }
   }
 
-  const response = await fetch(live, { cache: 'no-store' });
+  // A redirect is not followed (it could end in some other page's 404), and
+  // a server that does not answer within 30 s counts as unreachable.
+  const response = await fetch(live, {
+    cache: 'no-store',
+    redirect: 'manual',
+    signal: AbortSignal.timeout(30_000),
+  });
   if (response.status === 404) return undefined;
   if (!response.ok) throw new Error(`HTTP ${response.status} from ${live}`);
 
@@ -108,6 +118,12 @@ async function main(argv) {
   }
 
   const out = resolve(outArg ?? resolve(here, 'out'));
+
+  if (served && !existsSync(served)) {
+    console.error(`--served ${served} does not exist. Deploy stopped.`);
+
+    return 1;
+  }
 
   if (existsSync(resolve(out, 'UNLOGGED'))) {
     console.error(

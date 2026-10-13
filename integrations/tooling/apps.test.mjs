@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -30,8 +31,10 @@ import {
 import {
   buildCatalog,
   dependencyDirs,
+  clearOut,
   explained,
   logProblem,
+  markOut,
   readBuilds,
   recordedFor,
   versionProblems,
@@ -664,6 +667,28 @@ test('usertest: catalog.mjs refuses an unlogged build unless --no-log or --recor
     );
 });
 
+test('usertest: catalog.mjs clears out/ first and marks an unlogged build before it builds', () => {
+  const out = mkdtempSync(join(tmpdir(), 'usertest-out-'));
+
+  try {
+    writeFileSync(join(out, 'catalog.json'), '[]');
+    writeFileSync(join(out, 'UNLOGGED'), 'old');
+    // What main() does before installing or building: nothing from an
+    // earlier build is left, whatever fails next.
+    clearOut(out);
+    assert.equal(existsSync(join(out, 'catalog.json')), false);
+    assert.equal(existsSync(join(out, 'UNLOGGED')), false);
+    // Unlogged: marked before any catalog.json is written. Logged: not.
+    markOut(out, {});
+    assert.equal(existsSync(join(out, 'UNLOGGED')), true);
+    clearOut(out);
+    markOut(out, { USERTEST_LOG_URL: 'https://logs.example/log' });
+    assert.equal(existsSync(join(out, 'UNLOGGED')), false);
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
 test('usertest: check-live.mjs: a changed module fails, absent passes, unreachable fails', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'usertest-check-live-'));
   const I = 'https://atomicdata.dev/integrations/properties/';
@@ -689,6 +714,7 @@ test('usertest: check-live.mjs: a changed module fails, absent passes, unreachab
   const server = createServer((req, res) => {
     const [status, body] = {
       '/missing': [404, 'Not Found'],
+      '/moved': [302, ''],
       '/down': [502, '<html>Bad Gateway</html>'],
       '/html': [200, '<html>maintenance</html>'],
       '/same': [200, JSON.stringify([entry('sha384-unlogged')])],
@@ -724,9 +750,15 @@ test('usertest: check-live.mjs: a changed module fails, absent passes, unreachab
     );
     assert.equal((await run([join(dir, 'same.json'), out])).status, 0);
 
-    // Absent passes: empty input, deploy.sh's NONE, no file in an existing folder.
-    assert.equal((await live('')).status, 0);
+    // Absent passes: deploy.sh's NONE, no file in an existing folder; and
+    // `[]` is a real, empty catalog.
     assert.equal((await live('NONE\n')).status, 0);
+    assert.equal((await live('[]')).status, 0);
+    // Empty input is not absence: deploy.sh says NONE for that, so it is an
+    // empty catalog.json on the droplet, or a read gone wrong.
+    assert.equal((await live('')).status, 1);
+    writeFileSync(join(dir, 'empty.json'), '');
+    assert.equal((await run([join(dir, 'empty.json'), out])).status, 1);
     assert.equal(
       (await run([join(dir, 'no-catalog-yet.json'), out])).status,
       0,
@@ -742,6 +774,8 @@ test('usertest: check-live.mjs: a changed module fails, absent passes, unreachab
     await new Promise(ready => server.listen(0, '127.0.0.1', ready));
     const base = `http://127.0.0.1:${server.address().port}`;
     assert.equal((await run([`${base}/missing`, out])).status, 0);
+    // A redirect is not followed: it fails rather than land on another 404.
+    assert.equal((await run([`${base}/moved`, out])).status, 1);
     assert.equal((await run([`${base}/down`, out])).status, 1);
     assert.equal((await run([`${base}/html`, out])).status, 1);
     assert.equal((await run([`${base}/same`, out])).status, 0);
@@ -755,6 +789,13 @@ test('usertest: check-live.mjs: a changed module fails, absent passes, unreachab
     const onDisk = await run(['-', out, '--served', served], 'NONE');
     assert.equal(onDisk.status, 1);
     assert.match(onDisk.stderr, /differs from the file already served/);
+    // A --served folder that does not exist (a typo) fails.
+    const typo = await run(
+      ['-', out, '--served', join(dir, 'srv-typo')],
+      'NONE',
+    );
+    assert.equal(typo.status, 1);
+    assert.match(typo.stderr, /does not exist/);
 
     // A build made with --no-log is never deployed.
     writeFileSync(join(out, 'UNLOGGED'), 'x');
