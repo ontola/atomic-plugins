@@ -82,6 +82,17 @@ Data flows through four stages, each its own directory under `src/`:
    while any other read that is not complete (failed, or an undocumented
    short-page end) gets `spans: null`.
    `read/read.ts` adds ontology/type projection.
+   `read/produced-classes.ts` reads Produced Classes 0.1.0-draft
+   (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
+   only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
+   `validate.py` (keep them in step), `parseProduces` reads nothing from a
+   declaration with any rule 2-6 violation, `discoverReadModel` puts a
+   resource's classes on each of its collections (`ReadCollection.produces`,
+   behind `ApiClient.produces`), `producedClasses`/`resourcesProducing`
+   read a document (also a Swagger 2.0 root `x-crudResources`), and
+   `lensFits` checks a caller-fetched lens's `target.class` and
+   `source.record.{provider,resource}` (the fields of the catalog lenses in
+   `ontology/lenses/`, `ontology-kit/lens.d.mts`). Nothing is fetched.
    `read/runtime-schemas.ts` is the consumer of the draft Runtime Schemas
    extension (`x-runtime-schema`, `openapi-extensions/spec/runtime-schemas/`,
    #398; the spec's `validate.py` `derive_class`/`read_members` are its
@@ -221,7 +232,9 @@ Data flows through four stages, each its own directory under `src/`:
    `resolveWrite` `retry`, sets its field's first segment or deletes the
    record; `retry` refuses an `unknown` follow-up), an unknown outcome sets `awaitingRefresh` (read back first),
    and a `confirm`ed uncertain create queues them `awaitingRefresh`;
-   updates select declared PUT, otherwise PATCH; the chosen operation's
+   updates use the item-path PUT or PATCH whose `x-crud` declares
+   `action: update` for the resource (both declared: PUT; neither, or a
+   legacy document: PUT, else PATCH; `clientRoutes`); the chosen operation's
    `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
    `merge-patch.ts`): `jsonMergePatch` sends the changes alone and applies
    RFC 7396 locally, `jsonPatch` makes `update()` throw, anything else (and
@@ -681,6 +694,11 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   under an unavailable parent concluded at once and sent again after the
   parent returns, `record` on unavailable reports, and an unrecognised
   `notFound` read as `unavailable`.
+- `unit/client/update-modes.test.ts` covers update bodies (`mode`,
+  `patchFormat`, merge patches, conflicts, stored `updateBody`) and which
+  operation updates: a declared PATCH over an undeclared PUT, the reverse,
+  both declared, neither, another resource's `x-crud`, and a declared
+  `jsonPatch` PATCH throwing.
 - `unit/client/write-preconditions.test.ts` covers the client side of
   Write Preconditions: `ifMatch` (body version without a read, header
   version with one, `conflictStatus` and `header`), `refuseWhen`,
@@ -690,6 +708,12 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   three ways, `gone` over `notFound`, an update stopped), source objects
   (refused, unreadable then sent), `kind: none`, an unusable declaration
   and an unknown stored state.
+- `unit/client/calendar-recurring-refuse.test.ts` reads the repository's
+  Calendar write-preconditions overlay from `../overlays/` and applies its
+  operation updates to a Calendar-shaped document (K18 part 2): the
+  declarations parse under the placement rules, a series' master event
+  (`recurrence`) is refused for update and delete without a request, and a
+  single event and an exception are sent with `If-Match`.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored
@@ -731,6 +755,11 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
   `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,
   a failed collection still throwing).
+- `unit/read/produced-classes.test.ts` runs Produced Classes on the spec's
+  example (read from `openapi-extensions/`), mirrors its `ValidationTests`
+  through `checkProduces`, covers `resourcesProducing`, the read model and
+  `ApiClient.produces`, and `lensFits` on the published lenses read from
+  `ontology/lenses/`.
 - `unit/read/runtime-schemas-reference.test.ts` mirrors the spec's
   `ReadingTests` (same TABLE and ROW) against `deriveRuntimeClass` and
   `readRuntimeMembers`, plus the declarations `runtimeSchemasOf` refuses.
