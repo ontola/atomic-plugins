@@ -32,7 +32,7 @@ The extension versions this source reads, against the specifications in
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
-| [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
+| [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
 | [Filtering](../openapi-extensions/spec/filtering/README.md) | 0.2.0-draft | `x-time-zone` on list query parameters, with their `x-filter` field and operator for the covered spans. Not `x-filter` or `x-collection-scope` otherwise. |
 | [Write Preconditions](../openapi-extensions/spec/write-preconditions/README.md) | 0.1.0-draft | `x-write-precondition` on create, update and delete operations: `ifMatch`, `readVerify` and `refuseWhen` ([below](#write-preconditions-x-write-precondition)). Not on a compound create's follow-up operations. |
@@ -1069,6 +1069,44 @@ them on the last confirmed copy, which on such a provider may restore the
 record or change a deleted one; that is the caller's choice. Records in a
 list read, and write responses, are not checked for the marker.
 
+### List tombstones
+
+Some lists return deleted records among the others, with a marker (an
+event list read with `showDeleted=true` that returns deleted events with
+`status: cancelled`). The draft [Deletion Feeds extension](../openapi-extensions/spec/deletion-feeds/README.md#45-list-tombstones)
+0.3.0 declares the marker with `x-list-tombstone` on the CRUD Causality
+Collection Object, else on its list operation: a Tombstone Object's
+`field` and `values`, plus `except` conditions (`{ field, values }` or
+`{ field, present: true }`) for marked items the provider documents as
+something else (a cancelled exception of a recurring event, an item with
+`recurringEventId`, which is kept). Since 0.3.0 every Tombstone Object takes
+the same `except` conditions, and the client applies them to feed items and
+read tombstones too, so a provider state has one reading wherever it is
+answered; a Tombstone Object whose `except` does not parse is ignored.
+
+An item that is a list tombstone is not a member: `readCollections` leaves
+it out of `items` and lists its id in the snapshot's `tombstones` (an item
+with the marker and no id is skipped), and `readPlatform` makes no record of
+it. In `sync()`, a complete read that returns a record only as a list
+tombstone concludes it deleted without a request (`source: 'list'`): a
+record without writes is told to `onPresence` as `deleted` and removed, or
+kept marked `deleted` under `retainDeleted` (`client.presence()`); a kept
+`unconfirmed` or `unavailable` mark is settled the same way; no check is
+counted against `maxMissingRecordChecks`; a held update fails as
+`missingRecord: 'deleted'`, before any declaration or GET, and a held delete
+is released and sent (its 404 or 410 settles it); and the members of a
+nested collection declaring `parentAbsent` are concluded as for any deleted
+parent. A read that ends without an error but is not complete (range
+windows, an undocumented short page) removes nothing, but its list
+tombstones still fail a held update as deleted and release a held delete. A
+read that ends with an error reports no list tombstones (`tombstones` is
+empty); an object returned twice in one read, as a member or as a list
+tombstone, fails it as a repeated identity (a restore between pages, say),
+so neither copy is evidence. A later read that returns the record, not as a
+tombstone, brings it back. A Collection Object's declaration that does not
+parse is ignored, and the list operation's, if any, applies; with neither,
+every item stays a member. Not verified against a real provider.
+
 ### Uncertain creates
 
 POST is not idempotent in general, so the client does not resend a create
@@ -1849,6 +1887,30 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: Deletion Feeds 0.3.0-draft `except` conditions on every
+  Tombstone Object: a feed item or a read tombstone that matches one is not
+  a tombstone (a cancelled exception of a recurring event read by GET is
+  `filtered`, not `deleted`). Behaviour change only for documents that
+  declare `except`.
+- **Unreleased**: Deletion Feeds 0.3.0-draft list tombstones
+  (`x-list-tombstone`, K18): items of a collection's read that carry the
+  declared marker, and match no `except` condition, are not members:
+  `CollectionSnapshot.tombstones` lists their ids, `readPlatform` makes no
+  record of them, and `sync()` takes them as `deleted` evidence
+  (`source: 'list'`, no GET): a record without writes is told `deleted` and
+  removed (kept marked under `retainDeleted`, uncounted against
+  `maxMissingRecordChecks`), a held update fails as deleted and a held
+  delete is released and sent, also from a read that ends without an error
+  but is not complete. An object one read returns twice, as a member or a
+  list tombstone, fails the read as a repeated identity. Behaviour change
+  only for documents that declare `x-list-tombstone`, apart from the next
+  bullet.
+- **Unreleased**: A Tombstone Object's `field` (a feed's or a read
+  tombstone's, as a list tombstone's) must be a dot-path without an empty
+  segment: `a..b`, `.a` and `a.` no longer parse, so such a declaration is
+  ignored, and each name is read from the item's own fields only. Before, any
+  nonempty string was read as a path. A stored presence mark with
+  `source: 'list'` is restored; an older client drops that mark's source.
 - **Unreleased**: A record kept `unavailable` without writes is read
   again by later syncs wherever its collection makes checks
   (`missingRecordChecks: 'all'`, `absent: removed`, a `parentAbsent`
