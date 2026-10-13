@@ -1463,7 +1463,24 @@ function clientRoutes(
     ) {
       route.createPath = collection.url;
     }
-    if (item?.put) route.updateMethod = 'PUT';
+    // Which operation updates is syncables' policy; CRUD Causality only
+    // says what each `x-crud: { action: update }` operation does (§4.3).
+    // An item-path operation that declares one for this resource wins over
+    // one that does not; with both declared, or neither, PUT before PATCH,
+    // as before. A legacy document ignores `x-crud` here.
+    const declaresUpdate = (method: 'put' | 'patch'): boolean => {
+      const crud = item?.[method]?.['x-crud'];
+      return (
+        isRecord(crud) &&
+        crud['action'] === 'update' &&
+        crud['resource'] === collection.resource
+      );
+    };
+    const declaredPut = !legacy && declaresUpdate('put');
+    const declaredPatch = !legacy && declaresUpdate('patch');
+    if (declaredPatch && !declaredPut) route.updateMethod = 'PATCH';
+    else if (declaredPut) route.updateMethod = 'PUT';
+    else if (item?.put) route.updateMethod = 'PUT';
     else if (item?.patch) route.updateMethod = 'PATCH';
     else if (legacy)
       route.updateMethod = paired.get(collection.url)?.updateMethod ?? 'PUT';
