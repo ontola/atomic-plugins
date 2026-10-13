@@ -207,7 +207,10 @@ reference documents merge-patch behaviour for its fields ("use null to
 remove the current milestone"; labels and assignees replace the stored set,
 `[]` clears it). GitHub does not name RFC 7396 and takes `application/json`.
 In github-issues the two label writes keep `mode: patch` and say
-`patchFormat: custom`. Nothing else changes; v1 stays published. No dated
+`patchFormat: custom`. v1 also gives its added fields (the issue `number`,
+the comment `id`) `source: server`, which §4.5 does not define; v2 says
+`generated`, so a consumer leaves its own placeholder for them out of the
+create body. Nothing else changes; v1 stays published. No dated
 catalog selects v2 yet. `tests/test_github_crud_patch_format.py` checks
 that every update of each composition names a rule-5 mode and a §4.6
 format, that v2 differs from v1 only there, and that the CRUD Causality

@@ -48,6 +48,16 @@ def updates(document):
     return found
 
 
+def creates(document):
+    """(path, method) -> x-crud of every create."""
+    return {
+        (path, method): operation["x-crud"]
+        for path, item in document["paths"].items()
+        for method, operation in item.items()
+        if isinstance(operation, dict) and operation.get("x-crud", {}).get("action") == "create"
+    }
+
+
 class GitHubPatchFormatTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -97,14 +107,29 @@ class GitHubPatchFormatTests(unittest.TestCase):
         rest = {key: x.get("patchFormat") for key, x in updates(self.rest["v2"]).items()}
         self.assertEqual(set(rest.values()), {"jsonMergePatch"})
 
-    def test_v2_changes_v1_only_in_patch_formats(self):
+    def test_v2_changes_v1_only_in_patch_formats_and_added_field_sources(self):
         for name, documents in (("github-issues", self.issues), ("api.github.com", self.rest)):
             with self.subTest(document=name):
                 v1, v2 = copy.deepcopy(documents["v1"]), copy.deepcopy(documents["v2"])
                 for document in (v1, v2):
                     for x_crud in updates(document).values():
                         x_crud.pop("patchFormat", None)
+                    for x_crud in creates(document).values():
+                        for field in x_crud.get("addedFields", {}).values():
+                            field.pop("source", None)
                 self.assertEqual(v1, v2)
+
+    def test_v2_added_fields_use_a_section_4_5_source(self):
+        for name, documents in (("github-issues", self.issues), ("api.github.com", self.rest)):
+            sources = {(key, field): spec["source"]
+                       for key, x_crud in creates(documents["v2"]).items()
+                       for field, spec in x_crud.get("addedFields", {}).items()}
+            with self.subTest(document=name):
+                self.assertTrue(sources)
+                self.assertEqual(set(sources.values()), {"generated"})
+            old = {spec["source"] for x_crud in creates(documents["v1"]).values()
+                   for spec in x_crud.get("addedFields", {}).values()}
+            self.assertEqual(old, {"server"})
 
     def test_the_compositions_pass_the_crud_causality_validator(self):
         for name, document in (("github-issues", self.issues["v2"]), ("api.github.com", self.rest["v2"])):
