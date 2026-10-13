@@ -36,14 +36,97 @@ pub struct PacedBucket {
     pub window: Duration,
 }
 
+/// A limit's `(requests, window seconds)`. For a Limit Object with `tiers`
+/// (Throttling 0.5.0, plan tiers): the tier named in `configured`, when it is
+/// one of them, else the most restrictive tier, the lowest requests per
+/// second and, of two equal rates, the longer window. Tiers without a
+/// positive `requests` and `window.seconds` are skipped. `None` when the
+/// limit has no usable amount.
+pub fn limit_amount(limit: &Value, configured: Option<&str>) -> Option<(u64, u64)> {
+    let amount = |value: &Value| -> Option<(u64, u64)> {
+        let requests = value.get("requests").and_then(Value::as_u64)?;
+        let seconds = value
+            .get("window")
+            .and_then(|window| window.get("seconds"))
+            .and_then(Value::as_u64)?;
+        (requests > 0 && seconds > 0).then_some((requests, seconds))
+    };
+    let Some(tiers) = limit.get("tiers").and_then(Value::as_array) else {
+        return amount(limit);
+    };
+    if let Some(chosen) = configured.and_then(|name| {
+        tiers
+            .iter()
+            .find(|tier| tier.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(amount)
+    }) {
+        return Some(chosen);
+    }
+    tiers.iter().filter_map(amount).min_by(|a, b| {
+        // a's rate a.0/a.1 against b's, without division; then the longer
+        // window first.
+        (u128::from(a.0) * u128::from(b.1))
+            .cmp(&(u128::from(b.0) * u128::from(a.1)))
+            .then(b.1.cmp(&a.1))
+    })
+}
+
+/// What is wrong with a catalog selection's `throttlingTiers` (a map from
+/// bucket id to tier name) for this document: entries that name no bucket
+/// with `tiers`, or no tier of it, or are not strings. Each such entry is
+/// ignored, so the bucket is paced at its most restrictive tier; the
+/// catalog load logs these.
+pub fn tier_selection_problems(
+    document: &Value,
+    selection: &serde_json::Map<String, Value>,
+) -> Vec<String> {
+    let Some(tiers) = selection.get("throttlingTiers") else {
+        return Vec::new();
+    };
+    let Some(tiers) = tiers.as_object() else {
+        return vec!["is not an object of bucket ids to tier names".into()];
+    };
+    let limits = document
+        .get("x-throttling")
+        .and_then(|root| root.get("limits"))
+        .and_then(Value::as_object);
+    let mut problems = Vec::new();
+    for (bucket, name) in tiers {
+        let names: Vec<&str> = limits
+            .and_then(|limits| limits.get(bucket))
+            .and_then(|limit| limit.get("tiers"))
+            .and_then(Value::as_array)
+            .map(|tiers| {
+                tiers
+                    .iter()
+                    .filter_map(|tier| tier.get("name").and_then(Value::as_str))
+                    .collect()
+            })
+            .unwrap_or_default();
+        match name.as_str() {
+            _ if names.is_empty() => problems.push(format!("bucket {bucket:?} has no plan tiers")),
+            Some(name) if names.contains(&name) => {}
+            Some(name) => problems.push(format!("bucket {bucket:?} has no tier {name:?}")),
+            None => problems.push(format!("the tier for bucket {bucket:?} is not a string")),
+        }
+    }
+    problems
+}
+
 /// The paced buckets an operation selects, from a composed document: the
 /// operation's own `x-throttling` array when present (it replaces the
 /// default in full), else the root `applies`; only buckets with a known
 /// `requests` of at most [`MAX_PACED_REQUESTS`], a positive
-/// `window.seconds`, and `partitionBy` exactly `[sourceIp]` or `[]`.
-/// Anything malformed or unknown is not paced (the provider still enforces
-/// its own limit).
-pub fn selected_buckets(document: &Value, operation: &Value) -> Vec<PacedBucket> {
+/// `window.seconds`, and `partitionBy` exactly `[sourceIp]` or `[]`. A
+/// bucket with plan `tiers` is paced at the tier `tiers` names for it (the
+/// catalog selection's `throttlingTiers`), else at its most restrictive tier
+/// ([`limit_amount`]). Anything malformed or unknown is not paced (the
+/// provider still enforces its own limit).
+pub fn selected_buckets(
+    document: &Value,
+    operation: &Value,
+    tiers: Option<&serde_json::Map<String, Value>>,
+) -> Vec<PacedBucket> {
     let Some(root) = document.get("x-throttling") else {
         return Vec::new();
     };
@@ -65,13 +148,11 @@ pub fn selected_buckets(document: &Value, operation: &Value) -> Vec<PacedBucket>
             Some([only]) => only.as_str() == Some("sourceIp"),
             _ => false,
         };
-        let requests = limit.get("requests").and_then(Value::as_u64);
-        let seconds = limit
-            .get("window")
-            .and_then(|window| window.get("seconds"))
-            .and_then(Value::as_u64);
-        if let (true, Some(requests @ 1..=MAX_PACED_REQUESTS), Some(seconds @ 1..)) =
-            (proxy_wide, requests, seconds)
+        let configured = tiers
+            .and_then(|tiers| tiers.get(id))
+            .and_then(Value::as_str);
+        if let (true, Some((requests @ 1..=MAX_PACED_REQUESTS, seconds))) =
+            (proxy_wide, limit_amount(limit, configured))
         {
             if !buckets.iter().any(|b: &PacedBucket| b.id == id) {
                 buckets.push(PacedBucket {
@@ -165,6 +246,84 @@ mod tests {
         }
     }
 
+    fn tiered() -> Value {
+        json!({"partitionBy": ["sourceIp"], "tiers": [
+            {"name": "FREE", "requests": 30, "window": {"seconds": 3600, "kind": "unspecified"}},
+            {"name": "PAID", "requests": 20, "window": {"seconds": 1, "kind": "unspecified"}},
+            {"name": "SLOW", "requests": 60, "window": {"seconds": 7200, "kind": "fixed"}},
+            {"name": "BROKEN", "window": {"seconds": 1, "kind": "fixed"}}
+        ]})
+    }
+
+    #[test]
+    fn a_tiered_limit_uses_the_configured_tier_else_the_most_restrictive() {
+        let limit = tiered();
+        assert_eq!(limit_amount(&limit, Some("PAID")), Some((20, 1)));
+        // FREE and SLOW have the same rate (1 per 120 s): the longer window.
+        assert_eq!(limit_amount(&limit, None), Some((60, 7200)));
+        // An unknown or unusable tier falls back to the most restrictive.
+        assert_eq!(limit_amount(&limit, Some("GOLD")), Some((60, 7200)));
+        assert_eq!(limit_amount(&limit, Some("BROKEN")), Some((60, 7200)));
+        // A limit without tiers is its own amount; with no usable tier, none.
+        assert_eq!(
+            limit_amount(
+                &json!({"requests": 5, "window": {"seconds": 60}}),
+                Some("PAID")
+            ),
+            Some((5, 60))
+        );
+        assert_eq!(limit_amount(&json!({"tiers": [{"name": "X"}]}), None), None);
+        assert_eq!(limit_amount(&json!({"tiers": []}), None), None);
+    }
+
+    #[test]
+    fn a_tiered_proxy_wide_bucket_is_paced_at_its_selected_tier() {
+        let document = json!({"x-throttling": {
+            "limits": {"plan": tiered(), "user": {"partitionBy": ["user"], "tiers": [
+                {"name": "FREE", "requests": 1, "window": {"seconds": 1}}]}},
+            "applies": ["plan", "user"]
+        }});
+        let paced = |tiers: Value| selected_buckets(&document, &json!({}), tiers.as_object());
+        assert_eq!(
+            paced(json!({})),
+            [bucket("plan", 60, 7200)],
+            "default: most restrictive; a user bucket is not paced"
+        );
+        assert_eq!(paced(json!({"plan": "PAID"})), [bucket("plan", 20, 1)]);
+        assert_eq!(paced(json!({"plan": "GOLD"})), [bucket("plan", 60, 7200)]);
+        // A tier above the cap is not paced.
+        let huge = json!({"x-throttling": {"limits": {"b": {"partitionBy": [], "tiers": [
+            {"name": "BIG", "requests": 10001, "window": {"seconds": 1}}]}}, "applies": ["b"]}});
+        assert!(selected_buckets(&huge, &json!({}), None).is_empty());
+
+        let selection = |tiers: Value| {
+            json!({"query_overrides": [], "throttlingTiers": tiers})
+                .as_object()
+                .unwrap()
+                .clone()
+        };
+        assert!(tier_selection_problems(&document, &selection(json!({"plan": "PAID"}))).is_empty());
+        assert!(tier_selection_problems(&document, json!({}).as_object().unwrap()).is_empty());
+        let problems = tier_selection_problems(
+            &document,
+            &selection(json!({"plan": "GOLD", "missing": "FREE", "user": 3})),
+        );
+        assert_eq!(problems.len(), 3, "{problems:?}");
+        assert!(problems
+            .iter()
+            .any(|p| p.contains("\"plan\" has no tier \"GOLD\"")));
+        assert!(problems
+            .iter()
+            .any(|p| p.contains("\"missing\" has no plan tiers")));
+        assert!(problems
+            .iter()
+            .any(|p| p.contains("\"user\" is not a string")));
+        assert_eq!(
+            tier_selection_problems(&document, &selection(json!(["plan"]))).len(),
+            1
+        );
+    }
+
     #[test]
     fn a_sliding_log_admits_the_limit_in_any_window() {
         let pacer = Pacer::default();
@@ -239,13 +398,13 @@ mod tests {
             "applies": ["ip", "everyone", "user", "pair", "unknownPartition", "unknownCount", "huge", "atCap", "noWindow", "undefined", "ip"]
         }});
         let ids = |operation: Value| -> Vec<String> {
-            selected_buckets(&document, &operation)
+            selected_buckets(&document, &operation, None)
                 .into_iter()
                 .map(|b| b.id)
                 .collect()
         };
         assert_eq!(ids(json!({})), ["ip", "everyone", "atCap"]);
-        let ip = &selected_buckets(&document, &json!({}))[0];
+        let ip = &selected_buckets(&document, &json!({}), None)[0];
         assert_eq!(ip.requests, 150);
         assert_eq!(ip.window, Duration::from_secs(300));
         // An operation's list replaces the default in full; `[]` selects none.
@@ -255,7 +414,10 @@ mod tests {
         );
         assert!(ids(json!({"x-throttling": []})).is_empty());
         // No declaration, or no limits: nothing is paced.
-        assert!(selected_buckets(&json!({}), &json!({})).is_empty());
-        assert!(selected_buckets(&json!({"x-throttling": {"headers": {}}}), &json!({})).is_empty());
+        assert!(selected_buckets(&json!({}), &json!({}), None).is_empty());
+        assert!(
+            selected_buckets(&json!({"x-throttling": {"headers": {}}}), &json!({}), None)
+                .is_empty()
+        );
     }
 }

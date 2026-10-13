@@ -14,6 +14,10 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   and refuses a request that would exceed one with `429 provider_quota` and
   `Retry-After`, without calling the provider. In memory, per instance. See
   README, "Pacing under provider quotas".
+- Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
+  paced at the tier the catalog selection's `throttlingTiers` names for it,
+  else at its most restrictive tier; unknown names are logged at load and
+  ignored.
 
 - Webhook inbox, step 2 of ontola/atomic-plugins#369: the bounded inbox of
   `openapi-extensions/spec/webhook-subscriptions` in PostgreSQL, off unless

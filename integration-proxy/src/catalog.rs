@@ -125,6 +125,12 @@ impl Catalog {
             }
             refuse_ref_path_items(&platform.name, &document)?;
             if let Some(selection) = platform.selection {
+                for problem in crate::pacing::tier_selection_problems(&document, &selection) {
+                    tracing::warn!(
+                        platform = %platform.name,
+                        "throttlingTiers: {problem}; the most restrictive tier is used"
+                    );
+                }
                 selections.insert(platform.name.clone(), Value::Object(selection));
             }
             insert_document(
@@ -339,7 +345,12 @@ impl Catalog {
             let paths = document.get("paths")?.as_object()?;
             let template = paths.keys().find(|t| path_matches(t, relative))?;
             let operation = paths.get(template)?.get(method.to_ascii_lowercase())?;
-            Some(crate::pacing::selected_buckets(&document, operation))
+            let tiers = self
+                .selections
+                .get(platform)
+                .and_then(|selection| selection.get("throttlingTiers"))
+                .and_then(Value::as_object);
+            Some(crate::pacing::selected_buckets(&document, operation, tiers))
         };
         resolve().unwrap_or_default()
     }

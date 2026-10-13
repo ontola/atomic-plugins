@@ -669,6 +669,15 @@ paces its own requests under it:
   `window.seconds`. Buckets partitioned by user, credential or anything else
   are each caller's own and not paced; a bucket over 10,000 requests per
   window is not paced either.
+- **Plan tiers** (Throttling 0.5.0). A bucket whose limit has `tiers` is
+  paced at one tier: the one the dated catalog entry's `selection` names
+  for it, `"throttlingTiers": {"<bucket id>": "<tier name>"}`, else the
+  most restrictive tier (the lowest requests per second; of two equal rates
+  the longer window). For these proxy-wide buckets the plan that counts is
+  the deployment's own (its address or application), so the deployment's
+  catalog chooses it. A name that is not a tier of that bucket, or a bucket
+  without tiers, is logged when the catalog loads and ignored, which leaves
+  the most restrictive tier.
 - **How.** A sliding log per platform and bucket: at most `requests`
   requests in any `window.seconds`, which stays under the limit for `fixed`
   (with or without an `anchor`), `sliding` and `unspecified` windows alike.
