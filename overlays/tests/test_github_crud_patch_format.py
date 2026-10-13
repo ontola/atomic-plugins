@@ -6,7 +6,7 @@ comment PATCHes and, in github-issues, `custom` for the two label writes,
 and changes nothing else. Each v2 is composed after the overlays the newest
 dated catalog selects for its document (github-issues), or after its own
 pagination overlay (api.github.com), and every update must then name a
-§9 rule 5 mode and a §4.6 patch format; the CRUD Causality validator must
+§8 rule 5 mode and a §4.6 patch format; the CRUD Causality validator must
 pass. The pinned OADs are downloaded by their full-SHA URLs; no provider is
 called.
 """
@@ -114,6 +114,7 @@ class GitHubPatchFormatTests(unittest.TestCase):
                 for document in (v1, v2):
                     for x_crud in updates(document).values():
                         x_crud.pop("patchFormat", None)
+                        x_crud.pop("description", None)
                     for x_crud in creates(document).values():
                         for field in x_crud.get("addedFields", {}).values():
                             field.pop("source", None)

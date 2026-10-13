@@ -107,7 +107,11 @@ actions:
         description: >
           Partial update: only the fields present in the request body are
           modified (e.g. `state`/`state_reason` to close or reopen). GitHub
-          exposes no PUT for issues — updates must be sent as PATCH.
+          exposes no PUT for issues — updates must be sent as PATCH. In a
+          merge patch `null` removes a value; GitHub's "Update an issue"
+          types `title`, `body`, `milestone`, `state_reason` and `type` as
+          nullable. `labels` and `assignees` are cleared with `[]`, not
+          `null`, and `state` is not nullable.
 
   # --- Issue comments -----------------------------------------------------
   - target: $.paths['/repos/{owner}/{repo}/issues/{issue_number}/comments'].post
@@ -144,7 +148,8 @@ actions:
         resource: issueComment
         description: >
           Partial update of a comment's body. Sent as PATCH; GitHub exposes
-          no PUT for issue comments.
+          no PUT for issue comments. `body` is required, so the patch always
+          carries it and never sends it as `null`.
   - target: $.paths['/repos/{owner}/{repo}/issues/comments/{comment_id}'].delete
     update:
       x-crud:
