@@ -26,6 +26,7 @@ import type {
   OpenApiDocument,
   OperationObject,
   ParameterObject,
+  PathItem,
 } from '../openapi/types.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
 import { findRoute } from '../routing/router.js';
@@ -52,6 +53,7 @@ import {
   type QuerySelection,
   type ReadCollection,
 } from '../read/model.js';
+import type { ProducedClass } from '../read/produced-classes.js';
 import {
   mergePatchRecord,
   patchedField,
@@ -82,6 +84,7 @@ import {
   parseHttpDate,
   type ThrottlingVerdict,
 } from '../throttling/throttling.js';
+import { Pacer } from '../throttling/pacing.js';
 import { paginate as paginateOperation } from '../read/read.js';
 import {
   fetchTransport,
@@ -341,6 +344,21 @@ export interface ApiClientOptions {
   storage?: StorageAdapter;
   fetch?: typeof fetch;
   retry?: RetryOptions;
+  /**
+   * Pace requests under the quotas the document's root `x-throttling`
+   * announces (a Limit Object with `requests`; pieces.md K2). Default true;
+   * documents without such a Limit Object are not paced. A request is
+   * counted when it is sent, so requests in flight count. A read waits
+   * within its time limit (else `RetryBeyondDeadline`); a write is held
+   * like a `notBefore`, never failed by pacing alone and without counting
+   * an attempt. Only this client's own requests are counted, in memory.
+   */
+  pace?: boolean;
+  /**
+   * The share of each paced bucket's `requests` sent per window: greater
+   * than 0, at most 1. Default 0.8 (at least one request per window).
+   */
+  paceFraction?: number;
   /**
    * Record property that holds a resource's identity — the value used as the
    * local storage key, read back from a create response to reconcile the
@@ -817,6 +835,14 @@ export interface ApiClient {
    * present as far as the client knows.
    */
   presence(resource?: string): PresenceMark[];
+  /**
+   * Produced Classes 0.1.0-draft: the shared classes the resource's records
+   * can be represented as, from `x-produces` on its CRUD Resource Object
+   * (each with its lens IRI, if declared). Empty when the resource declares
+   * none, or the declaration does not parse. Metadata only: nothing is
+   * fetched or mapped.
+   */
+  produces(resource: string): ProducedClass[];
   /**
    * Settles the `uncertain` or `failed` write for record `id`, or its restored
    * updates waiting for a refresh (see `WriteResolution`), or drops its
@@ -1445,7 +1471,23 @@ function clientRoutes(
     ) {
       route.createPath = collection.url;
     }
-    if (item?.put) route.updateMethod = 'PUT';
+    // CRUD Causality §4.3: an item-path operation declared
+    // `x-crud: { action: update }` for this resource wins over one that is
+    // not; with both declared, or neither, PUT before PATCH, as before. A
+    // legacy document ignores `x-crud` here.
+    const declaresUpdate = (method: 'put' | 'patch'): boolean => {
+      const crud = item?.[method]?.['x-crud'];
+      return (
+        isRecord(crud) &&
+        crud['action'] === 'update' &&
+        crud['resource'] === collection.resource
+      );
+    };
+    const declaredPut = !legacy && declaresUpdate('put');
+    const declaredPatch = !legacy && declaresUpdate('patch');
+    if (declaredPatch && !declaredPut) route.updateMethod = 'PATCH';
+    else if (declaredPut) route.updateMethod = 'PUT';
+    else if (item?.put) route.updateMethod = 'PUT';
     else if (item?.patch) route.updateMethod = 'PATCH';
     else if (legacy)
       route.updateMethod = paired.get(collection.url)?.updateMethod ?? 'PUT';
@@ -1687,8 +1729,49 @@ export function createApiClient(
   /** The running sync's read budget, for what is left of its time while a read waits out a pause. */
   let activeBudget: Budget | undefined;
   const storage = options.storage ?? new InMemoryStorageAdapter();
-  const baseTransport =
+  const unpacedTransport =
     options.transport ?? fetchTransport(options.fetch ?? globalThis.fetch);
+  // Pacing under the announced quotas (K2): every request, read or write,
+  // is counted when it is sent, after waiting for room in the buckets its
+  // operation counts against. Reads and writes wait for room before they
+  // get here (with their own limits); a wait here covers only a request
+  // that another one took the room of meanwhile.
+  const pacer =
+    throttling?.quotas.size && options.pace !== false
+      ? new Pacer(throttling.quotas, options.paceFraction ?? 0.8)
+      : undefined;
+  /**
+   * The end of the latest pacing sleep, shared by the read's wait and the
+   * transport's: a wait that ends no later is taken as waited out (the
+   * `sleep` option may return early, in tests).
+   */
+  let pacingSleptUntil = 0;
+  const pacedSend = async (
+    pacing: Pacer,
+    buckets: string[],
+    request: TransportRequest,
+  ): Promise<TransportResponse> => {
+    for (;;) {
+      const now = Date.now();
+      const wait = pacing.delay(buckets, now);
+      if (wait <= 0 || now + wait <= pacingSleptUntil) break;
+      await (options.sleep ?? defaultSleep)(wait);
+      pacingSleptUntil = Math.max(pacingSleptUntil, now + wait);
+    }
+    pacing.take(buckets, Date.now());
+    return unpacedTransport(request);
+  };
+  // Not async: a request with room is counted and sent in the same turn,
+  // with no wait added before it.
+  const baseTransport: Transport = pacer
+    ? (request): Promise<TransportResponse> => {
+        const buckets = requestBuckets(request);
+        if (pacer.delay(buckets, Date.now()) > 0)
+          return pacedSend(pacer, buckets, request);
+        pacer.take(buckets, Date.now());
+        return unpacedTransport(request);
+      }
+    : unpacedTransport;
   const transport = authenticatedTransport(
     baseTransport,
     options.credentials,
@@ -3653,13 +3736,17 @@ export function createApiClient(
           pauseFor(write),
           (write.notBefore ?? 0) - Date.now(),
         );
+        // Pacing (K2) only delays: it is left out of the check that fails a
+        // write held too long, and waiting counts no attempt.
+        const paced = pacingDelay(writeOperation(write));
         if (held > retry.maxRetryAfterMs) {
           const until = new Date(Date.now() + held).toISOString();
           write.lastError = `Held until ${until} by a rate limit the API declared exhausted, longer than retry.maxRetryAfterMs (${retry.maxRetryAfterMs} ms); not sent`;
           outcome = { status: 'gaveUp' };
-        } else if (held > 0) {
+        } else if (held > 0 || paced > 0) {
+          const wait = Math.max(held, paced);
           await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, Math.min(held, MAX_TIMER_MS));
+            const timer = setTimeout(resolve, Math.min(wait, MAX_TIMER_MS));
             if (typeof timer.unref === 'function') timer.unref();
             wakers.set(key, () => {
               clearTimeout(timer);
@@ -4016,6 +4103,56 @@ export function createApiClient(
     }
   }
 
+  /** The operation any request goes to, by its path and method. */
+  function requestOperation(
+    request: TransportRequest,
+  ): OperationObject | undefined {
+    const path = request.url.pathname.slice(
+      upstream.pathname.replace(/\/$/, '').length,
+    );
+    const matched = findRoute(Object.keys(doc.paths), path);
+    const method = request.method.toLowerCase() as keyof PathItem;
+    return matched
+      ? (doc.paths[matched.template]?.[method] as OperationObject | undefined)
+      : undefined;
+  }
+
+  /** The paced buckets a request counts against. */
+  function requestBuckets(request: TransportRequest): string[] {
+    return throttling
+      ? operationBuckets(throttling, requestOperation(request))
+      : [];
+  }
+
+  /** How long a request to `operation` must wait for room in its paced buckets; 0 now. */
+  function pacingDelay(operation: OperationObject | undefined): number {
+    return pacer && throttling
+      ? pacer.delay(operationBuckets(throttling, operation), Date.now())
+      : 0;
+  }
+
+  /**
+   * A read waits for room in its paced buckets within `remainingMs`, else
+   * stops with RetryBeyondDeadline, as for an exhausted bucket.
+   */
+  async function waitOutPacing(
+    operation: OperationObject | undefined,
+    remainingMs: () => number,
+  ): Promise<void> {
+    for (;;) {
+      const now = Date.now();
+      const wait = pacingDelay(operation);
+      if (wait <= 0 || now + wait <= pacingSleptUntil) return;
+      const remaining = remainingMs();
+      if (wait > remaining)
+        throw new RetryBeyondDeadline(
+          `Pacing under the API's announced rate limit holds this request for ${wait} ms, longer than the read's remaining time (${remaining} ms)`,
+        );
+      await (options.sleep ?? defaultSleep)(wait);
+      pacingSleptUntil = Math.max(pacingSleptUntil, now + wait);
+    }
+  }
+
   /** The operation a read request goes to; a POST list read (listMethod POST) is its path's post. */
   function readOperation(
     request: TransportRequest,
@@ -4104,6 +4241,11 @@ export function createApiClient(
       operation,
       () => activeBudget?.remainingMs() ?? readLimitMs,
     );
+    if (pacingDelay(operation) > 0)
+      await waitOutPacing(
+        operation,
+        () => activeBudget?.remainingMs() ?? readLimitMs,
+      );
     const raw = await readTransport({ ...request, headers });
     const response = { ...raw, headers: lowerCaseHeaders(raw.headers) };
     await noteReadThrottling(response, Date.now());
@@ -5010,13 +5152,21 @@ export function createApiClient(
    * Whether this sync checks record `id` of `route`, which a complete read
    * lacks and which has no writes: never under `missingRecordChecks:
    * 'none'` or without a way to check (no item GET, unless the declaration
-   * decides); else for `absent: removed` collections, under `'all'`, and
+   * or a list tombstone in `scope` decides); else for `absent: removed` collections, under `'all'`, and
    * for a record whose nested collections declare `parentAbsent`.
    */
-  function lookupPlanned(route: ClientRoute, id: string): boolean {
+  function lookupPlanned(
+    route: ClientRoute,
+    id: string,
+    scope?: string,
+  ): boolean {
     if (options.missingRecordChecks === 'none') return false;
+    // A list tombstone in this sync's read decides without a request, like
+    // `absent: deleted`, so no item GET is needed for it (#504 review).
+    const listed = scope !== undefined && listTombstoned.get(scope)?.has(id);
     if (
       !route.absentMeansDeleted &&
+      !listed &&
       !(route.itemReadable && route.collection.itemUrl)
     )
       return false;
@@ -5277,7 +5427,7 @@ export function createApiClient(
       if (
         !route.absentMeansDeleted &&
         !listTombstoned.get(scope)?.has(id) &&
-        lookupPlanned(route, id)
+        lookupPlanned(route, id, scope)
       ) {
         if (sync.lookups >= limit) {
           const mark = keptMarks.get(keyFor(scope, id));
@@ -5483,15 +5633,19 @@ export function createApiClient(
       updated.set(id, item);
     }
     // A list tombstone among the items is still what the provider answered
-    // (Deletion Feeds 0.3.0-draft §4.5): it fails a held update or delete of
-    // the record as deleted, as one of a complete read does. Only a
-    // complete read removes the record itself.
+    // (Deletion Feeds 0.3.0-draft §4.5): as in a complete read, the record's
+    // queued writes are held, and an idle head is concluded: an update fails
+    // as deleted, a delete is released and sent. Only a complete read
+    // removes the record itself.
     let concluded = false;
     for (const id of snapshot.tombstones ?? []) {
       const key = keyFor(scope, id);
       if (!writeQueues.has(key)) continue;
       if ((startedRecords.get(key) ?? 0) !== (recordRevisions.get(key) ?? 0))
         continue;
+      holdMissing(key);
+      // Reported only when a head will be concluded, as the complete path.
+      if (!evidenceHead(key)) continue;
       const found = listEvidence(route);
       const previous = before.get(id) ?? lastKnownFor(scope, id);
       reportMissing(route, context, id, found, previous);
@@ -5697,15 +5851,15 @@ export function createApiClient(
               recheck.push(id);
             else if (
               mark.presence === 'unconfirmed' &&
-              lookupPlanned(route, id)
+              lookupPlanned(route, id, scope)
             )
               recheck.push(id);
-            else if (remote(scope).has(id) && lookupPlanned(route, id))
+            else if (remote(scope).has(id) && lookupPlanned(route, id, scope))
               lookups.push(id);
             continue;
           }
           const last = remote(scope).get(id) ?? persistedById.get(id);
-          const planned = lookupPlanned(route, id);
+          const planned = lookupPlanned(route, id, scope);
           // Deleted, without a request: this read returned the record as a
           // list tombstone (Deletion Feeds 0.3.0-draft §4.5), or the
           // collection declares `absent: deleted`.
@@ -5837,7 +5991,7 @@ export function createApiClient(
             mark.presence === 'unconfirmed' &&
             !records.has(mark.id) &&
             !writeQueues.has(keyFor(scope, mark.id)) &&
-            lookupPlanned(route, mark.id)
+            lookupPlanned(route, mark.id, scope)
           )
             vanished.push(mark.id);
       // isFresh: a write that settled on a record during the rebuild above
@@ -6092,6 +6246,9 @@ export function createApiClient(
         ...(gone || kept ? { awaitingRefresh: true } : {}),
       });
       if (gone) await concludeNew(scope, id, gone);
+    },
+    produces(resource): ProducedClass[] {
+      return structuredClone(resolveRoute(resource).collection.produces ?? []);
     },
     presence(resource): PresenceMark[] {
       const name = resource
@@ -6417,6 +6574,10 @@ export function createApiClient(
           await waitOutPauses(readOperation(request), () =>
             Math.max(0, deadline - Date.now()),
           );
+          if (pacingDelay(readOperation(request)) > 0)
+            await waitOutPacing(readOperation(request), () =>
+              Math.max(0, deadline - Date.now()),
+            );
           const response = await readTransport(request);
           await noteReadThrottling(response, Date.now());
           return response;

@@ -148,28 +148,6 @@ fails through 2026-10-11 and reads as empty through this catalog;
 and stepped over under v3); run them from `syncables/` with
 `npx vitest run --root .. overlays/tests/<file>`.
 
-## Google Calendar throttling
-
-[Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
-declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
-for the Calendar document the catalogs select: the default quotas of
-Google's [quota page](https://developers.google.com/workspace/calendar/api/guides/quota)
-("Per minute per project": "10,000 requests", partitioned by application;
-"Per minute per user per project": "600 requests", by application and user;
-window kind `unspecified`, since Google lets a burst carry into "the next
-window"), and one signal: a 403 or 429 whose `error.errors[].reason` is
-`rateLimitExceeded` or `userRateLimitExceeded` is `throttled`, as the
-[error guide](https://developers.google.com/workspace/calendar/api/guides/errors)
-documents, with no bucket named. Not declared: `Retry-After` (not
-documented), `quotaExceeded` (Calendar usage limits against abuse, not a
-rate to wait out), the per-calendar and operational limits, which have
-no numbers, and the quota page's 1,000,000 requests per day per project,
-which is a billing threshold ("Usage under this threshold doesn't incur
-extra charges"), not a limit at which requests are refused. A project's own quota may differ from the defaults. No dated
-catalog selects it yet. `tests/test_calendar_throttling.py` composes it
-alone and after the catalog's Calendar overlays, and classifies synthetic
-errors in the guide's shape. No provider was called.
-
 ## Read and list tombstones
 
 Google Calendar v3 declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#43-tombstone-object)
@@ -212,6 +190,92 @@ yet. syncables reads both. `tests/test_calendar_read_tombstone_v2.py` and
 `tests/test_calendar_list_tombstone.py` compose them after the catalog's
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
+
+## Write preconditions
+
+Two standalone overlays declare [Write Preconditions 0.1.0-draft](../openapi-extensions/spec/write-preconditions/README.md)
+`x-write-precondition`; no dated catalog selects them.
+`tests/test_write_precondition_overlays.py` composes each with its pinned OAD,
+and Calendar's also after each of its crud-causality overlays, and checks the
+reference client logic against what the drive apps do;
+`syncables/__tests__/unit/client/calendar-recurring-refuse.test.ts` runs the
+Calendar overlay through the syncables client. No provider was called.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
+| [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
+
+## Google Calendar throttling
+
+[Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the Calendar document the catalogs select: the default quotas of
+Google's [quota page](https://developers.google.com/workspace/calendar/api/guides/quota)
+("Per minute per project": "10,000 requests", partitioned by application;
+"Per minute per user per project": "600 requests", by application and user;
+window kind `unspecified`, since Google lets a burst carry into "the next
+window"), and one signal: a 403 or 429 whose `error.errors[].reason` is
+`rateLimitExceeded` or `userRateLimitExceeded` is `throttled`, as the
+[error guide](https://developers.google.com/workspace/calendar/api/guides/errors)
+documents, with no bucket named. Not declared: `Retry-After` (not
+documented), `quotaExceeded` (Calendar usage limits against abuse, not a
+rate to wait out), the per-calendar and operational limits, which have
+no numbers, and the quota page's 1,000,000 requests per day per project,
+which is a billing threshold ("Usage under this threshold doesn't incur
+extra charges"), not a limit at which requests are refused. A project's own quota may differ from the defaults. No dated
+catalog selects it yet. `tests/test_calendar_throttling.py` composes it
+alone and after the catalog's Calendar overlays, and classifies synthetic
+errors in the guide's shape. No provider was called.
+
+## Spotify throttling
+
+[Spotify Web API throttling](APIs/spotify.com/1.0.0-readonly/throttling-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Spotify's [rate-limits page](https://developer.spotify.com/documentation/web-api/concepts/rate-limits):
+one bucket per app (`partitionBy: [application]`) over "a rolling 30 second
+window" (`kind: sliding`) with no request count, because none is published
+and it differs between development and extended quota mode; `Retry-After`
+in seconds, which a 429 "will normally include"; and a 429 as `throttled`.
+The 429 is not declared `quotaExhausted` for the app bucket, because Spotify
+also has endpoint limits that answer 429, of which it names one, "the
+playlist image upload endpoint" (not in the read-only document this overlay
+extends). No dated catalog selects
+it yet. `tests/test_spotify_throttling.py` composes it alone and after the
+catalog's Spotify overlays and classifies synthetic responses. No provider
+was called.
+
+## Airtable throttling
+
+[Airtable Web API throttling](APIs/airtable.com/1.0-readonly/throttling-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Airtable's [rate-limits page](https://airtable.com/developers/web/api/rate-limits):
+"5 requests per second per base", selected by the three operations that
+address a base (partitioned by a URI-named base dimension, since the
+extension's vocabulary has none), and a 429 as `throttled` with
+`minDelaySeconds: 30` ("will need to wait 30 seconds before subsequent
+requests will succeed"). Not declared: the 50-per-second limit, which the
+page states for personal access tokens and service accounts while the
+catalog connects through OAuth, and `Retry-After`, which the page does not
+mention. No dated catalog selects it yet. `tests/test_airtable_throttling.py`
+composes it alone and after the catalog's Airtable overlays and classifies
+a synthetic 429. No provider was called.
+
+## Asana throttling
+
+[Asana API throttling](APIs/asana.com/1.0/throttling-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Asana's [rate-limits page](https://developers.asana.com/docs/rate-limits):
+a standard per-token bucket over minute-long windows with no request count
+(150 per minute on a free domain, 1,500 on a paid one, which a document
+cannot select), a search bucket of 60 per minute per token on the task
+search, `Retry-After` in seconds, and a 429 as `throttled` with no bucket
+named, since the standard, search, concurrency and cost-based limits all
+answer 429. Not declared: the concurrency and cost-based limits, which this
+version of the extension does not describe. No dated catalog selects it
+yet. `tests/test_asana_throttling.py` composes it alone and after the
+catalog's Asana overlays and classifies a synthetic 429. No provider was
+called.
 
 ## Directory layout and OAD revisions
 

@@ -253,21 +253,53 @@ describe('an offset scheme that also declares a next link', () => {
     expect(offsets).toEqual([0, 2, 4]);
   });
 
-  it('pinned: under pageSize the link leads, then the stale offset fails the read at a null link', async () => {
-    // Current behaviour, pinned on purpose (see the README): the offset
-    // cursor is not advanced while links are followed, so at the last page
-    // (next: null) the pageSize advance steps from the first offset again,
-    // asks for a page the read already has, and the read ends with an
-    // error rather than short. With total_count it does the same.
+  it('follows the link while there is one, and ends at a null link, under pageSize (0.7.1)', async () => {
     for (const withTotal of [false, true]) {
       const { transport, offsets } = linkingProvider(6);
       const s = linked('pageSize');
       if (!withTotal) delete s.response!.bodyFields!['total_count'];
-      await expect(read(s, transport, 2)).rejects.toThrow(
-        /repeated a page|holds an item an earlier page returned/,
-      );
-      expect(offsets.slice(0, 3)).toEqual([0, 2, 4]);
+      expect(await read(s, transport, 2)).toHaveLength(6);
+      expect(offsets).toEqual([0, 2, 4]);
     }
+  });
+
+  it('ends at an absent link even when total_count says more items exist (0.7.1)', async () => {
+    for (const advance of ['itemCount', 'pageSize'] as const) {
+      const { transport, offsets } = linkingProvider(4);
+      const s = linked(advance);
+      const more: Transport = async (request) => {
+        const response = await transport(request);
+        const body = JSON.parse(response.body) as Record<string, unknown>;
+        return {
+          ...response,
+          body: JSON.stringify({ ...body, total_count: 10 }),
+        };
+      };
+      expect(await read(s, more, 2)).toHaveLength(4);
+      expect(offsets).toEqual([0, 2]);
+      // The read ends there, but is not complete.
+      const result = await readCollections(document(s), {
+        transport: more,
+        constants: { folder_id: '0' },
+      });
+      const [snapshot] = result.collections;
+      expect(result.errors).toEqual([]);
+      expect(snapshot!.items).toHaveLength(4);
+      expect(snapshot!.complete).toBe(false);
+      expect(snapshot!.notComplete).toMatch(
+        /totalCount \(10\) exceeds the 4 items read: not a complete read/,
+      );
+    }
+  });
+
+  it('is complete at an absent link when total_count matches the items read', async () => {
+    const { transport } = linkingProvider(4);
+    const result = await readCollections(document(linked('pageSize')), {
+      transport,
+      constants: { folder_id: '0' },
+    });
+    expect(result.collections[0]!.complete).toBe(true);
+    expect(result.collections[0]!.items).toHaveLength(4);
   });
 });
 

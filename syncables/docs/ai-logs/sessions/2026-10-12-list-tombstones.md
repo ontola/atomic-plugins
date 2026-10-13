@@ -87,3 +87,23 @@ from the sources a stored mark is restored with, and is added. Tests for
 each, which fail on the code before (one restart test checked separately).
 The Calendar overlay comment, the spec example and the overlays README say
 that with `singleEvents=true` nothing in the list reports a deleted series.
+
+## Turn 4
+
+**Human (via the coordinator session):** #504 review: a list-tombstoned
+parent without an item GET does not conclude its `parentAbsent` children,
+since `lookupPlanned` needs an item read unless `absent: deleted` holds;
+treat a list tombstone the same way, with a no-item-GET test. Nits: a
+held delete is released and sent, not failed; check `evidenceHead` before
+`reportMissing` in `upsertIncomplete`; "for objects" about a read body in
+§4.4 and §9. Merge main.
+
+**Assistant:** `lookupPlanned` takes the scope and treats an id in this
+sync's list tombstones like `absent: deleted`; the `parentAbsent` test runs
+with and without the lists' item GET (the variant fails without the
+change). `upsertIncomplete` holds the record's writes and reports only
+when an idle head will be concluded. The README, the changelog and the
+spec's reference note say a held update fails and a held delete is
+released and sent; §4.4 and §9 say "objects" about read bodies. Merged
+main (with Produced Classes in `model.ts` and the READMEs; a duplicated
+overlays README section dropped).

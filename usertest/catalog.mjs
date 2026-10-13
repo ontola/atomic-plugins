@@ -86,7 +86,7 @@ export const VERSIONS = {
   'issue-tracker': 'usertest-10',
   money: 'usertest-6',
   notion: 'usertest-11',
-  timesheets: 'usertest-10',
+  timesheets: 'usertest-11',
 };
 const APPS = {
   calendar: {
@@ -114,7 +114,7 @@ const APPS = {
  * provider fixture under sample-data/. Bump SAMPLE_VERSION whenever
  * sample-data/ or a fixture it imports changes.
  */
-export const SAMPLE_VERSION = 'sample-3';
+export const SAMPLE_VERSION = 'sample-4';
 const SAMPLES = {
   calendar: { provider: 'Google Calendar', name: 'Google Calendar' },
   'issue-tracker': { provider: 'GitHub', name: 'GitHub issues' },

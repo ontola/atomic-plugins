@@ -8,6 +8,13 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 `Config` gains a public field (`webhooks`), a breaking change under Cargo's
 0.x semver rules, so the next release is 0.4.0.
 
+- Pacing under provider quotas (docs/design/pieces.md P4): for `x-throttling`
+  buckets partitioned by `sourceIp` or by nothing, with at most 10,000
+  requests per window, the proxy keeps a sliding log per platform and bucket
+  and refuses a request that would exceed one with `429 provider_quota` and
+  `Retry-After`, without calling the provider. In memory, per instance. See
+  README, "Pacing under provider quotas".
+
 - Webhook inbox, step 2 of ontola/atomic-plugins#369: the bounded inbox of
   `openapi-extensions/spec/webhook-subscriptions` in PostgreSQL, off unless
   `WEBHOOKS_ENABLED=true` (new `Config::webhooks`, `WebhookConfig`,
@@ -27,6 +34,13 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   Deleting a connection ends its subscriptions in the same transaction.
   Subscriptions use shared application hooks only; no provider hook is
   created.
+- Webhook rate limits: refusals per client network (over it: `429` for ids
+  that name no endpoint, and at most 2 of its requests waiting for the
+  endpoint lookup, beyond which even a real delivery gets `429`) and failed
+  verifications per endpoint, and subscription requests per owner,
+  checked before the access check (`WEBHOOK_INGRESS_LIMIT_PER_NETWORK`,
+  `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`, `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`;
+  new `WebhookConfig` fields).
 - Rate-limit and conditional headers (docs/design/pieces.md P1-P3): the
   provider's `X-RateLimit-Limit`, `-Remaining`, `-Used`, `-Reset`,
   `-Resource`, `RateLimit`, `RateLimit-Policy`, `RateLimit-Limit`,
@@ -38,6 +52,9 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   `Cache-Control: no-store`. A catalog-fixed value for a caller header now
   replaces the caller's instead of being sent next to it. See SECURITY.md,
   "Validating proxy".
+- A composed catalog document with a `$ref` path item, or a path item that is
+  not an object, is refused at load (naming the platform and path) instead of
+  being read inconsistently; no catalog uses one.
 
 ## 0.3.0 (2026-10-06)
 

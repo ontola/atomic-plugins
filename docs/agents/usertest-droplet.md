@@ -45,6 +45,36 @@ ssh root@178.62.223.35 sh /opt/usertest/moderator/run.sh
 ssh root@178.62.223.35 USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server.sh 178-62-223-35.sslip.io [<sha>]
 ```
 
+- **On the build VPS** (`usertest.michielbdejong.com`, since 2026-10-02) the
+  catalog and moderator are on the same host, so there is no `ssh` and
+  `deploy.sh` does not apply. From a checkout of `main`:
+
+  ```sh
+  USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log node usertest/catalog.mjs
+  node usertest/check-live.mjs https://catalog.usertest.michielbdejong.com/catalog.json
+  (cd usertest/out && tar -cf - apps samples) | tar -xf - -C /srv/catalog
+  cat usertest/out/catalog.json > /srv/catalog/catalog.json
+  ```
+
+  `/srv/catalog` itself is owned by root, so `tar` cannot replace
+  `catalog.json` there (it deletes the old file first); the file belongs to
+  `claude`, so it is written in place. Existing app versions stay. `check-live.mjs`
+  runs before the copy: it refuses a module that changed under an existing
+  version, which it can only see while the old one is still live. Build with
+  `USERTEST_LOG_URL`, as the earlier deploys here did (the Calendar modules
+  embed it): a 2026-10-12 build left it out, which changed Calendar's
+  `usertest-12` under the same version until it was rebuilt with it and
+  restored the same day. A moderator change is copied in without the
+  root-owned `node_modules/`, then started (this ends sessions in progress):
+
+  ```sh
+  tar -C usertest/moderator --exclude node_modules -cf - . | tar -xf - -C /opt/usertest/moderator
+  sudo sh /opt/usertest/moderator/run.sh
+  ```
+
+  The other files `deploy.sh` copies (the page, the collector, the
+  Caddyfile, `server.sh`) are root-owned here and need `sudo`; that has not
+  been done on this host.
 - **Env files are read when a container is created.** `moderator/run.sh`
   passes `/etc/anthropic.env`, `/etc/usertest-moderator.env`,
   `/etc/usertest-salt.env` and `/etc/github-findings.env` with `--env-file`,

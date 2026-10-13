@@ -34,6 +34,7 @@ The extension versions this source reads, against the specifications in
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
+| [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.0-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
 
 The other specifications there (Filtering, the authentication and webhook
 extensions) are not read by Syncables.
@@ -230,9 +231,12 @@ changes within two days are not told apart.
 immediately and return, then apply themselves against the server in the
 background. Confirmed provider state is separate from pending local intent;
 refreshes and older write responses replay remaining mutations rather than
-replacing newer local edits. Updates use the item's declared PUT, or PATCH
-when PUT is absent. The chosen operation's CRUD Causality `x-crud` (an
-`update` for the same resource; §4.3 `mode`, §4.6 `patchFormat`) sets the
+replacing newer local edits. Updates use the item path's operation that
+declares CRUD Causality `x-crud: { action: update }` for the record's
+resource: when exactly one of its PUT and PATCH does, that one; when both
+do, the PUT; when neither does (or in a legacy document, without
+`components.crudResources`), the PUT, or the PATCH when there is no PUT.
+The chosen operation's `x-crud` (§4.3 `mode`, §4.6 `patchFormat`) sets the
 body:
 
 - `mode: replace`, no `x-crud`, or a legacy document (no
@@ -254,9 +258,11 @@ body:
 - `patchFormat: custom`, or `mode: patch` without `patchFormat`: the full
   record, as for `replace`. Whether the provider accepts that is not checked.
 
-A declared PUT is chosen even when the item's PATCH is declared as a merge
-patch, so such a document still sends full records; preferring the merge
-patch there is a possible follow-up, not done.
+With both declared, the PUT is chosen even when the PATCH is declared as a
+merge patch, so such a document still sends full records; preferring the
+merge patch there is a possible follow-up, not done. A PATCH declared with
+`patchFormat: jsonPatch` beside an undeclared PUT is followed: `update()`
+throws.
 
 A merge-patch edit records the confirmed values of the top-level fields it
 names, so a remote change anywhere inside a nested object it patches is
@@ -451,8 +457,41 @@ stops the read with an error), then the budget waits the earliest retry
 time of a throttled answer and sends the request again, up to
 `limits.maxRetries` times, or stops with "API retry delay exceeds the
 remaining read time"; a throttled answer without a time is returned to the
-read as before. Pacing requests against the announced `limits` is not
-implemented, and nothing here has been checked against a real provider.
+read as before. Nothing here has been checked against a real provider.
+
+##### Pacing under announced quotas
+
+Where a Limit Object in `x-throttling` states `requests`, the client paces
+itself, so it does not have to run into the limit first (pieces.md K2). It
+sends at most `paceFraction` of `requests` (default 0.8, rounded down, at
+least one) in any window of the bucket. Moneybird's 150 per 300 s becomes
+120 per 300 s. The buckets a request counts against are its operation's
+`x-throttling` selection, else the root `applies`. An operation whose
+selection leaves a bucket out (`x-throttling: []`, say) is not paced by
+it. Buckets without `requests` are not paced. Documents without such a
+Limit Object behave as before.
+
+- **Windows.** A `sliding` or `unspecified` window counts the preceding
+  `seconds`. A `fixed` window with an `anchor` counts from its boundaries.
+  **A `fixed` window without an `anchor` is paced as sliding.** Its phase
+  is unknown, and pacing it as sliding keeps under the quota whatever the
+  phase is.
+- **Counting.** A request counts when it is sent, not when it is answered,
+  so requests in flight count and concurrent write queues cannot overshoot.
+  A request that finds no room waits.
+- **Reads** wait through `sleep` within their time limit, as for a paused
+  bucket. A wait past `limits.timeoutMs`, or past what is left of the
+  sync's budget, stops the read with an error before the request is sent.
+- **Writes** are held like a `notBefore`. Pacing alone never fails a write,
+  however long the hold, and waiting does not count an attempt.
+- **Only this client's own requests are counted**, in memory, so a restart
+  starts the count afresh. A bucket partitioned by `sourceIp` behind a
+  shared proxy, or shared with other clients of the same user, can still
+  run out. Pacing those across clients is the proxy's job (pieces.md P4).
+  The reaction to a throttled answer described above stays in place.
+
+Turn pacing off with `pace: false`. `paceFraction` must be greater than 0
+and at most 1.
 
 ```ts
 import { createApiClient, defaultWriteFailureClass } from 'syncables';
@@ -1031,12 +1070,14 @@ request (`source: 'list'`): a record without writes is told to `onPresence`
 as `deleted` and removed, or kept marked `deleted` under `retainDeleted`
 (`client.presence()`); a kept `unconfirmed` or `unavailable` mark is
 settled the same way; no check is counted against
-`maxMissingRecordChecks`; a held update or delete fails as
-`missingRecord: 'deleted'`, before any declaration or GET; and the
+`maxMissingRecordChecks`; a held update fails as
+`missingRecord: 'deleted'`, before any declaration or GET, and a held
+delete is released and sent (its 404 or 410 settles it); and the
 members of a nested collection declaring `parentAbsent` are concluded as
 for any deleted parent. A read that ends without an error but is not
 complete (range windows, an undocumented short page) removes nothing, but
-its list tombstones still fail a held update or delete as deleted. A read
+its list tombstones still fail a held update as deleted and release a held
+delete. A read
 that ends with an error reports no list tombstones (`tombstones` is
 empty); an object returned twice in one read, as a member or as a list
 tombstone, fails it as a repeated identity (a restore between pages, say),
@@ -1784,6 +1825,39 @@ collections, as for `readCollections`.
 The main `syncables` entry exports the same functions, with `paginate`
 renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
+### Produced classes (`x-produces`)
+
+A CRUD resource may declare the shared classes its objects can be
+represented as, by subject IRI, each with an optional lens IRI (the draft
+[Produced Classes extension](../openapi-extensions/spec/produced-classes/README.md)
+0.1.0). Syncables reads the declaration as metadata only: it fetches no
+class or lens, and maps no record.
+
+- `producedClasses(document)` lists each resource that declares
+  `x-produces` (in `components.crudResources`, or a Swagger 2.0 document's
+  root `x-crudResources`) with its `classes` (`class`, `lens`?,
+  `description`?; `x-*` fields left out), or, when the declaration breaks
+  §7 rules 2–6, its `errors` and no classes. A declaration anywhere else is
+  not read.
+- `resourcesProducing(document, classIri)` gives the resources whose
+  declaration names that class, compared as §3 says (the scheme and host
+  case-insensitively, the rest exactly): the resources to offer for a table
+  of that class.
+- `ReadCollection.produces` carries a resource's classes on each of its
+  collections, and `ApiClient.produces(resource)` returns them (a copy;
+  empty when none are declared or the declaration does not parse).
+- `lensFits(produced, lens, { provider, resource })` checks a lens document
+  the caller fetched itself (§4.2): when it names a target, that must be a
+  `target.class` that is the entry's class; when it names a source, that
+  must be the provider record `source.record.provider` and `.resource`
+  (`provider` is the openapi-directory key, `clockify.me`, as the catalog
+  lenses under `ontology/lenses/` name it). An entry whose lens does not fit
+  is to be treated as having none.
+- `checkProduces`, `parseProduces`, `absoluteIri` and `sameSubject` are the
+  spec `validate.py`'s `check_list`, `absolute_uri` and `same_subject`.
+
+Not verified against a real provider: no overlay declares `x-produces` yet.
+
 ## Changelog
 
 - **Unreleased**: Deletion Feeds 0.3.0-draft `except` conditions on every
@@ -1798,7 +1872,8 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   record of them, and `sync()` takes them as `deleted` evidence
   (`source: 'list'`, no GET): a record without writes is told `deleted`
   and removed (kept marked under `retainDeleted`, uncounted against
-  `maxMissingRecordChecks`), and a held update or delete fails as deleted,
+  `maxMissingRecordChecks`), a held update fails as deleted and a held
+  delete is released and sent,
   also from a read that ends without an error but is not complete. An
   object one read returns twice, as a member or a list tombstone, fails the
   read as a repeated identity. Behaviour change only for documents that
@@ -1809,6 +1884,42 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   ignored, and each name is read from the item's own fields only. Before, any
   nonempty string was read as a path. A stored presence mark with
   `source: 'list'` is restored; an older client drops that mark's source.
+- **Unreleased**: Updates follow `x-crud: { action: update }`: an item-path
+  PUT or PATCH that declares it for the record's resource is used over one
+  that does not (before, any PUT on the item path was used). With both
+  declared the PUT is kept; with neither, the PUT, else the PATCH, as
+  before; legacy documents are unchanged. Behaviour change for a document
+  whose PATCH alone declares the update while the path also has a PUT, such
+  as Google Calendar's events with the catalog's `app-crud-causality`
+  overlay (PATCH, with the full record, instead of PUT); a PATCH declared
+  with `patchFormat: jsonPatch` there now makes `update()` throw.
+- **Unreleased**: Produced Classes 0.1.0-draft (`x-produces`), read-only:
+  `producedClasses`, `resourcesProducing`, `ReadCollection.produces`,
+  `ApiClient.produces`, `lensFits`, and the spec's checks (`checkProduces`,
+  `parseProduces`, `absoluteIri`, `sameSubject`), from both entries. A
+  declaration that does not parse is reported and read as none. Nothing is
+  fetched or mapped.
+- **Unreleased**: Pacing under the quotas `x-throttling` announces
+  (pieces.md K2). Where a Limit Object states `requests`, the client sends
+  at most `paceFraction` (default 0.8) of them per window of each bucket a
+  request's operation selects. A `fixed` window without an `anchor` is
+  paced as sliding. Requests are counted when sent. Reads wait within
+  their time limit, and writes are held without failing or counting an
+  attempt. Only this client's own requests are counted, in memory. On by
+  default; `pace: false` turns it off. `ThrottlingDeclaration` gains
+  `quotas`, and `Pacer` and `Quota` are exported. Behaviour change only
+  for documents whose `x-throttling` limits state `requests`.
+- **Unreleased**: the webhook inbox consumer in `syncables/browser`, for
+  atomic-server's QuickJS sandbox (ontola/atomic-plugins#369 step 4b):
+  `InboxClient`, `InboxConsumer` and `scopedReads` need no `URL`,
+  `Buffer` or `TextDecoder`; `acknowledge: 'next-step'` acknowledges and
+  reports a reconciliation only on the step after the writes landed.
+  `InboxClient` now refuses a base URL
+  that is not canonical (a lower-case host, no default port, no query,
+  fragment, user info, escape or dot segment) and strips every trailing
+  `/` from it, not only one. `InboxError.backoff()` also covers a `409
+  obsolete-generation`, and `parseRetryAfter` follows the client's
+  `Retry-After` rules (`parseHttpDate`, 2^53 − 1).
 - **Unreleased**: An `itemCount` offset read (the default `advance`)
   without a `totalCount` no longer stops after its first page (#495). It
   read short, with no error and without being reported incomplete. It now
@@ -1817,12 +1928,15 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   the next offset reaches it, as before. The repeat check ends a read
   whose server ignores the offset.
 
-  Known limit, kept as it is: a scheme that declares both an offset and a
-  `nextLink` field follows the link while there is one, and the offset is
-  not advanced meanwhile. Under `itemCount` an absent or `null` link then
-  ends the read. Under `advance: pageSize` the read steps from the stale
-  offset at that point, asks for a page it already has, and ends with an
-  error rather than short.
+- **Unreleased**: Pagination Schemes 0.7.1 §4.3.2: in a scheme that
+  declares both an offset and a `nextLink` field, the link leads under
+  either `advance`. The client follows it while there is one. An absent,
+  `null` or empty link ends the read. When the last response's
+  `totalCount` exceeds the items read, the read still ends there, but is
+  not complete (`notComplete`), so nothing is concluded about records it
+  did not return. Before, under `advance: pageSize`, the read stepped from an
+  offset that was not advanced while links were followed. It then asked
+  for a page it already had and ended with an error.
 - **Unreleased**: Pagination Schemes 0.7.0 `emptyWhenAbsent` on an
   Envelope Object (a scheme's `response.envelope` or a Collection Object's
   `envelope`): with a non-empty `itemsField`, a body in which that field is

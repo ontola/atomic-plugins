@@ -2,6 +2,7 @@ import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
 import type { ListMethod } from './transport.js';
 import { discoverResources } from '../resources/discover.js';
 import { parseListTombstone, type ListTombstone } from './list-tombstones.js';
+import { parseProduces, type ProducedClass } from './produced-classes.js';
 
 /**
  * The collection model the read path walks, built from the OpenAPI CRUD
@@ -67,6 +68,13 @@ export interface ReadCollection {
    * operation). Absent when neither is declared or parses.
    */
   listTombstone?: ListTombstone;
+  /**
+   * Produced Classes 0.1.0-draft: the shared classes the resource's objects
+   * can be represented as (`x-produces` on its CRUD Resource Object, the
+   * same for every collection of the resource). Absent when not declared,
+   * or when the declaration does not parse (`producedClasses` says why).
+   */
+  produces?: ProducedClass[];
 }
 
 /** Enumerate `collection` and read `field` off each item to fill a path variable. */
@@ -178,6 +186,7 @@ export function discoverReadModel(
     if (!isRecord(def)) {
       continue;
     }
+    const produces = parseProduces(def['x-produces']);
     const identity = isRecord(def['identity']) ? def['identity'] : {};
     const itemUrl =
       typeof identity['urlTemplate'] === 'string'
@@ -265,6 +274,7 @@ export function discoverReadModel(
         ...(itemUrl ? { itemUrl } : {}),
         ...(itemParam ? { itemParam } : {}),
         ...(listTombstone ? { listTombstone } : {}),
+        ...(produces ? { produces: structuredClone(produces) } : {}),
       });
     }
   }

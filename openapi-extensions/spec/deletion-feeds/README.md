@@ -265,9 +265,9 @@ By declaring `x-read-tombstone`, the document states:
 * a read tombstone reports that the object was deleted when the read was
   made: it has the meaning of a tombstone (§4.3), as a 404 or 410 would;
 * the provider documents the marked state as the object's deletion, for
-  every item that no `except` condition excludes. A state it documents as
-  something else (archived, hidden, completed, moved to a trash) MUST NOT be
-  declared for such items, even when the collection's list leaves the
+  every object whose read body no `except` condition excludes. A state it
+  documents as something else (archived, hidden, completed, moved to a
+  trash) MUST NOT be declared for such objects, even when the collection's list leaves the
   object out.
 
 The declaration does not say whether a deleted object can be restored.
@@ -620,13 +620,14 @@ A conforming document:
 * MUST name, in `operationId`, a `GET` operation of the document;
 * MUST give `tombstone.values` at least one value;
 * MUST NOT declare a tombstone value for a state in which the object's read
-  still answers 2xx without a read tombstone, for items that no `except`
-  condition excludes (§4.3, §4.4);
+  still answers 2xx without a read tombstone, for items or read bodies that
+  no `except` condition excludes (§4.3, §4.4);
 * MUST NOT declare a feed whose items about one object are not oldest first
   (§4.1);
 * MUST give an `x-read-tombstone`'s `values` at least one value, and MUST
   NOT declare in it a state that the provider does not document as the
-  object's deletion, for items that no `except` condition excludes (§4.4);
+  object's deletion, for objects whose read body no `except` condition
+  excludes (§4.4);
 * since 0.3.0: MUST give a Tombstone Object's `except`, when present, at
   least one condition, and each `except` condition of a Tombstone Object (a
   feed's, a read tombstone's or a list tombstone's) a `field` and exactly
@@ -738,9 +739,9 @@ out of the collection's members and its id reported with the read. In a
 complete read, a record the read returns only as one is concluded deleted
 without a request (`source: 'list'`): removed, or kept marked deleted under
 its `retainDeleted` option, with no check counted against its limit, and a
-held update or delete of it fails as deleted. A read that ends without an
+held update of it fails as deleted (a held delete is released and sent). A read that ends without an
 error but is not complete removes nothing; its list tombstones still fail a
-held update or delete as deleted. A read that ends with an error reports no
+held update as deleted and release a held delete. A read that ends with an error reports no
 list tombstones; one that returns an object twice, as a member or a list
 tombstone, is such a read (its repeated-identity check). A later read that
 returns the record, not as a tombstone, brings it back.
