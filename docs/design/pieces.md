@@ -131,12 +131,12 @@ freeze (2026-10-01) an **as** gap becomes an issue draft for Joep, not a PR
 
 **I1 sketch (proposal, not decided; estimated throughout):**
 
-| Question | Sketch                                                                                                                                                                                                       |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Question | Sketch                                                                                                                                                                                                                                                                                                    |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Where    | Specified as [Produced Classes](../../openapi-extensions/spec/produced-classes/README.md) 0.1.0-draft: `x-produces` on a CRUD Resource Object in `components.crudResources`, set by an overlay; no catalog or `selection` placement (a resource without CRUD annotations gets them from an overlay first) |
-| Value    | One or more class subject IRIs, for example `https://ontola.github.io/atomic-plugins/ontology/classes/time-entry-v1`, each with an optional `lens` IRI that maps the resource to the class; the spec defines no field map of its own (O8)  |
-| Proxy    | Passes it through unchanged inside `/catalog/<name>.yaml` (the composed document); no parsing, no Atomic knowledge (D4). No proxy change was needed; a test checks the pass-through                |
-| Spec     | A new spec, `openapi-extensions/spec/produced-classes/` (name open), specified there first per AGENTS.md, with a row in the README; it references CRUD Causality's Resource Object, which it annotates       |
+| Value    | One or more class subject IRIs, for example `https://ontola.github.io/atomic-plugins/ontology/classes/time-entry-v1`, each with an optional `lens` IRI that maps the resource to the class; the spec defines no field map of its own (O8)                                                                 |
+| Proxy    | Passes it through unchanged inside `/catalog/<name>.yaml` (the composed document); no parsing, no Atomic knowledge (D4). No proxy change was needed; a test checks the pass-through                                                                                                                       |
+| Spec     | A new spec, `openapi-extensions/spec/produced-classes/` (name open), specified there first per AGENTS.md, with a row in the README; it references CRUD Causality's Resource Object, which it annotates                                                                                                    |
 
 ### 3.3 Lenses
 
@@ -230,7 +230,7 @@ decides.**
 | `google-tasks` 0.1.0      | Google Tasks    | own reader                           | read (S17:3)                                | K3–K6, K9  | Read, after a CRUD Causality overlay and K4–K6                |
 | `moneybird` 0.3.0         | Moneybird       | own reader, pacing                   | read                                        | K1, K2, K9 | Read, after K1, K2                                            |
 | `notion` 0.5.0            | Notion          | syncables + own send                 | two-way after review (`notion/README.md`:6) | K14–K16    | Read after K16; writes after K14, K15                         |
-| `timesheets` 0.7.1        | Clockify        | own client (`clockifyApi.ts`)        | two-way, observation log                    | K11–K13    | Read after K12; writes after K11; K13 open                    |
+| `timesheets` 0.7.2        | Clockify        | own client (`clockifyApi.ts`)        | two-way, observation log                    | K11–K13    | Read after K12; writes after K11; K13 open                    |
 | `calendar` 0.3.2          | Google Calendar | own client                           | two-way, `If-Match`                         | K17, K18   | After K17, K18                                                |
 | `issue-tracker` 0.4.0     | GitHub          | own client, review gate, rate limits | two-way with review                         | K7–K9      | After K7 (with P1, P1h), K8                                   |
 | `money` 0.4.1             | files           | sandbox importer                     | import                                      | –          | Not a proxy integration                                       |

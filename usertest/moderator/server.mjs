@@ -54,6 +54,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { analyze, fileFindings } from './analyze.mjs';
 import { loadPlans, PLACEHOLDER } from './plans.mjs';
+import { moderatorTurn } from './turn.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8082);
@@ -116,7 +117,7 @@ const DEFAULT_PLAN = 'calendar';
 if (!PLANS[DEFAULT_PLAN])
   throw new Error(`sessions/${DEFAULT_PLAN}.md is missing`);
 const client = new Anthropic();
-/** id -> { dir, meta, lang, langChanged, started, plan, cursor, clients, messages, turns, done, analyzed } */
+/** id -> { dir, meta, lang, langChanged, started, plan, cursor, clients, messages, turns, done, endsRefused, analyzed } */
 const sessions = new Map();
 
 mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -275,11 +276,12 @@ async function nextLine(session, said, screenshot, typed) {
           .map(block => block.text)
           .join(' ')
           .trim();
-  const done = text.includes('[END]');
-  const wait = !done && /^\[WAIT\]$/.test(text);
-  const say = wait
-    ? ''
-    : text.replace('[END]', '').replace('[WAIT]', '').trim() || language.lost;
+  // An [END] after a question is refused (turn.mjs, usertest-findings#21).
+  const { say, done, wait, endRefused } = moderatorTurn(text, {
+    endsRefused: session.endsRefused ?? 0,
+    fallback: language.lost,
+  });
+  if (endRefused) session.endsRefused = (session.endsRefused ?? 0) + 1;
 
   session.messages.push({ role: 'assistant', content: wait ? '[WAIT]' : say });
   session.turns++;
@@ -288,6 +290,7 @@ async function nextLine(session, said, screenshot, typed) {
     role: 'moderator',
     say,
     done,
+    ...(endRefused ? { endRefused } : {}),
     stop: response.stop_reason,
     usage: response.usage,
   });

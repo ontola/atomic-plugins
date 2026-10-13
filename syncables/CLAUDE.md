@@ -171,9 +171,12 @@ Data flows through four stages, each its own directory under `src/`:
    conclusion sets `clearing` on the mark: `rebuildTelling` drops it once
    the removal is told, or keeps the mark (not clearing) when the handler
    throws, so the record is checked again. `dropMark` drops a mark outside
-   `tell`/`setMark` (`settled`, a clearing mark on a record that stays) and
+   `tell`/`setMark` (a read returning the record, `settled`, a clearing
+   mark on a record that stays) and
    its held change, replaced by `present` when the mark is `told` (set by
-   a successful end tell, kept by `setMark`, and set on restored marks).
+   a successful end tell and on restored marks; `setMark` keeps it from
+   the mark before, or sets it when the change it replaces is a held
+   `present`, the only trace of a told mark once that mark is dropped).
    `client.presence()` lists
    `keptMarks`. `seenAt` (in
    memory, set for every record a sync's reads return to that sync's start,
@@ -230,6 +233,39 @@ Data flows through four stages, each its own directory under `src/`:
    writes, `detectConflicts` compares with the field after the patches
    (`patchedField`, in order) and `supersede`/`retry` strip nested members
    (`withoutSetBy`, `withoutPatched`). Read-only operations fail before local edits.
+   `preconditions.ts` is the pure logic of the draft Write Preconditions
+   extension (`x-write-precondition`,
+   `openapi-extensions/spec/write-preconditions/`): `parsePrecondition`
+   (defaults, or `{ refused }` for a declaration it cannot read),
+   `versionOf`, `refusalOf`, `maySend`, `writeAnswer` and `resolveUnknown`,
+   ports of the spec's `validate.py` functions of the same names; keep them
+   in step (`unit/client/preconditions.test.ts` mirrors its `ClientTests`,
+   and its `ValidationTests` through `parsePrecondition`, which refuses
+   whatever `validate()` refuses, placement rules included when given a
+   `PreconditionPlace`; it never falls back to a default on bad input).
+   The client reads each write operation's declaration into
+   `route.preconditions` (or `route.preconditionRefused`, which makes the
+   write call throw). `attemptWrite` first runs `resolveByRead` for a write
+   with `precondition: 'resolving'`, then `precheck`. `precheck` reads the
+   object when the declaration needs it (`readObject`) and reads the source
+   objects (`sourceObject`, cached per sync pass in `sourceCache`). It then
+   calls `maySend` and gives the headers, plus the read under `readVerify`,
+   which the full-record body is built on. In the catch, a `conflictStatus`
+   answer or a `writeAnswer` 404/410 stops the write (`stopWrite`, gaveUp
+   with `QueuedWrite.precondition`, stored). Otherwise
+   `goneUnconfirmed` keeps the record and reports it `unavailable` with
+   `source: 'write'`. `deletionConfirmed` takes a feed tombstone,
+   `absentMeansDeleted` or `notFound: deleted`, and `route.gone` decides a
+   410. An unknown outcome sets `resolving`, also on restore of an in-flight
+   update or delete (not a follow-up, which preconditions skip). An unknown
+   stored state reads as `resolving`. `sentVersion` is the raw version
+   (string or number), stored for its rule 5. `resolveWrite` `retry` clears
+   every state but `resolving`. A refused precondition read goes through
+   `readRefused`: throttling sets `notBefore` and pauses buckets, and
+   `auth` blocks, unless the read was sent before the latest renewal
+   (then it is sent again). A source read's refusal is kept in
+   `sourceErrors` by URL, with its epoch, and is not cached. The restore
+   check `missingSources` includes `write`.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone
@@ -521,6 +557,30 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `page` field (`deriveHasNextPage`'s `firstPage`). The page size sent is
   capped at the parameter's `maximum`. The validator checks §9 rules
   19–21, `resolveEffectiveScheme` rule 22.
+- Pagination Schemes 0.7.0: an Envelope Object's `emptyWhenAbsent`
+  (`declaredEnvelope` in `read/pages.ts`, from `PageWalk.itemsField`/
+  `emptyWhenAbsent`, which a Collection Object's envelope sets through
+  `ReadCollection.emptyWhenAbsent`, else the scheme's `response.envelope`)
+  makes `itemsAt` return no items when the field is absent (`isAbsent`: an
+  object along the path lacks the next segment); a present non-array is
+  still an error. The validator checks rule 23. Tests:
+  `unit/read/empty-when-absent.test.ts`. An `offset` field's `advance`
+  (§4.3.2; `offsetAdvance` in `read/pages.ts`): `pageSize` steps the
+  offset by `state.pageSize` (≥ 1), else the page size sent
+  (`sendsPageSize`), ends at `totalCount` (without one, at an empty page)
+  and throws `PageReadError` with neither (`integerRole`: a reported
+  `pageSize` counts as an integer ≥ 1, `totalCount` as an integer ≥ 0, read
+  from the body per response); `itemCount` (default) steps by the items
+  the page held and ends at an empty page or `totalCount` (#495: before,
+  without a `totalCount`, `hasNextPage` ended it after one page), unless
+  the scheme declares a `nextLink` (`declaresRole`), which then leads under
+  either advance (0.7.1): the offset cursor is not advanced while links
+  are followed, so neither advance branch runs for such a scheme, and an
+  absent or `null` link ends the read before `hasNextPage` is asked (not
+  complete when that response's `totalCount` exceeds the items read). The repeat check (`seenIds` by `PageWalk.identity`,
+  else the previous page's fingerprint when no item has an id) runs on
+  every offset walk as well as on short-page walks. The validator checks rule 24,
+  `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
@@ -613,6 +673,15 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   under an unavailable parent concluded at once and sent again after the
   parent returns, `record` on unavailable reports, and an unrecognised
   `notFound` read as `unavailable`.
+- `unit/client/write-preconditions.test.ts` covers the client side of
+  Write Preconditions: `ifMatch` (body version without a read, header
+  version with one, `conflictStatus` and `header`), `refuseWhen`,
+  `readVerify` (conflict, the body built on the read, a delete),
+  unknown outcomes (applied, not applied, another change, an idempotent
+  PUT resent, a restart), a write's own 404/410 (unconfirmed, confirmed
+  three ways, `gone` over `notFound`, an update stopped), source objects
+  (refused, unreadable then sent), `kind: none`, an unusable declaration
+  and an unknown stored state.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored
@@ -713,8 +782,19 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
 ### Webhook inbox consumer (`src/inbox/`)
 
 The daemon side of a webhook receiver (ontola/atomic-plugins#369 step 4,
-`openapi-extensions/spec/webhook-subscriptions`), exported from the Node
-entry only (it uses `node:crypto`). `sign.ts` signs requests with Atomic v2
+`openapi-extensions/spec/webhook-subscriptions`). `sign.ts` uses
+`node:crypto` and is exported from the Node entry only; `client.ts`,
+`consumer.ts` and `reads.ts` are in `syncables/browser` too, and must run in
+atomic-server's QuickJS sandbox, which has no `URL`, `URLSearchParams`,
+`Buffer`, `TextDecoder` or `atob`: `url.ts` builds request URLs as strings
+(a stand-in object where `URL` is missing), `reads.ts` decodes base64 UTF-8
+itself, and `unit/inbox/sandbox.test.ts` runs the bundle in a bare `vm`
+context. `acknowledge: 'next-step'` is for hosts whose writes become
+durable only after the step (a scheduled sandbox run's intents): the cursor
+to acknowledge and a finished reconciliation are stored with the step's
+writes (`StoredSubscription.unacknowledged`, `.unconfirmedReconciliation`)
+and sent at the start of the next step (`unit/inbox/deferred.test.ts`).
+`sign.ts` signs requests with Atomic v2
 signatures (`signedTransport`; tested against atomic-server's golden vectors
 in `__tests__/fixtures/atomic-request-v2-vectors.json`, the copy
 `integration-proxy` verifies). `client.ts` is `InboxClient` for the consumer

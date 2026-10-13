@@ -110,6 +110,66 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
+## Pagination Schemes 0.7.0 catalog: Google Tasks empty lists and Box offsets
+
+`catalog/2026-10-12-tasks-box-pages.json` is `catalog/2026-10-12-box-pagination-v2.json`
+with two pagination overlays replaced; every other entry is unchanged.
+
+Google Tasks:
+[v2](APIs/googleapis.com/tasks/v1/pagination-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml)
+in place of v1. v1 declares `envelope.itemsField: items`, and a syncables
+reader from 0.21.0 on fails a body without that array ("No items array at
+items"). An empty task list is expected to come back without `items`: the
+Protocol Buffers JSON mapping leaves an empty repeated field out, and the
+google-tasks drive app reads an absent `items` as empty. The Tasks
+reference does not say what an empty list returns, and no live empty list
+was read. v2 declares `emptyWhenAbsent: true`, which a reader that does not
+know the field ignores, failing such a read as before. No Google Calendar
+overlay is changed: Calendar's reference does not say it leaves `items`
+out, and the Calendar drive app (`integrations/calendar/app/relay.ts`)
+requires the array.
+
+Box:
+[v3](APIs/box.com/2.0.0/pagination-v3-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
+in place of v2: `advance: pageSize` on the offset lists' `offset` field, so
+a 0.7.0 reader steps by the `limit` Box reports and ends at `total_count`,
+as Box documents, instead of advancing by the entries returned (see the v2
+note above for what that does). A reader without 0.7.0 ignores `advance`
+and reads as with v2.
+
+`tests/test_google_tasks_empty_lists.py` checks Tasks v2 against v1, the
+composed Tasks platform with the reference validator, and the catalog
+against its base; `tests/test_box_pagination_v3.py` checks Box v3 against
+v2, validates it and reads a synthetic offset list with the reference
+`read_offsets`. Two syncables tests read through the catalogs
+(`tests/google_tasks_empty_lists_syncables.test.ts`: an empty task list
+fails through 2026-10-11 and reads as empty through this catalog;
+`tests/box_offsets_syncables.test.ts`: a short page is read again under v2
+and stepped over under v3); run them from `syncables/` with
+`npx vitest run --root .. overlays/tests/<file>`.
+
+## Google Calendar throttling
+
+[Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the Calendar document the catalogs select: the default quotas of
+Google's [quota page](https://developers.google.com/workspace/calendar/api/guides/quota)
+("Per minute per project": "10,000 requests", partitioned by application;
+"Per minute per user per project": "600 requests", by application and user;
+window kind `unspecified`, since Google lets a burst carry into "the next
+window"), and one signal: a 403 or 429 whose `error.errors[].reason` is
+`rateLimitExceeded` or `userRateLimitExceeded` is `throttled`, as the
+[error guide](https://developers.google.com/workspace/calendar/api/guides/errors)
+documents, with no bucket named. Not declared: `Retry-After` (not
+documented), `quotaExceeded` (Calendar usage limits against abuse, not a
+rate to wait out), the per-calendar and operational limits, which have
+no numbers, and the quota page's 1,000,000 requests per day per project,
+which is a billing threshold ("Usage under this threshold doesn't incur
+extra charges"), not a limit at which requests are refused. A project's own quota may differ from the defaults. No dated
+catalog selects it yet. `tests/test_calendar_throttling.py` composes it
+alone and after the catalog's Calendar overlays, and classifies synthetic
+errors in the guide's shape. No provider was called.
+
 ## Read tombstones
 
 [Google Calendar v3 read tombstones](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
@@ -140,6 +200,23 @@ deletion feed over the event list is declared (Deletion Feeds §8).
 `tests/test_calendar_read_tombstone.py` composes it after the catalog's
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
+
+## Spotify throttling
+
+[Spotify Web API throttling](APIs/spotify.com/1.0.0-readonly/throttling-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Spotify's [rate-limits page](https://developer.spotify.com/documentation/web-api/concepts/rate-limits):
+one bucket per app (`partitionBy: [application]`) over "a rolling 30 second
+window" (`kind: sliding`) with no request count, because none is published
+and it differs between development and extended quota mode; `Retry-After`
+in seconds, which a 429 "will normally include"; and a 429 as `throttled`.
+The 429 is not declared `quotaExhausted` for the app bucket, because Spotify
+also has endpoint limits that answer 429, of which it names one, "the
+playlist image upload endpoint" (not in the read-only document this overlay
+extends). No dated catalog selects
+it yet. `tests/test_spotify_throttling.py` composes it alone and after the
+catalog's Spotify overlays and classifies synthetic responses. No provider
+was called.
 
 ## Directory layout and OAD revisions
 
@@ -328,9 +405,11 @@ directly.
 | [Gmail v1](APIs/googleapis.com/gmail/v1/pagination-f34c235dd04bee41b091108dd52c07d1415a54b9-overlay.yaml) | Five mailbox/CSE collections with operation-specific envelopes and page-size inputs. | [Provider documentation](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list) |
 | [Google People v1](APIs/googleapis.com/people/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml) | Five full-list contact and directory collections; sync checkpoints remain separate. | [Provider documentation](https://developers.google.com/people/api/rest/v1/people.connections/list) |
 | [Google Tasks v1](APIs/googleapis.com/tasks/v1/pagination-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks, preserving completion, hidden/deleted and date filters. | [Provider documentation](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
+| [Google Tasks v1 v2](APIs/googleapis.com/tasks/v1/pagination-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | v1 plus [Pagination Schemes 0.7.0](../openapi-extensions/spec/pagination-schemes/README.md#442-envelope-object) `emptyWhenAbsent` on both envelopes: an empty list answered without `items` is a page with no items. Declared, not verified against a live empty list. | [tasks.list](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list), [ProtoJSON format](https://protobuf.dev/programming-guides/json/) |
 | [YouTube v3](APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Six playlist, subscription, comment and search collections; comment ID batches and streams excluded. | [Provider documentation](https://developers.google.com/youtube/v3/docs/playlistItems/list) |
 | [Google Cloud Storage v1](APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml) | Four bucket, flat-object, operation and HMAC-key collections; directory prefixes excluded. | [Provider documentation](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/list) |
 | [Box 2.0.0 v2](APIs/box.com/2.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 41 GET lists, each applied explicitly: 13 offset lists (`offset`, `limit`, `total_count`; folder items, trash and users too, whose marker paging needs `usemarker=true`) and 28 marker lists (`marker`, `next_marker`), all with the `entries` envelope. Replaces v1, whose `type: offset` and roles `currentOffset` and `pageTokenMode` the spec does not define. | [Offset-based](https://developer.box.com/guides/api-calls/pagination/offset-based), [Marker-based](https://developer.box.com/guides/api-calls/pagination/marker-based) |
+| [Box 2.0.0 v3](APIs/box.com/2.0.0/pagination-v3-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | v2 plus [Pagination Schemes 0.7.0](../openapi-extensions/spec/pagination-schemes/README.md#432-offset-advance) `advance: pageSize` on the offset lists: the next offset adds the reported `limit`, and the list ends at `total_count`. | [Offset-based](https://developer.box.com/guides/api-calls/pagination/offset-based) |
 | [Box 2026.0](APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml) | GET workflows and read-POST item query, with separate query/body markers and entries envelopes. | [Provider documentation](https://developer.box.com/guides/api-calls/pagination/marker-based) |
 | [GitHub REST 2022-11-28](APIs/github.com/api.github.com.2022-11-28/1.1.4/pagination-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml) | Eight issue, pull-request, comment, label, milestone and repository lists, using Link headers and root arrays. | [Provider documentation](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api) |
 | [Twilio Conversations](APIs/twilio.com/twilio_conversations_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | 22 GET collections, including conversations, messages, participants, services and users. | [Provider documentation](https://www.twilio.com/docs/conversations-classic/api/conversation-resource) |
@@ -844,7 +923,7 @@ the response array, as this may be less than the limit", while syncables
 (0.21.0 and 0.22.0) advances by the entries returned and stops at the
 first empty page. So with syncables, an offset list whose page holds fewer
 entries than the limit before its end is read again from inside that page
-(the repeated entries fail a collection read), and an empty page before
+(the repeated entries fail the read: a collection read, and from syncables 0.22.0 any offset read), and an empty page before
 `total_count` ends the read as if complete, missing the entries after it
 without an error. Whether Box answers such pages is not verified. The
 marker lists do not have this risk. `GET /files/{file_id}/collaborations`

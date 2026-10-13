@@ -28,6 +28,54 @@ function pointer(expression: string): string[] | undefined {
     .map((segment) => segment.replace(/~1/g, '/').replace(/~0/g, '~'));
 }
 
+const BASE64 =
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/**
+ * A payload's base64 body as UTF-8 text, with no `Buffer`, `atob` or
+ * `TextDecoder`: none of them is certain in atomic-server's QuickJS
+ * sandbox. `undefined` for malformed UTF-8, and for base64 that is not
+ * padded to a multiple of four in the standard alphabet with at most two
+ * `=` at the end (a payload that is not JSON text asks for no reads). Not a
+ * strict base64 check: non-zero bits in the last character before the
+ * padding are ignored, as most decoders do, so two encodings can decode to
+ * the same text. The receiver's own encoding never sets them.
+ */
+export function decodeBase64Utf8(base64: string): string | undefined {
+  if (base64.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) {
+    return undefined;
+  }
+  const bytes: number[] = [];
+  for (let i = 0; i < base64.length; i += 4) {
+    const quad = base64.slice(i, i + 4);
+    const n = [...quad].map((c) => (c === '=' ? 0 : BASE64.indexOf(c)));
+    const value = (n[0]! << 18) | (n[1]! << 12) | (n[2]! << 6) | n[3]!;
+    bytes.push((value >> 16) & 0xff);
+    if (quad[2] !== '=') bytes.push((value >> 8) & 0xff);
+    if (quad[3] !== '=') bytes.push(value & 0xff);
+  }
+  let text = '';
+  for (let i = 0; i < bytes.length; ) {
+    const b0 = bytes[i]!;
+    const length = b0 < 0x80 ? 1 : b0 >= 0xf0 ? 4 : b0 >= 0xe0 ? 3 : 2;
+    if (b0 >= 0x80 && b0 < 0xc2) return undefined;
+    if (b0 > 0xf4 || i + length > bytes.length) return undefined;
+    let code = length === 1 ? b0 : b0 & (0xff >> (length + 1));
+    for (let k = 1; k < length; k++) {
+      const b = bytes[i + k]!;
+      if ((b & 0xc0) !== 0x80) return undefined;
+      code = (code << 6) | (b & 0x3f);
+    }
+    const min = [0, 0, 0x80, 0x800, 0x10000][length]!;
+    if (code < min || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) {
+      return undefined;
+    }
+    text += String.fromCodePoint(code);
+    i += length;
+  }
+  return text;
+}
+
 /** A string, or a non-negative integer as text (Webhook Deliveries §3). */
 function key(value: Json): string | undefined {
   if (typeof value === 'string' && value !== '') return value;
@@ -110,9 +158,9 @@ export function scopedReads(document: Json, event: InboxEvent): ScopedRead[] {
   if (!declared || !resources) return [];
   let body: Json;
   try {
-    body = JSON.parse(
-      Buffer.from(event.payload.body, 'base64').toString('utf8'),
-    );
+    const text = decodeBase64Utf8(event.payload.body);
+    if (text === undefined) return [];
+    body = JSON.parse(text);
   } catch {
     return [];
   }
