@@ -573,9 +573,11 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   from the body per response); `itemCount` (default) steps by the items
   the page held and ends at an empty page or `totalCount` (#495: before,
   without a `totalCount`, `hasNextPage` ended it after one page), unless
-  the scheme declares a `nextLink` (`declaresRole`), which then leads. Under
-  `pageSize` with a `nextLink` the offset cursor is stale after links, and
-  a `null` link makes the read fail on a repeat (pinned in the tests). The repeat check (`seenIds` by `PageWalk.identity`,
+  the scheme declares a `nextLink` (`declaresRole`), which then leads under
+  either advance (0.7.1): the offset cursor is not advanced while links
+  are followed, so neither advance branch runs for such a scheme, and an
+  absent or `null` link ends the read before `hasNextPage` is asked (not
+  complete when that response's `totalCount` exceeds the items read). The repeat check (`seenIds` by `PageWalk.identity`,
   else the previous page's fingerprint when no item has an id) runs on
   every offset walk as well as on short-page walks. The validator checks rule 24,
   `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
@@ -786,8 +788,19 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
 ### Webhook inbox consumer (`src/inbox/`)
 
 The daemon side of a webhook receiver (ontola/atomic-plugins#369 step 4,
-`openapi-extensions/spec/webhook-subscriptions`), exported from the Node
-entry only (it uses `node:crypto`). `sign.ts` signs requests with Atomic v2
+`openapi-extensions/spec/webhook-subscriptions`). `sign.ts` uses
+`node:crypto` and is exported from the Node entry only; `client.ts`,
+`consumer.ts` and `reads.ts` are in `syncables/browser` too, and must run in
+atomic-server's QuickJS sandbox, which has no `URL`, `URLSearchParams`,
+`Buffer`, `TextDecoder` or `atob`: `url.ts` builds request URLs as strings
+(a stand-in object where `URL` is missing), `reads.ts` decodes base64 UTF-8
+itself, and `unit/inbox/sandbox.test.ts` runs the bundle in a bare `vm`
+context. `acknowledge: 'next-step'` is for hosts whose writes become
+durable only after the step (a scheduled sandbox run's intents): the cursor
+to acknowledge and a finished reconciliation are stored with the step's
+writes (`StoredSubscription.unacknowledged`, `.unconfirmedReconciliation`)
+and sent at the start of the next step (`unit/inbox/deferred.test.ts`).
+`sign.ts` signs requests with Atomic v2
 signatures (`signedTransport`; tested against atomic-server's golden vectors
 in `__tests__/fixtures/atomic-request-v2-vectors.json`, the copy
 `integration-proxy` verifies). `client.ts` is `InboxClient` for the consumer

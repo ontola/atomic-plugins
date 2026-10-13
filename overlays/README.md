@@ -216,6 +216,23 @@ Calendar overlay through the syncables client. No provider was called.
 | [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
 | [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
 
+## Spotify throttling
+
+[Spotify Web API throttling](APIs/spotify.com/1.0.0-readonly/throttling-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Spotify's [rate-limits page](https://developer.spotify.com/documentation/web-api/concepts/rate-limits):
+one bucket per app (`partitionBy: [application]`) over "a rolling 30 second
+window" (`kind: sliding`) with no request count, because none is published
+and it differs between development and extended quota mode; `Retry-After`
+in seconds, which a 429 "will normally include"; and a 429 as `throttled`.
+The 429 is not declared `quotaExhausted` for the app bucket, because Spotify
+also has endpoint limits that answer 429, of which it names one, "the
+playlist image upload endpoint" (not in the read-only document this overlay
+extends). No dated catalog selects
+it yet. `tests/test_spotify_throttling.py` composes it alone and after the
+catalog's Spotify overlays and classifies synthetic responses. No provider
+was called.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
