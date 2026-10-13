@@ -262,6 +262,9 @@ per-route buckets are named only at run time). Discord types the reset and
 delay values as numbers and its example has a fraction (`retry_after:
 64.57`); the extension's units are whole seconds, so a fractional value is
 ignored and the consumer falls back to `Retry-After` or its own backoff.
+Plainly: a consumer that follows the spec cannot use a fractional
+`X-RateLimit-Reset-After` or `retry_after` at all, because the Throttling
+spec allows whole seconds only.
 Not declared: the global limit, which the page states for bots while the
 catalog connects a user; the per-route limits, which have no published
 numbers; and the invalid-request limit, which counts only 401, 403 and 429
