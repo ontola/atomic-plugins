@@ -7,7 +7,8 @@
  *
  * Needs the AGENTS.md layout: an atomic-server checkout at the pinned commit
  * with `browser` symlinked into this repo. Point ATOMIC_SERVER_CHECKOUT at it
- * (default /tmp/atomic-server) and build it once; every lane shares it. Or
+ * (default: this pin's ~/.cache/atomic-plugins/atomic-server/<sha> when it
+ * exists, else /tmp/atomic-server) and build it once; every lane shares it. Or
  * skip the build: with ATOMIC_SERVER_IMAGE set, serve.mjs runs the published
  * ghcr.io/ontola/atomic-server-e2e:<pin> image in Docker instead.
  *

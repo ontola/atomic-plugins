@@ -27,7 +27,9 @@ node integrations/tooling/link-atomic-server.mjs
 
 What it does, each step idempotent:
 
-1. Makes `$ATOMIC_SERVER_CHECKOUT` (default `/tmp/atomic-server`) an
+1. Makes `$ATOMIC_SERVER_CHECKOUT` (default: this pin's
+   `~/.cache/atomic-plugins/atomic-server/<sha>` when that directory exists,
+   else `/tmp/atomic-server`) an
    atomic-server checkout at the commit in `.atomic-server-ref`. If the
    directory is missing it fetches just that commit (`--depth=1`). If the
    checkout is on another commit it fetches and detaches to the pinned one.
