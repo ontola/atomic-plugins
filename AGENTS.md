@@ -568,6 +568,9 @@ In order, it:
   needed for the lanes (an IPv4 loopback address needs no IPv6; not verified
   in the cloud). The hook still sets it, so cloud lane servers bind
   `0.0.0.0`; changing that is left to a session that can test in the cloud;
+- restores the two tracked files atomic-server's build regenerates
+  (`BUILD_OUTPUT_PATHS` in `integrations/tooling/server-build.mjs`) before
+  linking, and again after a build;
 - runs `link-atomic-server.mjs` (its `pnpm install` included), builds
   `@tomic/lib`, and installs every plugin lockfile, as CI does;
 - installs Playwright's Chromium for `browser/e2e`. The proxy blocks
