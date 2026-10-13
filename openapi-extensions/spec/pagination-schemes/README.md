@@ -1,6 +1,6 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.7.1
+**Spec version:** 0.8.0
 
 ---
 
@@ -167,6 +167,7 @@ Describes the fields the client reads from the server response to determine the 
 | `bodyFields` | `Record<string, ResponseFieldObject>` | Fields in the JSON response body. Key is the field name as it appears in the response, or a dot-path (e.g. `metadata.continue`, `tokenPagination.pageToken`) to address a field nested inside an object. Each path segment is a literal property name; a segment MUST be escaped as `["a.b"]` if it contains a literal `.`. |
 | `headers` | `Record<string, ResponseFieldObject>` | HTTP response headers. Key is the header name. |
 | `shortPage` | `ShortPageObject` (§4.4.5) | Added in 0.6.0, for `pageNumber` schemes only: a page with fewer items than a full page ends the list. |
+| `incomplete` | `IncompleteObject` (§4.4.6) | Added in 0.8.0, for every scheme type: a response body value that marks the result the pages come from as cut short by the server. |
 | `x-*` | any | Extension fields. |
 
 #### 4.4.1 Response Field Object
@@ -316,6 +317,37 @@ rest by one), as with any `page` or `offset` traversal; Collection
 Completeness's [paging clause](../collection-completeness/README.md#3-conventions)
 applies to such a read as to any other, and a read that must not miss such
 an item re-reads.
+
+#### 4.4.6 Incomplete results
+
+Added in 0.8.0. Some APIs stop serving a result at a cap and say so in the
+response rather than through the next-page signals. Notion's
+[Query a data source](https://developers.notion.com/reference/query-a-data-source)
+pages through "up to **10,000 results** per query"; past that, "`has_more`
+becomes `false`, and every response page served from the capped result
+includes a `request_status` marking the result as incomplete", with
+"`type: incomplete` and `incomplete_reason: query_result_limit_reached`". A
+reader that trusts `has_more` alone takes such a read as complete. The
+Incomplete Object names the body value that says otherwise.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `field` | string | **Yes** | A dot-path into the JSON response body, as a `bodyFields` key is written (§4.4). |
+| `equals` | string, number, boolean or `null` | One of `equals`, `in` | The response is marked when the value at `field` equals it (JSON equality, so `"0"` does not equal `0`). |
+| `in` | nonempty array of such values | One of `equals`, `in` | The response is marked when the value at `field` equals one of them. |
+| `description` | string | No | Human-readable description, such as the source of the claim. |
+| `x-*` | any | No | Extension fields. |
+
+A response whose body has no value at `field`, or another value, is not
+marked. A read in which any response is marked is **not complete**, in the
+sense of [Collection Completeness](../collection-completeness/README.md#3-conventions)
+("follows every page"): the items it returned are real items, but a consumer
+infers nothing about objects absent from it. The client otherwise pages as
+the scheme says, following the next-page signals of a marked response like
+any other; the mark changes whether the read is complete, not where it ends.
+A consumer that does not support `incomplete` (before 0.8.0) ignores it, and
+takes such a read as complete; a document that needs it should not be used
+with one.
 
 ### 4.5 Semantic Roles
 
@@ -857,6 +889,34 @@ paginationSchemes:
 
 A full answer for `updatedFrom=2026-01-01T00:00:00Z&updatedBefore=2026-01-01T00:00:10Z` (10 seconds) is read again as `[00:00:00, 00:00:05)` and `[00:00:05, 00:00:10)`. This shape is a neutral example, not a claim about a particular API.
 
+### 8.15 A capped result marked in the body (Notion-style)
+
+```yaml
+paginationSchemes:
+  cappedQuery:
+    type: pageToken
+    autoDetect: false
+    request:
+      bodyFields:
+        start_cursor:
+          role: cursor
+    response:
+      envelope:
+        itemsField: results
+      bodyFields:
+        next_cursor:
+          role: nextCursor
+      incomplete:
+        field: request_status.type
+        equals: incomplete
+        description: Past 10,000 results has_more is false and every page carries request_status.
+```
+
+The client follows `next_cursor` as usual; if any page carries
+`request_status.type: incomplete`, the read is not complete (§4.4.6).
+[`examples/incomplete-marker.yaml`](examples/incomplete-marker.yaml) is a
+complete document of this shape.
+
 ### 8.14 Zero-based pages ended by a short page (ClickUp-style)
 
 ```yaml
@@ -914,6 +974,7 @@ A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every lin
 23. `emptyWhenAbsent` MAY appear only in an Envelope Object whose `itemsField` is a non-empty string, and is a boolean.
 24. `advance` MAY appear only on a Request Field Object whose `role` is `offset`, and is `itemCount` or `pageSize`.
 25. When a scheme whose `offset` field has `advance: pageSize` is applied to an operation, after its overrides are merged, it has a request or response field whose `role` is `pageSize`. A component scheme on its own is not checked.
+26. `incomplete` MAY appear only in a Response Pagination Fields Object. Its `field` is a non-empty dot-path whose segments are non-empty, and it has exactly one of `equals` (a JSON scalar) or `in` (a nonempty array of JSON scalars).
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paginationSchemes.myScheme.request.queryParameters.page`).
 
@@ -921,18 +982,19 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 
 ## Schema, validator and tests
 
-[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4, 8–10, 12–16, 19, 20, 23 and 24. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5, 11, 17, 18, 21, 22 and 25 (for Swagger 2.0, rule 18 reads the operation's and path item's `parameters` the same way, with `$ref`s to the root `parameters`). It also holds `page_items`, which locates a page's items through the Envelope Object (with `emptyWhenAbsent`), `read_offsets`, a reference implementation of the offset traversal with `advance` (§4.3.2), `read_pages`, a reference implementation of the page-number traversal with `start` and §4.4.5 over a caller-supplied request function (with `totalPages`, `totalCount` and a reported `pageSize`, and refusing a page size above the documented maximum), `read_range`, a reference implementation of §4.6.3 and §4.6.4 over a caller-supplied request function, and `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
+[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4, 8–10, 12–16, 19, 20, 23, 24 and 26. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5, 11, 17, 18, 21, 22 and 25 (for Swagger 2.0, rule 18 reads the operation's and path item's `parameters` the same way, with `$ref`s to the root `parameters`). It also holds `response_incomplete`, which says whether a response body is marked (§4.4.6), `page_items`, which locates a page's items through the Envelope Object (with `emptyWhenAbsent`), `read_offsets`, a reference implementation of the offset traversal with `advance` (§4.3.2), `read_pages`, a reference implementation of the page-number traversal with `start` and §4.4.5 over a caller-supplied request function (with `totalPages`, `totalCount` and a reported `pageSize`, and refusing a page size above the documented maximum), `read_range`, a reference implementation of §4.6.3 and §4.6.4 over a caller-supplied request function, and `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
 
 ```sh
 python3 -m venv /tmp/pagination-schemes-venv
 /tmp/pagination-schemes-venv/bin/pip install -r openapi-extensions/spec/pagination-schemes/requirements.txt
 cd openapi-extensions/spec/pagination-schemes
 /tmp/pagination-schemes-venv/bin/python -m unittest test_validate
-/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml examples/range-window.yaml examples/short-page.yaml examples/empty-when-absent.yaml examples/offset-advance.yaml
+/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml examples/range-window.yaml examples/short-page.yaml examples/empty-when-absent.yaml examples/offset-advance.yaml examples/incomplete-marker.yaml
 ```
 
 ## Changes
 
+- **0.8.0** (2026-10-13): adds `incomplete` to the Response Pagination Fields Object (§4.4.6), the Incomplete Object: a response body value (`field` with `equals` or `in`) that marks the result as cut short by the server, as Notion's query does past 10,000 results with `has_more: false`. A read in which any response is marked is not complete; paging is unchanged. Validation rule 26, `response_incomplete` in the validator, and `complete` in `read_pages` and `read_offsets` honour it; an example and tests. A document valid under 0.7.1 stays valid and means the same. A 0.7.1 consumer ignores `incomplete` and takes a marked read as complete.
 - **0.7.1** (2026-10-12): a clarification of §4.3.2: in a scheme that declares both an `offset` field and a `nextLink` response field, the link leads under either `advance`, an absent, `null` or empty link ends the read, and such a read is not complete when the last response's `totalCount` exceeds the items read. 0.7.0 did not say. No document changes meaning, but consumers that stepped the offset after following links change behaviour: such a consumer could ask again for a page it had. `read_offsets` takes `follow` for such schemes and returns `complete`.
 - **0.7.0** (2026-10-12): adds `emptyWhenAbsent` to the Envelope Object (§4.4.2): `true` makes a response without the `itemsField` field a page with no items, for providers that leave an empty array out (the Protocol Buffers JSON mapping does), such as Google's Tasks API. Adds `advance` to an `offset` request field (§4.3.2): `itemCount` (the default, what clients did) adds the items a page held, `pageSize` adds the page size and ends only at `totalCount`, for providers such as Box that document the next offset as the previous offset plus the previous limit. Validation rules 23–25, `page_items` and `read_offsets` in the validator, examples and tests. A document valid under 0.6.0 stays valid and means the same, with one new consumer requirement: an offset read, under `itemCount` (the default) as under `pageSize`, ends with an error at a page holding an item an earlier page of the same read returned (§4.3.2); 0.6.0 required that only of a read with a Short Page Object. A 0.6.0 consumer ignores both fields: it fails a read whose items field is absent, as before, and advances an offset by the items held, which under a provider that needs `pageSize` can read items twice or stop early.
 - **0.6.0** (2026-10-08): adds `start` on a `page` request field (the first page number, default 1, so zero-based pages are described), and the Short Page Object (`shortPage` on a `pageNumber` scheme's response, §4.4.5): a page with fewer than `size` items ends the list, with an `assurance` (`documented`, `observed` or `assumed`) that decides whether such a read is complete for Collection Completeness; validation rules 19–22, `read_pages` in the validator, an example and tests. For pondersource/openapi-extensions#25 and ontola/atomic-plugins#385 (ClickUp). A document valid under 0.5.0 stays valid and means the same. A 0.5.0 consumer ignores `start` and `shortPage`: it asks a zero-based list for page 1 first, skipping page 0, and stops after a page without a continuation signal, so a document that needs either should not be used with such a consumer.

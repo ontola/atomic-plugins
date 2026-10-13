@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.7.1: schema, document validator, examples, link resolution and range windows."""
+"""Pagination Schemes 0.8.0: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -6,10 +6,10 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import LinkRefused, PageReadError, WindowReadError, halves, page_items, read_offsets, read_pages, read_range, resolve_link, rfc3986_resolve, validate, window_request
+from validate import LinkRefused, PageReadError, WindowReadError, halves, page_items, read_offsets, read_pages, read_range, resolve_link, response_incomplete, rfc3986_resolve, validate, window_request
 
 ROOT = pathlib.Path(__file__).parent
-EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml", "empty-when-absent.yaml", "offset-advance.yaml")
+EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml", "empty-when-absent.yaml", "offset-advance.yaml", "incomplete-marker.yaml")
 
 
 def example(name):
@@ -744,6 +744,89 @@ class ReadPagesSmallerPageSizeTests(unittest.TestCase):
         document["paths"]["/projects"]["get"]["x-pagination"][0]["overrides"] = {
             "request": {"queryParameters": {"per_page": {"role": "pageSize"}}}}
         validate(document)
+
+
+
+class IncompleteMarkerTests(unittest.TestCase):
+    """0.8.0: the Incomplete Object (§4.4.6, rule 26)."""
+
+    def document(self):
+        return example("incomplete-marker.yaml")
+
+    def scheme(self, document):
+        return document["components"]["paginationSchemes"]["cappedQuery"]
+
+    def test_shape(self):
+        for mutate in (lambda m: m.pop("equals"),
+                       lambda m: m.update({"in": ["incomplete"]}),
+                       lambda m: m.update(field=""),
+                       lambda m: m.update(field="a..b"),
+                       lambda m: m.update(field=".a"),
+                       lambda m: m.update(equals={"type": "incomplete"}),
+                       lambda m: m.update(extra=1)):
+            document = self.document()
+            mutate(self.scheme(document)["response"]["incomplete"])
+            with self.subTest(), self.assertRaises(ValueError):
+                validate(document)
+        document = self.document()
+        marker = self.scheme(document)["response"]["incomplete"]
+        marker.pop("equals")
+        marker["in"] = ["incomplete", None, 0, False]
+        validate(document)
+        # Not allowed in a request.
+        document = self.document()
+        self.scheme(document)["request"]["incomplete"] = {"field": "a", "equals": 1}
+        with self.assertRaises(ValueError):
+            validate(document)
+
+    def test_marking(self):
+        scheme = self.scheme(self.document())
+        marked = {"results": [], "request_status": {"type": "incomplete", "incomplete_reason": "query_result_limit_reached"}}
+        self.assertTrue(response_incomplete(scheme, marked))
+        for body in ({"results": []}, {"request_status": {"type": "complete"}}, {"request_status": "incomplete"},
+                     {"request_status": None}, [], None):
+            with self.subTest(body=body):
+                self.assertFalse(response_incomplete(scheme, body))
+        self.assertFalse(response_incomplete({"type": "pageToken"}, marked))
+        # JSON equality: "1" is not 1, True is not 1, 1.0 is 1.
+        numeric = {"response": {"incomplete": {"field": "capped", "in": [1]}}}
+        self.assertTrue(response_incomplete(numeric, {"capped": 1.0}))
+        self.assertFalse(response_incomplete(numeric, {"capped": "1"}))
+        self.assertFalse(response_incomplete(numeric, {"capped": True}))
+
+    def test_a_marked_page_makes_page_and_offset_reads_not_complete(self):
+        pages = copy.deepcopy(example("short-page.yaml")["components"]["paginationSchemes"]["sizedPages"])
+        pages["response"]["incomplete"] = {"field": "capped", "equals": True}
+        pages["response"]["envelope"] = {"itemsField": "rows"}
+
+        def wrapped(capped_page):
+            def request(values):
+                number = values[("queryParameters", "page")]
+                rows = [{"id": str(i)} for i in range((number - 1) * 50, min(120, number * 50))]
+                return {"rows": rows, "capped": number == capped_page}
+            return request
+
+        self.assertTrue(read_pages(pages, wrapped(None), page_size=50)["complete"])
+        result = read_pages(pages, wrapped(2), page_size=50)
+        self.assertFalse(result["complete"])
+        self.assertEqual(len(result["items"]), 120)  # paging is unchanged
+
+        offsets = copy.deepcopy(example("offset-advance.yaml")["components"]["paginationSchemes"]["limitPages"])
+        offsets["response"]["incomplete"] = {"field": "capped", "equals": True}
+
+        def by_offset(values):
+            offset = values[("queryParameters", "offset")]
+            return {"entries": [{"id": str(i)} for i in range(offset, min(30, offset + 10))], "limit": 10,
+                    "offset": offset, "total_count": 30, "capped": offset == 10}
+
+        result = read_offsets(offsets, by_offset)
+        self.assertFalse(result["complete"])
+        self.assertEqual(len(result["items"]), 30)
+
+    def test_0_7_documents_stay_valid(self):
+        for name in ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml",
+                     "empty-when-absent.yaml", "offset-advance.yaml"):
+            validate(example(name))
 
 
 if __name__ == "__main__":
