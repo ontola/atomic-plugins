@@ -1,0 +1,100 @@
+# Source: https://developers.notion.com/reference/intro#pagination
+# Source: https://developers.notion.com/reference/post-search
+# Checked against this pinned OAD and provider documentation, not a live account.
+# Source: https://developers.notion.com/reference/query-a-data-source
+# v3 of pagination-v2-0c8e2296...: the same schemes, operations and bodies, plus
+# Pagination Schemes 0.8.0's `incomplete` on bodyCursorPages. Query a data source pages
+# through "up to 10,000 results per query"; past that "has_more becomes false, and every
+# response page served from the capped result includes a request_status marking the result
+# as incomplete" ("type: incomplete and incomplete_reason: query_result_limit_reached").
+# Search's response schema documents the same request_status. queryCursorPages (/views)
+# is unchanged: its reference documents no such field.
+# The pinned OAD's response schemas do not list request_status; a page without it is not marked.
+# Needs Pagination Schemes 0.8.0 (openapi-extensions/spec/pagination-schemes, §4.4.6).
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/0c8e229623efdcc1d4ab50111d17bcca3214a899/APIs/notion.com/2026-03-11/openapi.yaml
+info:
+  title: Notion list envelopes with explicit POST and GET cursor fields
+  version: 3.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        bodyCursorPages:
+          type: pageToken
+          autoDetect: false
+          description: Send next_cursor as start_cursor on the next request. Omit start_cursor
+            on the first request; null or absent next_cursor marks the last page. Preserve
+            the original filters and sorts.
+          request:
+            bodyFields:
+              start_cursor:
+                role: pageToken
+              page_size:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: results
+            bodyFields:
+              next_cursor:
+                role: nextPageToken
+            incomplete:
+              field: request_status.type
+              equals: incomplete
+              description: Past Notion's result cap has_more is false and every page carries
+                request_status type incomplete; such a read is not complete.
+        queryCursorPages:
+          type: pageToken
+          autoDetect: false
+          description: Send next_cursor as start_cursor on the next request. Omit start_cursor
+            on the first request; null or absent next_cursor marks the last page. Preserve
+            the original filters and sorts.
+          request:
+            queryParameters:
+              start_cursor:
+                role: pageToken
+              page_size:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: results
+            bodyFields:
+              next_cursor:
+                role: nextPageToken
+      schemas:
+        NotionCursorListBody:
+          allOf:
+            - $ref: '#/components/schemas/JsonObject'
+            - type: object
+              properties:
+                start_cursor:
+                  type: string
+                  description: Opaque next_cursor from the previous page; omit on the first
+                    request.
+                page_size:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+      requestBodies:
+        NotionCursorListRequest:
+          required: false
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotionCursorListBody'
+  - target: $.paths['/search'].post
+    update:
+      requestBody:
+        $ref: '#/components/requestBodies/NotionCursorListRequest'
+      x-pagination:
+        - scheme: bodyCursorPages
+  - target: $.paths['/data_sources/{data_source_id}/query'].post
+    update:
+      requestBody:
+        $ref: '#/components/requestBodies/NotionCursorListRequest'
+      x-pagination:
+        - scheme: bodyCursorPages
+  - target: $.paths['/views'].get
+    update:
+      x-pagination:
+        - scheme: queryCursorPages

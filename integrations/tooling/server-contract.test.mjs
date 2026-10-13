@@ -164,6 +164,7 @@ test('real runner executes the contract and propagates failures without browser 
     'server-contract.mjs',
     'serve.mjs',
     'link-atomic-server.mjs',
+    'server-build.mjs',
     'deps.mjs',
   ])
     copyFileSync(
@@ -214,6 +215,7 @@ test('node tier executes real suites and propagates failed or missing suites', t
     'lanes.mjs',
     'serve.mjs',
     'link-atomic-server.mjs',
+    'server-build.mjs',
     'deps.mjs',
   ])
     copyFileSync(
