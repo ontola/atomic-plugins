@@ -72,8 +72,8 @@ pub struct WebhookConfig {
     /// `WEBHOOK_INGRESS_LIMIT_PER_NETWORK`: refusals one client network (as
     /// `TRUST_FORWARDED_FOR` finds it) may cause per minute, per instance
     /// (not `400` or `408`). Over it, its requests for ids that name no
-    /// endpoint get `429`, and it never queues for the lookup slot. Default
-    /// 120.
+    /// endpoint get `429`, and at most 2 requests of networks over their
+    /// limit may wait for the lookup slot at a time. Default 120.
     pub ingress_per_network_per_minute: u32,
     /// `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`: subscription requests per
     /// connection owner per hour, per instance, counted before the access

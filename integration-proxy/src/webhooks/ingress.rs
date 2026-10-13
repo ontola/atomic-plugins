@@ -125,13 +125,15 @@ impl Drop for EndpointRead<'_> {
     }
 }
 
-/// The rate limits count refusals only and never refuse a delivery that
-/// verifies (see [`super::limits`]). The per-network limit applies only to
-/// ids that are malformed or name no endpoint, after the lookup: a sender
-/// that points a provider's hooks at junk URLs makes the provider's own
-/// addresses collect refusals, which must not cost its real deliveries
-/// anything. The per-endpoint limit counts that endpoint's failed
-/// verifications.
+/// The rate limits count refusals only (see [`super::limits`]). A network
+/// over its limit gets `429` for ids that are malformed or name no endpoint,
+/// after the lookup, and may have at most `INGRESS_BLOCKED_WAITERS`
+/// requests waiting for the lookup slot; beyond that its requests get `429`
+/// at once, a real delivery included. A sender that points a provider's
+/// hooks at junk URLs makes the provider's own addresses collect refusals,
+/// so that queue is where the provider's real deliveries can still lose
+/// (SECURITY.md, rate limits). The per-endpoint limit counts that endpoint's
+/// failed verifications.
 pub async fn receive(
     State(state): State<AppState>,
     Path(endpoint_id): Path<String>,
@@ -212,24 +214,26 @@ async fn receive_checked(
     }
     let gate = &webhooks.gate;
     let hook = {
-        // A network over its refusal limit never queues for the lookup slot:
-        // it takes the slot only when it is free right now, and otherwise
-        // gets `429` at once. The semaphore is fair, so a slot released while
-        // other requests wait goes to them, never to such a request: a flood
-        // from blocked networks cannot keep real deliveries waiting.
+        // A network over its refusal limit may queue for the lookup slot
+        // only while fewer than `INGRESS_BLOCKED_WAITERS` of its kind wait;
+        // beyond that it gets `429` at once. The lookup semaphore is fair, so
+        // those few cannot jump ahead of other networks' requests, and a
+        // real delivery from a blocked network (a provider whose addresses
+        // also carry junk) can still wait for the slot like any other.
         let blocked = webhooks
             .limits
             .ingress_per_network
             .blocked(network, std::time::Instant::now());
-        let permit = match blocked {
-            Some(retry) => match gate.lookups.try_acquire() {
-                Ok(permit) => permit,
+        let _queued = match blocked {
+            Some(retry) => match gate.blocked_waiters.try_acquire() {
+                Ok(permit) => Some(permit),
                 Err(_) => return super::limits::too_many(retry),
             },
-            None => match slot(&gate.lookups, gate.wait).await {
-                Some(permit) => permit,
-                None => return answer(StatusCode::SERVICE_UNAVAILABLE),
-            },
+            None => None,
+        };
+        let permit = match slot(&gate.lookups, gate.wait).await {
+            Some(permit) => permit,
+            None => return answer(StatusCode::SERVICE_UNAVAILABLE),
         };
         let _slot = permit;
         match webhooks.store.hook_by_endpoint(&endpoint_id).await {

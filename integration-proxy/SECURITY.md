@@ -586,16 +586,16 @@ generic code.
   release creating dedicated hooks has to decide whether to keep narrow
   cleanup material.
 
-- **Rate limits.** On `POST /webhooks/…` the limits count refusals only
-  and never refuse a delivery that verifies. Anyone can point a provider's
-  hooks at junk URLs, or send junk to a real endpoint, so the provider's
-  own delivery addresses collect refusals too; a limit that refused them
-  would drop real deliveries, which GitHub does not retry. A client network
-  (120 a minute) counts the refusals it caused (unknown or malformed ids,
-  failed verification, oversized bodies; not `400` or `408`, which a
-  provider's own broken or slow upload causes), and once over, only its
-  requests for ids that are malformed or name no endpoint get `429`, after
-  the lookup. An endpoint (600 a minute) counts its failed verifications,
+- **Rate limits.** On `POST /webhooks/…` the limits count refusals only.
+  Anyone can point a provider's hooks at junk URLs, or send junk to a real
+  endpoint, so the provider's own delivery addresses collect refusals too;
+  a limit that refused them would drop real deliveries, which GitHub does
+  not retry. A client network (120 a minute) counts the refusals it caused
+  (unknown or malformed ids, failed verification, oversized bodies; not
+  `400` or `408`, which a provider's own broken or slow upload causes).
+  Once over, its requests for ids that are malformed or name no endpoint
+  get `429` after the lookup, and it is held to a short queue for the
+  lookup itself (below). An endpoint (600 a minute) counts its failed verifications,
   and once over answers further ones `429` instead of `401`; random ids
   never take an endpoint's key. Neither saves the verification work: the
   ingress gate's lookup, read and database slots bound that. Subscription
@@ -610,16 +610,25 @@ generic code.
   and `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`, read only with the inbox on.
   Behind a proxy such as Heroku's router, `TRUST_FORWARDED_FOR` must be
   set (`heroku`), or every sender is one network: the router's.
-  A network over its limit never queues for the one endpoint-lookup slot:
-  it takes the slot only when it is free at that moment and otherwise gets
-  `429` at once, and the slot's semaphore is fair, so a released slot goes
-  to the requests already waiting. What remains: many networks that each
-  stay under the limit (120 refusals a minute each, for example a client
-  rotating IPv6 /64s) can still keep the slot busy, and a delivery that
-  waits 3 s for it gets `503`, which GitHub does not retry; the periodic
-  full reads are the fallback. A provider network that junk has pushed over
-  the limit gets `429` for a real delivery only while the slot is busy at
-  that moment.
+  There is one endpoint-lookup slot. Requests from networks over their
+  limit may wait for it, but at most 2 of them at a time across all such
+  networks; while 2 wait, any further request from a network over its
+  limit gets `429` at once. The slot's semaphore is fair, so a released
+  slot goes to the requests already waiting in order, and those 2 cannot
+  jump ahead of other networks' requests. What holds: a flood from
+  networks over their limit cannot hold up deliveries from other networks,
+  and a real delivery from a network over its limit still gets through
+  whenever fewer than 2 of its kind are waiting. What remains:
+  - A provider whose delivery addresses also carry junk (anyone can point
+    the provider's hooks at junk ids, so its network goes over the limit)
+    has its real deliveries compete for those 2 places with the junk. Under
+    a sustained flood through the provider's own addresses, a real delivery
+    can find both taken and get `429`, which GitHub does not retry; the
+    periodic full reads are the fallback.
+  - Many networks that each stay under the limit (120 refusals a minute
+    each, for example a client rotating IPv6 /64s) can still keep the slot
+    busy, and a delivery that waits 3 s for it gets `503`, which GitHub
+    does not retry either.
 
 Not yet verified: any real provider's deliveries (only the synthetic
 fixtures), and how the limits behave across several instances (each counts

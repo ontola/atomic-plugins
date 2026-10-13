@@ -1482,13 +1482,14 @@ fn with_limits(env: &Env, endpoint: u32, network: u32, owner: u32) -> AppState {
     state
 }
 
-/// Ingress limits (reviews of the rate-limits PR): they count refusals only
-/// and never refuse a delivery that verifies. Blocker A: a third party that
-/// points a provider's hooks at junk URLs, or signs junk for a real
-/// endpoint, makes the provider's own address collect refusals; its real
-/// deliveries must still be accepted. Only ids that name no endpoint are
-/// refused for a network's refusals, and an endpoint's window counts only
-/// its failed verifications.
+/// Ingress limits (reviews of the rate-limits PR): they count refusals only.
+/// Blocker A: a third party that points a provider's hooks at junk URLs, or
+/// signs junk for a real endpoint, makes the provider's own address collect
+/// refusals; its real deliveries must still be accepted (here with the
+/// lookup slot free; `a_blocked_network_queues_for_the_lookup_slot_only_a_little`
+/// covers a busy slot). Only ids that name no endpoint are refused for a
+/// network's refusals, and an endpoint's window counts only its failed
+/// verifications.
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
 async fn ingress_limits_never_refuse_a_delivery_that_verifies() {
@@ -1576,12 +1577,15 @@ async fn ingress_limits_never_refuse_a_delivery_that_verifies() {
     env.drop_schema().await;
 }
 
-/// Re-review of the rate-limits PR: a blocked network never queues for the
-/// one lookup slot. While the slot is busy it gets `429` at once, and a
-/// flood of its requests cannot hold up a delivery from another network.
+/// Re-reviews of the rate-limits PR: a blocked network may queue for the
+/// one lookup slot, but only `INGRESS_BLOCKED_WAITERS` of its requests at a
+/// time; the rest get `429` at once. So a real delivery from a blocked
+/// network that shares its addresses with junk (a provider's) still gets
+/// through while the slot is busy, and a flood from blocked networks cannot
+/// hold up deliveries from other networks.
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
-async fn a_blocked_network_never_queues_for_the_lookup_slot() {
+async fn a_blocked_network_queues_for_the_lookup_slot_only_a_little() {
     let mut env = env(small()).await;
     let alice = Agent::new(99);
     let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
@@ -1605,60 +1609,78 @@ async fn a_blocked_network_never_queues_for_the_lookup_slot() {
         let state = state.clone();
         async move { crate::router(state).oneshot(request).await.unwrap() }
     };
-    let attacker = "198.51.100.7";
+    let delivery = |id: &str| env.signed_delivery(&endpoint, id, &task("p-100", id));
+    // The provider's address, pushed over its limit by junk sent to it.
+    let provider = "192.0.2.1";
+    let other = "203.0.113.9";
     for n in 0..3 {
-        send(from(attacker, junk(n))).await;
+        send(from(provider, junk(n))).await;
     }
     assert_eq!(
-        send(from(attacker, junk(9))).await.status(),
+        send(from(provider, junk(9))).await.status(),
         StatusCode::TOO_MANY_REQUESTS,
-        "the attacker's network is blocked"
+        "the provider's network is blocked"
     );
 
-    // The lookup slot is busy: the blocked network is answered at once, while
-    // a delivery from another network waits for the slot and gets it.
+    // The lookup slot is busy. A real delivery from the blocked network
+    // queues; so does one junk request; the queue is then full, and further
+    // requests from blocked networks get 429 at once.
     let webhooks = state.webhooks.clone().unwrap();
     let held = webhooks.gate.lookups.acquire().await.unwrap();
-    let waiting = tokio::spawn(send(from(
-        "192.0.2.1",
-        env.signed_delivery(&endpoint, "real-1", &task("p-100", "real-1")),
-    )));
+    let real = tokio::spawn(send(from(provider, delivery("real-blocked"))));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let queued_junk = tokio::spawn(send(from(provider, junk(50))));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let elsewhere = tokio::spawn(send(from(other, delivery("real-other"))));
     let started = std::time::Instant::now();
     for n in 0..20 {
         assert_eq!(
-            send(from(attacker, junk(100 + n))).await.status(),
+            send(from(provider, junk(100 + n))).await.status(),
             StatusCode::TOO_MANY_REQUESTS
         );
     }
     assert!(
         started.elapsed() < Duration::from_secs(1),
-        "no request queued"
+        "over the queue cap nothing waits"
     );
     tokio::time::sleep(Duration::from_millis(200)).await;
     drop(held);
-    assert_eq!(waiting.await.unwrap().status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        real.await.unwrap().status(),
+        StatusCode::NO_CONTENT,
+        "a real delivery from a blocked network that queued gets through"
+    );
+    assert_eq!(elsewhere.await.unwrap().status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        queued_junk.await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
 
-    // A flood from the blocked network alongside real deliveries: none of
-    // those waits out the slot and fails.
-    let flood: Vec<_> = (0..200)
-        .map(|n| tokio::spawn(send(from(attacker, junk(1000 + n)))))
-        .collect();
-    for id in ["real-2", "real-3", "real-4"] {
+    // A flood from the blocked network, with real deliveries from another
+    // network interleaved: every real one is stored, no flood request
+    // anything but refused.
+    let mut flood = Vec::new();
+    let mut real = Vec::new();
+    for n in 0..200 {
+        flood.push(tokio::spawn(send(from(provider, junk(1000 + n)))));
+        if n % 20 == 0 {
+            let id = format!("interleaved-{n}");
+            real.push(tokio::spawn(send(from(other, delivery(&id)))));
+        }
+    }
+    for (n, request) in real.into_iter().enumerate() {
         assert_eq!(
-            send(from(
-                "192.0.2.1",
-                env.signed_delivery(&endpoint, id, &task("p-100", id)),
-            ))
-            .await
-            .status(),
+            request.await.unwrap().status(),
             StatusCode::NO_CONTENT,
-            "{id}"
+            "interleaved delivery {n}"
         );
     }
     for request in flood {
         let status = request.await.unwrap().status();
         assert!(matches!(status, StatusCode::TOO_MANY_REQUESTS), "{status}");
     }
+    // Every 204 above was a durable outcome (stored, or recorded as a gap
+    // once the small test policy's pending limit is reached).
     env.drop_schema().await;
 }
 

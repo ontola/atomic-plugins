@@ -1,12 +1,16 @@
 //! Rate limits on the webhook routes (plan: "Rate-limit verification work,
 //! subscription creation"). On `POST /webhooks/{endpointId}` they count
-//! refusals only and never refuse a delivery that verifies, so a third
-//! party cannot make the proxy refuse a provider's real deliveries, which a
-//! provider such as GitHub does not retry: per client network, for ids that
-//! are malformed or name no endpoint; per endpoint, for requests to it that
-//! fail verification. The work a request can cause is bounded by the
-//! ingress gate (lookup, read and database slots), not by these. Per owner
-//! on subscription creation, checked before its access check reaches the
+//! refusals only: per client network, for refusals it caused; per
+//! endpoint, for requests to it that fail verification. A network over its
+//! limit gets `429` for ids that are malformed or name no endpoint, and may
+//! have at most `INGRESS_BLOCKED_WAITERS` requests waiting for the lookup
+//! slot (`ingress.rs`); an endpoint over its limit answers failed
+//! verifications `429`. A delivery that verifies is refused only in one
+//! case: it comes from a network over its limit while that queue is full,
+//! which junk sent through a provider's own addresses can cause (see
+//! SECURITY.md). The work a request can cause is bounded by the ingress gate
+//! (lookup, read and database slots), not by these. Per owner on
+//! subscription creation, checked before its access check reaches the
 //! provider.
 //!
 //! Fixed windows, in memory, per proxy instance. Memory is bounded: at most
