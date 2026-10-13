@@ -96,8 +96,8 @@ tests prove the mechanism against an invented `api/` only.
 ## Todoist drive app (`todoist-app/`)
 
 An iframe drive app, the same shape as `../money/moneybird/` (read-only, no
-npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 38,912
-bytes for 0.2.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
+npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 52,134
+bytes for 0.3.0, 38,912 for 0.2.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
 folder and publishes it as `apps/todoist/<version>/ui.js`) whose
 `view({ root, store })` runs in the host's null-origin frame. It imports the
 connected account's **active tasks** into its own table, nothing more; the
@@ -119,10 +119,41 @@ their status, presence, due day, priority, project and last-seen.
 **Rows** are of the shared class `issue-v1` (#177), like the GitHub issues
 app's: on first open the app adds the class to its App's `renders`, its
 extras to `row-extras`, and sets its table's `classtype` (`drive.ts`;
-shown on another Issue table it says so and imports nothing). Shared fields
-go through `ontology-kit`'s strict resolver: `name` (the task's `content`),
-task/v1 `status` (`done` only when Todoist returned `checked: true`, else
-`todo`), `body` (the task's `description`) and `due-date` (the due day).
+shown on another Issue table it says so and imports nothing).
+
+**Shared fields come from the catalog lens (0.3.0).** What a task becomes
+in `issue-v1` is the shared lens catalog's `todoist-task-issue-v2`
+([`ontology-kit/LENSES.md`](../../ontology-kit/LENSES.md)), run by
+`ontology-kit/lens.mjs`, not mapping code of this app's own. Both are
+bundled at build time (`todoist-app/lens.ts` imports the published mapping
+from `ontology-kit/lenses.mjs`), as the terms are. A pass writes each row
+from its task with the lens's backward put onto the row's current values:
+`name` is the task's `content`, `body` its `description` (an empty
+description is an empty body), task/v1 `status` is `done` when Todoist
+returned `checked: true` and `todo` when `false`, and `due-date` is the
+day of `due.date`, removed when the task no longer has a due date.
+
+A task the lens refuses is named on the card and in the summary: a deleted
+task, a task without content, and a due date with a fixed time zone (`…Z`
+or an offset, whose day depends on the time zone). An existing row keeps
+its shared values. A **new** refused task still gets a row, with the app's
+bookkeeping (`todoist-task-id`, presence, priority, project, source) but no
+shared values, so the view and the host table show it as "Incomplete:
+missing Name" until a later pass can read it. A row whose `todoist-source`
+is unreadable (not JSON) takes every field the lens reads from the row
+itself (name, body, status and due day, `taskFromRow` in
+`todoist-app/lens.ts`) when Todoist no longer lists the task, so it is not
+refused on every pass and loses no value; the next pass that reads the task
+rewrites the source.
+
+Changes from 0.2.0, which mapped tasks itself:
+
+- `name` is `content` as Todoist sends it, no longer trimmed, and no longer
+  the task id when `content` is empty;
+- an empty description writes an empty `body` instead of none;
+- a due date with a fixed time zone is refused instead of cut at its UTC
+  day.
+
 The provider extras, created once under the app's own ontology:
 `todoist-task-id` (the row's identity), `todoist-presence`,
 `todoist-last-seen`, `todoist-priority`, `todoist-project` and
@@ -221,7 +252,11 @@ node integrations/tooling/run-lane.mjs issue-tracker --tier e2e
 ```
 
 **Not verified:** anything against a live Todoist account or the real
-integration proxy (#46).
+integration proxy (#46). The catalog lens path (0.3.0) is covered by the
+unit tests (`todoist-app/lens.test.ts`, the conformance tests in
+`devonian/todoist/lens/catalog.test.ts`) and this lane's e2e against the
+synthetic fixture; whether live tasks with a fixed-time-zone due date are
+common enough to matter is not known.
 
 **Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
 todoist --i-understand-this-writes-to <project id>` runs this app's
