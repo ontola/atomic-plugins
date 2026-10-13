@@ -178,7 +178,9 @@ Data flows through four stages, each its own directory under `src/`:
    writes (`unsettled`) are re-read where `lookupPlanned` in a second pass,
    `recheckUnavailable` (from `SyncRound.unavailable`, before
    `finishFeeds`), oldest `checked` first across collections (`checkTime`,
-   strictly increasing, stored with the mark), so they never take checks
+   strictly increasing, stored with the mark; set by `checkVanished`'s
+   `onChecked` only when `findEvidence` returned evidence, so a record the
+   budget or a 429 left unread keeps its place), so they never take checks
    from unconfirmed or newly missing records; `reportMissing` turns
    the evidence into marks (`setMark`: changes go to the client-level
    `untoldMarks`, the latest per record, kept across syncs until told).

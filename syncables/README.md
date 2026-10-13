@@ -775,7 +775,10 @@ collection's unconfirmed records and the records its read newly lacks
 `maxMissingRecordChecks`, a limit per sync across all collections. Within
 that pass the record checked longest ago goes first (one never checked
 before any other; the time is stored with the mark), so a small limit
-reads each kept record in turn rather than the same one every sync. Each
+reads each kept record in turn rather than the same one every sync. The
+time moves only when a check ran: a record that the request budget
+(`limits.maxRequests`, the timeout) or a 429 left unread keeps its place
+and goes first next time. Each
 re-read is reported to `onMissingRecord` again, whatever it finds. A 404
 under `notFound: unavailable` keeps it kept, and tells `onPresence` nothing
 again; a 2xx shows
@@ -1492,8 +1495,8 @@ back after an upgrade as `unavailable` (kept, and read again only where
 the collection makes checks). A `presence` value this client does not know
 is read as `unavailable` in the same way. A client from before `lastSeen`
 drops it the same way, and one from before `checked` (when a re-read last
-checked a kept record) drops that, so its records count as never checked. The version stays `1` because an older client can
-read every write it holds and either sends it or keeps it unchanged, with
+checked a kept record) drops that, so its records count as never checked.
+The version stays `1` because an older client can read every write it holds and either sends it or keeps it unchanged, with
 those caveats: settle or discard merge-patch updates, unbound creates and
 writes held as unavailable before downgrading. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
@@ -1853,8 +1856,9 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   until a list read returned it. The re-reads run in a second pass, after
   every collection's unconfirmed and newly missing records, within what is
   left of `maxMissingRecordChecks` (a limit per sync, across collections),
-  the record checked longest ago first; the outbox stores that time with
-  the mark (`checked`, added within version 1). A 2xx now removes it from
+  the record checked longest ago first (a record the request budget or a
+  429 left unread keeps its place); the outbox stores that time with the
+  mark (`checked`, added within version 1). A 2xx now removes it from
   the copy (it exists outside the collection), and an answer concluding
   deletion removes it; a 404 under `notFound: unavailable` keeps it
   without telling `onPresence` again. Behaviour change: more item GETs

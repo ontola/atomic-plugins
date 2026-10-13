@@ -5319,7 +5319,8 @@ export function createApiClient(
    * Checks one record without writes that a complete read lacks (or that
    * is kept unavailable), within `maxMissingRecordChecks`; what concludes
    * it goes to `out`, for the caller's rebuild. `last` is its last known
-   * copy. `onCheck` runs just before its GET is made.
+   * copy. `onChecked` runs once a check has run: not when the request
+   * budget or a 429 left the record unread (`findEvidence` undefined).
    */
   async function checkVanished(
     read: CheckRead,
@@ -5331,7 +5332,7 @@ export function createApiClient(
       foundById: Map<string, Evidence>;
       nested: RebuildTarget[];
     },
-    onCheck?: () => void,
+    onChecked?: () => void,
   ): Promise<void> {
     const { route, scope, context, budget, sync } = read;
     const limit = options.maxMissingRecordChecks ?? 50;
@@ -5354,8 +5355,8 @@ export function createApiClient(
       sync.lookups += 1;
     }
     const revision = recordRevisions.get(keyFor(scope, id)) ?? 0;
-    onCheck?.();
     const found = await findEvidence(route, context, id, budget);
+    if (found) onChecked?.();
     if (undecided(found))
       sync.undecided.push({
         scope,
@@ -5367,8 +5368,13 @@ export function createApiClient(
         vanished: true,
       });
     else if (found) {
-      // A write to it settled during the GET: a later sync decides.
-      if ((recordRevisions.get(keyFor(scope, id)) ?? 0) !== revision) return;
+      // A write to it settled or was queued during the GET: a later sync
+      // decides, and the mark stays.
+      if (
+        (recordRevisions.get(keyFor(scope, id)) ?? 0) !== revision ||
+        unsettled(scope, id)
+      )
+        return;
       reportMissing(route, context, id, found, last);
       // Kept with its last known values when unavailable (§4.3); a
       // conclusion that clears a kept mark removes the record again
@@ -5611,21 +5617,20 @@ export function createApiClient(
       if (round.skipped.has(scope)) continue;
       const key = keyFor(scope, id);
       const mark = keptMarks.get(key);
-      // Settled since it was planned (a read, or a write queued while the
-      // app was told): not read again now.
-      if (
-        mark?.presence !== 'unavailable' ||
-        round.returned.get(scope)?.has(id) ||
-        unsettled(scope, id)
-      )
-        continue;
+      // Settled since it was planned (a write queued, or a check that
+      // cleared it): not read again now. A record this sync's read returned
+      // lost its mark at the sync's start.
+      if (mark?.presence !== 'unavailable' || unsettled(scope, id)) continue;
       const out = {
         touchedIds: new Set<string>(),
         foundById: new Map<string, Evidence>(),
         nested: [] as RebuildTarget[],
       };
+      // Its time moves only when a check ran: a record the request budget
+      // or a 429 left unread keeps its place for the next sync.
       await checkVanished(read, id, mark.record, released, out, () => {
-        mark.checked = checkTime();
+        const current = keptMarks.get(key);
+        if (current) current.checked = checkTime();
       });
       for (const touched of out.touchedIds) {
         const found = out.foundById.get(touched);

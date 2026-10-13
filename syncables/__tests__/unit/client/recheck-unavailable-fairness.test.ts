@@ -223,6 +223,37 @@ describe('kept unavailable records under maxMissingRecordChecks', () => {
     expect(order.slice(3)).toEqual(order.slice(0, 3));
   });
 
+  it('keep their place when the request budget leaves them unread', async () => {
+    const fake = server({
+      pets: [
+        { id: '1', name: 'Rex' },
+        { id: '2', name: 'Tom' },
+        { id: '3', name: 'Kit' },
+      ],
+    });
+    const storage = new InMemoryStorageAdapter();
+    const first = client(fake, { storage }).client;
+    await first.sync();
+    for (const id of ['1', '2', '3']) {
+      fake.hidden.add(`pets/${id}`);
+      fake.item[`pets/${id}`] = 404;
+    }
+    await first.sync();
+    // Three requests a sync: the pets and owners lists, and one item GET;
+    // the records the budget leaves unread get no check time, so they come
+    // first next sync.
+    const c = client(fake, { storage, limits: { maxRequests: 3 } }).client;
+    await c.ready();
+    const order: string[] = [];
+    for (let sync = 0; sync < 3; sync += 1) {
+      fake.gets.length = 0;
+      await c.sync().catch(() => undefined);
+      order.push(...fake.gets);
+    }
+    expect(order).toHaveLength(3);
+    expect([...order].sort()).toEqual(['pets/1', 'pets/2', 'pets/3']);
+  });
+
   it('wait for the checks of records other collections newly lack', async () => {
     const fake = server({
       pets: [

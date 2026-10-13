@@ -52,3 +52,16 @@ called again on every re-check. New tests
 a changed read, rotation with a limit of one across a restart, and a
 later collection's newly missing record checked before an earlier
 collection's unavailable one; three fail on the code before.
+
+## Delta review fix (#553)
+
+B1: the check time was set before `findEvidence`, which returns nothing
+without a read when the request budget or a 429 stops it, so unread
+records got the newest time and the same leading records were read every
+sync (the reviewer saw `pets/1` read six times under `maxRequests: 3`).
+`checkVanished` now calls `onChecked` only when `findEvidence` returned
+evidence. New test with `limits.maxRequests: 3`, which fails on the code
+before. Nits: a write queued during the GET also keeps the mark
+(`unsettled` beside the revision check); the docs say an unread record
+keeps its place; a long README line wrapped; the redundant
+`round.returned` check dropped.
