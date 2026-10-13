@@ -57,7 +57,8 @@
     "prettier": "prettier \"{src,__tests__}/**/*.{ts,mts}\" --config .prettierrc --write",
     "prettier:check": "prettier \"{src,__tests__}/**/*.{ts,mts}\" --config .prettierrc --check",
     "test:watch": "vitest unit",
-    "prepare": "npm run build:release"
+    "prepare": "npm run build:release",
+    "cli:mock": "node examples/cli-device-server.mjs"
   },
   "author": "Michiel de Jong <michiel@unhosted.org>",
   "license": "Apache-2.0",
@@ -67,5 +68,8 @@
   },
   "volta": {
     "node": "22.12.0"
+  },
+  "bin": {
+    "syncables": "build/src/cli/main.js"
   }
 }

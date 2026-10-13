@@ -1,0 +1,123 @@
+# CLI authentication scaffold
+
+This first stage of [#566](https://github.com/ontola/atomic-plugins/issues/566)
+adds a CLI to the existing `syncables` npm package. Library imports and the
+`syncables/browser` entry remain unchanged. Importing either entry does not
+run the CLI or read CLI configuration.
+
+The scaffold tests device authorization, connection discovery and a GET through
+Local Thought. It also saves and lists definitions for Atomic, NextGraph and
+remoteStorage replication. It does **not** run these replication protocols,
+start a daemon, store tokens, or implement PostgreSQL caching/outbox persistence.
+Those follow after this stage has been tested.
+
+## Build the source
+
+Use Node 22, matching this package's supported engine:
+
+```sh
+cd syncables
+npm ci
+npm run build:release
+node build/src/cli/main.js --help
+```
+
+The package has a `bin` named `syncables` pointing to `build/src/cli/main.js`.
+The commands below use the source build; the CLI is not claimed to be in the
+currently published npm release. No service is installed by npm installation.
+
+## Try the mock device flow
+
+In one terminal:
+
+```sh
+npm run cli:mock
+```
+
+In another terminal:
+
+```sh
+node build/src/cli/main.js auth-test \
+  --issuer http://127.0.0.1:11872 \
+  --client-id syncables-cli-demo \
+  --path '/repos/example/tasks/issues?per_page=1'
+```
+
+Open the printed URL, enter the displayed code and approve the invented
+connection. The CLI lists the owner and accessible provider connections, then
+reports `apiAccess: verified`, HTTP status, content type and response byte count.
+This proves the scaffold works against the mock; it is not evidence of real
+GitHub access. The mock's approval page uses no real login and is not a
+production authorization server.
+
+The default mock port avoids the previous pilot's 11870/11871 ports. Override
+it with `SYNCABLES_MOCK_PORT` if needed and use that origin in the CLI command.
+
+## Test the real Local Thought deployment
+
+[#565](https://github.com/ontola/atomic-plugins/issues/565) must supply the
+public client ID, scopes and deployed device-flow contract first:
+
+```sh
+node build/src/cli/main.js auth-test \
+  --issuer https://localthought.io \
+  --client-id '<published-public-client-id>' \
+  --scope '<published-read-scope>' \
+  --connection '<approved-connection-id>' \
+  --path '/repos/ontola/usertest-findings/issues?state=all&per_page=1'
+```
+
+If exactly one connection is returned, `--connection` is optional. Omit
+`--path` to test login and list connections without making a provider request.
+The command sends GET only; success logging does not imply write access.
+
+Discovery uses `/.well-known/oauth-authorization-server` and requires matching
+issuer, `device_authorization_endpoint` and `token_endpoint`. If #565 publishes
+endpoints before discovery, supply both `--device-endpoint` and
+`--token-endpoint`. This scaffold permits HTTPS or loopback HTTP, requires the
+device/token endpoints on the issuer origin, and refuses redirects. The proposed
+resource contract is bearer-authenticated `/connections` and
+`/proxy/{connection_id}/{platform}/{path}`. Adapt it to #565's final contract
+before claiming live compatibility.
+
+Polling obeys the interval, pending/slow-down responses, denial and expiry,
+with a 15-minute command cap and 10-second request timeouts. Tokens stay in
+memory, are not printed/saved, and are discarded when the command exits.
+There is no refresh or session persistence yet, so each test authorizes again.
+No provider credential is requested by or returned to the CLI.
+
+## Configure replication destinations
+
+Local Thought provider connections and replication destinations are separate.
+Each replication definition names its backend, destination and explicit local
+collection scope. These examples use invented identifiers; substitute real
+values when a backend is implemented:
+
+```sh
+node build/src/cli/main.js replication add \
+  --name ontola --backend atomic --collections issues,comments \
+  --url http://localhost:11870 --drive atomic:example
+
+node build/src/cli/main.js replication add \
+  --name nextgraph --backend nextgraph --collections issues \
+  --graph did:ng:o:example
+
+node build/src/cli/main.js replication add \
+  --name personal --backend remotestorage --collections issues \
+  --address user@example.com --module syncables
+
+node build/src/cli/main.js replication list
+```
+
+Definitions are private JSON files beneath
+`~/Library/Application Support/Syncables/replication` on macOS, or
+`~/.config/syncables/replication` elsewhere. `--config-dir` chooses a separate
+directory for tests. Adds publish a complete file without overwriting an
+existing name, including concurrent adds. No keys or tokens belong in these
+definitions. Output says `status: configured` and `replicationImplemented:
+false`; no remote access or background job is started.
+
+Atomic and NextGraph native replication require their SDKs, identities,
+permissions, commit history and durable protocol state. remoteStorage requires
+WebFinger discovery, scoped authorization and ETag-aware document sync.
+Configuring an endpoint is not proof that any of those steps has happened.

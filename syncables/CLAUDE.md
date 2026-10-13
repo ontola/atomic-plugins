@@ -45,8 +45,11 @@ npx vitest run __tests__/unit/client/client.test.ts --config __tests__/vitest.co
 npx vitest run -t "keeps a local copy in sync" --config __tests__/vitest.config.ts
 ```
 
-This package has no `main.ts`/CLI entrypoint — it's a library (`build/src/index.js`,
-see `package.json` `exports`), so there's no `npm start`.
+The library entrypoints remain `build/src/index.js` and `build/src/browser.js`.
+An isolated CLI executable at `src/cli/main.ts` is exposed as the npm `syncables`
+bin; it is not imported by either library entrypoint. See `docs/cli.md` for the
+authentication/configuration scaffold and `npm run cli:mock` for its local test
+server. There is still no `npm start` or installed daemon.
 
 ## Architecture
 

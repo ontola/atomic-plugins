@@ -74,6 +74,12 @@ the guide explains how to run that source before an npm release.
 
 ## Usage
 
+The source also includes an optional **CLI authentication scaffold** in the
+same npm package. It tests device login and read-only API access through Local
+Thought and saves/lists Atomic, NextGraph and remoteStorage connection
+definitions. Library imports remain unchanged. See the [CLI guide](docs/cli.md)
+for the local mock, the device-server dependency and the current limits.
+
 For published releases, install with `npm install syncables`. To build the
 current source, run these commands from `syncables/` with Node 22:
 
