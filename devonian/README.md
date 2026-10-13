@@ -1,13 +1,36 @@
 # Bidirectional Lenses for Data Portability
 ## Work in Progress
 
-[API docs](https://tubsproject.github.io/devonian/)
+[API docs](https://ontola.github.io/atomic-plugins/devonian/docs/) (TypeDoc
+output committed in [`docs/`](docs/index.html); last regenerated before 0.9.0,
+so it does not list `devonian/lenses` yet)
 
 [![A Tiktaalik leaving its pond in search for another one](https://cdn.mos.cms.futurecdn.net/fi8nrWxvEb5sowf5jkQ8RY-700-80.jpg.webp)](https://www.livescience.com/43596-devonian-period.html)
 
 Inspired by [the Cambria Project](https://github.com/inkandswitch/cambria-project), Devonian uses TypeScript transformations to bridge differences in data shape and primary key assignment between independent systems of record. Scoped identity maps record which external records correspond; they do not track causality or resolve conflicts.
 
 Already familiar with Cambria? Start with [Devonian for Cambria users](docs/from-cambria.md), which explains the value algebra, connector API, identity maps and current limits.
+
+## Which API to use
+
+Devonian is pre-1.0: a minor version may change an API. Each part below is
+covered by deterministic tests with fakes. No part has been run against a
+live provider, a real browser engine or a service worker (see "Entry points
+and browser support").
+
+| Part (import) | What it does | Tested guarantees | What it does not do | The host's responsibilities |
+|---|---|---|---|---|
+| **Native Atomic Data** (`devonian/atomic`): `AtomicStore`, `AtomicIdentityMap`, `AtomicLens` | Imports, creates, updates and deletes between Atomic Data resources and one platform's records through a connector; subject URLs are identities | Scoped identities (connector and entity, string and number ids apart); unmanaged fields kept; explicit removal; a failure does not poison the queue; one lens's calls in call order (`__tests__/atomic/*.test.ts`) | Durable storage (the store is in memory), cross-lens or cross-process locking, stale-event rejection, conflict resolution, signed Atomic Commits, Atomic Server transport | Snapshot after awaited work and reload before replay ([Persistence and restart](docs/atomic-data.md#persistence-and-restart), [Recovering from a crash](docs/atomic-data.md#recovering-from-a-crash)); one lock for every lens that touches the same resources ([Concurrency](docs/atomic-data.md#concurrency-and-next-milestones)); ordering delayed events ([Event ordering](docs/atomic-data.md#event-ordering)); a connector that honours the idempotency key |
+| **Value lenses** (`devonian/lenses`, 0.9.0) | Pure, synchronous field and custom mappings between a source and an editable view | Declared ownership, unchanged-value preservation, detached copies, example-based GetPut, PutGet and stable put (`__tests__/unit/lenses.test.ts`) | Any I/O, identity, ordering or conflict handling; laws over all values (examples only) | Running a lens inside its own read/write path ([Value lenses](docs/value-lenses.md)) |
+| **Reflection** (`devonian/reflect`) | Copies new records both ways between two `syncables` clients, agrees open/closed state, reflects comments, suppresses echoes | Echo suppression, no duplicates across restarts through `IdMap` plus a marker scan, a serialised runner (`__tests__/unit/reflect/*.test.ts`) | Field updates beyond state, deletions, OAuth, overlays or documents of its own | Building the two `ApiClient`s, persisting `IdMap` and `KvStore` (`File*` only in Node) |
+| **Background scheduler** (`devonian/background`): `BackgroundSync` | Runs a sync pass on a persisted schedule from a tab, a service worker or Node | Due-time, pause and backoff state across restarts; one pass at a time under a lease (`__tests__/unit/background/*.test.ts`) | Choosing the browser's cadence (Periodic Background Sync is Chromium-only); locking across contexts without Web Locks (the fallback is in-process only) | Supplying the key-value store (IndexedDB in a browser) and classifying permanent failures |
+| **Legacy row API** (`devonian` root): `DevonianLens`, `DevonianTable`, `DevonianClient`, `DevonianIndex` | Copies **additions** between two tables, with foreign-id bookkeeping | Additions and foreign ids (`__tests__/unit/DevonianTable.test.ts`, `DevonianIndex.test.ts`, the examples) | **Updates and deletions**: `DevonianLens` only listens for additions, and none are planned | Migrating to the native API for anything more (see "How the legacy row API works") |
+| **Automerge storage** | Experimental storage for the row API | Its own unit test only | Reachable from no entry point (`storage/Automerge.ts` is not exported) | None: not for use |
+
+**Recommendation.** New integrations use the native Atomic Data API, with value
+lenses for field mapping inside connector transformations. Use reflection for
+bridging two `syncables`-backed issue trackers. Keep the legacy row API only
+where it already runs.
 
 ## Native Atomic Data API
 
@@ -105,7 +128,16 @@ I think Lens VM also has a concept of foreign IDs and id maps, but I think it is
 For instance in a bank account statement, if I transfer 100 euros from my savings account to my current account, and then do the same again on the same day, some CSV export formats will meaningfully represent this as two identical rows in the CSV file (date, amount, from, to), and refering to these rows by content ID would incorrectly collapse them into a single row.
 
 ## How the legacy row API works
-The core is in DevonianLens which is very simple: it links corresponding database tables on different systems of record (e.g. bridging a Slack channel with a Matrix room, copying over messages from one to the other), and calls a 'left to right' translation function when a change happens on the left, then add the result on the right. So far only additions have been implemented; updates and deletions coming soon. Here is an implementation of the ['Extract Entity' challenge](https://arxiv.org/pdf/2309.11406):
+**Additions only.** `DevonianLens` listens for additions (`add-from-client`) on both tables and nothing else: an update or a deletion on either side is not copied, and none is planned. For anything more, migrate to the native API:
+
+- **Records:** a table row becomes an Atomic Data resource in an `AtomicStore`, with property URLs for its fields.
+- **Foreign ids:** `DevonianIndex` and `ForeignIds` become `AtomicIdentityMap` mappings, scoped by connector and entity.
+- **Translation:** the left-to-right and right-to-left functions become the `AtomicLens` options `read` (platform record to resource patch) and `write` (resource to platform record), optionally built from value lenses.
+- **New:** `ingest` and `ingestDelete` take platform changes in; `publish` and `delete` send creates, updates and deletions, with explicit field removal.
+
+The [Atomic Extract Entity example](examples/AtomicExtractEntity.ts) is the native version of the example below.
+
+The core is in DevonianLens which is very simple: it links corresponding database tables on different systems of record (e.g. bridging a Slack channel with a Matrix room, copying over messages from one to the other), and calls a 'left to right' translation function when a change happens on the left, then add the result on the right. Here is an implementation of the ['Extract Entity' challenge](https://arxiv.org/pdf/2309.11406):
 ```ts
 new DevonianLens<AcmeComprehensiveOrderWithoutId, AcmeLinkedOrderWithoutId, AcmeComprehensiveOrder, AcmeLinkedOrder>(
       this.acmeComprehensiveOrderTable,
@@ -148,16 +180,13 @@ Apart from the translation of differently named JSON fields, when copying a mess
 The `DevonianIndex` class keeps track of different identifiers an object may have on different platforms, and generates a `ForeignIds` object for each platform. If a platform API offers a place for storing custom metadata, the `ForeignIds` object can be stored there.
 
 ## Link with Automerge
-You can choose between InMemory or [Automerge](https://automerge.org) storage. If two sides update a conflicting thing, InMemory storage will lead to Last Write Wines, whereas with Automerge the hope is that conflicting changes can be handled more gracefully in more situations. This is a topic of ongoing research though, and I don't have a good example yet that shows this in action.
+**Experimental, and not reachable from any entry point** (`storage/Automerge.ts` is not exported; see "Entry points and browser support"). The row API's in-memory storage resolves a conflicting update by the last write; the [Automerge](https://automerge.org) storage was an experiment in handling such conflicts more gracefully, without an example that shows it working.
 
 ## Usage
-Short answer: DON'T.
-Take into account that this is a work in progress, and the version you see now may become deprecated overnight without warning.
-See the [examples folder](https://github.com/tubsproject/devonian/blob/main/examples/) for inspiration.
-More documentation coming soon.
+Pick the part from "Which API to use" above; each row links to its guarantees and to what the host must do. Devonian is pre-1.0, so pin an exact version. The [examples folder](examples/) has a native Atomic Data example ([AtomicExtractEntity.ts](examples/AtomicExtractEntity.ts)) and the legacy row API's. Live provider and real-browser behaviour are not verified; the roadmap for durability, ordering and browser checks is [ontola/atomic-plugins#259](https://github.com/ontola/atomic-plugins/issues/259).
 
 ## Contributing
-Please [create an issue](https://github.com/tubsproject/devonian/issues/new) with any feedback you might have.
+Devonian lives in [ontola/atomic-plugins](https://github.com/ontola/atomic-plugins) (`devonian/`); open an issue or pull request there. Its working rules are in [AGENTS.md](AGENTS.md).
 ```sh
 pnpm install
 pnpm build
