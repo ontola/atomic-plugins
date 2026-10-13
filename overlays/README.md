@@ -194,6 +194,25 @@ Calendar overlay through the syncables client. No provider was called.
 | [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
 | [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
 
+## GitHub patch formats
+
+[GitHub Issues crud-causality v2](APIs/github.com/github-issues/1.1.4/crud-causality-v2-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml)
+and [GitHub REST crud-causality v2](APIs/github.com/api.github.com/1.1.4/crud-causality-v2-920631db31e628be547e9366821d3ebc7fa0ead5-overlay.yaml)
+replace v1's `patchFormat: merge`, which [CRUD Causality §4.6](../openapi-extensions/spec/crud-causality/README.md#46-patch-formats)
+does not define, so a consumer did not know the body format and sent the
+full record. The issue and comment PATCHes are `jsonMergePatch`: the body is
+a partial object, and GitHub's
+[Update an issue](https://docs.github.com/en/rest/issues/issues#update-an-issue)
+reference documents merge-patch behaviour for its fields ("use null to
+remove the current milestone"; labels and assignees replace the stored set,
+`[]` clears it). GitHub does not name RFC 7396 and takes `application/json`.
+In github-issues the two label writes keep `mode: patch` and say
+`patchFormat: custom`. Nothing else changes; v1 stays published. No dated
+catalog selects v2 yet. `tests/test_github_crud_patch_format.py` checks
+that every update of each composition names a rule-5 mode and a §4.6
+format, that v2 differs from v1 only there, and that the CRUD Causality
+validator passes. No provider was called.
+
 ## Google Calendar throttling
 
 [Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
