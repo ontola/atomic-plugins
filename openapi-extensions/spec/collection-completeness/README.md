@@ -181,7 +181,12 @@ declares no Completeness Object or leaves `notFound` out; every
 
 `notFound` is not allowed with `absent: deleted`: such a collection's absent
 objects are deleted without a read, and §4.2 already says that their read
-answers `404` or `410`.
+answers `404` or `410`. Nor may a resource mix the two across collections:
+when any collection of a resource states `notFound: unavailable` (or, since
+0.3.0, `gone: unavailable`), no collection of that resource declares
+`absent: deleted`. Such a document says both that an object gone from one
+collection is deleted and that the same object's `404` (or `410`) does not
+establish a deletion; it contradicts itself, and a validator rejects it (§7).
 
 Since 0.3.0, `gone` separates a `410` from a `404`. A provider that answers
 `404` for objects the caller can no longer reach, whatever happened to them,
@@ -374,7 +379,8 @@ A conforming document:
   Completeness Object; once any collection of a resource states `notFound`,
   MUST state it, with the same value, on every collection of that resource
   declared `absent: removed`; MUST NOT declare `notFound: deleted` without
-  provider documentation for it;
+  provider documentation for it; MUST NOT declare `absent: deleted` on any
+  collection of a resource that states `notFound: unavailable` (§4.3);
 * since 0.3.0: MUST give `gone`, when present, one of the values in §4.3;
   MUST NOT declare it together with `absent: deleted`; once any collection of
   a resource states `gone`, MUST state it, with the same value, on every
@@ -385,7 +391,8 @@ A conforming document:
   `notFound: unavailable` explicitly: a 0.2.0 consumer ignores `gone` and
   reads a `410` by `notFound`, so with `notFound: deleted`, or with
   `notFound` left to its `deleted` default, it would read that `410` as a
-  deletion.
+  deletion; MUST NOT declare `absent: deleted` on any collection of a
+  resource that states `gone: unavailable` (§4.3).
 
 A conforming consumer:
 
@@ -435,7 +442,8 @@ A conforming consumer:
 
 [`validate.py`](validate.py) checks the document rules of §7 that a document
 alone can show: the values of `absent`, `notFound` and `parentAbsent`,
-`notFound` with `absent: deleted`, and that `parentAbsent` sits on a nested
+`notFound` with `absent: deleted` (on one collection or across a
+resource's collections), and that `parentAbsent` sits on a nested
 collection whose parent has a Completeness Object. It cannot check the
 evidence rules. It also holds `classify_read(...)` and `members_of_gone_parent(...)`,
 reference implementations of §4.3 and §4.4. From the repository root:
@@ -452,7 +460,10 @@ python3 validate.py examples/nested-tasks.yaml
 - **0.3.0-draft** (2026-10-09): adds `gone` (§4.3: what a `410` means,
   defaulting to `notFound`), so that a `410` documented as a deletion can mean
   `deleted` while a `404` stays `unavailable`. A 0.2.0 document stays valid
-  and means the same.
+  and means the same, except one that declares `absent: deleted` on a
+  collection of a resource whose other collection states
+  `notFound: unavailable`: that document contradicts itself, and §7 now
+  rejects it (none of the overlays in this repository does this).
 - **0.2.0-draft** (2026-10-08): adds `notFound` (§4.3: what a `404` or `410`
   from reading an absent object means, `deleted` by default or
   `unavailable`, resource-wide once stated) and `parentAbsent` (§4.4: the

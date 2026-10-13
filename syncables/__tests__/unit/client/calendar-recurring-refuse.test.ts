@@ -259,10 +259,9 @@ describe("Calendar's write-preconditions overlay (K18 part 2)", () => {
     const { client, fake } = await synced();
     await client.update('events', 'single', { summary: 'Dentist, 10:00' }, c1);
     await idle(client);
-    // The client sends the PUT when the path has one (the full record), as
-    // it does today even though only the PATCH carries x-crud update; both
-    // carry the same precondition.
-    expect(fake.log).toEqual(['PUT single if-match "3181"']);
+    // The PATCH carries x-crud update and the PUT does not, so the client
+    // sends the declared PATCH (#516), with the full record (no mode).
+    expect(fake.log).toEqual(['PATCH single if-match "3181"']);
   });
 
   it('sends an update of an exception of a series: one event of its own', async () => {
@@ -274,7 +273,7 @@ describe("Calendar's write-preconditions overlay (K18 part 2)", () => {
       c1,
     );
     await idle(client);
-    expect(fake.log).toEqual(['PUT series_20261012T090000Z if-match "3183"']);
+    expect(fake.log).toEqual(['PATCH series_20261012T090000Z if-match "3183"']);
   });
 
   it('sends a delete of an exception of a series', async () => {
