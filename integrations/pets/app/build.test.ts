@@ -18,7 +18,7 @@ describe('pets drive-plugin bundle', async () => {
     // Stored as a string property on a resource, so the size is capped at
     // the measured size plus about 10%: 73 416 bytes on 2026-10-13 for 0.1.5,
     // minified, with syncables 0.22.0. Its read path grew by 29 434 bytes over
-    // 0.21.0, with no change to the app's own code: read/time-zone (8 250,
+    // 0.21.0 (the app's own code is unchanged), mainly: read/time-zone (8 250,
     // new), read/runtime-schemas (7 489, new), read/pages (+5 626),
     // throttling (+1 867), pagination/validate (+1 665), read/collections
     // (+1 513), read/produced-classes (1 599, new). readCollections calls
