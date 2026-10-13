@@ -15,6 +15,7 @@ use std::sync::Arc;
 pub mod cleanup;
 pub mod cursor;
 pub mod ingress;
+pub mod limits;
 pub mod metadata;
 pub mod policy;
 pub mod pool;
@@ -41,6 +42,12 @@ pub struct IngressGate {
     /// so a flood of unknown ids cannot take those slots from verified
     /// deliveries.
     pub lookups: tokio::sync::Semaphore,
+    /// Requests from networks over their refusal limit that may wait for
+    /// the lookup slot at once (re-review of the rate-limits PR); any
+    /// beyond that get `429` at once, so such networks cannot crowd out
+    /// the others, while a real delivery from a blocked network that shares
+    /// its addresses with junk (a provider's) can still queue.
+    pub blocked_waiters: tokio::sync::Semaphore,
     /// Bodies read at once for one endpoint, so one endpoint (or one
     /// attacker at it) cannot hold every read slot.
     pub reads_per_endpoint: usize,
@@ -64,12 +71,15 @@ pub const INGRESS_DATABASE: usize = 2;
 pub const INGRESS_LOOKUPS: usize = 1;
 /// Bodies read at once per endpoint.
 pub const INGRESS_READS_PER_ENDPOINT: usize = 4;
+/// Requests from blocked networks waiting for the lookup slot at once.
+pub const INGRESS_BLOCKED_WAITERS: usize = 2;
 
 impl Default for IngressGate {
     fn default() -> Self {
         Self {
             reads: tokio::sync::Semaphore::new(INGRESS_READS),
             lookups: tokio::sync::Semaphore::new(INGRESS_LOOKUPS),
+            blocked_waiters: tokio::sync::Semaphore::new(INGRESS_BLOCKED_WAITERS),
             reads_per_endpoint: INGRESS_READS_PER_ENDPOINT,
             reading: Default::default(),
             database: tokio::sync::Semaphore::new(INGRESS_DATABASE),
@@ -90,15 +100,31 @@ pub struct Webhooks {
     pub gate: IngressGate,
     /// Long polls waiting, per consumer.
     pub waiting: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+    pub limits: limits::Limits,
 }
 
 impl Webhooks {
+    /// With the default rate limits.
+    #[cfg(test)]
     pub fn new(store: Arc<Store>, shared_secrets: BTreeMap<String, Vec<u8>>) -> Self {
+        Self::with_limits(
+            store,
+            shared_secrets,
+            limits::Limits::from_config(&crate::config::WebhookConfig::default()),
+        )
+    }
+
+    pub fn with_limits(
+        store: Arc<Store>,
+        shared_secrets: BTreeMap<String, Vec<u8>>,
+        limits: limits::Limits,
+    ) -> Self {
         Self {
             store,
             shared_secrets,
             gate: IngressGate::default(),
             waiting: Default::default(),
+            limits,
         }
     }
 
@@ -157,5 +183,9 @@ pub async fn start(
         }
     }
     tracing::info!("webhook inbox enabled");
-    Ok(Some(Arc::new(Webhooks::new(store, secrets))))
+    Ok(Some(Arc::new(Webhooks::with_limits(
+        store,
+        secrets,
+        limits::Limits::from_config(config),
+    ))))
 }

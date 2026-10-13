@@ -1,6 +1,6 @@
 // @wc-ignore-file
 /**
- * Produced Classes 0.1.0-draft (`x-produces`,
+ * Produced Classes 0.1.1-draft (`x-produces`,
  * `openapi-extensions/spec/produced-classes/`): the shared classes an object
  * of a CRUD Causality resource can be represented as, each optionally with a
  * lens IRI. Read-only metadata: nothing here fetches a class or a lens, or
@@ -29,8 +29,12 @@ export interface ResourceProduction {
 }
 
 const SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:/;
-// eslint-disable-next-line no-control-regex
-const FORBIDDEN = /[\s\x00-\x1f\x7f<>"{}|\\^`]/u;
+// §3 (0.1.1): whitespace (Unicode White_Space), control characters (C0,
+// DEL, C1) and U+FEFF, and the ASCII characters RFC 3987 excludes; the same
+// explicit set as the spec's validate.py (`\s` differs between languages).
+const FORBIDDEN =
+  // eslint-disable-next-line no-control-regex
+  /[\x00-\x20\x7f-\x9f<>"{}|\\^`\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000\ufeff]/u;
 const KNOWN = new Set(['class', 'lens', 'description']);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -195,7 +199,9 @@ export function resourcesProducing(
  * without a `lens`, or a document that is not an object, does not fit. The
  * caller treats an entry whose lens does not fit as if it had none.
  * `provider` is the openapi-directory provider key (`clockify.me`), as the
- * catalog lenses name it.
+ * catalog lenses name it. The lens document's own `@id` is not compared with
+ * `produced.lens`: §4.2 names only the target and the source, and a copy
+ * served from elsewhere keeps the catalog's `@id`.
  */
 export function lensFits(
   produced: ProducedClass,
