@@ -27,6 +27,8 @@ import {
   write,
 } from './apps.mjs';
 import {
+  APP_IDS,
+  appBase,
   buildCatalog,
   dependencyDirs,
   explained,
@@ -614,24 +616,25 @@ test('usertest: a build that misses a package says to install the plugin depende
 });
 
 test("usertest: catalog.mjs installs each app's plugin folders and its lane's shared packages", () => {
-  const dirs = dependencyDirs([
-    { id: 'notion', paths: ['integrations/sync-status/**'] },
-    { id: 'issue-tracker', paths: ['devonian/src/**', 'ontology/**'] },
-  ]);
+  const bases = APP_IDS.map(appBase);
+  const invented = dependencyDirs(
+    bases.map(id => ({
+      id,
+      paths: id === bases[0] ? ['devonian/src/**', 'ontology/**'] : [],
+    })),
+  );
+  for (const base of bases)
+    for (const dir of [`integrations/${base}`, `integrations/${base}/app`])
+      assert.ok(invented.includes(dir), dir);
+  // A lane's shared packages, once each.
+  assert.equal(invented.filter(d => d === 'devonian').length, 1);
 
-  for (const id of [
-    'calendar',
-    'issue-tracker',
-    'money',
-    'notion',
-    'timesheets',
-  ])
-    for (const dir of [`integrations/${id}`, `integrations/${id}/app`])
-      assert.ok(dirs.includes(dir), dir);
-  // A lane's shared packages, once each; never a path outside the repository.
-  assert.ok(dirs.includes('devonian'));
-  assert.equal(dirs.filter(d => d === 'devonian').length, 1);
-  assert.ok(dirs.every(d => !d.startsWith('/') && !d.includes('..')));
-  // This repository's lanes resolve too.
-  assert.ok(dependencyDirs().includes('integrations/notion/app'));
+  // This repository's real lanes: every app's folders, nothing outside it.
+  const real = dependencyDirs();
+  for (const base of bases) assert.ok(real.includes(`integrations/${base}`));
+  for (const dir of real)
+    assert.ok(
+      !dir.startsWith('/') && !dir.split('/').includes('..') && dir !== '',
+      dir,
+    );
 });
