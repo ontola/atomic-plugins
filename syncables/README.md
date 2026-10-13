@@ -1872,6 +1872,22 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   accepted; the rest of C1 was accepted). `ApiClient.produces(name)` also
   takes a CRUD resource key, and returns nothing for an unknown name
   instead of throwing.
+- **Unreleased**: A resource without `identity` in a CRUD Causality
+  document is read-only (CRUD Causality 0.6.0 §4.1). `create()` no longer
+  sends a POST to its collection's URL, which the client took as the create
+  of any collection read by GET whose URL has a POST operation; it throws
+  "declares no create operation", as `update()` and `remove()` already did.
+  An `x-crud` create of such a resource is refused too: `create()` throws
+  "declares a create but no identity (CRUD Causality 0.6.0 rule 25): a
+  list-only resource is read-only". A create queued by 0.22.0 for such a
+  resource is never sent: on restore it is `failed` ("declares no create
+  operation; not sent again: discard it"), or, when it may have applied (in
+  flight at the stop, or already `uncertain`), stays `uncertain` with its
+  error and the note appended, to confirm or discard; `resolveWrite`
+  `retry` throws. A resource with an `identity`, and legacy documents
+  (without `crudResources`), create as before. The `idField` option's
+  documentation now says it must be unique across a list's pages (the
+  offset and short-page repeat checks).
 - **Unreleased**: Deletion Feeds 0.3.0-draft `except` conditions on every
   Tombstone Object: a feed item or a read tombstone that matches one is not
   a tombstone (a cancelled exception of a recurring event read by GET is
