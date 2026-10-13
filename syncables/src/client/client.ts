@@ -1457,9 +1457,15 @@ function clientRoutes(
     const item = collection.itemUrl
       ? document.paths[collection.itemUrl]
       : undefined;
+    // A POST on the collection URL is taken as its create (a heuristic for
+    // documents without x-crud), except for a resource without identity in
+    // a CRUD Causality document: a list-only resource (CRUD Causality 0.6.0
+    // §4.1) is read-only. An x-crud create below still counts.
     if (
       legacy ||
-      (collection.method === 'GET' && document.paths[collection.url]?.post)
+      (collection.itemUrl &&
+        collection.method === 'GET' &&
+        document.paths[collection.url]?.post)
     ) {
       route.createPath = collection.url;
     }
@@ -1493,6 +1499,14 @@ function clientRoutes(
           continue;
         if (method === 'post' && crud['action'] === 'create') {
           route.createPath = path;
+          // CRUD Causality 0.6.0 rule 25: a create addresses an object, so
+          // its resource needs an identity; a resource without one is
+          // list-only and read-only (§4.1), and nothing is sent.
+          if (!legacy && !collection.itemUrl) {
+            route.createRefused =
+              'declares a create but no identity (CRUD Causality 0.6.0 rule 25): a list-only resource is read-only';
+            continue;
+          }
           const declared = legacy
             ? undefined
             : createDeclaration(document, crud);
@@ -2358,6 +2372,41 @@ export function createApiClient(
       };
       const failed = entry.failed.map(restored);
       const queue = entry.queue.map(restored);
+      // A create queued before the document stopped declaring one (a
+      // resource now list-only): parked in place, never sent. One that may
+      // have reached the server (in flight at the stop, or already
+      // uncertain) stays uncertain with its error, the note appended, so it
+      // is not discarded as if it had not applied; any other is failed.
+      queue.forEach((write, at) => {
+        if (
+          write.type !== 'create' ||
+          (route.createPath && !route.createRefused)
+        )
+          return;
+        const note = `Resource ${route.collection.name} ${route.createRefused ?? 'declares no create operation'}; not sent again`;
+        const mayHaveApplied =
+          write.state === 'uncertain' || entry.queue[at]?.sending === true;
+        delete write.sending;
+        if (mayHaveApplied) {
+          write.state = 'uncertain';
+          const message = write.lastError?.includes(note)
+            ? write.lastError
+            : write.lastError
+              ? `${write.lastError}. ${note}: confirm it with the server's id if it applied, or discard it`
+              : `${note}: confirm it with the server's id if it applied, or discard it`;
+          if (write.lastError !== message) {
+            write.lastError = message;
+            changed = true;
+          }
+          return;
+        }
+        const message = `${note}: discard it`;
+        write.state = 'failed';
+        if (write.lastError !== message) {
+          write.lastError = message;
+          changed = true;
+        }
+      });
       // Blocked writes wait for authRenewed() only while the client is blocked.
       for (const write of queue)
         if (write.state === 'blocked' && !authBlock) write.state = 'pending';
@@ -6258,6 +6307,14 @@ export function createApiClient(
           await rebuild(scope, id);
           return;
         }
+        if (
+          resolution.action === 'retry' &&
+          head.type === 'create' &&
+          (!route.createPath || route.createRefused)
+        )
+          throw new Error(
+            `Resource ${resource} ${route.createRefused ?? 'declares no create operation'}; the create of record ${id} cannot be sent: discard it`,
+          );
         if (resolution.action === 'retry' && head.unbound)
           throw new Error(
             `The create of record ${id} of ${resource} succeeded but did not identify the record (unbound); confirm it with the server's id, or discard it`,

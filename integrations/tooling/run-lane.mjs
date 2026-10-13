@@ -86,9 +86,9 @@ if (tiers.some(tier => !['contract', 'node'].includes(tier))) {
   for (const problem of layoutProblems()) console.warn(`warning: ${problem}`);
 
   // Locally, this lane's own lockfiles (and a shared package its `paths`
-  // import from source) may not be installed yet. CI installs them before this
-  // script runs, so there every folder already has node_modules and nothing
-  // happens (deps.mjs).
+  // import from source) may not be installed yet, or installed from a
+  // different pnpm-lock.yaml (stale). CI installs them before this script
+  // runs, so there every folder is up to date and nothing happens (deps.mjs).
   try {
     installMissing([
       ...pluginDependencyDirs(lane.id),
