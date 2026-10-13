@@ -1,0 +1,72 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Revised 2026-10-12 (K18 part 2): only a series master (recurrence present) is refused; an
+# exception of a series is one event of its own and is written.
+# Source: https://developers.google.com/workspace/calendar/api/guides/version-resources
+# ("Every resource has a version field that changes every time the resource changes - the
+# etag field"; "specify an If-Match header that contains the value of the etag from the
+# previous retrieval"; "Otherwise, you will get a 412 (Precondition failed) response code").
+# The pinned OAD declares the Event etag field, but not the If-Match header or a 412 response.
+# Source for the refusal: the pinned OAD's Event.recurrence ("List of RRULE, EXRULE, RDATE
+# and EXDATE lines for a recurring event ... omitted for single events or instances of
+# recurring events"), so only a series' master event carries it. An exception (an instance
+# with recurringEventId, as a singleEvents=false list returns it) has no recurrence.
+# Needs Write Preconditions 0.1.0-draft (openapi-extensions/spec/write-preconditions).
+overlay: 1.0.0
+info:
+  title: Google Calendar API event write preconditions
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32237fa5d14aa887dc9f3923395dac971e00a36c/APIs/googleapis.com/calendar/v3/openapi.yaml
+actions:
+- target: $.paths['/calendars/{calendarId}/events/{eventId}'].patch
+  update:
+    x-write-precondition:
+      kind: ifMatch
+      version:
+        in: body
+        name: etag
+      conflictStatus:
+      - 412
+      refuseWhen:
+      - field: recurrence
+        present: true
+        description: A recurring series' master event. A write to it changes every occurrence
+          of the series, which a one-row-per-event sync cannot review (pieces.md K18). An
+          exception of a series (recurringEventId present, no recurrence) is one event of its
+          own and is not refused.
+      description: Send the event's etag, as last read from events.get or events.list, in
+        If-Match; 412 means the event changed since. A recurring series' master event is not
+        written; its exceptions are. integrations/calendar/app sends If-Match on its patches
+        the same way, and also leaves exceptions out, which is its own scope, not this
+        declaration's.
+- target: $.paths['/calendars/{calendarId}/events/{eventId}'].put
+  update:
+    x-write-precondition:
+      kind: ifMatch
+      version:
+        in: body
+        name: etag
+      conflictStatus:
+      - 412
+      refuseWhen:
+      - field: recurrence
+        present: true
+        description: A recurring series' master event. A write to it changes every occurrence
+          of the series, which a one-row-per-event sync cannot review (pieces.md K18). An
+          exception of a series (recurringEventId present, no recurrence) is one event of its
+          own and is not refused.
+- target: $.paths['/calendars/{calendarId}/events/{eventId}'].delete
+  update:
+    x-write-precondition:
+      kind: ifMatch
+      version:
+        in: body
+        name: etag
+      conflictStatus:
+      - 412
+      refuseWhen:
+      - field: recurrence
+        present: true
+        description: A recurring series' master event. A write to it changes every occurrence
+          of the series, which a one-row-per-event sync cannot review (pieces.md K18). An
+          exception of a series (recurringEventId present, no recurrence) is one event of its
+          own and is not refused.

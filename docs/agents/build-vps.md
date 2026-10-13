@@ -162,11 +162,12 @@ The host also runs things Michiel and testers depend on:
   `127.0.0.1:8082`, `8081` and `8080` respectively. Welcome page, catalog and
   logs are on `*.usertest.michielbdejong.com`. Restarting the moderator or the
   server ends running test sessions; the rule on #227 is to warn there first,
-  and to restart only when no session is running. Deploys go through
-  `usertest-deploy.yml` and need Michiel's OK
-  ([usertest-droplet.md](usertest-droplet.md); it still describes the
-  DigitalOcean droplet, which was destroyed on 2026-10-02, so read its
-  commands as for the new host).
+  and to restart only when no session is running. Deploys are done by
+  hand on this host under Michiel's standing OK (Decision Inbox Q-104),
+  after checking that no session is running
+  ([usertest-droplet.md](usertest-droplet.md), "On the build VPS").
+  `usertest-deploy.yml` still targets the DigitalOcean droplet, destroyed
+  on 2026-10-02, so it cannot deploy here.
 - **Michiel's dashboard** at https://dev.michielbdejong.com (`localhost:8090`),
   behind Cloudflare Access. It holds the Decision Inbox (Q-064: the questions
   of #227's inbox migrate there, keeping their `Q-###` ids).

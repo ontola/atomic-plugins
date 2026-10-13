@@ -36,6 +36,9 @@ pub enum ApiError {
     // 400
     BadRequest(&'static str),
     InvalidHandoff,
+    // 429: the proxy is pacing its own requests to the platform under the
+    // provider's announced quota; retry after this long.
+    ProviderQuota(std::time::Duration),
     // 5xx
     Unavailable,
     Internal,
@@ -64,6 +67,7 @@ impl ApiError {
             }
             UnknownConnection => StatusCode::NOT_FOUND,
             BadRequest(_) | InvalidHandoff => StatusCode::BAD_REQUEST,
+            ProviderQuota(_) => StatusCode::TOO_MANY_REQUESTS,
             Unavailable => StatusCode::SERVICE_UNAVAILABLE,
             Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -94,6 +98,7 @@ impl ApiError {
             UnknownConnection => "unknown_connection",
             BadRequest(_) => "bad_request",
             InvalidHandoff => "invalid_handoff",
+            ProviderQuota(_) => "provider_quota",
             Unavailable => "unavailable",
             Internal => "internal",
         }
@@ -124,6 +129,7 @@ impl ApiError {
             UnknownConnection => "no such connection; it was deleted, expired after 90 idle days, or never existed".into(),
             BadRequest(message) => (*message).into(),
             InvalidHandoff => "invalid or expired connection code".into(),
+            ProviderQuota(_) => "the proxy's requests to this platform are at the provider's announced quota for the proxy's address; retry after Retry-After seconds".into(),
             Unavailable => "the proxy's database is unavailable".into(),
             Internal => "internal error".into(),
         }
@@ -132,6 +138,10 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let retry_after = match &self {
+            ApiError::ProviderQuota(retry) => Some(retry.as_secs().max(1)),
+            _ => None,
+        };
         let mut response = (
             self.status(),
             Json(serde_json::json!({"error": self.code(), "message": self.message()})),
@@ -140,6 +150,31 @@ impl IntoResponse for ApiError {
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+        if let Some(seconds) = retry_after {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, seconds.into());
+        }
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_quota_is_a_429_with_retry_after_in_whole_seconds() {
+        for (retry, header) in [(1, "1"), (40, "40"), (0, "1")] {
+            let response =
+                ApiError::ProviderQuota(std::time::Duration::from_secs(retry)).into_response();
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(response.headers()[header::RETRY_AFTER], header);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        }
+        assert!(!ApiError::NotOwner
+            .into_response()
+            .headers()
+            .contains_key(header::RETRY_AFTER));
     }
 }
