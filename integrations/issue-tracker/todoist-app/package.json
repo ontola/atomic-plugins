@@ -1,7 +1,7 @@
 {
   "name": "@atomic-integrations/todoist-app",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Todoist drive app (read-only active tasks into the shared issue-v1 class). Records only the version its catalog entry and apps/todoist/<version>/ui.js carry (integrations/tooling/apps.mjs APP_FOLDERS); no npm dependencies. Its version is its own, not the GitHub issues app's in ../app/package.json."
 }

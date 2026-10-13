@@ -822,13 +822,14 @@ export interface ApiClient {
    */
   presence(resource?: string): PresenceMark[];
   /**
-   * Produced Classes 0.1.0-draft: the shared classes the resource's records
+   * Produced Classes 0.1.1-draft: the shared classes a resource's records
    * can be represented as, from `x-produces` on its CRUD Resource Object
-   * (each with its lens IRI, if declared). Empty when the resource declares
-   * none, or the declaration does not parse. Metadata only: nothing is
-   * fetched or mapped.
+   * (each with its lens IRI, if declared). `name` is a collection name (as
+   * for `list()`), a legacy collection path, or a CRUD resource key. Empty
+   * when the resource declares none, the declaration does not parse, or
+   * `name` names nothing. Metadata only: nothing is fetched or mapped.
    */
-  produces(resource: string): ProducedClass[];
+  produces(name: string): ProducedClass[];
   /**
    * Settles the `uncertain` or `failed` write for record `id`, or its restored
    * updates waiting for a refresh (see `WriteResolution`), or drops its
@@ -1456,16 +1457,23 @@ function clientRoutes(
     const item = collection.itemUrl
       ? document.paths[collection.itemUrl]
       : undefined;
+    // A POST on the collection URL is taken as its create (a heuristic for
+    // documents without x-crud), except for a resource without identity in
+    // a CRUD Causality document: a list-only resource (CRUD Causality 0.6.0
+    // §4.1) is read-only. An x-crud create below still counts.
     if (
       legacy ||
-      (collection.method === 'GET' && document.paths[collection.url]?.post)
+      (collection.itemUrl &&
+        collection.method === 'GET' &&
+        document.paths[collection.url]?.post)
     ) {
       route.createPath = collection.url;
     }
-    // CRUD Causality §4.3: an item-path operation declared
-    // `x-crud: { action: update }` for this resource wins over one that is
-    // not; with both declared, or neither, PUT before PATCH, as before. A
-    // legacy document ignores `x-crud` here.
+    // Which operation updates is syncables' policy; CRUD Causality only
+    // says what each `x-crud: { action: update }` operation does (§4.3).
+    // An item-path operation that declares one for this resource wins over
+    // one that does not; with both declared, or neither, PUT before PATCH,
+    // as before. A legacy document ignores `x-crud` here.
     const declaresUpdate = (method: 'put' | 'patch'): boolean => {
       const crud = item?.[method]?.['x-crud'];
       return (
@@ -1491,6 +1499,14 @@ function clientRoutes(
           continue;
         if (method === 'post' && crud['action'] === 'create') {
           route.createPath = path;
+          // CRUD Causality 0.6.0 rule 25: a create addresses an object, so
+          // its resource needs an identity; a resource without one is
+          // list-only and read-only (§4.1), and nothing is sent.
+          if (!legacy && !collection.itemUrl) {
+            route.createRefused =
+              'declares a create but no identity (CRUD Causality 0.6.0 rule 25): a list-only resource is read-only';
+            continue;
+          }
           const declared = legacy
             ? undefined
             : createDeclaration(document, crud);
@@ -2356,6 +2372,41 @@ export function createApiClient(
       };
       const failed = entry.failed.map(restored);
       const queue = entry.queue.map(restored);
+      // A create queued before the document stopped declaring one (a
+      // resource now list-only): parked in place, never sent. One that may
+      // have reached the server (in flight at the stop, or already
+      // uncertain) stays uncertain with its error, the note appended, so it
+      // is not discarded as if it had not applied; any other is failed.
+      queue.forEach((write, at) => {
+        if (
+          write.type !== 'create' ||
+          (route.createPath && !route.createRefused)
+        )
+          return;
+        const note = `Resource ${route.collection.name} ${route.createRefused ?? 'declares no create operation'}; not sent again`;
+        const mayHaveApplied =
+          write.state === 'uncertain' || entry.queue[at]?.sending === true;
+        delete write.sending;
+        if (mayHaveApplied) {
+          write.state = 'uncertain';
+          const message = write.lastError?.includes(note)
+            ? write.lastError
+            : write.lastError
+              ? `${write.lastError}. ${note}: confirm it with the server's id if it applied, or discard it`
+              : `${note}: confirm it with the server's id if it applied, or discard it`;
+          if (write.lastError !== message) {
+            write.lastError = message;
+            changed = true;
+          }
+          return;
+        }
+        const message = `${note}: discard it`;
+        write.state = 'failed';
+        if (write.lastError !== message) {
+          write.lastError = message;
+          changed = true;
+        }
+      });
       // Blocked writes wait for authRenewed() only while the client is blocked.
       for (const write of queue)
         if (write.state === 'blocked' && !authBlock) write.state = 'pending';
@@ -6159,8 +6210,15 @@ export function createApiClient(
       });
       if (gone) await concludeNew(scope, id, gone);
     },
-    produces(resource): ProducedClass[] {
-      return structuredClone(resolveRoute(resource).collection.produces ?? []);
+    produces(name): ProducedClass[] {
+      // As resolveRoute, then a CRUD resource key (every collection of a
+      // resource carries the same classes); nothing for an unknown name.
+      const byPath = routes.filter((r) => r.collection.url === name);
+      const route =
+        byResource.get(name) ??
+        (byPath.length === 1 ? byPath[0] : undefined) ??
+        routes.find((r) => r.collection.resource === name);
+      return structuredClone(route?.collection.produces ?? []);
     },
     presence(resource): PresenceMark[] {
       const name = resource
@@ -6249,6 +6307,14 @@ export function createApiClient(
           await rebuild(scope, id);
           return;
         }
+        if (
+          resolution.action === 'retry' &&
+          head.type === 'create' &&
+          (!route.createPath || route.createRefused)
+        )
+          throw new Error(
+            `Resource ${resource} ${route.createRefused ?? 'declares no create operation'}; the create of record ${id} cannot be sent: discard it`,
+          );
         if (resolution.action === 'retry' && head.unbound)
           throw new Error(
             `The create of record ${id} of ${resource} succeeded but did not identify the record (unbound); confirm it with the server's id, or discard it`,

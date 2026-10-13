@@ -27,7 +27,9 @@ node integrations/tooling/link-atomic-server.mjs
 
 What it does, each step idempotent:
 
-1. Makes `$ATOMIC_SERVER_CHECKOUT` (default `/tmp/atomic-server`) an
+1. Makes `$ATOMIC_SERVER_CHECKOUT` (default: this pin's
+   `~/.cache/atomic-plugins/atomic-server/<sha>` when that directory exists,
+   else `/tmp/atomic-server`) an
    atomic-server checkout at the commit in `.atomic-server-ref`. If the
    directory is missing it fetches just that commit (`--depth=1`). If the
    checkout is on another commit it fetches and detaches to the pinned one.
@@ -290,7 +292,8 @@ Builds pin esbuild's `absWorkingDir` to the repository root, so the bytes do
 not depend on the directory the build ran from. Before building an app,
 `check` and `write` run `pnpm install --frozen-lockfile` in its plugin folder
 and its own folder when either has a `pnpm-lock.yaml` and no `node_modules`
-yet (one `apps: Installing …` line each, through `tooling/deps.mjs`, as
+yet, or a stale one installed from a different `pnpm-lock.yaml` (one
+`apps: Installing …` line each, through `tooling/deps.mjs`, as
 `run-lane.mjs` does for a lane); CI installs every lockfile first, so there
 nothing happens. `--no-install` skips that, and a missing package then fails
 the build with esbuild's "Could not resolve".
