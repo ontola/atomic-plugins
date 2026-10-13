@@ -73,6 +73,12 @@ export type ImportSheet =
       progress?: WriteProgress;
       /** Why applying failed, when it did. */
       failure?: string;
+      /**
+       * After a failure: the table is read again and the file compared with
+       * it, so Import offers only what was not written (#539). Import is
+       * disabled meanwhile.
+       */
+      rechecking?: boolean;
     }
   | { step: 'error' | 'blocked'; file: FileInfo; problem: Problem };
 
@@ -279,6 +285,12 @@ export function createController(
   let run = 0;
   let pendingText: string | undefined;
   let pendingPreview: Preview | undefined;
+  /**
+   * After a failed import: the table read again, then the kept file compared
+   * with it (#539). A check started meanwhile waits for it, so it never
+   * compares with rows from before the failure.
+   */
+  let recheck: Promise<void> | undefined;
   let table: string | undefined;
   /** The table's row class: only children of it are rows. */
   let rowClass: string | undefined;
@@ -383,6 +395,66 @@ export function createController(
           queueRefresh();
         }
       });
+  };
+
+  /**
+   * After a failed import, which may have written some rows (#539): what the
+   * preview said was new is stale, and writing it again would write those
+   * rows twice. Drop it, read the table again (after any refresh under way),
+   * and compare the kept file with what is there now, so the sheet offers
+   * only the rest. Import is disabled until then.
+   */
+  const recheckAfterFailure = (failure: string) => {
+    const mine = run;
+    const text = pendingText;
+    pendingPreview = undefined;
+    const current = state.importing;
+    if (current?.step === 'preview')
+      update({
+        importing: {
+          ...current,
+          applying: false,
+          progress: undefined,
+          failure,
+          rechecking: true,
+        },
+      });
+
+    const done: Promise<void> = (async () => {
+      await refreshing?.catch(() => undefined);
+      await refresh().catch(() => undefined);
+      await loadStatements().catch(() => undefined);
+      if (mine !== run || !text) return;
+      const parsed = read(text);
+      const sheet = state.importing;
+      if (!parsed.ok || sheet?.step !== 'preview') return;
+      const checked = compare(parsed.format, parsed.statements, state.rows);
+
+      if (!checked.ok) {
+        update({
+          importing: {
+            step: isBlocked(checked.problem) ? 'blocked' : 'error',
+            file: sheet.file,
+            problem: checked.problem,
+          },
+        });
+
+        return;
+      }
+
+      pendingPreview = checked.preview;
+      update({
+        importing: {
+          ...sheet,
+          preview: checked.preview,
+          tab: checked.preview.fresh.length ? 'new' : 'already',
+          rechecking: false,
+        },
+      });
+    })().finally(() => {
+      if (recheck === done) recheck = undefined;
+    });
+    recheck = done;
   };
 
   const loadStatements = async () => {
@@ -730,6 +802,10 @@ export function createController(
       });
       await tick();
       if (stale()) return;
+      // Rows a failed import wrote are read first (#539), else this check
+      // would offer them again.
+      if (recheck) await recheck;
+      if (stale()) return;
       const checked = compare(parsed.format, parsed.statements, state.rows);
       if (!checked.ok) return stop(checked.problem);
       pendingText = text;
@@ -749,7 +825,13 @@ export function createController(
     },
     async applyImport() {
       const sheet = state.importing;
-      if (sheet?.step !== 'preview' || !port || !pendingText || !pendingPreview)
+      if (
+        sheet?.step !== 'preview' ||
+        sheet.rechecking ||
+        !port ||
+        !pendingText ||
+        !pendingPreview
+      )
         return;
       const mine = run;
       update({
@@ -798,32 +880,29 @@ export function createController(
         } else if (outcome.status === 'cancelled')
           // Closed in the host's review: back to the preview, unchanged.
           update({ importing: { ...sheet, applying: false } });
-        else
-          update({
-            importing: {
-              ...sheet,
-              applying: false,
-              progress: undefined,
-              failure:
-                ('errors' in outcome ? outcome.errors?.join('\n') : '') ||
-                'The importer blocked this file.',
-            },
-          });
+        else {
+          update({ importing: { ...sheet, applying: false } });
+          recheckAfterFailure(
+            ('errors' in outcome ? outcome.errors?.join('\n') : '') ||
+              'The importer blocked this file.',
+          );
+        }
       } catch (error) {
         importedUntil = 0;
-        if (mine === run)
-          update({
-            importing: {
-              ...sheet,
-              applying: false,
-              progress: undefined,
-              failure: error instanceof Error ? error.message : String(error),
-            },
-          });
-        // Rows the app wrote before the failure are there; show them, so the
-        // next check of the same file proposes only the rest.
-        queueRefresh();
-        void loadStatements().catch(() => undefined);
+
+        // Rows the app wrote before the failure are there: the preview that
+        // listed them is dropped, and the file compared again once the table
+        // shows them, so neither Import again nor a new check of the same
+        // file writes them twice (#539).
+        if (mine === run) {
+          update({ importing: { ...sheet, applying: false } });
+          recheckAfterFailure(
+            error instanceof Error ? error.message : String(error),
+          );
+        } else {
+          queueRefresh();
+          void loadStatements().catch(() => undefined);
+        }
       }
     },
     closeImport() {

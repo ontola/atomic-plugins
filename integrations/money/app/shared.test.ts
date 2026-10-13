@@ -488,6 +488,63 @@ describe('importing into the app’s own table by its own writes (write.ts)', ()
     expect(controller.state().statements).toHaveLength(1);
   });
 
+  /** An import whose second row write fails, as in the e2e (#539). */
+  const failedImport = async () => {
+    const h = harness({ data: 'own' });
+    await h.controller.load();
+    await h.controller.importFile(file(mt940));
+    const original = h.store.newResource.bind(h.store);
+    let calls = 0;
+
+    h.store.newResource = async args => {
+      if (++calls === 2) throw new Error('Simulated write failure');
+
+      return original(args);
+    };
+
+    await h.controller.applyImport();
+    h.store.newResource = original;
+    expect(rowsOf(h.store, OWN_TABLE)).toHaveLength(1);
+
+    return h;
+  };
+
+  it('pressing Import again right after a failure never writes a row twice (#539)', async () => {
+    const { store, controller } = await failedImport();
+    // No wait: the old preview listed both rows; the first is written.
+    expect(controller.state().importing).toMatchObject({
+      step: 'preview',
+      failure: 'Simulated write failure',
+      // Import stays disabled until the file is compared with the table again.
+      rechecking: true,
+    });
+    await controller.applyImport();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(1);
+    // Once the table caught up, the sheet offers only the rest.
+    await settle();
+    const sheet = controller.state().importing;
+    expect(sheet?.step === 'preview' && sheet.rechecking).toBeFalsy();
+    expect(sheet?.step === 'preview' && sheet.preview.fresh).toHaveLength(1);
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+    expect(controller.state().statements).toHaveLength(1);
+  });
+
+  it('checking the same file right after a failure proposes only the rest (#539)', async () => {
+    const { store, controller } = await failedImport();
+    // No wait for the table to catch up before the check.
+    controller.closeImport();
+    await controller.importFile(file(mt940));
+    const preview = controller.state().importing;
+    expect(preview?.step === 'preview' && preview.preview.fresh).toHaveLength(
+      1,
+    );
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+  });
+
   it('saves a category on its own rows without asking for a grant', async () => {
     const { store, controller } = harness({
       data: 'own',

@@ -349,10 +349,12 @@ function preview(
               ? sheet.progress
                 ? `Importing ${count(sheet.progress.done, locale)} of ${count(sheet.progress.total, locale)}…`
                 : 'Importing…'
-              : `Import ${plural(fresh.length, 'transaction', 'transactions', locale)}`,
+              : sheet.rechecking
+                ? 'Checking what was written…'
+                : `Import ${plural(fresh.length, 'transaction', 'transactions', locale)}`,
             {
               variant: 'primary',
-              disabled: !state.canApply || sheet.applying,
+              disabled: !state.canApply || sheet.applying || sheet.rechecking,
               onClick: actions.applyImport,
               key: 'import-apply',
               'aria-describedby': state.canApply
