@@ -36,7 +36,7 @@ The extension versions this source reads, against the specifications in
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
 | [Filtering](../openapi-extensions/spec/filtering/README.md) | 0.2.0-draft | `x-time-zone` on list query parameters, with their `x-filter` field and operator for the covered spans. Not `x-filter` or `x-collection-scope` otherwise. |
 | [Write Preconditions](../openapi-extensions/spec/write-preconditions/README.md) | 0.1.0-draft | `x-write-precondition` on create, update and delete operations: `ifMatch`, `readVerify` and `refuseWhen` ([below](#write-preconditions-x-write-precondition)). Not on a compound create's follow-up operations. |
-| [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.0-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
+| [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.1-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
 | [Webhook Deliveries](../openapi-extensions/spec/webhook-deliveries/README.md) | 0.1.0-draft | The `events` of `x-webhook-deliveries`, read by `scopedReads` only (the webhook inbox consumer). Not signature checks or hook registration, which are the receiver's. |
 | [Webhook Subscriptions](../openapi-extensions/spec/webhook-subscriptions/README.md) | 0.1.0-draft | The consumer routes, through `InboxClient` and `InboxConsumer`. The root `x-webhook-subscriptions` field is not read. |
 
@@ -1829,15 +1829,18 @@ class or lens, and maps no record.
   case-insensitively, the rest exactly): the resources to offer for a table
   of that class.
 - `ReadCollection.produces` carries a resource's classes on each of its
-  collections, and `ApiClient.produces(resource)` returns them (a copy;
-  empty when none are declared or the declaration does not parse).
+  collections, and `ApiClient.produces(name)` returns them for a collection
+  name, a legacy collection path or a CRUD resource key (a copy; empty when
+  none are declared, the declaration does not parse, or the name names
+  nothing).
 - `lensFits(produced, lens, { provider, resource })` checks a lens document
   the caller fetched itself (§4.2): when it names a target, that must be a
   `target.class` that is the entry's class; when it names a source, that
   must be the provider record `source.record.provider` and `.resource`
   (`provider` is the openapi-directory key, `clockify.me`, as the catalog
   lenses under `ontology/lenses/` name it). An entry whose lens does not fit
-  is to be treated as having none.
+  is to be treated as having none. The lens document's `@id` is not compared
+  with the entry's `lens`.
 - `checkProduces`, `parseProduces`, `absoluteIri` and `sameSubject` are the
   spec `validate.py`'s `check_list`, `absolute_uri` and `same_subject`.
 
@@ -1845,6 +1848,12 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: Produced Classes 0.1.1-draft: an IRI holding a C1
+  control character (U+0080–U+009F) or U+FEFF is not absolute, as the
+  spec's validator now says too (U+FEFF was refused before and U+0085 was
+  accepted; the rest of C1 was accepted). `ApiClient.produces(name)` also
+  takes a CRUD resource key, and returns nothing for an unknown name
+  instead of throwing.
 - **Unreleased** (for 0.23.0): Pagination Schemes 0.8.0 `response.incomplete`
   (§4.4.6): a response body value that marks a capped result (Notion's
   `request_status.type: incomplete` past 10,000 results). A read in which
