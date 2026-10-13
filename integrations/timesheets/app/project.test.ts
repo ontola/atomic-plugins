@@ -23,7 +23,8 @@ describe('projectEntries (through the devonian Clockify lens)', () => {
 
     expect(row).toEqual({
       entryId: 'e1',
-      name: 'Write docs',
+      // The catalog lens's name: the description exactly (0.8.0, D-1).
+      name: '  Write docs  ',
       start: Date.parse('2026-09-22T09:00:00Z'),
       end: Date.parse('2026-09-22T10:00:00Z'),
       billable: true,
@@ -45,7 +46,7 @@ describe('projectEntries (through the devonian Clockify lens)', () => {
     expect(row.projectName).toBeUndefined();
   });
 
-  it('skips breaks and running timers, and names an undescribed entry', () => {
+  it('skips breaks and running timers; an undescribed entry has an empty name (display only shows "Time entry")', () => {
     const rows = projectEntries(
       [
         entry({ id: 'break', type: 'BREAK' }),
@@ -59,9 +60,7 @@ describe('projectEntries (through the devonian Clockify lens)', () => {
       [],
     );
 
-    expect(rows.map(r => [r.entryId, r.name])).toEqual([
-      ['blank', 'Time entry'],
-    ]);
+    expect(rows.map(r => [r.entryId, r.name])).toEqual([['blank', '']]);
   });
 
   it('rejects an entry that ends before it starts', () => {

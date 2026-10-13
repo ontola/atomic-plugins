@@ -82,7 +82,7 @@ Data flows through four stages, each its own directory under `src/`:
    while any other read that is not complete (failed, or an undocumented
    short-page end) gets `spans: null`.
    `read/read.ts` adds ontology/type projection.
-   `read/produced-classes.ts` reads Produced Classes 0.1.0-draft
+   `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
    `validate.py` (keep them in step), `parseProduces` reads nothing from a
@@ -210,8 +210,14 @@ Data flows through four stages, each its own directory under `src/`:
    Metadata collection names and bound context identify storage namespaces;
    identical IDs in sibling parents stay separate. Legacy names remain paths.
    Writes are serialized per scoped record and retry with exponential backoff
-   (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
-   a declared `x-crud` create (`ClientRoute.create`, `created-identity.ts`)
+   (`retry.maxAttempts` is optional). A POST on a collection's URL is its
+   create (`createPath`) unless the resource has no identity in a CRUD
+   Causality document (list-only, read-only: `list-only.test.ts`); an
+   `x-crud` create of such a resource sets `createRefused` (rule 25), and
+   `restore` parks a create queued for a route without one (`failed`; one
+   in flight at the stop or already uncertain stays `uncertain` with its
+   error and a note; `resolveWrite` `retry` throws). Creates reconcile
+   server-assigned IDs; a declared `x-crud` create (`ClientRoute.create`, `created-identity.ts`)
    leaves `generated` `addedFields` out of the body (`createBody`) and reads
    the identity from its `url` source through the identity template in
    reverse (`createdIdentity`, after CRUD Causality 0.5.0's

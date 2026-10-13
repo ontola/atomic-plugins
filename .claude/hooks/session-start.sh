@@ -61,20 +61,24 @@ if [ ! -e /proc/net/if_inet6 ]; then
 fi
 
 # --- atomic-server checkout, ./browser, pnpm install ------------------------
-# The data-browser build that server/build.rs runs regenerates these
-# committed files with a small diff. The binary embeds the built output, not
-# these sources, so restore them: link-atomic-server.mjs refuses to move a
-# checkout with uncommitted changes to a new pin.
+# The data-browser build that server/build.rs runs regenerates two committed
+# files with a small diff (BUILD_OUTPUT_PATHS in server-build.mjs, the one
+# list). The binary embeds the built output, not these sources, so the build
+# step below restores them. link-atomic-server.mjs tolerates (and restores)
+# those two paths when it moves the checkout to a new pin, and refuses any
+# other uncommitted change.
 restore_generated() {
-  [ -d "$CHECKOUT/.git" ] &&
-    git -C "$CHECKOUT" checkout -- browser/data-browser/src/chunks/Website/runtime 2>/dev/null
+  [ -e "$CHECKOUT/.git" ] || return 0
+  node --input-type=module -e \
+    "import { restoreBuildOutputs } from '$REPO/integrations/tooling/server-build.mjs'; restoreBuildOutputs(process.argv[1]);" \
+    "$CHECKOUT" ||
+    warn "could not restore the build outputs in $CHECKOUT"
   return 0
 }
 
 step "link-atomic-server.mjs (checkout at $CHECKOUT)"
 cd "$REPO" || exit 0
 mkdir -p "$(dirname "$CHECKOUT")"
-restore_generated
 node integrations/tooling/link-atomic-server.mjs || warn "link-atomic-server.mjs failed"
 SHA=$(cat "$REPO/.atomic-server-ref")
 
