@@ -29,7 +29,7 @@ The extension versions this source reads, against the specifications in
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.7.1 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, and a scheme's `response.envelope` (with `emptyWhenAbsent`). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
-| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.5.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
+| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional: a resource without one is list-only and read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
@@ -1828,28 +1828,32 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **Unreleased**: Produced Classes 0.1.1-draft: an IRI holding a C1
-  control character (U+0080–U+009F) or U+FEFF is not absolute, as the
-  spec's validator now says too (U+FEFF was refused before and U+0085 was
-  accepted; the rest of C1 was accepted). `ApiClient.produces(name)` also
-  takes a CRUD resource key, and returns nothing for an unknown name
-  instead of throwing.
-- **Unreleased**: A resource without `identity` in a CRUD Causality
-  document is read-only (CRUD Causality 0.6.0 §4.1). `create()` no longer
-  sends a POST to its collection's URL, which the client took as the create
-  of any collection read by GET whose URL has a POST operation; it throws
-  "declares no create operation", as `update()` and `remove()` already did.
-  An `x-crud` create of such a resource is refused too: `create()` throws
-  "declares a create but no identity (CRUD Causality 0.6.0 rule 25): a
-  list-only resource is read-only". A create queued by 0.22.0 for such a
-  resource is never sent: on restore it is `failed` ("declares no create
-  operation; not sent again: discard it"), or, when it may have applied (in
-  flight at the stop, or already `uncertain`), stays `uncertain` with its
-  error and the note appended, to confirm or discard; `resolveWrite`
-  `retry` throws. A resource with an `identity`, and legacy documents
-  (without `crudResources`), create as before. The `idField` option's
-  documentation now says it must be unique across a list's pages (the
-  offset and short-page repeat checks).
+- **0.22.1**: CRUD Causality 0.6.0 list-only resources and Produced Classes
+  0.1.1-draft. Behaviour change to know before upgrading: `create()` on a
+  resource without `identity` now throws instead of POSTing, and a create
+  0.22.0 queued for one is never sent (see the second bullet).
+  - A resource without `identity` in a CRUD Causality
+    document is read-only (CRUD Causality 0.6.0 §4.1). `create()` no longer
+    sends a POST to its collection's URL, which the client took as the create
+    of any collection read by GET whose URL has a POST operation; it throws
+    "declares no create operation", as `update()` and `remove()` already did.
+    An `x-crud` create of such a resource is refused too: `create()` throws
+    "declares a create but no identity (CRUD Causality 0.6.0 rule 25): a
+    list-only resource is read-only". A create queued by 0.22.0 for such a
+    resource is never sent: on restore it is `failed` ("declares no create
+    operation; not sent again: discard it"), or, when it may have applied (in
+    flight at the stop, or already `uncertain`), stays `uncertain` with its
+    error and the note appended, to confirm or discard; `resolveWrite`
+    `retry` throws. A resource with an `identity`, and legacy documents
+    (without `crudResources`), create as before. The `idField` option's
+    documentation now says it must be unique across a list's pages (the
+    offset and short-page repeat checks).
+  - Produced Classes 0.1.1-draft: an IRI holding a C1
+    control character (U+0080–U+009F) or U+FEFF is not absolute, as the
+    spec's validator now says too (U+FEFF was refused before and U+0085 was
+    accepted; the rest of C1 was accepted). `ApiClient.produces(name)` also
+    takes a CRUD resource key, and returns nothing for an unknown name
+    instead of throwing.
 - **0.22.0**: Consumer support for new extension revisions (CRUD
   Causality 0.5.0, Collection Completeness 0.2.0 and 0.3.0, Pagination
   Schemes 0.6.0, 0.7.0 and 0.7.1, Throttling 0.3.0, Filtering 0.2.0
