@@ -602,6 +602,18 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   else the previous page's fingerprint when no item has an id) runs on
   every offset walk as well as on short-page walks. The validator checks rule 24,
   `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
+- Pagination Schemes 0.8.0: a scheme's `response.incomplete`
+  (`IncompleteObject`; `responseIncomplete(marker, body)` in
+  `read/pages.ts`, after the spec's `response_incomplete`: own properties
+  along the field's names split on `.`, no bracket escapes, JSON equality)
+  marks a response; `walkAllPages` records the
+  first mark in `WalkOutcome.marked` and `walkPages` then ends the outcome
+  not complete with that reason, paging unchanged. `readCollections` gives
+  `notComplete`, `readPlatform` `ReadResult.incomplete`, `paginate` its
+  `outcome` option, and `sync()` the `upsertIncomplete` path. The
+  validator checks rule 26 (`checkIncomplete`, with the type restriction
+  to pageNumber/pageToken/nextLink). Tests:
+  `unit/read/incomplete-marker.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control

@@ -148,11 +148,28 @@ export interface EnvelopeObject {
   [key: `x-${string}`]: unknown;
 }
 
+export type JsonScalar = string | number | boolean | null;
+
+/**
+ * Pagination Schemes 0.8.0 §4.4.6: a response body value that marks the
+ * result the pages come from as cut short by the server (Notion's
+ * `request_status.type: incomplete` past 10,000 results). `field` is a
+ * dot-path of property names matched literally (no bracket escapes in this
+ * version); exactly one of `equals` and `in`, compared by JSON equality.
+ */
+export type IncompleteObject = {
+  field: string;
+  description?: string;
+  [key: `x-${string}`]: unknown;
+} & ({ equals: JsonScalar } | { in: JsonScalar[] });
+
 export interface ResponsePaginationFieldsObject {
   envelope?: EnvelopeObject;
   bodyFields?: Record<string, ResponseFieldObject>;
   headers?: Record<string, ResponseFieldObject>;
   shortPage?: ShortPageObject;
+  /** Pagination Schemes 0.8.0 §4.4.6. */
+  incomplete?: IncompleteObject;
   [key: `x-${string}`]: unknown;
 }
 
