@@ -1861,8 +1861,12 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
     instead of stopping after its first page, and every offset read
     (`paginate` and `ApiClient.paginate` too) ends with `PageReadError` at
     a page holding an item an earlier page returned (or a page identical to
-    the one before); `advance: pageSize` steps by the page size and ends
-    only at `totalCount` or an empty page;
+    the one before). Items are identified by `paginate`'s `idField`,
+    default `'id'`, so an offset list whose items share an id under that
+    field (two rows with the same `id`) now fails with `PageReadError`
+    where it used to return both; pass the `idField` that is unique (#512).
+    `advance: pageSize` steps by the page size and ends only at
+    `totalCount` or an empty page;
   - `sync()` now applies reads that ended without an error but are not
     complete (range windows, undocumented short pages), adding and
     updating records only, listed in `SyncResult.incomplete`;
