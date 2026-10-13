@@ -92,6 +92,19 @@ export type {
   RuntimeMembers,
   RuntimeProperty,
 } from './read/runtime-schemas.js';
+export {
+  absoluteIri,
+  checkProduces,
+  lensFits,
+  parseProduces,
+  producedClasses,
+  resourcesProducing,
+  sameSubject,
+} from './read/produced-classes.js';
+export type {
+  ProducedClass,
+  ResourceProduction,
+} from './read/produced-classes.js';
 
 export { applyOverlay } from './openapi/apply-overlay.js';
 export type {
