@@ -1764,7 +1764,13 @@ const { records, ontology, errors } = await readPlatform(document, {
   of `equals` and `in`, a value that is not a JSON scalar, or a scheme
   other than pageNumber, pageToken or nextLink) makes the scheme
   invalid, so a read that applies it explicitly fails rather than being
-  taken as complete.
+  taken as complete. A scheme with `autoDetect: true` and such a
+  declaration is left out of auto-detection, like any invalid scheme: an
+  operation it would have matched is read as unpaginated (one request, its
+  answer taken as the whole list), without an error. Apply such a scheme
+  with an explicit `x-pagination` entry to have the read fail instead.
+  An `outcome` passed to `paginate` again starts clean: an earlier walk's
+  mark does not carry over.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's

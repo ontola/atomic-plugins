@@ -535,6 +535,8 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
   if (outcome) {
     outcome.complete = false;
     delete outcome.reason;
+    // An outcome passed again: an earlier walk's mark is not this one's.
+    delete outcome.marked;
   }
   const result: WalkOutcome = { complete: true };
   yield* walkAllPages({ ...walk, outcome: result });

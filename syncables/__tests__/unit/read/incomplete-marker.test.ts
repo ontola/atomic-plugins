@@ -5,6 +5,7 @@ import {
   paginate,
   readCollections,
   readPlatform,
+  resolveEffectiveScheme,
   responseIncomplete,
   validatePaginationScheme,
   type OpenApiDocument,
@@ -373,6 +374,40 @@ describe('a read with a marked response is not complete', () => {
     expect(items.map((r) => r['id'])).toEqual(['a', 'b']);
     expect(outcome.complete).toBe(false);
     expect(outcome.reason).toMatch(/marked the result incomplete/);
+    // The same outcome passed to a walk with no marked response: the
+    // earlier walk's mark does not carry over.
+    fake.set([[a], [b]]);
+    await paginate(document(), {
+      transport: fake.transport,
+      path: '/data_sources/{data_source_id}/query',
+      method: 'POST',
+      pathParams: context,
+      outcome,
+    });
+    expect(outcome).toEqual({ complete: true });
+  });
+
+  it('skips an autoDetect scheme whose marker the validator refuses, without failing the read', async () => {
+    const scheme = {
+      ...capped({ field: 'request_status.type' }),
+      autoDetect: true,
+    } as unknown as PaginationSchemeObject;
+    expect(validatePaginationScheme('cappedQuery', scheme)).not.toEqual([]);
+    const doc = document({ scheme });
+    const operation = doc.paths['/data_sources/{data_source_id}/query']!.post!;
+    delete (operation as Record<string, unknown>)['x-pagination'];
+    expect(resolveEffectiveScheme(doc, operation)).toBeUndefined();
+    const fake = server();
+    fake.set([[a, b]]);
+    const result = await readCollections(doc, {
+      transport: fake.transport,
+      constants: context,
+    });
+    expect(result.collections[0]!.error).toBeUndefined();
+    expect(result.collections[0]!.items.map((r) => r['id'])).toEqual([
+      'a',
+      'b',
+    ]);
   });
 });
 
