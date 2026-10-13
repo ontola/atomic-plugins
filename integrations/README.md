@@ -33,7 +33,12 @@ What it does, each step idempotent:
    atomic-server checkout at the commit in `.atomic-server-ref`. If the
    directory is missing it fetches just that commit (`--depth=1`). If the
    checkout is on another commit it fetches and detaches to the pinned one.
-   It refuses if the checkout has uncommitted changes to tracked files.
+   It refuses if the checkout has uncommitted changes to tracked files,
+   apart from the two the atomic-server build regenerates
+   (`BUILD_OUTPUT_PATHS` in `tooling/server-build.mjs`, under
+   `browser/data-browser/src/chunks/Website/runtime/`). When only those
+   changed, it restores them to HEAD and moves the checkout; the binary
+   embeds its own built copy, so that changes nothing in it.
 2. Symlinks `browser` -> `$ATOMIC_SERVER_CHECKOUT/browser` and
    `integrations/node_modules` -> `../browser/e2e/node_modules`. Both are
    gitignored. It replaces a stale symlink but never a real directory.

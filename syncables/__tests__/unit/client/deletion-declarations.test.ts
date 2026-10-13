@@ -288,6 +288,40 @@ describe('Deletion Feeds §2: a change list whose feed is the collection list it
     ]);
   });
 
+  it('takes no feed item that matches an except condition as a tombstone (0.3.0-draft §4.3)', async () => {
+    const doc = structuredClone(transactionsFeed);
+    const feed = (
+      doc.components!['crudResources'] as Record<
+        string,
+        Record<string, Record<string, Record<string, Row>>>
+      >
+    )['transaction']!['collections']!['transactions']!['x-deletion-feed']!;
+    (feed['tombstone'] as Row)['except'] = [
+      { field: 'transfer_account_id', present: true },
+    ];
+    const reports: MissingRecord[] = [];
+    const fake = budget([tx1, tx2]);
+    const client = createApiClient(doc, {
+      ...slow,
+      transport: fake.transport,
+      constants: b1,
+      onMissingRecord: (r) => reports.push(r),
+    });
+    await client.sync();
+    await hold(client, 'transactions', 't1', b1);
+    await hold(client, 'transactions', 't2', b1);
+    fake.transactions.delete('t1');
+    fake.transactions.delete('t2');
+    // t1: marked, but excluded; t2: marked, a tombstone.
+    fake.log.push({ id: 't1', deleted: true, transfer_account_id: 'a9' });
+    fake.log.push({ id: 't2', deleted: true });
+    await client.sync();
+    expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
+      ['t1', 'unknown', 'read'],
+      ['t2', 'deleted', 'feed'],
+    ]);
+  });
+
   it('applies the §6 overlay to a document without the declaration, giving the §2 document', () => {
     const base = withoutDeclaration(transactionsFeed, 'x-deletion-feed');
     expect(base).not.toEqual(transactionsFeed);
