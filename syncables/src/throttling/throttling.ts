@@ -77,6 +77,13 @@ export interface ThrottlingDeclaration {
    * reading; an `anchor` that does not parse as a time is left out.
    */
   quotas: Map<string, Quota>;
+  /**
+   * Throttling 0.5.0 plan tiers: for each bucket whose Limit Object
+   * declares `tiers`, the name of the tier in force (the configured one,
+   * else the most restrictive). Its `requests` and window are the bucket's
+   * in `windows` and `quotas`.
+   */
+  tiers: Map<string, string>;
   /** The default bucket selection (`applies`). */
   applies: string[];
   /** Header Role Objects by lower-cased header name. */
@@ -146,6 +153,55 @@ const isScalar = (value: unknown): value is JsonScalar =>
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0;
 
+interface Tier {
+  name: string;
+  requests: number;
+  window: { seconds: number } & Record<string, unknown>;
+}
+
+/**
+ * Throttling 0.5.0 Plan tiers, after the spec's `select_tier`: the tier
+ * named `configured`, else the most restrictive (the lowest `requests` per
+ * window second, compared exactly; of two equal rates the longer window).
+ * Undefined when `tiers` is not a nonempty array of Tier Objects with
+ * unique string names, positive integer `requests` and a window with
+ * positive integer `seconds`: a tier that does not parse might be the
+ * strictest, so none is guessed.
+ */
+export function selectTier(
+  tiers: unknown,
+  configured?: string,
+): Tier | undefined {
+  if (!Array.isArray(tiers) || tiers.length === 0) return undefined;
+  const parsed: Tier[] = [];
+  const names = new Set<string>();
+  for (const tier of tiers) {
+    if (
+      !isRecord(tier) ||
+      typeof tier['name'] !== 'string' ||
+      tier['name'] === '' ||
+      names.has(tier['name']) ||
+      !isPositiveInteger(tier['requests']) ||
+      !isRecord(tier['window']) ||
+      !isPositiveInteger(tier['window']['seconds'])
+    )
+      return undefined;
+    names.add(tier['name']);
+    parsed.push(tier as unknown as Tier);
+  }
+  const named = parsed.find((tier) => tier.name === configured);
+  if (named) return named;
+  return parsed.reduce((strictest, tier) => {
+    // a/b < c/d  ⇔  a·d < c·b, for positive integers.
+    const left = tier.requests * strictest.window.seconds;
+    const right = strictest.requests * tier.window.seconds;
+    if (left < right) return tier;
+    if (left === right && tier.window.seconds > strictest.window.seconds)
+      return tier;
+    return strictest;
+  });
+}
+
 /**
  * Reads the document's root `x-throttling`. Undefined when absent or not an
  * object. A `headers` entry that does not parse (an unknown role, a missing
@@ -156,13 +212,24 @@ const isPositiveInteger = (value: unknown): value is number =>
  */
 export function declaredThrottling(
   document: OpenApiDocument,
+  throttlingTiers: Record<string, string> = {},
 ): ThrottlingDeclaration | undefined {
   const root = (document as Record<string, unknown>)['x-throttling'];
   if (!isRecord(root)) return undefined;
   const windows = new Map<string, number>();
   const quotas = new Map<string, Quota>();
+  const tiers = new Map<string, string>();
   if (isRecord(root['limits']))
-    for (const [name, limit] of Object.entries(root['limits'])) {
+    for (const [name, declared] of Object.entries(root['limits'])) {
+      let limit: unknown = declared;
+      // Throttling 0.5.0: a limit with `tiers` is read through the tier in
+      // force; one whose tiers do not all parse is left out.
+      if (isRecord(declared) && declared['tiers'] !== undefined) {
+        const tier = selectTier(declared['tiers'], throttlingTiers[name]);
+        if (!tier) continue;
+        tiers.set(name, tier.name);
+        limit = tier;
+      }
       const window = isRecord(limit) ? limit['window'] : undefined;
       const seconds = isRecord(window) ? window['seconds'] : undefined;
       if (!isPositiveInteger(seconds)) continue;
@@ -193,6 +260,7 @@ export function declaredThrottling(
   const declaration: ThrottlingDeclaration = {
     windows,
     quotas,
+    tiers,
     applies,
     headers,
     bodyFields,

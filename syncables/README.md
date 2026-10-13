@@ -30,7 +30,7 @@ The extension versions this source reads, against the specifications in
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.5.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber`, `pageToken`, `nextLink` and `rangeWindow` types, `linkResolution`, and a scheme's `response.envelope`. Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.5.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits` with plan `tiers`, `applies`) and an operation's bucket list; requests are paced under the `limits` that state `requests`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -502,6 +502,29 @@ const client = createApiClient(doc, {
     failure.status === 409 ? 'retry' : defaultWriteFailureClass(failure),
 });
 ```
+
+##### Plan tiers
+
+A Limit Object may declare `tiers` instead of `requests` and `window`
+(Throttling 0.5.0): one bucket whose amount and window depend on the
+account's plan, as Clockify documents (30 requests per hour on FREE, 20 per
+second on TRIAL to PRO, 50 per second on ENTERPRISE). The client reads the
+bucket through one tier: the one `throttlingTiers` names for that bucket
+(`{ workspace: 'ENTERPRISE' }`, the tier's `name` exactly as the document
+writes it; one name can cover several plans, `BASIC STANDARD PRO`), else,
+without an entry or with a name not among the tiers, the most restrictive
+one: the lowest `requests` per window second, compared exactly, and of two
+equal rates the longer window (the spec's `select_tier`). That tier's
+`requests` and window are the bucket's for pacing and for the window a
+`quotaExhausted` answer waits out, so a client that does not know its plan
+waits longer than needed, never less. A limit whose tiers do not all parse
+(a missing or repeated name, a `requests` or `window.seconds` that is not a
+positive integer) is left out, as other entries that do not parse are:
+the strictest tier could be the one that failed. `throttlingTiers` is an
+option of `createApiClient`, `readCollections`, `readPlatform` and
+`paginate`, and `declaredThrottling(document, tiers)` reports the tier in
+force per bucket (`ThrottlingDeclaration.tiers`); `selectTier` is the
+choice on its own. How a client learns its plan is up to the caller.
 
 #### Refused credentials
 
@@ -1821,6 +1844,15 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased** (for 0.23.0): Throttling 0.5.0 plan tiers: a Limit
+  Object's `tiers` is read through the tier `throttlingTiers` names for the
+  bucket, else the most restrictive one, for pacing and for the window a
+  `quotaExhausted` answer waits out. `throttlingTiers` is a new option of
+  `createApiClient`, `readCollections`, `readPlatform` and `paginate`;
+  `ThrottlingDeclaration.tiers` reports the tier in force and `selectTier`
+  is exported. A limit whose tiers do not all parse is left out. Behaviour
+  change only for documents whose `x-throttling` declares `tiers` (before,
+  such a limit had no window and was not paced).
 - **Unreleased**: Updates follow `x-crud: { action: update }`: an item-path
   PUT or PATCH that declares it for the record's resource is used over one
   that does not (before, any PUT on the item path was used). With both

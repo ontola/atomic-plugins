@@ -47,6 +47,14 @@ import type { Transport } from './transport.js';
 export interface CollectionReadOptions {
   transport: Transport;
   constants?: Record<string, string>;
+  /**
+   * Throttling 0.5.0 plan tiers: the tier to read, by `limits` bucket, for
+   * a Limit Object that declares `tiers` (the provider's tier name, exactly
+   * as the document writes it). A bucket without an entry, or whose name is
+   * not among its tiers, uses its most restrictive tier.
+   */
+  throttlingTiers?: Record<string, string>;
+
   selection?: QuerySelection;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
@@ -208,7 +216,7 @@ export async function readCollections(
       captureReadResponses(options.transport, options.storeResponse),
       options.limits,
       options.sleep,
-      declaredThrottling(doc),
+      declaredThrottling(doc, options.throttlingTiers),
     );
   const upstream = upstreamOf(doc);
   // Zones are read once per read and again after it (Filtering 0.2.0-draft).

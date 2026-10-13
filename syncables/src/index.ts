@@ -127,6 +127,7 @@ export {
   declaredThrottling,
   headerTime,
   operationBuckets,
+  selectTier,
 } from './throttling/throttling.js';
 export type {
   BodyPredicate,

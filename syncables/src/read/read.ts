@@ -85,6 +85,8 @@ export interface ReadOptions {
   probe?: boolean;
   /** The range for collections read by range windows; see `CollectionReadOptions.ranges`. */
   ranges?: NonNullable<CollectionReadOptions['ranges']>;
+  /** See `CollectionReadOptions.throttlingTiers`. */
+  throttlingTiers?: Record<string, string>;
 }
 
 export interface ReadRecord {
@@ -261,6 +263,8 @@ export interface PaginateOptions {
   idField?: string;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
+  /** See `CollectionReadOptions.throttlingTiers`. */
+  throttlingTiers?: Record<string, string>;
 }
 
 /**
@@ -283,7 +287,7 @@ export async function paginate(
     captureReadResponses(options.transport, options.storeResponse),
     options.limits,
     options.sleep,
-    declaredThrottling(doc),
+    declaredThrottling(doc, options.throttlingTiers),
   );
   const items: Record<string, unknown>[] = [];
   for await (const page of walkPages({

@@ -346,6 +346,13 @@ export interface ApiClientOptions {
    */
   paceFraction?: number;
   /**
+   * Throttling 0.5.0 plan tiers: the tier to read, by `limits` bucket, for
+   * a Limit Object that declares `tiers` (the provider's tier name, exactly
+   * as the document writes it). A bucket without an entry, or whose name is
+   * not among its tiers, uses its most restrictive tier.
+   */
+  throttlingTiers?: Record<string, string>;
+  /**
    * Record property that holds a resource's identity — the value used as the
    * local storage key, read back from a create response to reconcile the
    * server-assigned id, and substituted into the item URL's path variable.
@@ -1713,7 +1720,7 @@ export function createApiClient(
   const upstream = upstreamOf(doc);
   // The root x-throttling (draft Throttling extension): header roles and
   // the signals that make a response a rate-limit refusal.
-  const throttling = declaredThrottling(doc);
+  const throttling = declaredThrottling(doc, options.throttlingTiers);
   /** Buckets a quotaExhausted answer declared exhausted, by identifier ('*' when unnamed), until (ms). */
   const pausedBuckets = new Map<string, number>();
   /** The running sync's read budget, for what is left of its time while a read waits out a pause. */
