@@ -210,7 +210,10 @@ Data flows through four stages, each its own directory under `src/`:
    Metadata collection names and bound context identify storage namespaces;
    identical IDs in sibling parents stay separate. Legacy names remain paths.
    Writes are serialized per scoped record and retry with exponential backoff
-   (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
+   (`retry.maxAttempts` is optional). A POST on a collection's URL is its
+   create (`createPath`) unless the resource has no identity in a CRUD
+   Causality document (list-only, read-only: `list-only.test.ts`); an
+   `x-crud` create always counts. Creates reconcile server-assigned IDs;
    a declared `x-crud` create (`ClientRoute.create`, `created-identity.ts`)
    leaves `generated` `addedFields` out of the body (`createBody`) and reads
    the identity from its `url` source through the identity template in

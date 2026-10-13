@@ -1456,9 +1456,15 @@ function clientRoutes(
     const item = collection.itemUrl
       ? document.paths[collection.itemUrl]
       : undefined;
+    // A POST on the collection URL is taken as its create (a heuristic for
+    // documents without x-crud), except for a resource without identity in
+    // a CRUD Causality document: a list-only resource (CRUD Causality 0.6.0
+    // §4.1) is read-only. An x-crud create below still counts.
     if (
       legacy ||
-      (collection.method === 'GET' && document.paths[collection.url]?.post)
+      (collection.itemUrl &&
+        collection.method === 'GET' &&
+        document.paths[collection.url]?.post)
     ) {
       route.createPath = collection.url;
     }

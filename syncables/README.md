@@ -1821,6 +1821,13 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased** (for 0.22.1): A resource without `identity` in a CRUD
+  Causality document is read-only (CRUD Causality 0.6.0 §4.1): `create()`
+  no longer sends a POST to its collection's URL, which the client took as
+  the create of any collection whose URL has a POST operation; it throws
+  "declares no create operation", as `update()` and `remove()` already did.
+  A resource with an `identity`, an `x-crud` create, and legacy documents
+  (without `crudResources`) create as before.
 - **Unreleased**: Updates follow `x-crud: { action: update }`: an item-path
   PUT or PATCH that declares it for the record's resource is used over one
   that does not (before, any PUT on the item path was used). With both
