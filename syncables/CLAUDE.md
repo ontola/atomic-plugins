@@ -284,7 +284,7 @@ Data flows through four stages, each its own directory under `src/`:
    `auth` blocks, unless the read was sent before the latest renewal
    (then it is sent again). A source read's refusal is kept in
    `sourceErrors` by URL, with its epoch, and is not cached. The restore
-   check `missingSources` includes `write`.
+   check `missingSources` includes `write` and `list`.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone
@@ -757,6 +757,28 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   read, a restart, an unresolved bind, a refused declaration, a confirmed
   uncertain create, and no `followUps`; `compound-create-core.test.ts`
   the pure parts.
+- `unit/client/list-tombstones.test.ts` covers Deletion Feeds 0.3.0-draft
+  `x-list-tombstone` (`read/list-tombstones.ts`, after the reference
+  `list_tombstone`; parsed into `ReadCollection.listTombstone`, filtered in
+  `readCollections` into `CollectionSnapshot.tombstones`, and in `sync()`
+  the `listTombstoned` ids of the sync's reads are `findEvidence`'s first
+  evidence, `source: 'list'`) on the spec's §7.5 example
+  (`__tests__/fixtures/list-tombstones.ts`); the client's `Tombstone`
+  (feeds, read tombstones) is the same parsed object, so `except` applies
+  everywhere, tested with read tombstones there too. A list tombstone's
+  identity joins `readCollections`' repeated-identity check (a repeat fails
+  the read), and a read that ends with an error keeps `tombstones` empty.
+  In `performSync`'s pruning loop a write-less record in `listTombstoned` is
+  `deleted` with `source: 'list'` like `absent: deleted` (removed, or
+  `setMark` under `retainDeleted`; a kept mark goes to `recheck`), and the
+  vanished loop does not count it against `maxMissingRecordChecks`;
+  `upsertIncomplete` fails held heads of an incomplete read's list
+  tombstones (`listEvidence`, `failMissing`, `rebuild`).
+  `unit/client/list-tombstones-presence.test.ts` covers those paths
+  (presence, `retainDeleted`, marks, the check limit, incomplete reads,
+  repeated items, a restart), `completeness-outcomes.test.ts` a
+  `parentAbsent` parent concluded by a list tombstone, and
+  `deletion-declarations.test.ts` `except` on a deletion feed.
 - `unit/client/runtime-classes.test.ts` covers the classes in
   `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
   `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,
