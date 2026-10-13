@@ -30,7 +30,7 @@ The extension versions this source reads, against the specifications in
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.7.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, and a scheme's `response.envelope` (with `emptyWhenAbsent`). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.5.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Not pacing against the announced `limits`. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -453,8 +453,41 @@ stops the read with an error), then the budget waits the earliest retry
 time of a throttled answer and sends the request again, up to
 `limits.maxRetries` times, or stops with "API retry delay exceeds the
 remaining read time"; a throttled answer without a time is returned to the
-read as before. Pacing requests against the announced `limits` is not
-implemented, and nothing here has been checked against a real provider.
+read as before. Nothing here has been checked against a real provider.
+
+##### Pacing under announced quotas
+
+Where a Limit Object in `x-throttling` states `requests`, the client paces
+itself, so it does not have to run into the limit first (pieces.md K2). It
+sends at most `paceFraction` of `requests` (default 0.8, rounded down, at
+least one) in any window of the bucket. Moneybird's 150 per 300 s becomes
+120 per 300 s. The buckets a request counts against are its operation's
+`x-throttling` selection, else the root `applies`. An operation whose
+selection leaves a bucket out (`x-throttling: []`, say) is not paced by
+it. Buckets without `requests` are not paced. Documents without such a
+Limit Object behave as before.
+
+- **Windows.** A `sliding` or `unspecified` window counts the preceding
+  `seconds`. A `fixed` window with an `anchor` counts from its boundaries.
+  **A `fixed` window without an `anchor` is paced as sliding.** Its phase
+  is unknown, and pacing it as sliding keeps under the quota whatever the
+  phase is.
+- **Counting.** A request counts when it is sent, not when it is answered,
+  so requests in flight count and concurrent write queues cannot overshoot.
+  A request that finds no room waits.
+- **Reads** wait through `sleep` within their time limit, as for a paused
+  bucket. A wait past `limits.timeoutMs`, or past what is left of the
+  sync's budget, stops the read with an error before the request is sent.
+- **Writes** are held like a `notBefore`. Pacing alone never fails a write,
+  however long the hold, and waiting does not count an attempt.
+- **Only this client's own requests are counted**, in memory, so a restart
+  starts the count afresh. A bucket partitioned by `sourceIp` behind a
+  shared proxy, or shared with other clients of the same user, can still
+  run out. Pacing those across clients is the proxy's job (pieces.md P4).
+  The reaction to a throttled answer described above stays in place.
+
+Turn pacing off with `pace: false`. `paceFraction` must be greater than 0
+and at most 1.
 
 ```ts
 import { createApiClient, defaultWriteFailureClass } from 'syncables';
@@ -1786,6 +1819,9 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   - `sync()` now applies reads that ended without an error but are not
     complete (range windows, undocumented short pages), adding and
     updating records only, listed in `SyncResult.incomplete`;
+  - requests are paced under the quotas `x-throttling` announces, where a
+    Limit Object states `requests` (at most `paceFraction`, default 0.8, per
+    window; on by default, `pace: false` turns it off);
   - throttling roles are also read from `bodyFields`; throttling values,
     and the `Retry-After` of any retryable answer, are read strictly: only
     space, tab, CR and LF are trimmed, an integer above 2^53 − 1 does not
@@ -1883,7 +1919,13 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
     when a read last returned the record.
   - Throttling 0.3.0: `bodyFields` (roles read from a throttling response's
     JSON body by literal dot-path; a body wait of no time counts as absent;
-    `ThrottlingDeclaration.bodyFields`); the 2^53 − 1 bound, stripping only
+    `ThrottlingDeclaration.bodyFields`); pacing under announced quotas
+    (pieces.md K2: per bucket an operation selects, a `fixed` window
+    without an `anchor` paced as sliding, requests counted when sent, reads
+    waiting within their time limit, writes held without failing or
+    counting an attempt, only this client's own requests counted, in
+    memory; `ThrottlingDeclaration.quotas`, `Pacer` and `Quota` exported);
+    the 2^53 − 1 bound, stripping only
     SP/HT/CR/LF, and HTTP-dates only in RFC 9110's three exact forms (also
     for the client's own `Retry-After` and `Date` readings). A read waiting
     out an exhausted bucket no longer sleeps twice for one pause when the
