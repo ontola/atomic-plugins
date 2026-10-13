@@ -34,6 +34,7 @@ The extension versions this source reads, against the specifications in
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.1.0-draft | `x-completeness`; only `absent: deleted` changes what the client does. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.2.0-draft | `x-deletion-feed` and `x-read-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
+| [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.0-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
 
 The other specifications there (Filtering, the authentication and webhook
 extensions) are not read by Syncables.
@@ -456,8 +457,41 @@ stops the read with an error), then the budget waits the earliest retry
 time of a throttled answer and sends the request again, up to
 `limits.maxRetries` times, or stops with "API retry delay exceeds the
 remaining read time"; a throttled answer without a time is returned to the
-read as before. Pacing requests against the announced `limits` is not
-implemented, and nothing here has been checked against a real provider.
+read as before. Nothing here has been checked against a real provider.
+
+##### Pacing under announced quotas
+
+Where a Limit Object in `x-throttling` states `requests`, the client paces
+itself, so it does not have to run into the limit first (pieces.md K2). It
+sends at most `paceFraction` of `requests` (default 0.8, rounded down, at
+least one) in any window of the bucket. Moneybird's 150 per 300 s becomes
+120 per 300 s. The buckets a request counts against are its operation's
+`x-throttling` selection, else the root `applies`. An operation whose
+selection leaves a bucket out (`x-throttling: []`, say) is not paced by
+it. Buckets without `requests` are not paced. Documents without such a
+Limit Object behave as before.
+
+- **Windows.** A `sliding` or `unspecified` window counts the preceding
+  `seconds`. A `fixed` window with an `anchor` counts from its boundaries.
+  **A `fixed` window without an `anchor` is paced as sliding.** Its phase
+  is unknown, and pacing it as sliding keeps under the quota whatever the
+  phase is.
+- **Counting.** A request counts when it is sent, not when it is answered,
+  so requests in flight count and concurrent write queues cannot overshoot.
+  A request that finds no room waits.
+- **Reads** wait through `sleep` within their time limit, as for a paused
+  bucket. A wait past `limits.timeoutMs`, or past what is left of the
+  sync's budget, stops the read with an error before the request is sent.
+- **Writes** are held like a `notBefore`. Pacing alone never fails a write,
+  however long the hold, and waiting does not count an attempt.
+- **Only this client's own requests are counted**, in memory, so a restart
+  starts the count afresh. A bucket partitioned by `sourceIp` behind a
+  shared proxy, or shared with other clients of the same user, can still
+  run out. Pacing those across clients is the proxy's job (pieces.md P4).
+  The reaction to a throttled answer described above stays in place.
+
+Turn pacing off with `pace: false`. `paceFraction` must be greater than 0
+and at most 1.
 
 ```ts
 import { createApiClient, defaultWriteFailureClass } from 'syncables';
@@ -1752,6 +1786,39 @@ collections, as for `readCollections`.
 The main `syncables` entry exports the same functions, with `paginate`
 renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
 
+### Produced classes (`x-produces`)
+
+A CRUD resource may declare the shared classes its objects can be
+represented as, by subject IRI, each with an optional lens IRI (the draft
+[Produced Classes extension](../openapi-extensions/spec/produced-classes/README.md)
+0.1.0). Syncables reads the declaration as metadata only: it fetches no
+class or lens, and maps no record.
+
+- `producedClasses(document)` lists each resource that declares
+  `x-produces` (in `components.crudResources`, or a Swagger 2.0 document's
+  root `x-crudResources`) with its `classes` (`class`, `lens`?,
+  `description`?; `x-*` fields left out), or, when the declaration breaks
+  §7 rules 2–6, its `errors` and no classes. A declaration anywhere else is
+  not read.
+- `resourcesProducing(document, classIri)` gives the resources whose
+  declaration names that class, compared as §3 says (the scheme and host
+  case-insensitively, the rest exactly): the resources to offer for a table
+  of that class.
+- `ReadCollection.produces` carries a resource's classes on each of its
+  collections, and `ApiClient.produces(resource)` returns them (a copy;
+  empty when none are declared or the declaration does not parse).
+- `lensFits(produced, lens, { provider, resource })` checks a lens document
+  the caller fetched itself (§4.2): when it names a target, that must be a
+  `target.class` that is the entry's class; when it names a source, that
+  must be the provider record `source.record.provider` and `.resource`
+  (`provider` is the openapi-directory key, `clockify.me`, as the catalog
+  lenses under `ontology/lenses/` name it). An entry whose lens does not fit
+  is to be treated as having none.
+- `checkProduces`, `parseProduces`, `absoluteIri` and `sameSubject` are the
+  spec `validate.py`'s `check_list`, `absolute_uri` and `same_subject`.
+
+Not verified against a real provider: no overlay declares `x-produces` yet.
+
 ## Changelog
 
 - **Unreleased**: Updates follow `x-crud: { action: update }`: an item-path
@@ -1763,6 +1830,22 @@ renamed `paginateOperation` so it doesn't clash with `ApiClient.paginate`.
   as Google Calendar's events with the catalog's `app-crud-causality`
   overlay (PATCH, with the full record, instead of PUT); a PATCH declared
   with `patchFormat: jsonPatch` there now makes `update()` throw.
+- **Unreleased**: Produced Classes 0.1.0-draft (`x-produces`), read-only:
+  `producedClasses`, `resourcesProducing`, `ReadCollection.produces`,
+  `ApiClient.produces`, `lensFits`, and the spec's checks (`checkProduces`,
+  `parseProduces`, `absoluteIri`, `sameSubject`), from both entries. A
+  declaration that does not parse is reported and read as none. Nothing is
+  fetched or mapped.
+- **Unreleased**: Pacing under the quotas `x-throttling` announces
+  (pieces.md K2). Where a Limit Object states `requests`, the client sends
+  at most `paceFraction` (default 0.8) of them per window of each bucket a
+  request's operation selects. A `fixed` window without an `anchor` is
+  paced as sliding. Requests are counted when sent. Reads wait within
+  their time limit, and writes are held without failing or counting an
+  attempt. Only this client's own requests are counted, in memory. On by
+  default; `pace: false` turns it off. `ThrottlingDeclaration` gains
+  `quotas`, and `Pacer` and `Quota` are exported. Behaviour change only
+  for documents whose `x-throttling` limits state `requests`.
 - **Unreleased**: the webhook inbox consumer in `syncables/browser`, for
   atomic-server's QuickJS sandbox (ontola/atomic-plugins#369 step 4b):
   `InboxClient`, `InboxConsumer` and `scopedReads` need no `URL`,
