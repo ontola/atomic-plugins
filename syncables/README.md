@@ -37,9 +37,11 @@ The extension versions this source reads, against the specifications in
 | [Filtering](../openapi-extensions/spec/filtering/README.md) | 0.2.0-draft | `x-time-zone` on list query parameters, with their `x-filter` field and operator for the covered spans. Not `x-filter` or `x-collection-scope` otherwise. |
 | [Write Preconditions](../openapi-extensions/spec/write-preconditions/README.md) | 0.1.0-draft | `x-write-precondition` on create, update and delete operations: `ifMatch`, `readVerify` and `refuseWhen` ([below](#write-preconditions-x-write-precondition)). Not on a compound create's follow-up operations. |
 | [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.0-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
+| [Webhook Deliveries](../openapi-extensions/spec/webhook-deliveries/README.md) | 0.1.0-draft | The `events` of `x-webhook-deliveries`, read by `scopedReads` only (the webhook inbox consumer). Not signature checks or hook registration, which are the receiver's. |
+| [Webhook Subscriptions](../openapi-extensions/spec/webhook-subscriptions/README.md) | 0.1.0-draft | The consumer routes, through `InboxClient` and `InboxConsumer`. The root `x-webhook-subscriptions` field is not read. |
 
-The other specifications there (the authentication and webhook extensions)
-are not read by Syncables.
+The other specifications there (the authentication extensions) are not read
+by Syncables.
 
 These are sources of descriptions and conventions, not three npm packages
 you must install. Once you have a composed document, Syncables uses it locally;
@@ -1827,8 +1829,8 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   Causality 0.5.0, Collection Completeness 0.2.0 and 0.3.0, Pagination
   Schemes 0.6.0, 0.7.0 and 0.7.1, Throttling 0.3.0, Filtering 0.2.0
   `x-time-zone`, Runtime Schemas 0.1.0, Write Preconditions 0.1.0,
-  Produced Classes 0.1.0). Behaviour changes to know before upgrading, each
-  only for documents that declare the field named:
+  Produced Classes 0.1.0). Behaviour changes to know before upgrading, most
+  only for documents that declare the field named; the exceptions say so:
   - a create whose `x-crud` declares `addedFields: generated` leaves those
     fields out of its body and reads the created identity as declared; a
     2xx it cannot bind is `uncertain` and `unbound`, never sent again;
@@ -1850,6 +1852,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   - `parentAbsent` concludes the records under a gone parent
     `unavailable`, and the default `missingRecordChecks: 'pending'` now
     also reads a vanished parent with unsettled writes under it;
+  - `absent: removed` now keeps a record a complete read lacks, marked
+    `unconfirmed`, and checks it with a GET, also under the default
+    `missingRecordChecks: 'pending'` (0.21.0 did nothing with
+    `absent: removed`);
   - `x-time-zone` parameters are sent as wall-clock values; a value
     without `Z` or an offset fails the read;
   - a `shortPage` end, an oversized page or a repeated item ends a
@@ -1858,22 +1864,27 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   - for every document with an `offset` scheme: an `itemCount` read (the
     default) without a `totalCount` reads on to the first empty page
     instead of stopping after its first page, and every offset read
-    (`paginate` and `ApiClient.paginate` too) ends with `PageReadError` at
-    a page holding an item an earlier page returned (or a page identical to
-    the one before). Items are identified by `paginate`'s `idField`,
-    default `'id'`, so an offset list whose items share an id under that
-    field (two rows with the same `id`) now fails with `PageReadError`
-    where it used to return both; pass the `idField` that is unique (#512).
+    (`paginate` in `syncables/browser`, `paginateOperation` in the main
+    entry, and `ApiClient.paginate` too) ends with `PageReadError` at a page
+    holding an item an earlier page returned (or a page identical to the
+    one before). Items are identified by the `idField` option, default
+    `'id'`, so an offset list in which two items on different pages share
+    an id under that field now fails with `PageReadError` where it used to
+    return both; pass the `idField` that is unique (#512).
     `advance: pageSize` steps by the page size and ends only at
     `totalCount` or an empty page;
   - `sync()` now applies reads that ended without an error but are not
     complete (range windows, undocumented short pages), adding and
     updating records only, listed in `SyncResult.incomplete`;
-  - requests are paced under the quotas `x-throttling` announces, where a
-    Limit Object states `requests` (at most `paceFraction`, default 0.8, per
-    window; on by default, `pace: false` turns it off);
+  - requests an `ApiClient` sends are paced under the quotas
+    `x-throttling` announces, where a Limit Object states `requests` (at
+    most `paceFraction`, default 0.8, per window; on by default,
+    `pace: false` turns it off); standalone `paginate`,
+    `paginateOperation`, `readPlatform` and `readCollections` are not
+    paced;
   - throttling roles are also read from `bodyFields`; throttling values,
-    and the `Retry-After` of any retryable answer, are read strictly: only
+    and, for any document, the `Retry-After` of any retryable answer, are
+    read strictly: only
     space, tab, CR and LF are trimmed, an integer above 2^53 − 1 does not
     parse (before, a long `Retry-After` outside `x-throttling` was capped
     at `retry.maxRetryAfterMs`), and an HTTP-date parses only in RFC 9110's
@@ -1887,26 +1898,31 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
     declared; an update's 404/410 stops as `gone`, a delete settles only
     when the deletion is confirmed, and an unusable declaration makes the
     write call throw;
-  - a record a complete `sync()` removes is told to the new `onPresence`
-    handler, awaited, before it is removed (a failing handler applies
-    nothing of that read); under `missingRecordChecks: 'all'` a vanished
-    record is kept, marked, until its check instead of removed first; and a
-    vanished parent without writes under it is checked by default.
+  - for any document (client options): a record a complete `sync()`
+    removes is told to the new `onPresence` handler, awaited, before it is
+    removed (a failing handler applies nothing of that read); under
+    `missingRecordChecks: 'all'` a vanished record is kept, marked, until
+    its check instead of removed first; `maxMissingRecordChecks` (default
+    50) now caps the checks of records without writes per sync, under
+    `'all'` too; and a vanished parent without writes under it is checked
+    by default when a nested collection declares `parentAbsent`.
   Outbox changes within version `1` that matter for a downgrade: the write
   value `missingRecord: 'unavailable'` and the write type `followUp` (an
   older client keeps such a record's writes as unrestorable, neither sent
-  nor lost); the top-level `unavailable` (dropped by an older client, so
-  its next complete read removes those records locally); `updateBody` (an
-  older client sends a merge-patch update as a full record); `unbound` (an
-  older client's `retry` would send the create again); the kept
-  `unavailable` entries' `presence` and `source` and the mark's `lastSeen`
-  (an older client drops them and reads every kept record as
-  unavailable); a write's `precondition` and `sentVersion` (an older client
+  nor lost); the top-level `unavailable` list, with its entries'
+  `presence`, `source` and `lastSeen` (0.21.0, the only published older
+  client, drops the whole list, so its next complete read removes those
+  records locally); `updateBody` (an older client sends a merge-patch
+  update as a full record); `unbound` (an older client's `retry` would send
+  the create again); a write's `precondition` and `sentVersion` (an older client
   sends it again without its precondition, and does not resolve an unknown
   outcome by a read first). Settle or discard
   merge-patch updates, unbound creates, held unavailable writes and
   compound-create follow-ups and writes under a write precondition before
-  downgrading.
+  downgrading. Typings: the main entry's declarations now import
+  `node:crypto` (through `signedTransport`), so a TypeScript consumer of
+  `syncables` without `@types/node` and with `skipLibCheck: false` gets
+  TS2307; `syncables/browser` does not import it.
   - Writes (CRUD Causality 0.4.0 and 0.5.0): declared create results
     (§4.3.2, §4.4–4.5: `generated` `addedFields` not sent, the identity
     from the `url` source read through the identity template in reverse,
