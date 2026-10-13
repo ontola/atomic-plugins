@@ -1,0 +1,32 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.notion.com/reference/page (in_trash: "Whether the page has been
+# trashed"; archived: "Deprecated. Use in_trash instead. This is an alias for in_trash").
+# The page reference documents no ETag, If-Match or conditional update.
+# Needs Write Preconditions 0.1.0-draft (openapi-extensions/spec/write-preconditions).
+overlay: 1.0.0
+info:
+  title: Notion API page write preconditions
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/0c8e229623efdcc1d4ab50111d17bcca3214a899/APIs/notion.com/2026-03-11/openapi.yaml
+actions:
+  - target: $.paths['/pages/{page_id}'].patch
+    update:
+      x-write-precondition:
+        kind: readVerify
+        refuseWhen:
+          - field: in_trash
+            values: [true]
+            description: The page's owner moved it to the trash.
+          - field: archived
+            values: [true]
+            description: The deprecated alias of in_trash, for responses that still send only it.
+        description: >-
+          Notion documents no conditional update for pages, so a client reads
+          the page (GET /pages/{page_id}) just before the PATCH and sends it
+          only when every property it writes still holds its baseline; an edit
+          made in Notion between that read and the PATCH is overwritten. A
+          trashed page is not written. idempotent is left at its default
+          (false for PATCH): Notion does not document repeating a page update,
+          so an unknown outcome is resolved by reading the page and comparing
+          the written properties. As integrations/notion/app/send.ts does.
+          The pinned OAD's page schema does not declare in_trash or archived.
