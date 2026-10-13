@@ -1,6 +1,6 @@
 # OpenAPI Produced Classes Extension
 
-**Spec version:** 0.1.0-draft
+**Spec version:** 0.1.1-draft
 
 ---
 
@@ -62,8 +62,11 @@ An _absolute IRI_ is an IRI with a scheme and no fragment-only or relative
 form, per [RFC 3987 §2.2](https://www.rfc-editor.org/rfc/rfc3987#section-2.2)
 (`absolute-IRI`, plus an optional fragment): every absolute URI
 ([RFC 3986 §4.3](https://www.rfc-editor.org/rfc/rfc3986#section-4.3)) is one,
-and non-ASCII characters are allowed; whitespace and control characters are
-not. RDF and Atomic Data name classes by IRI. `https` subjects are
+and non-ASCII characters are allowed. Not allowed: whitespace (the Unicode
+`White_Space` characters), control characters (U+0000–U+001F, U+007F and
+the C1 range U+0080–U+009F), U+FEFF, and the ASCII characters RFC 3987
+excludes (`<`, `>`, `"`, `{`, `}`, `|`, `\`, `^`, `` ` ``). RDF and Atomic
+Data name classes by IRI. `https` subjects are
 RECOMMENDED.
 
 Two subjects are the _same_ when they are equal after lower-casing the
@@ -211,6 +214,11 @@ python3 validate.py examples/time-entries.yaml
 
 ## Changes
 
+- **0.1.1-draft** (2026-10-13): §3 lists the characters an absolute IRI may
+  not hold: whitespace, control characters including the C1 range, and
+  U+FEFF. Before, "whitespace and control characters" left the C1 range and
+  U+FEFF to each implementation (the reference validator rejected U+0085
+  only). A 0.1.0 document without those characters stays valid.
 - **0.1.0-draft** (2026-10-08): first draft, for ontola/atomic-plugins
   `docs/design/pieces.md` D4 and I1.
 

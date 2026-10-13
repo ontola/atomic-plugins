@@ -822,13 +822,14 @@ export interface ApiClient {
    */
   presence(resource?: string): PresenceMark[];
   /**
-   * Produced Classes 0.1.0-draft: the shared classes the resource's records
+   * Produced Classes 0.1.1-draft: the shared classes a resource's records
    * can be represented as, from `x-produces` on its CRUD Resource Object
-   * (each with its lens IRI, if declared). Empty when the resource declares
-   * none, or the declaration does not parse. Metadata only: nothing is
-   * fetched or mapped.
+   * (each with its lens IRI, if declared). `name` is a collection name (as
+   * for `list()`), a legacy collection path, or a CRUD resource key. Empty
+   * when the resource declares none, the declaration does not parse, or
+   * `name` names nothing. Metadata only: nothing is fetched or mapped.
    */
-  produces(resource: string): ProducedClass[];
+  produces(name: string): ProducedClass[];
   /**
    * Settles the `uncertain` or `failed` write for record `id`, or its restored
    * updates waiting for a refresh (see `WriteResolution`), or drops its
@@ -1462,10 +1463,11 @@ function clientRoutes(
     ) {
       route.createPath = collection.url;
     }
-    // CRUD Causality §4.3: an item-path operation declared
-    // `x-crud: { action: update }` for this resource wins over one that is
-    // not; with both declared, or neither, PUT before PATCH, as before. A
-    // legacy document ignores `x-crud` here.
+    // Which operation updates is syncables' policy; CRUD Causality only
+    // says what each `x-crud: { action: update }` operation does (§4.3).
+    // An item-path operation that declares one for this resource wins over
+    // one that does not; with both declared, or neither, PUT before PATCH,
+    // as before. A legacy document ignores `x-crud` here.
     const declaresUpdate = (method: 'put' | 'patch'): boolean => {
       const crud = item?.[method]?.['x-crud'];
       return (
@@ -6159,8 +6161,15 @@ export function createApiClient(
       });
       if (gone) await concludeNew(scope, id, gone);
     },
-    produces(resource): ProducedClass[] {
-      return structuredClone(resolveRoute(resource).collection.produces ?? []);
+    produces(name): ProducedClass[] {
+      // As resolveRoute, then a CRUD resource key (every collection of a
+      // resource carries the same classes); nothing for an unknown name.
+      const byPath = routes.filter((r) => r.collection.url === name);
+      const route =
+        byResource.get(name) ??
+        (byPath.length === 1 ? byPath[0] : undefined) ??
+        routes.find((r) => r.collection.resource === name);
+      return structuredClone(route?.collection.produces ?? []);
     },
     presence(resource): PresenceMark[] {
       const name = resource
