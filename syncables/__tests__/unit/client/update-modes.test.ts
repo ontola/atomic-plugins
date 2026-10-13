@@ -348,6 +348,72 @@ describe('update modes: mode: replace and the default', () => {
   });
 });
 
+describe('update modes: which operation updates (x-crud action update)', () => {
+  /** The method and body of the one write an update sends. */
+  async function sent(
+    doc: OpenApiDocument,
+  ): Promise<{ method: string; body: unknown }> {
+    const { client, fake } = await synced(doc);
+    await client.update('/pets', '1', { name: 'Rex 2' });
+    await idle(client);
+    expect(fake.writes).toHaveLength(1);
+    return { method: fake.writes[0]!.method, body: fake.writes[0]!.body };
+  }
+
+  it('uses the declared PATCH over an undeclared PUT on the item path', async () => {
+    // PUT stays in the document, without x-crud.
+    expect(await sent(document({ patch: MERGE }))).toEqual({
+      method: 'PATCH',
+      body: { name: 'Rex 2' },
+    });
+  });
+
+  it('uses the declared PUT over an undeclared PATCH', async () => {
+    const doc = document({ put: REPLACE, patch: MERGE });
+    delete doc.paths['/pets/{petId}']!.patch!['x-crud'];
+    expect(await sent(doc)).toEqual({
+      method: 'PUT',
+      body: { ...rex, name: 'Rex 2' },
+    });
+  });
+
+  it('keeps PUT when both are declared', async () => {
+    expect(await sent(document({ put: REPLACE, patch: MERGE }))).toEqual({
+      method: 'PUT',
+      body: { ...rex, name: 'Rex 2' },
+    });
+  });
+
+  it('keeps PUT, else PATCH, when neither is declared', async () => {
+    const both = document({ patch: MERGE });
+    delete both.paths['/pets/{petId}']!.patch!['x-crud'];
+    expect((await sent(both)).method).toBe('PUT');
+    const patchOnly = document({ put: false, patch: MERGE });
+    delete patchOnly.paths['/pets/{petId}']!.patch!['x-crud'];
+    expect(await sent(patchOnly)).toEqual({
+      method: 'PATCH',
+      body: { ...rex, name: 'Rex 2' },
+    });
+  });
+
+  it('counts an x-crud update for another resource as undeclared', async () => {
+    expect(
+      (await sent(document({ patch: { ...MERGE, resource: 'owner' } }))).method,
+    ).toBe('PUT');
+  });
+
+  it('follows a declared jsonPatch PATCH over an undeclared PUT: update() throws', async () => {
+    const { client, fake } = await synced(
+      document({ patch: { ...MERGE, patchFormat: 'jsonPatch' } }),
+    );
+    await expect(
+      client.update('/pets', '1', { name: 'Rex 2' }),
+    ).rejects.toThrow(/declares its PATCH update with patchFormat jsonPatch/);
+    expect(client.pendingWrites()).toEqual([]);
+    expect(fake.writes).toEqual([]);
+  });
+});
+
 describe('update modes: mode: patch, patchFormat: jsonMergePatch', () => {
   it('sends only the changes, as application/json unless the operation declares the merge-patch media type', async () => {
     for (const mergeContent of [false, true]) {
