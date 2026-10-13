@@ -520,8 +520,11 @@ class StructureRuleTests(unittest.TestCase):
         self.invalid(lambda d: self.crud(d, "/widgets", "post").update(url={"source": "location"}),
                      "url.source: expected one of header, bodyField, template (§4.3.2)")
         self.invalid(lambda d: self.crud(d, "/widgets", "post").update(url={"source": "bodyField"}),
-                     "url.name: source bodyField needs a dot-path name (§4.3.2)")
-        for url in ({"source": "template"}, {"source": "header"}, {"source": "bodyField", "name": "self.href"}):
+                     "url.name: source bodyField needs a dot-path name (rule 26)")
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").update(url={"source": "header"}),
+                     "url.name: source header needs a header name (rule 26)")
+        for url in ({"source": "template"}, {"source": "header", "name": "Location"},
+                    {"source": "bodyField", "name": "self.href"}):
             with self.subTest(url=url):
                 self.assertEqual(self.outcome(lambda d: self.crud(d, "/widgets", "post").update(url=url))[0], "")
 
@@ -575,6 +578,18 @@ class StructureRuleTests(unittest.TestCase):
                      "addresses one object of it (rule 25)")
         self.invalid(lambda d: self.resource(d, "project")["identity"].pop("urlTemplate"),
                      "crudResources.project.identity: an Identity Object needs a urlTemplate (rule 25, §4.1.1)")
+
+    def test_rule_25_reports_a_reference_target_without_identity_once(self):
+        errors, _ = self.outcome(lambda d: self.resource(d, "project").pop("identity"))
+        self.assertIn("(rule 25)", errors)
+        self.assertNotIn("(rule 12)", errors)
+
+    def test_a_ref_path_item_is_checked_too(self):
+        def via_ref(d):
+            d["components"]["pathItems"] = {"widget": d["paths"]["/widgets/{widgetId}"]}
+            d["paths"]["/widgets/{widgetId}"] = {"$ref": "#/components/pathItems/widget"}
+            d["components"]["pathItems"]["widget"]["patch"]["x-crud"].pop("mode")
+        self.invalid(via_ref, "paths./widgets/{widgetId}.patch.x-crud.mode: required for action update (rule 5)")
 
     def test_rule_25_a_list_only_resource_may_omit_identity(self):
         def list_only(d):

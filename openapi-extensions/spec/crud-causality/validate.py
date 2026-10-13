@@ -1,4 +1,4 @@
-"""Validate CRUD Causality 0.6.0 documents: every rule of §8 (1-25).
+"""Validate CRUD Causality 0.6.0 documents: every rule of §8 (1-26).
 
 `validate(document, warnings)` raises ValueError listing every violation it
 finds and returns None for a valid document; the SHOULD rules (6, 10, 13
@@ -312,7 +312,9 @@ def _resource_errors(resources, warnings, addressed=None):
             if not isinstance(target, dict):
                 errors.append(f"{at}.resource: {reference.get('resource')!r} is not a crudResources key (rule 11)")
                 continue
-            target_identity = target.get("identity") if isinstance(target.get("identity"), dict) else {}
+            target_identity = target.get("identity")
+            if not isinstance(target_identity, dict) or "urlTemplate" not in target_identity:
+                continue  # rule 25 reports the target; its bindings have nothing to name
             target_variables = _variables(target_identity.get("urlTemplate"))
             bindings = reference.get("bindings")
             if not isinstance(bindings, dict):
@@ -339,9 +341,9 @@ def _operation_errors(crud, where, resources, warnings):
         elif not isinstance(url, dict) or url.get("source") not in URL_SOURCES:
             errors.append(f"{where}.url.source: expected one of {', '.join(URL_SOURCES)} (§4.3.2)")
         elif url["source"] == "bodyField" and not _well_formed_path(url.get("name")):
-            errors.append(f"{where}.url.name: source bodyField needs a dot-path name (§4.3.2)")
-        elif url["source"] == "header" and "name" in url and not (isinstance(url["name"], str) and url["name"]):
-            errors.append(f"{where}.url.name: expected a header name (§4.3.2)")
+            errors.append(f"{where}.url.name: source bodyField needs a dot-path name (rule 26)")
+        elif url["source"] == "header" and not (isinstance(url.get("name"), str) and url["name"]):
+            errors.append(f"{where}.url.name: source header needs a header name (rule 26)")
     if action == "update":
         mode = crud.get("mode")
         if mode is None:
@@ -453,6 +455,7 @@ def validate(document, warnings=None):
                         errors.append(f"{where}.listBody.{'.'.join(path)}: owned by the operation's pagination scheme")
 
     for path, item in paths.items():
+        item = _resolve(document, item)
         if not isinstance(item, dict):
             continue
         for method in METHODS:
