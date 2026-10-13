@@ -17,8 +17,10 @@ overlays that a syncables 0.22.0 reader uses:
   listQuery) in place of v1; Google Tasks' v2 envelopes declare
   emptyWhenAbsent, as its pagination v2 does;
 * Google Calendar: cancelled events as read tombstones (Deletion Feeds
-  0.2.0-draft x-read-tombstone) and Throttling 0.2.0-draft limits and
-  signals, last;
+  0.3.0-draft x-read-tombstone, revision 2, with `except` for cancelled
+  exceptions of a recurring event), the event list read with syncToken as
+  a deletion feed (x-deletion-feed, the same `except`), and Throttling
+  0.2.0-draft limits and signals, last;
 * Notion (after its runtime schema), Spotify, Airtable and Asana:
   Throttling, last;
 * Google Tasks and GitHub Issues: Collection Completeness (after their
@@ -83,7 +85,8 @@ CHANGES = {
     "discord": [("append", url(DISCORD, "throttling"))],
     "google-calendar": [
         ("replace", url(CALENDAR, "app-crud-causality"), url(CALENDAR, "app-crud-causality-v2")),
-        ("append", url(CALENDAR, "read-tombstone")),
+        ("append", url(CALENDAR, "read-tombstone-v2")),
+        ("append", url(CALENDAR, "deletion-feed")),
         ("append", url(CALENDAR, "throttling")),
     ],
     "moneybird": [
@@ -219,7 +222,7 @@ def validator(spec):
 
 VALIDATORS = {spec: validator(spec) for spec in (
     "pagination-schemes", "crud-causality", "throttling", "filtering", "runtime-schemas",
-    "collection-completeness")}
+    "collection-completeness", "deletion-feeds")}
 
 
 def problems(spec, document):
@@ -400,6 +403,20 @@ class CatalogCompositionTests(unittest.TestCase):
         self.assertEqual(tasks["listQuery"], {"showCompleted": "true", "showHidden": "true"})
         events = self.composed["google-calendar"]["components"]["crudResources"]["event"]["collections"]["events"]
         self.assertEqual(events["listQuery"], {"showDeleted": "true", "singleEvents": "false"})
+
+    def test_calendar_cancelled_has_one_reading_in_the_read_and_the_feed(self):
+        document = self.composed["google-calendar"]
+        feed = document["components"]["crudResources"]["event"]["collections"]["events"]["x-deletion-feed"]
+        read = document["paths"]["/calendars/{calendarId}/events/{eventId}"]["get"]["x-read-tombstone"]
+        exception = [{"field": "recurringEventId", "present": True}]
+        self.assertEqual((read["field"], read["values"], read["except"]), ("status", ["cancelled"], exception))
+        self.assertEqual(feed["tombstone"], {"field": "status", "values": ["cancelled"], "except": exception})
+        # The feed is read with syncToken alone; pagination-v2 ("omit syncToken") is not selected.
+        self.assertEqual(feed["cursor"]["parameter"], "syncToken")
+        catalog = json.loads((ROOT / "catalog" / CATALOG).read_text(encoding="utf-8"))
+        overlays = next(p for p in catalog["platforms"] if p["name"] == "google-calendar")["overlays"]
+        self.assertNotIn(url(CALENDAR, "pagination-v2"), overlays)
+        self.assertNotIn(url(CALENDAR, "read-tombstone"), overlays)
 
 
 if __name__ == "__main__":

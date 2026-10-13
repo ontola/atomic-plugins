@@ -95,13 +95,19 @@ class CalendarReadTombstoneTests(unittest.TestCase):
         self.assertFalse(feeds.read_tombstone(declaration, exception, "id", "e2_1"))
         self.assertTrue(feeds.read_tombstone(declaration, {"id": "e1", "status": "cancelled"}, "id", "e1"))
 
-    def test_no_dated_catalog_selects_the_overlay(self):
-        # Whoever adds the overlay to a dated catalog changes this test to
-        # assert that only that catalog selects it, after the Calendar
-        # crud-causality overlay.
+    def test_only_the_syncables_0_22_catalog_selects_the_overlay(self):
+        # Whoever adds the overlay to another dated catalog changes this test.
+        # It comes after the Calendar crud-causality overlay there.
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
-                self.assertNotIn(OVERLAY, catalog.read_text(encoding="utf-8"))
+                text = catalog.read_text(encoding="utf-8")
+                if catalog.name == "2026-10-12-syncables-0.22.json":
+                    calendar = next(p for p in json.loads(text)["platforms"] if p["name"] == "google-calendar")
+                    names = [u.rsplit("/", 1)[1] for u in calendar["overlays"]]
+                    crud = next(i for i, n in enumerate(names) if "crud-causality" in n)
+                    self.assertGreater(names.index(OVERLAY), crud)
+                else:
+                    self.assertNotIn(OVERLAY, text)
 
 
 if __name__ == "__main__":
