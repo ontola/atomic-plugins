@@ -30,7 +30,10 @@ import type {
 } from '../openapi/types.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
 import { findRoute } from '../routing/router.js';
-import { resolveEffectiveScheme } from '../pagination/autodetect.js';
+import {
+  invalidAutoDetected,
+  resolveEffectiveScheme,
+} from '../pagination/autodetect.js';
 import {
   readCollections,
   type CollectionReadOptions,
@@ -4157,12 +4160,16 @@ export function createApiClient(
     }
   }
 
-  /** Whether a GET operation pages, or declares an x-pagination that cannot be applied. */
+  /**
+   * Whether a GET operation pages, declares an x-pagination that cannot be
+   * applied, or matches an invalid scheme by auto-detection.
+   */
   function paginated(operation: OperationObject | undefined): boolean {
     try {
+      const op = operation ?? { responses: {} };
       return (
-        resolveEffectiveScheme(doc, operation ?? { responses: {} }) !==
-        undefined
+        resolveEffectiveScheme(doc, op) !== undefined ||
+        invalidAutoDetected(doc, op) !== undefined
       );
     } catch {
       return true;
