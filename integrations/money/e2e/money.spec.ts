@@ -304,7 +304,7 @@ test.describe('money integration', () => {
     const syncCard = app.getByRole('region', { name: 'Sync status' });
     await expect(syncCard).toContainText('Synced just now');
     await expect(syncCard).toContainText(
-      '2 transactions from 1 statement; 2 arrived at the last sync',
+      '2 transactions from 1 statement; 2 imported here at the last sync',
     );
     await expect(syncCard).not.toContainText('Last sync:');
     await expect(syncCard).toContainText(
@@ -521,6 +521,74 @@ test.describe('money integration', () => {
       /^Sync failed /,
     );
     await expect(syncCard).not.toContainText('Simulated host failure');
+
+    // An import that stops midway (0.4.2's card): the host refuses the
+    // app's second write (its own writes go through /app-write). The same
+    // statement under another account brings 2 new transactions.
+    const other = mt940.replaceAll('NL00BUNQ0000000000', 'NL00BUNQ0000000001');
+    let writes = 0;
+    await page.route('**/app-write', route =>
+      ++writes === 2
+        ? route.fulfill({ status: 500, body: 'Simulated write failure' })
+        : route.continue(),
+    );
+
+    try {
+      await input.setInputFiles({
+        name: 'other.mt940',
+        mimeType: 'text/plain',
+        buffer: Buffer.from(other),
+      });
+      await expect(sheet.getByRole('tab', { name: 'New 2' })).toBeVisible({
+        timeout: 30_000,
+      });
+      await sheet
+        .getByRole('button', { name: 'Import 2 transactions' })
+        .click();
+      await expect(sheet).toContainText("The import didn't go through", {
+        timeout: 60_000,
+      });
+      await expect(syncCard).toContainText(
+        'The import stopped before every row was written.',
+      );
+      await expect(syncCard).toContainText(
+        'The rows written so far are kept; check the same file again to import the rest.',
+      );
+      expect(writes).toBeGreaterThanOrEqual(2);
+    } finally {
+      await page.unroute('**/app-write');
+    }
+
+    // The host recovers: the same file again writes the rest, nothing twice.
+    const otherRows = async () =>
+      (await rowsOf(page, own)).filter(
+        r =>
+          r[terms.properties['bank-account'].subject] === 'NL00BUNQ0000000001',
+      ).length;
+    await expect.poll(otherRows, { timeout: 30_000 }).toBe(1);
+    // Deliberately after the app's table caught up (#539): the check below
+    // compares the file with the app's own copy of the table, which counts
+    // the row written before the failure only once its refresh landed
+    // (4 transactions before, 5 now).
+    await expect(app.getByRole('tab', { name: /^Transactions/ })).toContainText(
+      '5',
+      { timeout: 30_000 },
+    );
+    await sheet.getByRole('button', { name: 'Close' }).first().click();
+    await input.setInputFiles({
+      name: 'other.mt940',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(other),
+    });
+    await expect(sheet.getByRole('tab', { name: 'New 1' })).toBeVisible({
+      timeout: 30_000,
+    });
+    await sheet.getByRole('button', { name: 'Import 1 transaction' }).click();
+    await expect(sheet).toBeHidden({ timeout: 60_000 });
+    await expect(syncCard).not.toContainText(
+      'The import stopped before every row was written.',
+    );
+    await expect.poll(otherRows, { timeout: 30_000 }).toBe(2);
   });
 
   test('Money app: a view of the importer’s Bank transactions table: import, statements, row editing, in-app check', async ({
@@ -641,7 +709,7 @@ test.describe('money integration', () => {
     ).toBeVisible();
     // The card dates the importer's import like the app's own.
     await expect(syncCard).toContainText('Synced just now');
-    await expect(syncCard).toContainText('2 arrived at the last sync');
+    await expect(syncCard).toContainText('2 imported here at the last sync');
 
     // The statement row, with its balances: the strip and the Imports tab.
     await expect(app.getByRole('group', { name: /^Accounts/ })).toContainText(

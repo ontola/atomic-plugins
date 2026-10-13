@@ -134,7 +134,8 @@ export function movePinProblem(checkout, ref) {
 
 /**
  * Tracked paths with uncommitted changes in `checkout` (staged or not), both
- * sides of a rename or copy included.
+ * sides of a rename or copy included, each path once (a copy's source can
+ * also be modified, say).
  */
 export function changedPaths(checkout) {
   // Not git(): its trim() would eat the leading space of " M path".
@@ -148,13 +149,15 @@ export function changedPaths(checkout) {
   const paths = [];
 
   for (let i = 0; i < fields.length; i++) {
-    const [x] = fields[i];
+    const [x, y] = fields[i];
     paths.push(fields[i].slice(3));
-    // A rename or copy is followed by its source path as its own field.
-    if (x === 'R' || x === 'C') paths.push(fields[++i]);
+    // A rename or copy, in the index (X) or in the working tree (Y, as an
+    // intent-to-add rename shows), is followed by its source path as its
+    // own field.
+    if ('RC'.includes(x) || 'RC'.includes(y)) paths.push(fields[++i]);
   }
 
-  return paths;
+  return [...new Set(paths)];
 }
 
 /**
