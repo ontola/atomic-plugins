@@ -156,7 +156,7 @@ describe('Money status card: the last import', () => {
   it('rows that just arrived: synced just now, with how many arrived, and no made-up counts', () => {
     const s = state({
       rows: [txn(), txn({ subject: 'did:ad:row-2' }), txn({ subject: 'r3' })],
-      arrived: { count: 2, at: NOW - 10_000 },
+      arrived: { count: 2, at: NOW - 10_000, source: 'elsewhere' },
       statements: [statement()],
     });
     const status = syncStatusFor({ state: s, now: NOW });
@@ -173,12 +173,24 @@ describe('Money status card: the last import', () => {
   it('rows that arrived into a table with no stored statements still say so', () => {
     const s = state({
       rows: [txn()],
-      arrived: { count: 1, at: NOW - 2 * MIN },
+      arrived: { count: 1, at: NOW - 2 * MIN, source: 'elsewhere' },
       statements: [],
     });
     expect(lines(s)).toMatchObject({
       headline: 'Synced 2 min ago',
       rows: '1 transaction in this table; 1 arrived at the last sync',
+    });
+  });
+
+  it("this view's own import: imported here, not arrived", () => {
+    const s = state({
+      rows: [txn(), txn({ subject: 'did:ad:row-2' })],
+      arrived: { count: 2, at: NOW - 5_000, source: 'import' },
+      statements: [statement()],
+    });
+    expect(lines(s)).toMatchObject({
+      headline: 'Synced just now',
+      rows: '2 transactions from 1 statement; 2 imported here at the last sync',
     });
   });
 

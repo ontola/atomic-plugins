@@ -7,7 +7,8 @@
  *   node usertest/catalog.mjs --record [out]   # after a version bump
  *
  * It first installs each app's plugin dependencies that have a lockfile and
- * no node_modules yet (`pnpm install --frozen-lockfile`, as run-lane.mjs and
+ * no node_modules yet, or a stale one installed from a different
+ * pnpm-lock.yaml (`pnpm install --frozen-lockfile`, as run-lane.mjs and
  * apps.mjs do through integrations/tooling/deps.mjs); `--no-install` skips
  * that. On CI, where every lockfile is installed first, it does nothing.
  *
@@ -96,7 +97,7 @@ const I = 'https://atomicdata.dev/integrations/properties/';
 export const VERSIONS = {
   calendar: 'usertest-12',
   'issue-tracker': 'usertest-11',
-  money: 'usertest-6',
+  money: 'usertest-7',
   notion: 'usertest-11',
   timesheets: 'usertest-12',
 };
@@ -247,11 +248,10 @@ export const appBase = id => APPS[id].base;
 
 /**
  * What to do when a build still misses a package: catalog.mjs installs a
- * missing node_modules itself, unless it ran with --no-install; one that is
- * present but stale it cannot notice.
+ * missing or stale node_modules itself, unless it ran with --no-install.
  */
 const INSTALL =
-  'run catalog.mjs without --no-install, which installs a missing node_modules; a node_modules that is present but stale it cannot notice, so in that plugin folder run pnpm install --frozen-lockfile by hand. CI installs every one with: for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile); done';
+  'run catalog.mjs without --no-install, which installs a missing or stale node_modules. From the repository root, CI installs every one with: for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile); done';
 
 /**
  * `run()`, with a build that fails on a missing package (esbuild's "Could
@@ -268,7 +268,7 @@ export async function explained(what, run) {
       /Could not resolve|Cannot find (module|package)/.test(text)
     )
       throw new Error(
-        `usertest: building ${what} failed on a missing package, so its plugin's dependencies are probably not installed here, or stale: ${INSTALL}\n${text}`,
+        `usertest: building ${what} failed on a missing package, so its plugin's dependencies are probably not installed here: ${INSTALL}\n${text}`,
         { cause: error },
       );
     throw error;

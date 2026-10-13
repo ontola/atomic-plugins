@@ -1,0 +1,50 @@
+# Reviewed 2026-10-12 against the pinned OAD and official provider documentation; no live calls.
+# Source: the pinned OAD's Event.status description (calendar.events.get, calendar.events.list)
+# Source: https://developers.google.com/workspace/calendar/api/v3/reference/events
+# Needs Deletion Feeds 0.3.0-draft (openapi-extensions/spec/deletion-feeds,
+# x-read-tombstone §4.4 with the Tombstone Object's `except`, §4.3).
+# Selected by no dated catalog yet.
+#
+# Revision 2 of read-tombstone-32237fa5... (#489), which stays as published.
+# That revision declared every "cancelled" event read as deleted, cancelled
+# exceptions of a recurring event included. The pinned document separates
+# them: "Cancelled exceptions of an uncancelled recurring event indicate
+# that this instance should no longer be presented to the user. Clients
+# should store these events for the lifetime of the parent recurring
+# event." and "All other cancelled events represent deleted events. Clients
+# should remove their locally synced copies." A state the provider tells
+# clients to store is not documented as deletion, so Deletion Feeds §4.3
+# requires excluding it: a cancelled exception carries recurringEventId
+# ("Cancelled exceptions are only guaranteed to have values for the id,
+# recurringEventId and originalStartTime fields populated"). The list
+# tombstone overlay (list-tombstone-32237fa5...) declares the same marker
+# and exception on the event list, so an event has one reading whether a
+# read or a list answers it.
+#
+# So a 2xx from calendar.events.get whose `status` is "cancelled" and that
+# has no recurringEventId is a read tombstone (§4.4): the event was deleted
+# when it was read. A cancelled exception of a deleted series is deleted
+# too by the document's words, but the read does not show its series'
+# state, so it is kept (the series' own read reports the series). The same
+# description says that on the organizer's calendar cancelled events "can
+# be restored (undeleted)", so a consumer treats the read tombstone as
+# restorable, as §4.4 requires of every read tombstone.
+#
+# Declared on the item read operation (§4.4 allows it there), so it applies
+# whichever crud-causality overlay a catalog selects for the `event`
+# resource, and resolves against the bare OAD.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32237fa5d14aa887dc9f3923395dac971e00a36c/APIs/googleapis.com/calendar/v3/openapi.yaml
+info:
+  title: Google Calendar v3 cancelled events as read tombstones (revision 2)
+  version: 2.0.0
+actions:
+  - target: $.paths['/calendars/{calendarId}/events/{eventId}'].get
+    update:
+      x-read-tombstone:
+        field: status
+        values:
+          - cancelled
+        except:
+          - field: recurringEventId
+            present: true
