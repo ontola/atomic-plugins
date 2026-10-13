@@ -69,7 +69,9 @@ actions:
                 series: Google's showDeleted description says individually
                 cancelled instances are listed with singleEvents=false. Whether
                 instances changed but not cancelled are listed too is not
-                verified against a live calendar. This overlay declares no tombstones in the list
+                verified against a live calendar. Hidden invitations are left
+                out: showHiddenInvitations ("The default is False") is not
+                sent. This overlay declares no tombstones in the list
                 (Deletion Feeds §8 leaves that out).
               listQuery:
                 showDeleted: 'true'

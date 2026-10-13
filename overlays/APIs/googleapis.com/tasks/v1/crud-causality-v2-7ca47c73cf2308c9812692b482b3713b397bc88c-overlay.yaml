@@ -57,7 +57,10 @@ actions:
                 (showHidden defaults to false), and completed tasks made in
                 Google's own clients are hidden too unless showHidden is true,
                 so both flags are fixed to true. Deleted tasks (showDeleted)
-                stay excluded.
+                stay excluded. Tasks assigned to the current user are left out
+                too: Google's tasks.list has showAssigned ("The
+                default is False"), which the pinned document does not
+                declare, so the collection does not send it.
               listQuery:
                 showCompleted: 'true'
                 showHidden: 'true'

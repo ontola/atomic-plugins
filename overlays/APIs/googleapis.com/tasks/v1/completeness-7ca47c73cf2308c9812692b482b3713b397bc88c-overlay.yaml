@@ -42,7 +42,10 @@ actions:
                 description: >-
                   A complete read sends showCompleted=true and showHidden=true
                   (the collection's listQuery) and every page; it then returns
-                  every task of the list that is not deleted. A task leaves it
+                  every task of the list that is not deleted, apart from tasks
+                  assigned to the user (showAssigned, "The default is False",
+                  is not in the pinned document and is not sent), which are
+                  not members of this collection. A task leaves it
                   when deleted (a read then answers 200 with deleted true, as
                   Task.deleted documents) and possibly in other ways Google
                   does not document, so absence is removed. Google does not

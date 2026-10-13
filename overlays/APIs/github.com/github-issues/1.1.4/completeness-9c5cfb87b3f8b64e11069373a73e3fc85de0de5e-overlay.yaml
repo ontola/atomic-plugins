@@ -31,7 +31,11 @@ actions:
                 description: >-
                   With state=all (the collection's fixed read) every page
                   returns every issue and pull request of the repository,
-                  open and closed. An issue leaves it when transferred to
+                  open and closed. The list is paged by page number, which
+                  Collection Completeness §7 advises against: an issue deleted
+                  or transferred during a read shifts the later pages, so a
+                  member can be skipped; it is then absent, stays unconfirmed,
+                  and its own read (a GET) settles it. An issue leaves it when transferred to
                   another repository or deleted, so absence is removed. Its
                   own read then answers 301 (transferred), 404 (transferred
                   or deleted where the caller lacks read access) or 410
