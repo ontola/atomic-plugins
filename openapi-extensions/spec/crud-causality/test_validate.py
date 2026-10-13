@@ -1,4 +1,4 @@
-"""CRUD Causality 0.5.0: collection reads (listMethod, listQuery, listBody) and compound creates."""
+"""CRUD Causality 0.5.0: every rule of §8, collection reads (listMethod, listQuery, listBody) and compound creates."""
 import copy
 import pathlib
 import unittest
@@ -6,7 +6,8 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import compound_create, continue_compound_create, created_identity, read_request, validate
+from validate import (compound_create, continue_compound_create, created_identity, path_template_problem,
+                      read_request, validate)
 
 ROOT = pathlib.Path(__file__).parent
 
@@ -454,6 +455,158 @@ class CompoundCreateSecondReviewTests(unittest.TestCase):
         with self.assertRaises(ValueError) as raised:
             validate(self.document)
         self.assertIn("field 'labels' has more than one follow-up", str(raised.exception))
+
+
+def lifecycle():
+    return yaml.safe_load((ROOT / "examples" / "widget-lifecycle.yaml").read_text(encoding="utf-8"))
+
+
+class StructureRuleTests(unittest.TestCase):
+    """Rules 1, 3, 5-8 and 10-13, and the value sets of §4.1, §4.3.2 and §4.6, on examples/widget-lifecycle.yaml."""
+
+    def outcome(self, mutate):
+        document = lifecycle()
+        mutate(document)
+        warnings = []
+        try:
+            validate(document, warnings)
+        except ValueError as raised:
+            return str(raised), warnings
+        return "", warnings
+
+    def invalid(self, mutate, fragment):
+        errors, _ = self.outcome(mutate)
+        self.assertIn(fragment, errors)
+
+    def warns(self, mutate, fragment):
+        errors, warnings = self.outcome(mutate)
+        self.assertEqual(errors, "")
+        self.assertTrue(any(fragment in w for w in warnings), warnings)
+
+    @staticmethod
+    def crud(document, path, method):
+        return document["paths"][path][method]["x-crud"]
+
+    @staticmethod
+    def resource(document, name):
+        return document["components"]["crudResources"][name]
+
+    def test_example_is_valid_without_warnings(self):
+        warnings = []
+        validate(lifecycle(), warnings)
+        self.assertEqual(warnings, [])
+
+    def test_example_is_valid_openapi_without_the_extension_members(self):
+        document = lifecycle()
+        document["components"].pop("crudResources")
+        for item in document["paths"].values():
+            for operation in item.values():
+                if isinstance(operation, dict):
+                    operation.pop("x-crud", None)
+        validate_openapi(document)
+
+    def test_rule_1_action(self):
+        self.invalid(lambda d: self.crud(d, "/widgets", "get").update(action="search"),
+                     "paths./widgets.get.x-crud.action: 'search' is not one of create, list, read, update, delete (rule 1)")
+        self.invalid(lambda d: self.crud(d, "/widgets", "get").pop("action"), "None is not one of")
+
+    def test_rule_2_resource(self):
+        self.invalid(lambda d: self.crud(d, "/widgets/{widgetId}", "get").update(resource="gadget"),
+                     "paths./widgets/{widgetId}.get.x-crud.resource: 'gadget' is not a crudResources key (rule 2)")
+
+    def test_rule_3_create_url(self):
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").pop("url"),
+                     "paths./widgets.post.x-crud.url: required for action create (rule 3)")
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").update(url={"source": "location"}),
+                     "url.source: expected one of header, bodyField, template (§4.3.2)")
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").update(url={"source": "bodyField"}),
+                     "url.name: source bodyField needs a dot-path name (§4.3.2)")
+        for url in ({"source": "template"}, {"source": "header"}, {"source": "bodyField", "name": "self.href"}):
+            with self.subTest(url=url):
+                self.assertEqual(self.outcome(lambda d: self.crud(d, "/widgets", "post").update(url=url))[0], "")
+
+    def test_rule_4_list_collection(self):
+        self.invalid(lambda d: self.crud(d, "/widgets", "get").update(collection="gadgets"),
+                     "x-crud.collection: 'gadgets' is not a collection of widget (rule 4)")
+
+    def test_rule_5_update_mode(self):
+        self.invalid(lambda d: self.crud(d, "/widgets/{widgetId}", "patch").pop("mode"),
+                     "paths./widgets/{widgetId}.patch.x-crud.mode: required for action update (rule 5)")
+        self.invalid(lambda d: self.crud(d, "/widgets/{widgetId}", "put").update(mode="merge"),
+                     "x-crud.mode: 'merge' is not replace or patch (rule 5)")
+
+    def test_rule_6_patch_format_is_a_should(self):
+        self.warns(lambda d: self.crud(d, "/widgets/{widgetId}", "patch").pop("patchFormat"),
+                   "mode patch without patchFormat (rule 6, SHOULD)")
+
+    def test_patch_format_values(self):
+        self.invalid(lambda d: self.crud(d, "/widgets/{widgetId}", "patch").update(patchFormat="merge"),
+                     "x-crud.patchFormat: 'merge' is not one of jsonPatch, jsonMergePatch, custom (§4.6)")
+
+    def test_rule_7_member_of_and_removes_from(self):
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").update(memberOf=["widgets", "favourites"]),
+                     "x-crud.memberOf: 'favourites' is not a collection of widget (rule 7)")
+        self.invalid(lambda d: self.crud(d, "/widgets/{widgetId}/recent", "delete").update(removesFrom=["gone"]),
+                     "x-crud.removesFrom: 'gone' is not a collection of widget (rule 7)")
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").update(memberOf="widgets"),
+                     "x-crud.memberOf: expected an array of collection names (rule 7)")
+        self.assertEqual(self.outcome(lambda d: self.crud(d, "/widgets/{widgetId}/recent", "delete")
+                                      .update(removesFrom=["*"]))[0], "")
+
+    def test_rule_8_path_templates(self):
+        self.invalid(lambda d: self.resource(d, "widget")["identity"].update(urlTemplate="widgets/{widgetId}"),
+                     "crudResources.widget.identity.urlTemplate: 'widgets/{widgetId}' must begin with / (rule 8)")
+        self.invalid(lambda d: self.resource(d, "widget")["collections"]["widgets"].update(urlTemplate="/widgets?all=1"),
+                     "crudResources.widget.collections.widgets.urlTemplate: '/widgets?all=1' has a query or fragment (rule 8)")
+        for template, problem in [("/w/{a", "has an unclosed {"), ("/w/a}", "has a } without {"),
+                                  ("/w/{{a}}", "has a nested {"), ("/w/{}", "has an empty {}"),
+                                  ("/w/{a}/{a}", "names 'a' twice"), (7, "expected a string")]:
+            with self.subTest(template=template):
+                self.assertEqual(path_template_problem(template), problem)
+        for template in ["/widgets", "/reports/{id}.json", "/a/{b}/c/{d}"]:
+            self.assertIsNone(path_template_problem(template))
+
+    def test_identity_and_url_template_are_required(self):
+        self.invalid(lambda d: self.resource(d, "widget").pop("identity"),
+                     "crudResources.widget.identity: an identity with a urlTemplate is required (§4.1, §4.1.1)")
+        self.invalid(lambda d: self.resource(d, "project")["identity"].pop("urlTemplate"),
+                     "crudResources.project.identity: an identity with a urlTemplate is required")
+
+    def test_rule_9_identity_bindings(self):
+        self.invalid(lambda d: self.resource(d, "widget")["identity"]["bindings"].update(gadgetId={"field": "id"}),
+                     "crudResources.widget.identity.bindings.gadgetId: not a variable of urlTemplate")
+
+    def test_rule_10_unbound_identity_variables_come_from_a_collection(self):
+        self.warns(lambda d: self.resource(d, "project")["collections"]["projects"].update(urlTemplate="/projects"),
+                   "crudResources.project.identity.urlTemplate: {workspaceId} is neither bound nor in a collection's urlTemplate (rule 10, SHOULD)")
+
+    def test_rule_11_reference_resource(self):
+        self.invalid(lambda d: self.resource(d, "timeEntry")["references"]["project"].update(resource="client"),
+                     "crudResources.timeEntry.references.project.resource: 'client' is not a crudResources key (rule 11)")
+
+    def test_rule_12_reference_bindings_name_target_variables(self):
+        self.invalid(lambda d: self.resource(d, "timeEntry")["references"]["project"]["bindings"]
+                     .update(timeEntryId={"field": "id"}),
+                     "crudResources.timeEntry.references.project.bindings.timeEntryId: not a variable of project's urlTemplate")
+        self.invalid(lambda d: self.resource(d, "timeEntry")["references"]["project"].pop("bindings"),
+                     "references.project.bindings: required, an object (§4.1.3)")
+
+    def test_rule_13_unbound_target_variables_come_from_the_referring_collections(self):
+        def move(d):
+            self.resource(d, "timeEntry")["collections"]["timeEntries"]["urlTemplate"] = "/time-entries"
+            self.resource(d, "timeEntry")["identity"]["urlTemplate"] = "/time-entries/{timeEntryId}"
+        self.warns(move, "references.project: {workspaceId} of project's urlTemplate is neither bound nor in a "
+                         "collection's urlTemplate of timeEntry (rule 13, SHOULD)")
+
+    def test_every_violation_is_reported(self):
+        def break_three(d):
+            self.crud(d, "/widgets/{widgetId}", "patch").pop("mode")
+            self.crud(d, "/widgets", "get").update(action="search")
+            self.resource(d, "widget")["identity"]["urlTemplate"] = "/widgets/{widgetId"
+        errors, _ = self.outcome(break_three)
+        self.assertIn("(rule 1)", errors)
+        self.assertIn("(rule 5)", errors)
+        self.assertIn("(rule 8)", errors)
 
 
 if __name__ == "__main__":

@@ -759,19 +759,33 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 
 ## Validator and tests
 
-[`validate.py`](validate.py) checks rules 2, 4, 9, 14–19 and 20–24 for a loaded OpenAPI
-document: the collection reads of §4.2.1 and the resource and collection names
-they depend on; rule 19 is reported as a warning, and the `x-list-*` forms are not checked. It does not check the other
-rules. It also holds `read_request`, which builds the first request of a read
-(§4.2.1 steps 1–3, with the `x-list-*` fallback), and `compound_create` and `continue_compound_create`, a reference implementation of §4.7.2 over caller-supplied request functions, with `created_identity` reading the created object's identity back as §4.3.2 says. [`examples/compound-create.yaml`](examples/compound-create.yaml) is a synthetic document with a compound create. [`examples/fixed-query.yaml`](examples/fixed-query.yaml)
-is a synthetic document with a fixed-query `GET` collection and a `POST`
-search collection. From the repository root:
+[`validate.py`](validate.py) checks every rule of §8 for a loaded OpenAPI
+document (OpenAPI 3, or Swagger 2.0 with the root `x-crudResources` of §6).
+The SHOULD rules 6, 10, 13 and 19 are reported as warnings. It also checks
+the value sets the object tables give: a required `identity` with a
+`urlTemplate` (§4.1, §4.1.1), a Url Source Object's `source`, with a `name`
+for `bodyField` (§4.3.2), and a `patchFormat` from §4.6. Rule 8's path
+template syntax is: begins with `/`, no query or fragment, every `{name}`
+closed, not nested, nonempty, and no name twice. Rules 14–18 constrain the
+standard fields only; the `x-list-*` forms are not checked. Each error names
+its location and its rule. It also holds `read_request`, which builds the
+first request of a read (§4.2.1 steps 1–3, with the `x-list-*` fallback),
+and `compound_create` and `continue_compound_create`, a reference
+implementation of §4.7.2 over caller-supplied request functions, with
+`created_identity` reading the created object's identity back as §4.3.2
+says. [`examples/widget-lifecycle.yaml`](examples/widget-lifecycle.yaml) is
+§7.1, §7.3, §7.4 and §7.6 as one synthetic document.
+[`examples/compound-create.yaml`](examples/compound-create.yaml) is a
+synthetic document with a compound create.
+[`examples/fixed-query.yaml`](examples/fixed-query.yaml) is a synthetic
+document with a fixed-query `GET` collection and a `POST` search collection.
+From the repository root:
 
 ```sh
 cd openapi-extensions/spec/crud-causality
 pip install -r requirements.txt
 python3 -m unittest test_validate
-python3 validate.py examples/fixed-query.yaml examples/compound-create.yaml
+python3 validate.py examples/*.yaml
 ```
 
 ## Changes
