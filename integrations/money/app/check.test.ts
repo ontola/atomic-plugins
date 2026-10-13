@@ -9,7 +9,13 @@ import {
   type ImportPort,
   type State,
 } from './controller.js';
-import { fakeStore, property, TABLE, type SeedRow } from './fakeStore.js';
+import {
+  fakeStore,
+  property,
+  seedRow,
+  TABLE,
+  type SeedRow,
+} from './fakeStore.js';
 import { readRow, type Txn } from './rows.js';
 import type { ImporterRun } from './store.js';
 
@@ -333,6 +339,57 @@ describe('importing through the host (atomic-server#1774)', () => {
       source: 'import',
     });
     expect(controller.state().statements).toHaveLength(1);
+  });
+
+  it('counts rows that arrive before the run returns as this import, and later strangers as arrived (#537 review)', async () => {
+    const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+    let seenDuringRun: unknown;
+    let outcome: 'applied' | 'cancelled' = 'applied';
+    // The importer's writes reach the subscription, and its refresh
+    // completes, before the run's result does.
+    const store = fakeStore({
+      importRun: async () => {
+        store.addRows([seedRow('-4.20', '2026-09-20')]);
+        for (let i = 0; i < 4; i++) await tick();
+        seenDuringRun = controller.state().arrived;
+
+        return outcome === 'applied'
+          ? {
+              status: 'applied',
+              created: 1,
+              updated: 0,
+              destroyed: 0,
+              failed: 0,
+            }
+          : { status: 'cancelled' };
+      },
+    });
+    let clock = 1_790_000_000_000;
+    const controller = createController(store, () => {}, {
+      tick: async () => {},
+      now: () => clock,
+    });
+    await controller.load();
+    await controller.importFile(file(mt940));
+    await controller.applyImport();
+    expect(seenDuringRun).toMatchObject({ count: 1, source: 'import' });
+
+    // 15 s later, a row from someone else is not this view's import.
+    clock += 16_000;
+    store.addRows([seedRow('-1.00', '2026-09-21')]);
+    for (let i = 0; i < 4; i++) await tick();
+    expect(controller.state().arrived).toMatchObject({
+      count: 1,
+      source: 'elsewhere',
+    });
+
+    // A run that is cancelled: what arrives afterwards is not the import.
+    outcome = 'cancelled';
+    await controller.importFile(file(mt940));
+    await controller.applyImport();
+    store.addRows([seedRow('-2.00', '2026-09-22')]);
+    for (let i = 0; i < 4; i++) await tick();
+    expect(controller.state().arrived).toMatchObject({ source: 'elsewhere' });
   });
 
   it('goes back to the preview when the review is cancelled, and says why when blocked', async () => {

@@ -111,12 +111,12 @@ Moneybird's mapping passes in `money/moneybird/status.test.ts`, its DOM in
 `view.test.ts`, and the `money` lane's `moneybird.spec.ts` checks the card
 before any sync, after the import, after a failed contacts refresh and on an
 unsynced table.
-Money's mapping passes in `money/app/status.test.ts` (14 tests), its DOM in
+Money's mapping passes in `money/app/status.test.ts` (15 tests), its DOM in
 `money/app/view.test.ts` (the pill and the card both "Sync failed" on a load
 error), and the `money` lane's `money.spec.ts` checks the card after the
 MT940 import into the app's own table ("Synced just now", "2 transactions
-from 1 statement; 2 imported here at the last sync" from 0.4.4, "2 arrived" before, no counts line, read-only
-with the no-provider note).
+from 1 statement; 2 imported here at the last sync" from 0.4.4, "2 arrived"
+before, no counts line, read-only with the no-provider note).
 Notion's mapping passes in `notion/app/view/status.test.ts` (19 tests) and
 through the real controller in `notion/app/twoway.test.ts`; the `notion` e2e
 checks the card after the first sync, after a failed sync (with the last good

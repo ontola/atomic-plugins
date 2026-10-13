@@ -287,7 +287,7 @@ export function createController(
   let again = false;
   /**
    * Until when (epoch ms) a refresh's new rows count as this view's import:
-   * set when an import applies, for the refreshes that follow it.
+   * `Infinity` while an import runs, then 15 s after it applied, else 0.
    */
   let importedUntil = 0;
 
@@ -761,6 +761,11 @@ export function createController(
         },
       });
 
+      // Rows that arrive while the run is under way are this view's import
+      // too: the host importer's writes can reach the subscription before
+      // its result does (#537 review).
+      importedUntil = Infinity;
+
       try {
         const outcome = await port.apply(
           pendingText,
@@ -772,6 +777,7 @@ export function createController(
               update({ importing: { ...current, progress } });
           },
         );
+        importedUntil = outcome.status === 'applied' ? now() + 15_000 : 0;
         if (mine !== run) return;
 
         if (outcome.status === 'applied' || outcome.status === 'nothing') {
@@ -783,7 +789,6 @@ export function createController(
           // writes made while the host's socket reconnects.
           update({ importing: undefined });
 
-          if (outcome.status === 'applied') importedUntil = now() + 15_000;
           if (outcome.status === 'applied')
             for (const delay of [0, 1000, 4000])
               setTimeout(() => {
@@ -805,6 +810,7 @@ export function createController(
             },
           });
       } catch (error) {
+        importedUntil = 0;
         if (mine === run)
           update({
             importing: {
