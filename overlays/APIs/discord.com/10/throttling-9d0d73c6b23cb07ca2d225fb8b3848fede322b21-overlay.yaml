@@ -4,7 +4,8 @@
 #   number of remaining requests that can be made"; X-RateLimit-Reset "Epoch time (seconds
 #   since 00:00:00 UTC on January 1, 1970) at which the rate limit resets";
 #   X-RateLimit-Reset-After "Total time (in seconds) of when the current rate limit bucket
-#   will reset"; X-RateLimit-Bucket "A unique string denoting the rate limit being
+#   will reset. Can have decimals to match previous millisecond ratelimit precision";
+#   X-RateLimit-Bucket "A unique string denoting the rate limit being
 #   encountered"; a 429 body has retry_after, "The number of seconds to wait before
 #   submitting another request", and applications should "rely on the Retry-After header or
 #   retry_after field to determine when to retry the request".
@@ -16,13 +17,17 @@
 # The reset and delay values are declared in whole seconds (epochSeconds, deltaSeconds),
 # the only units the extension has. Discord's documentation and the pinned OAD type them as
 # numbers and its 429 example has a fraction (retry_after 64.57); a value with a fraction
-# does not parse in those units, so a consumer ignores it and falls back to Retry-After or
-# its own backoff, never to a shorter wait. Plainly: when Discord sends a fractional
+# does not parse in those units, so a consumer ignores it and falls back to another
+# declared value that parses, or else its own backoff, which may be shorter or longer than
+# Discord's wait. Plainly: when Discord sends a fractional
 # X-RateLimit-Reset-After or retry_after (its example values are 1.337 and 64.57), a consumer
 # that follows the Throttling spec cannot use that value at all; the spec allows whole
 # seconds only. The declarations help only when Discord sends whole seconds.
-# Not declared: the global limit ("All bots can make up to 50 requests per second"), which
-# the page states for bots while the catalog connects a user through OAuth; the per-route
+# Not declared: the global limit. It applies to users as well as bots ("Global rate limits
+# apply to the total number of requests a bot or user makes, independent of any per-route
+# limits"), but the page publishes a number only for bots ("All bots can make up to 50
+# requests per second"), and the catalog connects a user through OAuth; a 429 from it is
+# still classified (X-RateLimit-Global, X-RateLimit-Scope global). The per-route
 # buckets, which have no published numbers and are named only at run time
 # (X-RateLimit-Bucket); and the invalid-request limit (10,000 per 10 minutes per IP), which
 # counts only 401, 403 and 429 responses, not every request.
@@ -49,7 +54,8 @@ actions:
             unit: deltaSeconds
             description: >-
               "Total time (in seconds) of when the current rate limit bucket
-              will reset". Preferred over X-RateLimit-Reset (an epoch time),
+              will reset. Can have decimals to match previous millisecond
+              ratelimit precision". Preferred over X-RateLimit-Reset (an epoch time),
               which reports the same moment against Discord's clock. A
               fractional value (Discord's example: 1.337) cannot be used by a
               consumer that follows the Throttling spec, which allows whole

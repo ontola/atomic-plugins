@@ -265,9 +265,10 @@ ignored and the consumer falls back to `Retry-After` or its own backoff.
 Plainly: a consumer that follows the spec cannot use a fractional
 `X-RateLimit-Reset-After` or `retry_after` at all, because the Throttling
 spec allows whole seconds only.
-Not declared: the global limit, which the page states for bots while the
-catalog connects a user; the per-route limits, which have no published
-numbers; and the invalid-request limit, which counts only 401, 403 and 429
+Not declared: the global limit, which applies to bots and users ("Global
+rate limits apply to the total number of requests a bot or user makes") but
+has a published number only for bots ("All bots can make up to 50 requests
+per second"); the per-route limits, which have no published numbers; and the invalid-request limit, which counts only 401, 403 and 429
 responses. No dated catalog selects it yet.
 `tests/test_discord_throttling.py` composes it alone and after the
 catalog's Discord overlays and classifies synthetic responses, fractions
