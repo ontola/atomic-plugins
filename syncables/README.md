@@ -231,9 +231,12 @@ changes within two days are not told apart.
 immediately and return, then apply themselves against the server in the
 background. Confirmed provider state is separate from pending local intent;
 refreshes and older write responses replay remaining mutations rather than
-replacing newer local edits. Updates use the item's declared PUT, or PATCH
-when PUT is absent. The chosen operation's CRUD Causality `x-crud` (an
-`update` for the same resource; §4.3 `mode`, §4.6 `patchFormat`) sets the
+replacing newer local edits. Updates use the item path's operation that
+declares CRUD Causality `x-crud: { action: update }` for the record's
+resource: when exactly one of its PUT and PATCH does, that one; when both
+do, the PUT; when neither does (or in a legacy document, without
+`components.crudResources`), the PUT, or the PATCH when there is no PUT.
+The chosen operation's `x-crud` (§4.3 `mode`, §4.6 `patchFormat`) sets the
 body:
 
 - `mode: replace`, no `x-crud`, or a legacy document (no
@@ -255,9 +258,11 @@ body:
 - `patchFormat: custom`, or `mode: patch` without `patchFormat`: the full
   record, as for `replace`. Whether the provider accepts that is not checked.
 
-A declared PUT is chosen even when the item's PATCH is declared as a merge
-patch, so such a document still sends full records; preferring the merge
-patch there is a possible follow-up, not done.
+With both declared, the PUT is chosen even when the PATCH is declared as a
+merge patch, so such a document still sends full records; preferring the
+merge patch there is a possible follow-up, not done. A PATCH declared with
+`patchFormat: jsonPatch` beside an undeclared PUT is followed: `update()`
+throws.
 
 A merge-patch edit records the confirmed values of the top-level fields it
 names, so a remote change anywhere inside a nested object it patches is
@@ -1816,6 +1821,15 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: Updates follow `x-crud: { action: update }`: an item-path
+  PUT or PATCH that declares it for the record's resource is used over one
+  that does not (before, any PUT on the item path was used). With both
+  declared the PUT is kept; with neither, the PUT, else the PATCH, as
+  before; legacy documents are unchanged. Behaviour change for a document
+  whose PATCH alone declares the update while the path also has a PUT, such
+  as Google Calendar's events with the catalog's `app-crud-causality`
+  overlay (PATCH, with the full record, instead of PUT); a PATCH declared
+  with `patchFormat: jsonPatch` there now makes `update()` throw.
 - **Unreleased**: Produced Classes 0.1.0-draft (`x-produces`), read-only:
   `producedClasses`, `resourcesProducing`, `ReadCollection.produces`,
   `ApiClient.produces`, `lensFits`, and the spec's checks (`checkProduces`,
