@@ -1,0 +1,104 @@
+# Reviewed 2026-10-13 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://docs.gitlab.com/user/gitlab_com/rate_limits/
+#   "Authenticated API traffic for a user": "2,000 requests each minute"; "All traffic from an
+#   IP address": "2,000 requests each minute"; "Projects list requests (/api/v4/projects)":
+#   "2,000 requests every 10 minutes"; "Single project requests (/api/v4/projects/:id)": "400
+#   requests each minute" (the limits in effect; the page also lists proposed tier-aware
+#   limits that are not yet in effect); "When a request is rate limited, GitLab responds with
+#   a 429 Too Many Requests status code."
+# Source: https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/
+#   (Response headers) on all responses: RateLimit-Limit "The request quota for the client
+#   each minute.", RateLimit-Observed "Number of requests associated with the client in the
+#   time window.", RateLimit-Remaining "Remaining quota in the time window.", RateLimit-Reset
+#   "Unix time-formatted time when the request quota is reset."; on a 429 only:
+#   RateLimit-ResetTime ("RFC2616-formatted date and time") and Retry-After "Remaining
+#   duration in seconds until the quota is reset."
+# The pinned document is a read-only GitLab.com subset ("Only GitLab.com is represented"), so
+# GitLab.com's limits are the ones that apply. It declares no 429 response.
+# Needs Throttling 0.2.0-draft (openapi-extensions/spec/throttling: limits, headers, signals).
+# Every operation counts against the per-user and the per-IP limit; the project list and the
+# single-project read also against their own endpoint limit. The endpoint rows do not say
+# per what they count, so those buckets name no partition. The IP is the one GitLab sees: a
+# proxy's address is shared by everyone connecting through it.
+# Not declared: RateLimit-ResetTime (the same moment as RateLimit-Reset, and a role appears
+# once); RateLimit-Name (a throttle name, no role); the unauthenticated limit (60 each hour
+# per IP: every operation here is called with a user's token); the proposed tier-aware
+# limits (not in effect). The page names no limit for the issue list or issue read.
+overlay: 1.0.0
+info:
+  title: GitLab.com REST API v4 throttling
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/f6d7940e9865903b9c99c5c1fc2d57d92811eef4/APIs/gitlab.com/v4-readonly/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        limits:
+          authenticatedApi:
+            requests: 2000
+            window: { seconds: 60, kind: unspecified }
+            partitionBy: [user]
+            description: >-
+              "Authenticated API traffic for a user": "2,000 requests each
+              minute" on GitLab.com, the limit in effect when this was
+              reviewed. The page lists tier-aware limits as proposed and not
+              in effect; supersede this revision when they take effect. The
+              counting algorithm is not documented.
+          allTrafficPerIp:
+            requests: 2000
+            window: { seconds: 60, kind: unspecified }
+            partitionBy: [sourceIp]
+            description: >-
+              "All traffic from an IP address": "2,000 requests each minute".
+              Behind a proxy every user of it shares this counter.
+          projectsList:
+            requests: 2000
+            window: { seconds: 600, kind: unspecified }
+            description: >-
+              "Projects list requests (/api/v4/projects)": "2,000 requests
+              every 10 minutes". The row does not say per what it counts.
+          singleProject:
+            requests: 400
+            window: { seconds: 60, kind: unspecified }
+            description: >-
+              "Single project requests (/api/v4/projects/:id)": "400 requests
+              each minute". The row does not say per what it counts.
+        applies: [authenticatedApi, allTrafficPerIp]
+        headers:
+          RateLimit-Limit:
+            role: limit
+            description: >-
+              "The request quota for the client each minute." When the
+              throttle's period is not one minute, GitLab adjusts it "to
+              approximately the nearest 60-minute period", so it is not
+              always the request count of the window that RateLimit-Reset
+              ends.
+          RateLimit-Observed:
+            role: used
+            description: '"Number of requests associated with the client in the time window."'
+          RateLimit-Remaining:
+            role: remaining
+            description: '"Remaining quota in the time window."'
+          RateLimit-Reset:
+            role: reset
+            unit: epochSeconds
+            description: '"Unix time-formatted time when the request quota is reset."'
+          Retry-After:
+            role: retryAfter
+            unit: deltaSeconds
+            description: >-
+              On a 429 only: "Remaining duration in seconds until the quota is
+              reset."
+        signals:
+          - status: [429]
+            meaning: throttled
+            description: >-
+              "When a request is rate limited, GitLab responds with a 429 Too
+              Many Requests status code." GitLab.com has several throttles
+              (RateLimit-Name names the one applied), so no bucket is named.
+  - target: $.paths['/projects'].get
+    update:
+      x-throttling: [authenticatedApi, allTrafficPerIp, projectsList]
+  - target: $.paths['/projects/{id}'].get
+    update:
+      x-throttling: [authenticatedApi, allTrafficPerIp, singleProject]
