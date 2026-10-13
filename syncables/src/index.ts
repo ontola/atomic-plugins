@@ -103,6 +103,19 @@ export type {
   RuntimeMembers,
   RuntimeProperty,
 } from './read/runtime-schemas.js';
+export {
+  absoluteIri,
+  checkProduces,
+  lensFits,
+  parseProduces,
+  producedClasses,
+  resourcesProducing,
+  sameSubject,
+} from './read/produced-classes.js';
+export type {
+  ProducedClass,
+  ResourceProduction,
+} from './read/produced-classes.js';
 export { buildBody, buildQuery } from './pagination/request-builder.js';
 export type { PageCursor } from './pagination/request-builder.js';
 export { parseLinkHeader } from './pagination/response-parser.js';
@@ -127,6 +140,8 @@ export type {
   ThrottlingVerdict,
   TimeUnit,
 } from './throttling/throttling.js';
+export { Pacer } from './throttling/pacing.js';
+export type { Quota } from './throttling/pacing.js';
 export { halves, WindowReadError } from './pagination/window.js';
 export type {
   RangeWindowObject,

@@ -413,6 +413,38 @@ heuristically.
   connection the key is namespaced per connection, above). None of them
   widens what the catalog allows or which credential is sent.
 
+## Pacing under provider quotas (P4, unreleased)
+
+The proxy paces its own requests under `x-throttling` buckets partitioned by
+`sourceIp` or by nothing (README, "Pacing under provider quotas"). Without
+it, one tenant could spend a quota the provider counts on the proxy's
+address and every other tenant of that platform would be refused by the
+provider. What it changes for safety:
+
+- **Only authenticated requests count.** The log is taken after
+  authentication, delegation, the access policy and the catalog checks, so
+  nobody without a connection can fill a bucket. A tenant with a connection
+  still can, by sending up to the bucket's limit itself: the pacing keeps
+  the proxy's traffic under the provider's limit; it is not fair between
+  tenants, and nothing on this release bounds one tenant's share. (A
+  per-owner limit on proxied requests is proposed separately, and would not
+  bound this either: an owner is any agent key, and anyone can make more.)
+- **No-credential platforms.** A platform whose document needs no
+  credential (`security: []`) lets almost anyone create a connection: the
+  consent page asks for nothing and the owner is whichever agent signs. So
+  on such a platform anyone can spend its `sourceIp` bucket and keep other
+  tenants' requests refused with `429 provider_quota` for as long as they
+  keep sending; `AccessPolicy` (an allowlist of owners) is the only bound.
+- **Bounded memory.** One log per declared bucket, keyed by platform and
+  bucket id from the server-owned catalog, never by anything a caller
+  sends; each log holds at most `requests` timestamps, and buckets above
+  10,000 are not paced.
+- **Nothing is learned about other tenants** beyond what a provider's `429`
+  already shows: a `provider_quota` refusal says the shared bucket is full
+  and when it frees, not who filled it.
+- **Fails open.** A malformed or unknown declaration paces nothing; the
+  provider's own limit still applies.
+
 ## Release gate
 
 Provider callback URLs and credential variable names are now deterministic

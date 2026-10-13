@@ -141,6 +141,36 @@ class ClassifyTests(unittest.TestCase):
         self.assertIsNone(members_of_gone_parent(declaration, "unknown"))
         self.assertIsNone(members_of_gone_parent({"absent": "removed"}, "deleted"))
 
+    def test_absent_deleted_contradicts_a_resource_wide_unavailable(self):
+        for field in ("notFound", "gone"):
+            with self.subTest(field=field):
+                document = example()
+                collections = document["components"]["crudResources"]["task"]["collections"]
+                if field == "gone":
+                    collections["listTasks"]["x-completeness"]["gone"] = "unavailable"
+                collections["starred"] = {"urlTemplate": "/starred", "x-completeness": {"absent": "deleted"}}
+                with self.assertRaises(ValueError) as raised:
+                    validate(document)
+                self.assertIn("['starred'] declare absent: deleted while the resource states", str(raised.exception))
+                self.assertIn(f"{field}: unavailable", str(raised.exception))
+        # Through the list operation's declaration too.
+        document = example()
+        collections = document["components"]["crudResources"]["task"]["collections"]
+        collections["listTasks"].pop("x-completeness")
+        document["paths"]["/lists/{listId}/tasks"]["get"]["x-completeness"] = {"absent": "deleted"}
+        collections["other"] = {"urlTemplate": "/other", "x-completeness": {"absent": "removed", "notFound": "unavailable"}}
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("['listTasks'] declare absent: deleted", str(raised.exception))
+        # absent: deleted beside a resource that states notFound: deleted, or nothing, stays valid.
+        document = example()
+        collections = document["components"]["crudResources"]["task"]["collections"]
+        collections["listTasks"]["x-completeness"] = {"absent": "removed", "notFound": "deleted"}
+        collections["starred"] = {"urlTemplate": "/starred", "x-completeness": {"absent": "deleted"}}
+        validate(document)
+        collections["listTasks"]["x-completeness"] = {"absent": "removed"}
+        validate(document)
+
     def test_resource_wide_not_found(self):
         document = example()
         # The task resource states unavailable; a read reached through an undeclared collection uses it.
