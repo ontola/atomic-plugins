@@ -341,6 +341,47 @@ against a live account. No dated catalog selects it yet.
 through syncables on the catalog's bytes (a dropped label added by the
 follow-up; a 403 follow-up failed, the create not sent again).
 
+## Google Calendar deletion feed
+
+[Google Calendar v3 deletion feed](APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md)
+`x-deletion-feed` on the `events` collection: the feed is the event list
+itself (`calendar.events.list`), read with the cursor `syncToken` and its
+pages only; the cursor for the next read is `nextSyncToken`, "present only
+on the very last page"; a 410 ("sync tokens are invalidated") drops the
+cursor; cancelled events are the tombstones, except items with
+`recurringEventId` (cancelled exceptions, which clients store), the same
+`except` as the read and list tombstones above. The pinned document's
+`syncToken` says "All events deleted since the previous list request will
+always be in the result set and it is not allowed to set showDeleted to
+False", so the feed needs no `showDeleted`, and every feed read sends the
+same parameters, as Google's
+[sync guide](https://developers.google.com/workspace/calendar/api/guides/sync)
+asks. So the first cursor comes from a feed read without a cursor, never
+from the drive app's own list read (`singleEvents=false&showDeleted=true`),
+whose token would then be sent without those parameters. That first read is
+a full listing and counts against the consumer's record budget (syncables'
+`maxRecords`, 5000 by default): a calendar with more events never completes
+it and never gets a cursor. Members and tombstones are those
+`singleEvents=false` (the default) returns: a series is its master event,
+plus exceptions with their own ids; a deleted series has one tombstone, the
+master's, and its instances get none.
+
+It composes with `app-crud-causality-32237fa5…` (the catalogs' choice) or
+`crud-causality-32237fa5…`, both tested, and is selected with
+`read-tombstone-v2-32237fa5…`, not the first revision. Do not select it with
+`pagination-v2-32237fa5…`, whose event-list description says "Full listing
+only: omit syncToken". The first read-tombstone revision's comment "Not
+declared: an `x-deletion-feed` over the event list" is stale since this
+overlay; that file is published and stays as it is. Not verified and not
+documented: that a feed read returns an event at most once; what it returns
+for the exceptions of a deleted series; how an event moved to another
+calendar (`events.move`) or an attendee's copy after the attendee is removed
+appears (both may appear cancelled in the source calendar while the event
+still exists elsewhere). No dated catalog selects it yet.
+`tests/test_calendar_deletion_feed.py` checks the declaration against the
+composed document and the pinned wording. No provider was called.
+
 ## Google Calendar throttling
 
 [Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
