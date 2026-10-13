@@ -378,7 +378,24 @@ stopped-import message's punctuation, unit-tested in `app/status.test.ts`)
 the money lane's e2e (`e2e/money.spec.ts` and `moneybird.spec.ts`)
 exited 0 on 2026-10-12 against the pin `7dab1ce` (the build VPS's source build);
 its log was lost, so there are no per-test counts for that run.
-The stopped-import state is still not reached end to end.
+Since 2026-10-13 the card after an import that stopped midway is verified
+end to end too: the installed-app test has the host fail the app's second
+`/app-write` (Playwright `page.route`) while it imports two new
+transactions, and checks the sheet's "The import didn't go through" and the
+card's "The import stopped before every row was written." with "The rows
+written so far are kept; …"; then, after the app's copy of the table caught
+up (its Transactions count), the same file checked again proposes the one
+left (New 1), and the import ends with 2 rows. The five money e2e tests, this step included, passed on 2026-10-13 at
+0.4.3 against the pin `7dab1ce` (the build VPS's source build), in 5.5
+minutes. Known limit, found
+that way (#539): the app writes exactly what its preview said was new, so
+checking the file again before the app's copy of the table caught up, or
+pressing Import again in the failed sheet (it keeps the old preview),
+writes the transaction written before the failure a second time; the first
+run of this step ended with that transaction twice. The sheet's
+"transactions saved before the failure are recognised and not written
+twice" holds only for a check made after the app's copy of the table caught
+up.
 
 At 0.4.2 (`plugin.js` sha256
 `2c4005acaaad5ce1fe730009c452fb59c8213f4852711f915b8e12868e39b963`, again
@@ -390,8 +407,9 @@ run adds over 0.4.1: after the MT940 import into the app's own table, the
 sync-status card reads "Synced just now", "2 transactions from 1
 statement; 2 arrived at the last sync", no "Last sync:" counts line, and
 "Read-only: edits here stay in Atomic. There is no bank connection". Not
-verified end to end: the card on a table without import dates and after a
-stopped import (`app/status.test.ts` and `app/view.test.ts` only). With
+verified end to end: the card on a table without import dates
+(`app/status.test.ts` and `app/view.test.ts` only); after a stopped import
+it is since 0.4.3 (above). With
 incomplete rows it is: the installed-app test checks the card's ignored
 group for the hand-typed row ("1 transaction is incomplete (missing
 Amount): …", the row under Which, Open row). On the importer's table too:
