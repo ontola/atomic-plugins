@@ -54,8 +54,37 @@ import {
   root,
 } from './lanes.mjs';
 
-export const serverCheckout = () =>
-  process.env.ATOMIC_SERVER_CHECKOUT ?? '/tmp/atomic-server';
+/**
+ * The atomic-server checkout the lanes use: ATOMIC_SERVER_CHECKOUT when set
+ * (CI and the cloud hook set it). Otherwise this pin's per-SHA checkout,
+ * `~/.cache/atomic-plugins/atomic-server/<.atomic-server-ref>`, when that
+ * directory exists (one checkout per SHA, docs/agents/build-vps.md), and
+ * `/tmp/atomic-server` when it does not.
+ */
+export const serverCheckout = ({
+  env = process.env,
+  home = env.HOME,
+  pin = () => readFileSync(resolve(root, '.atomic-server-ref'), 'utf8').trim(),
+} = {}) => {
+  if (env.ATOMIC_SERVER_CHECKOUT) return env.ATOMIC_SERVER_CHECKOUT;
+
+  if (home) {
+    let sha;
+
+    try {
+      sha = pin();
+    } catch {
+      sha = undefined;
+    }
+
+    if (sha && /^[0-9a-f]{40}$/.test(sha)) {
+      const perSha = resolve(home, '.cache/atomic-plugins/atomic-server', sha);
+      if (existsSync(perSha)) return perSha;
+    }
+  }
+
+  return '/tmp/atomic-server';
+};
 
 /** The image to run atomic-server from instead of a local binary, if any. */
 export const serverImage = () => process.env.ATOMIC_SERVER_IMAGE || undefined;
