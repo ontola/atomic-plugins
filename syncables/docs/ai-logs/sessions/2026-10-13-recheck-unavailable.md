@@ -65,3 +65,14 @@ before. Nits: a write queued during the GET also keeps the mark
 (`unsettled` beside the revision check); the docs say an unread record
 keeps its place; a long README line wrapped; the redundant
 `round.returned` check dropped.
+
+## Follow-up nits (after #553 merged)
+
+N1: the unchanged-read path routed a kept mark only where the collection
+makes checks, so a mark a new list tombstone settles stayed when the
+members were unchanged and checks were off; it now goes to `vanished`
+whatever `lookupPlanned` says, as on a changed read (test under
+`missingRecordChecks: 'none'`, unchanged and changed read; the unchanged
+one fails on the code before). N2: the changelog notes that the
+`unsettled()` check also keeps `unconfirmed` marks with failed writes out
+of an unchanged read's checks.
