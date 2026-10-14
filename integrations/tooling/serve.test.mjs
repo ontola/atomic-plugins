@@ -60,12 +60,14 @@ test("serverCheckout: the variable, else this pin's per-SHA checkout when it exi
   try {
     const pick = (env, ref = () => sha) =>
       serverCheckout({ env, home, pin: ref });
-    // Set: always wins.
+    // Set: always wins. Set but empty counts as unset.
     assert.equal(pick({ ATOMIC_SERVER_CHECKOUT: '/x' }), '/x');
+    assert.equal(pick({ ATOMIC_SERVER_CHECKOUT: '' }), '/tmp/atomic-server');
     // Unset, no per-SHA checkout yet: the old default.
     assert.equal(pick({}), '/tmp/atomic-server');
     mkdirSync(perSha, { recursive: true });
     assert.equal(pick({}), perSha);
+    assert.equal(pick({ ATOMIC_SERVER_CHECKOUT: '' }), perSha);
     // Another pin's checkout is never picked; nor a pin that is not a SHA.
     assert.equal(
       pick({}, () => 'd'.repeat(40)),

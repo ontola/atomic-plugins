@@ -1191,7 +1191,45 @@ When the create operation declares an `x-crud` `create` for the resource
   the 2xx and storing it leaves the create marked in flight, which a
   restart treats as before: `uncertain`, or resent under its idempotency
   key. Settle it with `confirm` (the server's id, found by a
-  refresh) or `discard`. Finding it automatically is not implemented.
+  refresh) or `discard`, or let the next read bind it (below).
+- `matchUnboundCreates: { uniqueFields: { pets: ['ref'] } }` (off by
+  default) binds an unbound create from the first complete read of its
+  collection that starts after the create was answered, as `confirm` with
+  the record's id would, and lists it on `SyncResult.matched` (`{
+  collection, context, localId, id }`). The keys are collection names (a
+  path in a legacy document); an unknown one makes `createApiClient`
+  throw. Each listed field is one the app guarantees no other record of
+  the collection shares: an external reference, an idempotency token kept
+  in the record. A create is bound only when all of these hold:
+  - it sent at least one listed field (other than the id field), with a
+    value that is not `null` or `""`;
+  - a complete read of the collection was applied to the local copy since
+    this client started, before the create was answered (a read the
+    presence handler refused, or one a write made stale, does not count);
+  - exactly one record of the read is new since the create was answered
+    (not in the confirmed copy then), has no local writes, is not the id
+    another create was confirmed with, and equals every field the create
+    sent, by JSON value (the id field left out);
+  - no other unbound create of the collection has that record as a
+    candidate.
+
+  Otherwise the create stays unbound, as without the option: two
+  identical creates that match one record, or two records each, bind
+  neither; a record someone else made with the same values but another
+  unique value is not a candidate. Each create gets that one read: a
+  provider that lists the record later, a restart (what the client knew
+  when the create was answered is not stored), or a collection without
+  the listed field leave it to `resolveWrite`. A field the provider
+  changes on the way (trims, normalises, defaults) prevents the match.
+  What remains is the app's guarantee. "New" means not in the last
+  applied complete read before the create was answered, so the window
+  runs from that read (which may be several syncs old) to the first
+  complete read that starts after the answer. If a listed value is not
+  in fact unique (two clients, or a person, create the same value in that
+  window), and the record this create made is not listed (filtered out,
+  or not yet visible), the create is bound to the other record, and its
+  later updates and deletes go there. Declare only fields whose
+  uniqueness the provider enforces or the app alone assigns.
 
 Without a declaration, creates behave as described above.
 
@@ -1969,7 +2007,13 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   deletion removes it; a 404 under `notFound: unavailable` keeps it
   without telling `onPresence` again. Behaviour change: more item GETs
   where such records are kept, and `onMissingRecord` is called again on
-  every re-check.
+  every re-check. Also changed with it: an unchanged read no longer
+  re-checks an `unconfirmed` record that has failed (held) writes either,
+  only one with no writes at all (before, only queued writes kept it
+  out), as a changed read already did; its failed writes say what became
+  of it. And a kept mark that an unchanged read lists as a list tombstone
+  is now settled as `deleted` even where the collection makes no checks,
+  as a changed read already did.
 - **Unreleased**: Behaviour fix: a pagination scheme that auto-detection
   would apply to an operation but that fails validation was dropped, and
   the read made one request and took that page as the whole collection,
@@ -1979,6 +2023,13 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   scheme; `sync()` lists it in `SyncResult.incomplete` and removes
   nothing). `invalidAutoDetected` (exported) tells whether an operation is
   in that case.
+- **Unreleased**: `matchUnboundCreates` (off by default): an unbound
+  create (CRUD Causality 0.5.0 §4.3.2: a 2xx that did not identify the
+  record) is bound from the next complete read of its collection when it
+  sent a value of a field the app declares unique (`uniqueFields`) and
+  exactly one new record of that read matches every field it sent and no
+  other create. Bound creates are listed on `SyncResult.matched`. Before,
+  only `resolveWrite` `confirm` bound one.
 - **0.22.1**: CRUD Causality 0.6.0 list-only resources and Produced Classes
   0.1.1-draft. Behaviour change to know before upgrading: in a CRUD
   Causality document, `create()` on a resource without `identity` now
