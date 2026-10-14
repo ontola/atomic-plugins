@@ -24,6 +24,8 @@ pub enum ApiError {
     WrongAudience,
     CapabilityKeyMismatch,
     UnsupportedAuthorization,
+    InvalidToken,
+    TokenScope,
     CredentialRefreshFailed,
     // 403: the caller is known but not allowed.
     NotOwner,
@@ -60,11 +62,11 @@ impl ApiError {
             | CapabilityTooLong
             | WrongAudience
             | CapabilityKeyMismatch
+            | InvalidToken
             | UnsupportedAuthorization
             | CredentialRefreshFailed => StatusCode::UNAUTHORIZED,
-            NotOwner | NotDelegated | CapabilityScope | AccessDenied(_) | PlatformMismatch => {
-                StatusCode::FORBIDDEN
-            }
+            NotOwner | NotDelegated | CapabilityScope | TokenScope | AccessDenied(_)
+            | PlatformMismatch => StatusCode::FORBIDDEN,
             UnknownConnection => StatusCode::NOT_FOUND,
             BadRequest(_) | InvalidHandoff => StatusCode::BAD_REQUEST,
             ProviderQuota(_) => StatusCode::TOO_MANY_REQUESTS,
@@ -89,6 +91,8 @@ impl ApiError {
             WrongAudience => "wrong_audience",
             CapabilityKeyMismatch => "capability_key_mismatch",
             UnsupportedAuthorization => "unsupported_authorization",
+            InvalidToken => "invalid_token",
+            TokenScope => "insufficient_scope",
             CredentialRefreshFailed => "credential_refresh_failed",
             NotOwner => "not_owner",
             NotDelegated => "not_delegated",
@@ -119,7 +123,9 @@ impl ApiError {
             CapabilityTooLong => "the capability is valid for more than 15 minutes".into(),
             WrongAudience => "the capability is for a different proxy".into(),
             CapabilityKeyMismatch => "the request is not signed by the capability's cnf key".into(),
-            UnsupportedAuthorization => "the only Authorization scheme accepted is Capability; connection codes (Bearer) were retired".into(),
+            UnsupportedAuthorization => "use an Atomic signature, Capability, or a Local Thought device access token; retired bearer connection codes are not accepted".into(),
+            InvalidToken => "the Local Thought access token is invalid, expired or revoked".into(),
+            TokenScope => "the client session does not grant this connection or operation".into(),
             CredentialRefreshFailed => "the provider refused to refresh this connection's token; connect again".into(),
             NotOwner => "only the connection's owner may do this".into(),
             NotDelegated => "the signing agent has no delegation for this connection".into(),
@@ -142,6 +148,11 @@ impl IntoResponse for ApiError {
             ApiError::ProviderQuota(retry) => Some(retry.as_secs().max(1)),
             _ => None,
         };
+        let bearer_error = match self {
+            ApiError::InvalidToken => Some("Bearer error=\"invalid_token\""),
+            ApiError::TokenScope => Some("Bearer error=\"insufficient_scope\""),
+            _ => None,
+        };
         let mut response = (
             self.status(),
             Json(serde_json::json!({"error": self.code(), "message": self.message()})),
@@ -150,6 +161,11 @@ impl IntoResponse for ApiError {
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+        if let Some(error) = bearer_error {
+            response
+                .headers_mut()
+                .insert(header::WWW_AUTHENTICATE, error.parse().unwrap());
+        }
         if let Some(seconds) = retry_after {
             response
                 .headers_mut()

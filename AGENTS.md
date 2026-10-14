@@ -22,7 +22,8 @@ node integrations/tooling/link-atomic-server.mjs
 This shallow-fetches atomic-server at `.atomic-server-ref` into
 `$ATOMIC_SERVER_CHECKOUT` (default: this pin's
 `~/.cache/atomic-plugins/atomic-server/<sha>` when that directory exists,
-else `/tmp/atomic-server`; `run-lane.mjs`/`serve.mjs` use the same default;
+else `/tmp/atomic-server`; an empty `ATOMIC_SERVER_CHECKOUT=''` counts as
+unset; `run-lane.mjs`/`serve.mjs` use the same default;
 one checkout serves every worktree on that pin). It
 then symlinks `browser` and `integrations/node_modules`, and runs `pnpm
 install --frozen-lockfile` in its `browser/` (pnpm 10, per its
@@ -568,6 +569,9 @@ In order, it:
   needed for the lanes (an IPv4 loopback address needs no IPv6; not verified
   in the cloud). The hook still sets it, so cloud lane servers bind
   `0.0.0.0`; changing that is left to a session that can test in the cloud;
+- restores the two tracked files atomic-server's build regenerates
+  (`BUILD_OUTPUT_PATHS` in `integrations/tooling/server-build.mjs`) before
+  linking, and again after a build;
 - runs `link-atomic-server.mjs` (its `pnpm install` included), builds
   `@tomic/lib`, and installs every plugin lockfile, as CI does;
 - installs Playwright's Chromium for `browser/e2e`. The proxy blocks

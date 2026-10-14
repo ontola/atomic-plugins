@@ -170,9 +170,21 @@ Data flows through four stages, each its own directory under `src/`:
    `route.absentRemoved`, else `removed`; `lookupPlanned` is the check gate
    (not `'none'`, an item GET or a declaration, and `absent: removed`,
    `'all'`, a parent of a `parentAbsent` collection, or nested writes). The
-   lookups (previously unconfirmed first, also when `!differs`) run in
-   `releaseRefreshed`'s vanished loop, counted against
-   `maxMissingRecordChecks` (`SyncRound.lookups`); `reportMissing` turns
+   lookups (per collection, previously unconfirmed first, then the read's
+   new candidates; also when `!differs`) run in `releaseRefreshed`'s
+   vanished loop (`checkVanished`), counted against
+   `maxMissingRecordChecks` per sync across collections
+   (`SyncRound.lookups`). Kept `unavailable` marks without queued or failed
+   writes (`unsettled`; the `!differs` path skips unconfirmed marks with
+   failed writes too, and routes a list-tombstoned kept mark to
+   `vanished` whatever `lookupPlanned` says, as the `differs` path does)
+   are re-read where `lookupPlanned` in a second pass,
+   `recheckUnavailable` (from `SyncRound.unavailable`, before
+   `finishFeeds`), oldest `checked` first across collections (`checkTime`,
+   strictly increasing, stored with the mark; set by `checkVanished`'s
+   `onChecked` only when `findEvidence` returned evidence, so a record the
+   budget or a 429 left unread keeps its place), so they never take checks
+   from unconfirmed or newly missing records; `reportMissing` turns
    the evidence into marks (`setMark`: changes go to the client-level
    `untoldMarks`, the latest per record, kept across syncs until told).
    `tell()` sends removals at once (dropping a held change of the same
@@ -223,6 +235,15 @@ Data flows through four stages, each its own directory under `src/`:
    reverse (`createdIdentity`, after CRUD Causality 0.5.0's
    `created_identity()`); without one the 2xx create is `uncertain` with
    `unbound` (stored), never resent, and `resolveWrite` `retry` throws;
+   with `matchUnboundCreates` (`uniqueFieldsOf`, resolved at construction)
+   a create that sent a declared unique value is remembered in memory
+   (`unboundKnown`: the scope's confirmed ids, the body, `readsStarted`)
+   if `completeScopes` has its scope (added only where a complete read is
+   applied: `confirmed.set`, or an unchanged read), and `matchUnbound` in `performSync`
+   (before the snapshot is applied) binds it on the first complete read of
+   the scope that started later: exactly one new, write-less candidate
+   equal on every sent field and claimed by no other create; then
+   `confirmedId` as `resolveWrite(confirm)`, `SyncResult.matched`;
    a create's `followUps` (CRUD Causality 0.5.0 §4.7, `compound-create.ts`
    after the reference `missing_value`/`follow_up_request`, parsed into
    `CreateDeclaration.followUps`; one it cannot use sets
@@ -517,7 +538,12 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
 - `validate.ts` checks a scheme against the spec's own rules (§9); an
   invalid scheme (e.g. a `type` outside `pageNumber`/`pageToken`/`nextLink`)
   is excluded from auto-detection rather than throwing — one broken scheme
-  in a document shouldn't disable the rest.
+  in a document shouldn't disable the rest. But when no valid scheme
+  matches an operation and an invalid one would (`invalidAutoDetected` in
+  `autodetect.ts`), `walkAllPages` reads the one response and sets the
+  walk's outcome not complete (naming the scheme), so a page is never
+  taken for the whole collection; the client's `paginated()` counts such
+  an operation as paginated.
 - `autodetect.ts`'s `resolveEffectiveScheme(document, operation)` picks the
   scheme that applies to an operation: an explicit `x-pagination` entry
   first, else auto-detection by matching the scheme's declared query
@@ -608,6 +634,18 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   else the previous page's fingerprint when no item has an id) runs on
   every offset walk as well as on short-page walks. The validator checks rule 24,
   `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
+- Pagination Schemes 0.8.0: a scheme's `response.incomplete`
+  (`IncompleteObject`; `responseIncomplete(marker, body)` in
+  `read/pages.ts`, after the spec's `response_incomplete`: own properties
+  along the field's names split on `.`, no bracket escapes, JSON equality)
+  marks a response; `walkAllPages` records the
+  first mark in `WalkOutcome.marked` and `walkPages` then ends the outcome
+  not complete with that reason, paging unchanged. `readCollections` gives
+  `notComplete`, `readPlatform` `ReadResult.incomplete`, `paginate` its
+  `outcome` option, and `sync()` the `upsertIncomplete` path. The
+  validator checks rule 26 (`checkIncomplete`, with the type restriction
+  to pageNumber/pageToken/nextLink). Tests:
+  `unit/read/incomplete-marker.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control

@@ -25,6 +25,7 @@ import {
   BudgetExhausted,
   walkPages,
   type ReadLimits,
+  type WalkOutcome,
   type WindowRange,
 } from './pages.js';
 import type { ListMethod, Transport } from './transport.js';
@@ -129,6 +130,18 @@ export interface ReadResult {
    * last ones); present with `describers`.
    */
   describerErrors?: string[];
+  /**
+   * The collections read without an error but not completely, with why:
+   * read by range windows, ended by a short page whose end is not
+   * documented, or marked incomplete by the server (Pagination Schemes
+   * 0.8.0 §4.4.6). Their records are in `records`, but an absent record
+   * says nothing. Absent when every collection read completely.
+   */
+  incomplete?: {
+    collection: string;
+    context: Record<string, string>;
+    reason: string;
+  }[];
 }
 
 const TIMESTAMP =
@@ -210,11 +223,19 @@ export async function readPlatform(
       const runtime = snapshot.runtimeMembers?.[i];
       if (record && runtime) record.runtime = runtime;
     });
+  const incomplete = result.collections
+    .filter((s) => s.notComplete !== undefined && s.error === undefined)
+    .map((s) => ({
+      collection: s.collection.name,
+      context: { ...s.pathParams },
+      reason: s.notComplete as string,
+    }));
   return {
     platform: options.platform,
     ontology,
     records,
     errors: result.errors,
+    ...(incomplete.length ? { incomplete } : {}),
     ...(result.describers ? { describers: result.describers } : {}),
     ...(result.describerErrors
       ? { describerErrors: result.describerErrors }
@@ -266,6 +287,13 @@ export interface PaginateOptions {
   idField?: string;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Filled in when the walk ends: `complete` is false for a read that
+   * returned every page but is not complete (range windows, an
+   * undocumented short-page end, a response the scheme's
+   * `response.incomplete` marks), with `reason`.
+   */
+  outcome?: WalkOutcome;
 }
 
 /**
@@ -308,6 +336,7 @@ export async function paginate(
       ? { emptyWhenAbsent: true }
       : {}),
     ...(options.range ? { range: options.range } : {}),
+    ...(options.outcome ? { outcome: options.outcome } : {}),
     identity: (item) => asText(item[options.idField ?? 'id']),
   })) {
     items.push(...page.items);
