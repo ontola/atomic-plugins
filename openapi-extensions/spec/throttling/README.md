@@ -321,10 +321,15 @@ x-throttling:
 
 A `blocked` response is not throttling, even with status `429`: the default
 below does not apply once the signal matches, and the earliest retry time is
-not computed. A consumer that does not recognise a signal's `meaning` treats
-a response that matches it as `blocked`: it never resends automatically on a
-meaning it cannot read. A 0.3.0 validator rejects a document that declares
-`blocked`, so a document that uses it needs a 0.4.0 consumer.
+not computed. A consumer MUST NOT resend automatically a request whose
+response matches a `blocked` signal, or a signal whose `meaning` it does not
+recognise: it MUST treat a response matching a signal with an unrecognised
+`meaning` as `blocked`. It MUST also treat a `blocked` signal that carries a
+`bucket` or `minDelaySeconds` (which a valid document does not) as `blocked`,
+ignoring those fields, rather than dropping the signal. It MAY stop sending
+other requests with the same credentials until a person or the application
+acts. A 0.3.0 validator rejects a document that declares `blocked`, so a
+document that uses it needs a 0.4.0 consumer.
 
 A signal declares a response the API documents as a rate-limit refusal. That
 the refused request was not applied is an inference, as for any refusal before
@@ -350,7 +355,8 @@ JSON's whitespace (RFC 8259 §2), which includes a header's optional
 whitespace (RFC 9110 §5.6.3). Other characters, such as U+00A0 or U+3000,
 are kept, so a value that holds them does not parse.
 
-**Earliest retry time.** For a matching response, a consumer computes:
+**Earliest retry time.** For a matching response whose meaning is not
+`blocked`, a consumer computes:
 
 1. T1, from the `retryAfter` header or body field, when it is declared,
    present and parses (the later of the two when both do);
@@ -378,7 +384,9 @@ signals; those are consumer decisions.
 
 **Classification.** A response with status `429` (RFC 6585) is throttling,
 with the meaning `throttled`, unless a Signal Object matches it first; this
-holds whether or not `signals` is present. When `signals` is present, a
+holds whether or not `signals` is present. A `blocked` signal (or one with an
+unrecognised meaning) that matches first makes the response not throttling
+and not to be resent (above). When `signals` is present, a
 consumer classifies any other response as throttling only when it matches a
 Signal Object; in particular, a `403` that matches no signal is not
 throttling. When `signals` is absent, this extension says nothing about
