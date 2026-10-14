@@ -40,3 +40,14 @@ scheme, the catalogs (no explicitly applied scheme is invalid; the only
 invalid auto-detectable ones are Box's `offset` and `marker`), and
 Shutterstock's refusal; 20 of them fail on the code before. README,
 CLAUDE.md, an Unreleased changelog bullet.
+
+## Turn 3
+
+**Human (via the coordinator session):** add #573's reviewer's optional
+hardening: `queryParamNames` skips a non-array `parameters` and any entry
+that is not a plain object, so a malformed operation cannot throw.
+
+**Assistant:** done in `autodetect.ts` (names that are not strings are
+skipped too). Tests: a non-array `parameters`, a `null` and a string
+entry do not throw, and a well-formed parameter beside a malformed one
+still matches; three fail on the code before. Changelog sentence added.

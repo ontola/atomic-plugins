@@ -1979,6 +1979,9 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   repository's overlays the one scheme affected is Shutterstock's
   `pageNumber` (`response.properties` where `bodyFields` was meant), in
   no catalog; every scheme a catalog applies explicitly is still valid.
+  Auto-detection also skips a malformed operation `parameters` (not an
+  array) or parameter entry (not an object) instead of throwing, so such
+  an operation no longer makes every read of the document fail.
 - **0.23.0**: a data-loss fix for pagination schemes that auto-detection
   would apply but that are invalid; Pagination Schemes 0.8.0
   `response.incomplete`; Deletion Feeds 0.3.0-draft list tombstones and

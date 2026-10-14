@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 import { validatePaginationScheme } from '../../../src/pagination/validate.js';
+import { resolveEffectiveScheme } from '../../../src/pagination/autodetect.js';
+import type { OpenApiDocument } from '../../../src/openapi/types.js';
 import type { PaginationSchemeObject } from '../../../src/pagination/types.js';
 
 // validatePaginationScheme refuses what the spec's schema.json refuses
@@ -276,5 +278,31 @@ describe('the repository’s other overlays', () => {
     ).toEqual([
       'paginationSchemes.pageNumber.response.properties is not a Response Pagination Fields Object field',
     ]);
+  });
+});
+
+describe('auto-detection on a malformed operation', () => {
+  const doc = {
+    openapi: '3.0.3',
+    info: { title: 'Broken', version: '1' },
+    paths: {},
+    components: { paginationSchemes: { cursor: base() } },
+  } as unknown as OpenApiDocument;
+
+  it.each([
+    ['parameters that are not an array', { cursor: { in: 'query' } }],
+    ['a parameter that is null', [null, { name: 'cursor', in: 'query' }]],
+    ['a parameter that is a string', ['cursor']],
+  ])('does not throw on %s', (_label, parameters) => {
+    const operation = { parameters, responses: {} } as never;
+    expect(() => resolveEffectiveScheme(doc, operation)).not.toThrow();
+  });
+
+  it('still matches the well-formed parameters beside a malformed one', () => {
+    const operation = {
+      parameters: [null, { name: 'cursor', in: 'query' }],
+      responses: {},
+    } as never;
+    expect(resolveEffectiveScheme(doc, operation)?.schemeName).toBe('cursor');
   });
 });
