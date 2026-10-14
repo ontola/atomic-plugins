@@ -1,0 +1,48 @@
+# Reviewed 2026-10-14 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://developers.google.com/workspace/calendar/api/guides/errors: 404 "The
+#   specified resource was not found. This can happen in several cases. Here are some
+#   examples: when the requested resource (with the provided ID) has never existed; when
+#   accessing a calendar that the user can not access". 410: the syncToken or updatedMin is
+#   no longer valid, or "a request attempts to delete an event that has already been
+#   deleted".
+# Source: the pinned OAD's Event.status: cancelled events are returned by the list with
+#   showDeleted (or on incremental sync), and "The get method always returns them".
+# Needs Collection Completeness 0.2.0-draft (notFound). Compose after any Calendar
+# crud-causality overlay with the `events` collection (app-crud-causality,
+# app-crud-causality-v2 and crud-causality of this pin are tested), in either order: it
+# deep-merges into that collection.
+#
+# A deleted event stays readable: its get answers 2xx with status "cancelled", which the
+# read-tombstone overlays declare. So a 404 from an event's read is not a deletion: the guide
+# gives "never existed" and a calendar "the user can not access" as its causes. Without this
+# overlay a consumer takes that 404 as a deletion (the notFound default); with it, a 404 is
+# unavailable. An event can also leave a calendar's list without being deleted (moved to
+# another calendar with events.move, or the user's access to the calendar changing), and
+# with showDeleted=true a deletion shows as a cancelled item rather than an absence, so
+# absence is removed and settled by the event's own read.
+# Not declared: `gone` (the guide's 410 is about sync tokens and repeated deletes, not reads;
+# a 410 on a read is then classified like a 404, unavailable); `parentAbsent` (the calendar
+# has no collection with a Completeness Object).
+# Not verified: whether cancelled events are ever purged, and what their read answers then.
+overlay: 1.0.0
+info:
+  title: Google Calendar v3 events collection completeness
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32237fa5d14aa887dc9f3923395dac971e00a36c/APIs/googleapis.com/calendar/v3/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        event:
+          collections:
+            events:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                description: >-
+                  A calendar's events, every page. A deleted event stays
+                  readable (its get answers with status cancelled), so a 404
+                  from its read means it never existed or the calendar is out
+                  of the user's reach: unavailable. An event can leave the list
+                  without being deleted (moved to another calendar, access
+                  changed), so absence is removed.
