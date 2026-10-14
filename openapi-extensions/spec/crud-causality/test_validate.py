@@ -671,6 +671,7 @@ class CommittedErrorTests(unittest.TestCase):
         cases = (
             (lambda c: c.update(committedErrors=[]), "rule 27"),
             (lambda c: c["committedErrors"][0].update(status=[200]), "rule 28"),
+            (lambda c: c["committedErrors"][0].update(status=[409]), "rule 28"),
             (lambda c: c["committedErrors"][0].update(status=[503, 503]), "rule 28"),
             (lambda c: c["committedErrors"][0].update(status=[]), "rule 28"),
             (lambda c: c["committedErrors"][0].update(identity={}), "rule 28"),
@@ -700,12 +701,14 @@ class CommittedErrorTests(unittest.TestCase):
                          {"page_id": "59833787-2cf9-4fdf-8782-e53db20768a5"})
         # Another status, no id, an empty or unusable id, or no JSON: unknown, as before.
         self.assertIsNone(committed_identity(document, crud, 502, body))
-        for value in (None, "", True, {"id": "x"}):
+        for value in (None, "", "  ", True, {"id": "x"}, "a/b", "a?b", "a#b", -1, 1.5):
             changed = copy.deepcopy(body)
             changed["additional_data"]["committed_resource_id"] = value
             with self.subTest(value=value):
                 self.assertIsNone(committed_identity(document, crud, 503, changed))
+        # A listed status whose body holds only retry_guidance stays unknown.
         del body["additional_data"]["committed_resource_id"]
+        self.assertEqual(set(body["additional_data"]), {"retry_guidance"})
         self.assertIsNone(committed_identity(document, crud, 503, body))
         self.assertIsNone(committed_identity(document, crud, 503, None))
         # An integer id is given in decimal form.
