@@ -51,11 +51,7 @@ import {
   blockers,
   changedFields,
   clockifyInstant,
-  descriptionOf,
   ENTRY_FIELDS,
-  entryValues,
-  NO_DESCRIPTION,
-  putBody,
   snapToMinute,
   type ClockifyProject,
   type ClockifyTimeEntry,
@@ -64,6 +60,8 @@ import {
   type PlanStep,
   type WriteContext,
 } from '../devonian/clockify/lens/index.js';
+// Name, start, end and billable both ways: the catalog lens (0.8.0).
+import { entryValues, putBody } from './catalogLens.js';
 import type { RawTimeEntry } from './clockifyApi.js';
 import {
   canonicalEntry,
@@ -490,7 +488,8 @@ export const projectNames =
 
 /**
  * What would be sent for a row: its values, with changed times snapped to
- * whole minutes (#97 answer 7), an empty Name as "no description", and a
+ * whole minutes (#97 answer 7), the Name exactly as the row has it (the
+ * catalog lens maps it to the description unchanged; 0.8.0), and a
  * project name typed into the table resolved to that project's id (an
  * exact, active name; otherwise a blocker). A changed time that equals one
  * of `boundaries` (the start or end of an entry in Clockify) is not snapped.
@@ -502,10 +501,7 @@ export function desiredValues(
   boundaries: ReadonlySet<number> = new Set(),
 ): { desired: EntryValues; problems: string[] } {
   const problems: string[] = [];
-  const desired: EntryValues = {
-    ...ordered(local),
-    name: local.name.trim() || NO_DESCRIPTION,
-  };
+  const desired: EntryValues = ordered(local);
   // A time that lines up with another entry's start or end (a trim or an
   // extension from a range edit meeting its neighbour) is kept exact.
   const snap = (at: number) => (boundaries.has(at) ? at : snapToMinute(at));
@@ -956,7 +952,14 @@ export async function stageRangePlan(
   for (const step of steps) {
     if (step.op === 'update') {
       const r = await row(step.entryId);
-      if (await setRowValues(r, schema, step.desired)) await r.save();
+      // A range edit changes times and projects, never the Name: keep the
+      // row's own, so no description change is sent for it.
+      const name = sharedValues(r.props)[NAME];
+      const desired = {
+        ...step.desired,
+        name: typeof name === 'string' ? name : '',
+      };
+      if (await setRowValues(r, schema, desired)) await r.save();
     } else if (step.op === 'delete')
       await requestDelete(await row(step.entryId), schema, true);
     else {
@@ -970,11 +973,17 @@ export async function stageRangePlan(
           ? { tagIds: [...source.tagIds] }
           : {}),
       };
+      // A copy (the right part of a split) keeps its entry's description
+      // exactly; a filled gap has none ("Time entry" is display only).
+      const values = {
+        ...step.values,
+        name: source ? (entryValues(source)?.name ?? '') : '',
+      };
       const created = await store.newResource({
         parent: schema.table,
         isA: [TIME_ENTRY_CLASS],
         propVals: {
-          ...(await rowValues(schema, step.values)),
+          ...(await rowValues(schema, values)),
           [schema.sync.create]: JSON.stringify(marker),
         },
       });
@@ -1615,7 +1624,7 @@ async function sendCreate(
     start: clockifyInstant(desired.start),
     end: clockifyInstant(desired.end),
     billable: desired.billable,
-    description: descriptionOf(desired.name),
+    description: desired.name,
     ...(desired.projectId ? { projectId: desired.projectId } : {}),
     ...(state.create.taskId ? { taskId: state.create.taskId } : {}),
     tagIds: [...(state.create.tagIds ?? [])],

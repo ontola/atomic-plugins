@@ -270,9 +270,20 @@ describe('presence marks: the per-sync check limit', () => {
     // The unconfirmed ones first: 50 of the 70.
     expect(fake.gets).toHaveLength(50);
     expect(fake.gets.every((id) => waiting.includes(id))).toBe(true);
+    const stillWaiting = client
+      .presence()
+      .filter((m) => m.presence === 'unconfirmed')
+      .map((m) => m.id);
+    expect(stillWaiting).toHaveLength(20);
     fake.gets.length = 0;
     await client.sync();
-    expect(fake.gets).toHaveLength(20);
+    // The last 20 unconfirmed ones first, then kept unavailable ones are
+    // read again, up to the limit of 50.
+    expect(fake.gets).toHaveLength(50);
+    expect(fake.gets.slice(0, 20).sort()).toEqual([...stillWaiting].sort());
+    expect(fake.gets.slice(20).some((id) => stillWaiting.includes(id))).toBe(
+      false,
+    );
     expect(client.presence().every((m) => m.presence === 'unavailable')).toBe(
       true,
     );
