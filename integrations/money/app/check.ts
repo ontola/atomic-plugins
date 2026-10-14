@@ -46,6 +46,8 @@ export interface Changed {
 export type ProblemCode =
   | StatementErrorCode
   | 'CHANGED_TRANSACTION'
+  /** The table could not be read to compare the file with it (#572). */
+  | 'TABLE_UNREADABLE'
   | 'UNKNOWN';
 
 export interface Problem {

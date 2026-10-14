@@ -555,18 +555,14 @@ test.describe('money integration', () => {
       await page.unroute('**/app-write');
     }
 
-    // The host recovers. Since 0.4.5 (#539) the failed sheet never offers
-    // its old preview again, which listed the transaction written before
-    // the failure: Import is disabled until the file is compared with the
-    // table again, and then offers only the rest.
+    // The host recovers. Since 0.4.5 (#539, #572) the failed sheet never
+    // offers its old preview again, which listed the transaction written
+    // before the failure. And a check of the same file made at once, before
+    // anything has waited for the app's copy of the table, reads the table
+    // first and proposes only the rest.
     await expect(
       sheet.getByRole('button', { name: 'Import 2 transactions' }),
     ).toHaveCount(0);
-    await expect(
-      sheet.getByRole('button', { name: 'Import 1 transaction' }),
-    ).toBeVisible({ timeout: 30_000 });
-    // And a check of the same file made at once, with no wait for the app's
-    // copy of the table, proposes only the rest too.
     await sheet.getByRole('button', { name: 'Close' }).first().click();
     await input.setInputFiles({
       name: 'other.mt940',

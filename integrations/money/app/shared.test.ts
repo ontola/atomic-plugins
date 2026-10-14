@@ -509,6 +509,119 @@ describe('importing into the app’s own table by its own writes (write.ts)', ()
     return h;
   };
 
+  /**
+   * A row write held until `release()` runs, failing (`fail`) or not, so a
+   * test can close the sheet while the import is still under way.
+   */
+  const heldWrite = (
+    store: ReturnType<typeof harness>['store'],
+    at: number,
+    fail: boolean,
+  ) => {
+    const original = store.newResource.bind(store);
+    let calls = 0;
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    let reached!: () => void;
+    const waiting = new Promise<void>(resolve => (reached = resolve));
+
+    store.newResource = async args => {
+      if (++calls === at) {
+        reached();
+        await held;
+        if (fail) throw new Error('Simulated write failure');
+      }
+
+      return original(args);
+    };
+
+    return {
+      waiting,
+      release,
+      restore: () => (store.newResource = original),
+    };
+  };
+
+  it('a table read that fails after a failed import never brings back the old preview (#572 B1)', async () => {
+    const { store, controller } = harness({ data: 'own' });
+    await controller.load();
+    await controller.importFile(file(mt940));
+    const write = heldWrite(store, 2, true);
+    // The reads that follow the failure fail too.
+    const query = store.query.bind(store);
+    let broken = true;
+
+    store.query = async args => {
+      if (broken) throw new Error('Simulated read failure');
+
+      return query(args);
+    };
+
+    write.release();
+    await controller.applyImport();
+    write.restore();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(1);
+    // Import stays off: nothing is compared with a table read that failed.
+    const sheet = controller.state().importing;
+    expect(sheet?.step === 'preview' && sheet.rechecking).toBeFalsy();
+    expect(sheet?.step === 'preview' && sheet.unchecked).toBe(true);
+    await controller.applyImport();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(1);
+    // A new check of the file reads the table itself, and stops if it can't.
+    controller.closeImport();
+    await controller.importFile(file(mt940));
+    expect(controller.state().importing?.step).toBe('error');
+    broken = false;
+    await controller.importFile(file(mt940));
+    const fresh = controller.state().importing;
+    expect(fresh?.step === 'preview' && fresh.preview.fresh).toHaveLength(1);
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+  });
+
+  it('closing the sheet during an import that then fails, and checking at once, proposes only the rest (#572 B2)', async () => {
+    const { store, controller } = harness({ data: 'own' });
+    await controller.load();
+    await controller.importFile(file(mt940));
+    const write = heldWrite(store, 2, true);
+    const applying = controller.applyImport();
+    await write.waiting;
+    controller.closeImport();
+    write.release();
+    await applying;
+    write.restore();
+    // At once, with no wait for the table.
+    await controller.importFile(file(mt940));
+    const sheet = controller.state().importing;
+    expect(sheet?.step === 'preview' && sheet.preview.fresh).toHaveLength(1);
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+  });
+
+  it('closing the sheet during an import that succeeds, and checking at once, proposes nothing (#572)', async () => {
+    const { store, controller } = harness({ data: 'own' });
+    await controller.load();
+    await controller.importFile(file(mt940));
+    const write = heldWrite(store, 2, false);
+    const applying = controller.applyImport();
+    await write.waiting;
+    controller.closeImport();
+    // Checked while the import is still writing: it waits for the import.
+    const checking = controller.importFile(file(mt940));
+    write.release();
+    await applying;
+    await checking;
+    write.restore();
+    const sheet = controller.state().importing;
+    expect(sheet?.step === 'preview' && sheet.preview.fresh).toHaveLength(0);
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+  });
+
   it('pressing Import again right after a failure never writes a row twice (#539)', async () => {
     const { store, controller } = await failedImport();
     // No wait: the old preview listed both rows; the first is written.

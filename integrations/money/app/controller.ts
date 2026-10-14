@@ -79,6 +79,11 @@ export type ImportSheet =
        * disabled meanwhile.
        */
       rechecking?: boolean;
+      /**
+       * The table could not be read after a failure, so what was written is
+       * unknown: Import stays disabled; close and check the file again.
+       */
+      unchecked?: boolean;
     }
   | { step: 'error' | 'blocked'; file: FileInfo; problem: Problem };
 
@@ -291,6 +296,11 @@ export function createController(
    * compares with rows from before the failure.
    */
   let recheck: Promise<void> | undefined;
+  /**
+   * The import under way, if any, until its writes are done: a check of a
+   * file waits for it, whether or not its sheet was closed (#572).
+   */
+  let importing: Promise<unknown> | undefined;
   let table: string | undefined;
   /** The table's row class: only children of it are rows. */
   let rowClass: string | undefined;
@@ -374,6 +384,31 @@ export function createController(
    */
   let writing = false;
 
+  /**
+   * Reads the table now, after any read under way, as one of the reads
+   * `queueRefresh` serialises; true when it succeeded. A check of a file
+   * compares only with the table read this way (#572), never with rows from
+   * before an import.
+   */
+  const readNow = async (): Promise<boolean> => {
+    while (refreshing) await refreshing.catch(() => undefined);
+    let ok = true;
+    const reading = refresh().catch(() => {
+      ok = false;
+    });
+    refreshing = reading.finally(() => {
+      refreshing = undefined;
+
+      if (again) {
+        again = false;
+        queueRefresh();
+      }
+    });
+    await refreshing;
+
+    return ok;
+  };
+
   const queueRefresh = () => {
     if (writing) return;
 
@@ -409,7 +444,7 @@ export function createController(
     const text = pendingText;
     pendingPreview = undefined;
     const current = state.importing;
-    if (current?.step === 'preview')
+    if (mine === run && current?.step === 'preview')
       update({
         importing: {
           ...current,
@@ -417,40 +452,50 @@ export function createController(
           progress: undefined,
           failure,
           rechecking: true,
+          unchecked: false,
         },
       });
 
     const done: Promise<void> = (async () => {
-      await refreshing?.catch(() => undefined);
-      await refresh().catch(() => undefined);
-      await loadStatements().catch(() => undefined);
-      if (mine !== run || !text) return;
-      const parsed = read(text);
-      const sheet = state.importing;
-      if (!parsed.ok || sheet?.step !== 'preview') return;
-      const checked = compare(parsed.format, parsed.statements, state.rows);
+      let checked: ReturnType<typeof compare> | undefined;
 
-      if (!checked.ok) {
-        update({
-          importing: {
-            step: isBlocked(checked.problem) ? 'blocked' : 'error',
-            file: sheet.file,
-            problem: checked.problem,
-          },
-        });
+      try {
+        const fresh = await readNow();
+        await loadStatements().catch(() => undefined);
+        const parsed = fresh && text ? read(text) : undefined;
+        if (parsed && parsed.ok)
+          checked = compare(parsed.format, parsed.statements, state.rows);
+      } finally {
+        const sheet = state.importing;
 
-        return;
+        if (mine === run && sheet?.step === 'preview') {
+          if (checked && !checked.ok)
+            update({
+              importing: {
+                step: isBlocked(checked.problem) ? 'blocked' : 'error',
+                file: sheet.file,
+                problem: checked.problem,
+              },
+            });
+          else if (checked) {
+            pendingPreview = checked.preview;
+            update({
+              importing: {
+                ...sheet,
+                preview: checked.preview,
+                tab: checked.preview.fresh.length ? 'new' : 'already',
+                rechecking: false,
+                unchecked: false,
+              },
+            });
+          } else
+            // The table could not be read: what was written is unknown, so
+            // nothing is compared and Import stays off (#572).
+            update({
+              importing: { ...sheet, rechecking: false, unchecked: true },
+            });
+        }
       }
-
-      pendingPreview = checked.preview;
-      update({
-        importing: {
-          ...sheet,
-          preview: checked.preview,
-          tab: checked.preview.fresh.length ? 'new' : 'already',
-          rechecking: false,
-        },
-      });
     })().finally(() => {
       if (recheck === done) recheck = undefined;
     });
@@ -802,9 +847,24 @@ export function createController(
       });
       await tick();
       if (stale()) return;
-      // Rows a failed import wrote are read first (#539), else this check
-      // would offer them again.
+      // Compared only with the table as it is now (#539, #572): after any
+      // import under way has finished writing (its sheet may be closed),
+      // a fresh read; if that read fails, nothing is compared.
+      await importing?.catch(() => undefined);
       if (recheck) await recheck;
+      if (stale()) return;
+
+      if (!(await readNow())) {
+        if (!stale())
+          stop({
+            code: 'TABLE_UNREADABLE',
+            message:
+              "Couldn't read this table to check what is already in it. Check the file again in a moment.",
+          });
+
+        return;
+      }
+
       if (stale()) return;
       const checked = compare(parsed.format, parsed.statements, state.rows);
       if (!checked.ok) return stop(checked.problem);
@@ -828,6 +888,7 @@ export function createController(
       if (
         sheet?.step !== 'preview' ||
         sheet.rechecking ||
+        sheet.unchecked ||
         !port ||
         !pendingText ||
         !pendingPreview
@@ -849,7 +910,7 @@ export function createController(
       importedUntil = Infinity;
 
       try {
-        const outcome = await port.apply(
+        const applying = port.apply(
           pendingText,
           sheet.file,
           pendingPreview,
@@ -859,6 +920,10 @@ export function createController(
               update({ importing: { ...current, progress } });
           },
         );
+        importing = applying;
+        const outcome = await applying.finally(() => {
+          if (importing === applying) importing = undefined;
+        });
         importedUntil = outcome.status === 'applied' ? now() + 15_000 : 0;
         if (mine !== run) return;
 
