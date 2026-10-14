@@ -8,8 +8,9 @@ both base64 alphabets, and are canonicalized (`atomic:agent:` + unpadded
 base64url) before any comparison or storage. Weak (small-order) keys are
 refused and signatures are checked with `verify_strict`.
 
-Every request that reads or changes a connection is signed with Atomic's v2
-headers. The message covers the method, the full URL (the configured
+Connection administration uses Atomic v2 signatures. Reads additionally
+accept opt-in, owner-approved device bearer sessions restricted to selected
+connections and read scopes (DEVICE_AUTH.md). The signed message covers the method, the full URL (the configured
 `BASE_URL` plus the path and query as received, never the `Host` header),
 the timestamp and a SHA-256 of the body, under a fixed `atomic-request-v2`
 prefix, so a captured request cannot be replayed with another body, method,
@@ -28,7 +29,8 @@ A connection row holds one provider credential sealed with
 XChaCha20-Poly1305 under `ENCRYPTION_KEY`, with associated data binding the
 envelope to its row id, so an envelope copied into another row does not
 open. The row records its platform and owner. Only the owner (the agent that
-signed `/connect/redeem`) may delete it, delegate it, or list it. A delegation
+signed `/connect/redeem`) may delete it or delegate it. Device sessions may
+list only the connections the owner explicitly approved. A delegation
 names an app agent; a runtime registered by the owner names a node's agent
 that acts for a delegated app. Both are read on every proxied request, so
 revocation is immediate. A connection unused for 90 days is deleted with its
@@ -674,3 +676,18 @@ generic code.
 Not yet verified: any real provider's deliveries (only the synthetic
 fixtures), and how the limits behave across several instances (each counts
 its own).
+
+## Local Thought device client sessions
+
+See [DEVICE_AUTH.md](DEVICE_AUTH.md) for the complete #565 contract and limits.
+The opt-in RFC 8628 path authenticates the approving Atomic owner with signed,
+replay-protected challenge and approval requests; a user code or submitted owner
+ID is not authentication. CLI bearer tokens resolve to that same canonical
+owner with an explicit connection/read scope. They never confer owner
+administration. Connections, AccessPolicy and catalog permissions are checked
+live on each request. Device/approval/token secrets are stored as hashes in
+PostgreSQL; grants are single-use and refresh families rotate under row locks.
+Refresh-token reuse revokes the family across instances. The local owner bridge
+is a dogfooding example, not a production login. Device routes omit query strings
+from tracing, and consume bearer headers before the provider request is built.
+No provider credential is returned by device/token/connection-discovery routes.
