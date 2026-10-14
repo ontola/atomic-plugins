@@ -397,6 +397,26 @@ overlays it needs, run the Collection Completeness and CRUD Causality
 validators, and classify synthetic reads with the spec's `classify_read`.
 No provider was called.
 
+## Lists without pagination
+
+Fourteen catalog collections have no pagination scheme, so syncables reads
+each once and takes the answer as the whole list. Checked on 2026-10-14 from
+the providers' documentation only, so the next person need not re-check:
+
+| Collection | Pages? | Evidence |
+| --- | --- | --- |
+| Moneybird `financial_accounts`, `identities`, `ledger_accounts`, `subscriptions` (one contact's), `users`, `webhooks`, `workflows`, `custom_fields`, `document_styles`, `task_list_templates`, and the contact's and subscription's `additional_charges` | No | The pinned OAD (`85a61052`, "Generated from the official Moneybird OpenAPI v2 specification") gives none of them a `page` or `per_page` parameter; its paginated lists all have both ("The list is paginated. Use the `per_page` and `page` parameters"). `ledger_accounts`: "Pagination is not supported for this endpoint." Several say they return all: `ledger_accounts` ("a list of all the ledger accounts"), `workflows`, `document_styles`, `task_list_templates`, `webhooks`; `financial_accounts` returns "Only active financial accounts". [developer.moneybird.com](https://developer.moneybird.com/) renders client-side and could not be read. Not verified: that a large administration's answer is never cut short (no limit is documented for these). |
+| Moneybird `financial_mutations` | No, but capped | "Limited to 100 financial mutations" and no page parameter. Read by period windows: `pagination-range-window-85a61052…` (Pagination Schemes 0.5.0 `rangeWindow`, #397), not yet on `main`. |
+| Discord `/users/@me/guilds` | Yes (`before`, `after`, `limit` 1–200) | Discord's [Get Current User Guilds](https://docs.discord.com/developers/resources/user): "This endpoint returns 200 guilds by default, which is the maximum number of guilds a non-bot user can join. Therefore, pagination is not needed". The catalog's crud-causality overlay sends `limit=200` (`x-list-query`), and its credential is a user's OAuth token. A bot token can see more guilds; following `after` (the last guild's id) needs a Pagination Schemes role for a cursor taken from the last item, which 0.8.0 does not have. |
+
+The Moneybird drive app (`integrations/money/moneybird/read.ts`) reads with
+its own client, not syncables: `financial_accounts` in one answer, financial
+mutations by its own period windows, and none of the other lists, so it is
+not affected. `tests/test_unpaged_lists.py` fails if a pinned document gains
+a page parameter on one of these operations, if a catalogued Moneybird
+pagination overlay starts to declare one, or if the catalogs' Discord list
+stops asking for 200 guilds. No provider was called.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
