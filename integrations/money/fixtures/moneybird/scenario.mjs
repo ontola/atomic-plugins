@@ -33,7 +33,11 @@
  * - Every second read of an administration's contacts (counted by page-1
  *   requests) fails on page 2 with 503. That gives a host test a refresh
  *   that fails after a good one, without a control endpoint, and shows the
- *   other collections going on. `outage: false` on create() turns it off.
+ *   other collections going on. Reads are counted per connection the mock
+ *   proxy names (`context.connection`), so each test's own connection meets
+ *   the outage at the same point whatever ran before it (a retry, a repeat,
+ *   another test); a direct call with no context counts on one shared
+ *   counter. `outage: false` on create() turns it off.
  * - `financial_mutations.json` answers at most `mutationCap` records (100,
  *   the limit the pinned document states; a test lowers it to exercise the
  *   app's period halving) within the `period` the filter asks, oldest
@@ -184,7 +188,7 @@ export function moneybirdFixture({
     year,
     reads,
     mutationFilters,
-    request(method, url) {
+    request(method, url, _input, _headers, context = {}) {
       // The real proxy matches the path with the document's server base
       // path (`/api/v2`) included; without it the operation is not in the
       // catalog.
@@ -205,9 +209,11 @@ export function moneybirdFixture({
 
       if (collection === 'contacts') {
         const number = Number(url.searchParams.get('page') ?? '1');
-        if (number === 1)
-          reads.set(administration, (reads.get(administration) ?? 0) + 1);
-        if (outage && number === 2 && reads.get(administration) % 2 === 0)
+        const key = context.connection
+          ? `${context.connection} ${administration}`
+          : administration;
+        if (number === 1) reads.set(key, (reads.get(key) ?? 0) + 1);
+        if (outage && number === 2 && reads.get(key) % 2 === 0)
           return { status: 503, body: { error: 'Synthetic outage' } };
         const archived = url.searchParams.get('include_archived') === 'true';
 
