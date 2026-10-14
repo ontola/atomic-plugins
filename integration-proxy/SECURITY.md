@@ -339,8 +339,10 @@ Implemented today: the requested path is rejected if it contains a `.` or
 `..` segment before catalog validation, so it cannot normalize to a
 different path than the one authorized (see `proxy::contains_traversal_segment`).
 Upstream requests use a bounded connect/read timeout and disable automatic
-redirects, so a redirect cannot send a request to a destination the catalog
-never validated. The upstream response body is read incrementally and capped
+redirects, so a redirect cannot send a request, or the connection's
+credential, to a destination the catalog never validated; the redirect's
+`Location` is not forwarded to the caller either
+(`proxy::upstream_redirects_are_not_followed_and_their_location_is_dropped`). The upstream response body is read incrementally and capped
 at 10 MiB instead of being buffered in full before the limit is checked.
 Request validation against the OAD (`Catalog::validate_request`) is a bounded
 subset: it checks that declared *required* query parameters are present,

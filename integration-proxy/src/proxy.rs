@@ -1632,6 +1632,89 @@ mod tests {
         }
     }
 
+    /// SECURITY.md, "Validating proxy": upstream redirects are not
+    /// followed. A `302` or `307` from an allowlisted operation comes back
+    /// as is, the redirect target never sees a request (so never the
+    /// connection's credential), and the caller is not given the `Location`.
+    #[tokio::test]
+    async fn upstream_redirects_are_not_followed_and_their_location_is_dropped() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let elsewhere = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let elsewhere_address = elsewhere.local_addr().unwrap();
+        let catcher = axum::Router::new().fallback(move || {
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                "caught"
+            }
+        });
+        let catcher = tokio::spawn(async move { axum::serve(elsewhere, catcher).await.unwrap() });
+        let target = format!("http://{elsewhere_address}/steal");
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let found = target.clone();
+        let temporary = target.clone();
+        let app = axum::Router::new()
+            .route(
+                "/found",
+                axum::routing::get(move || async move {
+                    (StatusCode::FOUND, [(header::LOCATION, found)])
+                }),
+            )
+            .route(
+                "/temporary",
+                axum::routing::post(move || async move {
+                    (
+                        StatusCode::TEMPORARY_REDIRECT,
+                        [(header::LOCATION, temporary)],
+                    )
+                }),
+            );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = crate::build_http_client();
+        for (method, path, status, body) in [
+            (Method::GET, "found", StatusCode::FOUND, Bytes::new()),
+            (
+                Method::POST,
+                "temporary",
+                StatusCode::TEMPORARY_REDIRECT,
+                Bytes::from_static(b"{}"),
+            ),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json"),
+            );
+            let response = upstream_request(
+                &client,
+                method,
+                Url::parse(&format!("http://{address}/{path}")).unwrap(),
+                CredentialInjection::Bearer("connection-secret".into()),
+                &headers,
+                &[],
+                None,
+                body,
+            )
+            .send()
+            .await
+            .unwrap();
+            assert_eq!(response.status(), status, "{path}");
+            assert_eq!(response.headers()[header::LOCATION], target.as_str());
+            let forwarded = upstream_response_headers(response.headers());
+            assert!(!forwarded.contains_key(header::LOCATION), "{path}");
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            0,
+            "the redirect target was called"
+        );
+        server.abort();
+        catcher.abort();
+    }
+
     #[test]
     fn traversal_segments_are_rejected_including_encoded_forms() {
         assert!(contains_traversal_segment("/repositories/../issues"));
