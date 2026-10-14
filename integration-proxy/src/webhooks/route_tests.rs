@@ -1466,6 +1466,271 @@ async fn broken_uploads_and_the_per_endpoint_read_cap() {
     env.drop_schema().await;
 }
 
+fn with_limits(env: &Env, endpoint: u32, network: u32, owner: u32) -> AppState {
+    let config = crate::config::WebhookConfig {
+        ingress_per_endpoint_per_minute: endpoint,
+        ingress_per_network_per_minute: network,
+        subscribe_per_owner_per_hour: owner,
+        ..Default::default()
+    };
+    let mut state = env.state.clone();
+    state.webhooks = Some(Arc::new(Webhooks::with_limits(
+        env.store.clone(),
+        BTreeMap::from([("tracker".to_owned(), TRACKER_SECRET.to_vec())]),
+        super::limits::Limits::from_config(&config),
+    )));
+    state
+}
+
+/// Ingress limits (reviews of the rate-limits PR): they count refusals only.
+/// Blocker A: a third party that points a provider's hooks at junk URLs, or
+/// signs junk for a real endpoint, makes the provider's own address collect
+/// refusals; its real deliveries must still be accepted (here with the
+/// lookup slot free; `a_blocked_network_queues_for_the_lookup_slot_only_a_little`
+/// covers a busy slot). Only ids that name no endpoint are refused for a
+/// network's refusals, and an endpoint's window counts only its failed
+/// verifications.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn ingress_limits_never_refuse_a_delivery_that_verifies() {
+    let mut env = env(small()).await;
+    let alice = Agent::new(96);
+    let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
+    env.subscribe_project(&alice, &connection, "p-100").await;
+    let endpoint = env.endpoint("tracker").await;
+    env.state.trust_forwarded_for = crate::config::TrustForwardedFor::RightMost;
+    let state = with_limits(&env, 2, 2, 20);
+    let from = |network: &str, request: Request<Body>| {
+        let mut request = request;
+        request
+            .headers_mut()
+            .insert("x-forwarded-for", network.parse().unwrap());
+        request
+    };
+    let delivery = |id: &str| env.signed_delivery(&endpoint, id, &task("p-100", id));
+    let send = |request: Request<Body>| {
+        let state = state.clone();
+        async move { crate::router(state).oneshot(request).await.unwrap() }
+    };
+    let junk_id = |n: u32| {
+        Request::post(format!("/webhooks/{:0>43}", n))
+            .body(Body::from("{}"))
+            .unwrap()
+    };
+    let bad_signature = |id: &str| {
+        let mut request = delivery(id);
+        request
+            .headers_mut()
+            .insert("tracker-signature", "v1=00".parse().unwrap());
+        request
+    };
+    let provider = "192.0.2.1";
+    // Junk arrives from the provider's own address: unknown ids, then bad
+    // signatures for the real endpoint, over both limits (2).
+    for n in 0..2 {
+        assert_eq!(
+            send(from(provider, junk_id(n))).await.status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        send(from(provider, junk_id(9))).await.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "unknown ids from a network over its limit are refused"
+    );
+    assert_eq!(
+        send(from(provider, bad_signature("j1"))).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        send(from(provider, bad_signature("j2"))).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let limited = send(from(provider, bad_signature("j3"))).await;
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(limited.headers().contains_key("retry-after"));
+    // The provider's real deliveries still go through, more of them than
+    // either limit.
+    for id in ["a1", "a2", "a3", "a4"] {
+        assert_eq!(
+            send(from(provider, delivery(id))).await.status(),
+            StatusCode::NO_CONTENT,
+            "{id}"
+        );
+    }
+    // Random endpoint ids, from many networks, never take a key of the
+    // endpoint limiter.
+    for n in 0..50 {
+        assert_eq!(
+            send(from(&format!("203.0.113.{n}"), junk_id(100 + n)))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
+    let webhooks = state.webhooks.clone().unwrap();
+    assert_eq!(webhooks.limits.ingress_per_endpoint.tracked(), 1);
+    assert_eq!(
+        env.count("SELECT count(*) FROM webhook_event_refs").await,
+        4
+    );
+    env.drop_schema().await;
+}
+
+/// Re-reviews of the rate-limits PR: a blocked network may queue for the
+/// one lookup slot, but only `INGRESS_BLOCKED_WAITERS` of its requests at a
+/// time; the rest get `429` at once. So a real delivery from a blocked
+/// network that shares its addresses with junk (a provider's) still gets
+/// through while the slot is busy, and a flood from blocked networks cannot
+/// hold up deliveries from other networks.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn a_blocked_network_queues_for_the_lookup_slot_only_a_little() {
+    let mut env = env(small()).await;
+    let alice = Agent::new(99);
+    let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
+    env.subscribe_project(&alice, &connection, "p-100").await;
+    let endpoint = env.endpoint("tracker").await;
+    env.state.trust_forwarded_for = crate::config::TrustForwardedFor::RightMost;
+    let state = with_limits(&env, 600, 2, 20);
+    let from = |network: &str, request: Request<Body>| {
+        let mut request = request;
+        request
+            .headers_mut()
+            .insert("x-forwarded-for", network.parse().unwrap());
+        request
+    };
+    let junk = |n: usize| {
+        Request::post(format!("/webhooks/{:0>43}", n))
+            .body(Body::from("{}"))
+            .unwrap()
+    };
+    let send = |request: Request<Body>| {
+        let state = state.clone();
+        async move { crate::router(state).oneshot(request).await.unwrap() }
+    };
+    let delivery = |id: &str| env.signed_delivery(&endpoint, id, &task("p-100", id));
+    // The provider's address, pushed over its limit by junk sent to it.
+    let provider = "192.0.2.1";
+    let other = "203.0.113.9";
+    for n in 0..3 {
+        send(from(provider, junk(n))).await;
+    }
+    assert_eq!(
+        send(from(provider, junk(9))).await.status(),
+        StatusCode::TOO_MANY_REQUESTS,
+        "the provider's network is blocked"
+    );
+
+    // The lookup slot is busy. A real delivery from the blocked network
+    // queues; so does one junk request; the queue is then full, and further
+    // requests from blocked networks get 429 at once.
+    let webhooks = state.webhooks.clone().unwrap();
+    let held = webhooks.gate.lookups.acquire().await.unwrap();
+    let real = tokio::spawn(send(from(provider, delivery("real-blocked"))));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let queued_junk = tokio::spawn(send(from(provider, junk(50))));
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let elsewhere = tokio::spawn(send(from(other, delivery("real-other"))));
+    let started = std::time::Instant::now();
+    for n in 0..20 {
+        assert_eq!(
+            send(from(provider, junk(100 + n))).await.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "over the queue cap nothing waits"
+    );
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(held);
+    assert_eq!(
+        real.await.unwrap().status(),
+        StatusCode::NO_CONTENT,
+        "a real delivery from a blocked network that queued gets through"
+    );
+    assert_eq!(elsewhere.await.unwrap().status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        queued_junk.await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+
+    // A flood from the blocked network, with real deliveries from another
+    // network interleaved: every real one is stored, no flood request
+    // anything but refused.
+    let mut flood = Vec::new();
+    let mut real = Vec::new();
+    for n in 0..200 {
+        flood.push(tokio::spawn(send(from(provider, junk(1000 + n)))));
+        if n % 20 == 0 {
+            let id = format!("interleaved-{n}");
+            real.push(tokio::spawn(send(from(other, delivery(&id)))));
+        }
+    }
+    for (n, request) in real.into_iter().enumerate() {
+        assert_eq!(
+            request.await.unwrap().status(),
+            StatusCode::NO_CONTENT,
+            "interleaved delivery {n}"
+        );
+    }
+    for request in flood {
+        let status = request.await.unwrap().status();
+        assert!(matches!(status, StatusCode::TOO_MANY_REQUESTS), "{status}");
+    }
+    // Every 204 above was a durable outcome (stored, or recorded as a gap
+    // once the small test policy's pending limit is reached).
+    env.drop_schema().await;
+}
+
+/// Subscription requests are limited per owner before the access check
+/// reaches the provider.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn subscribing_is_rate_limited_per_owner() {
+    let env = env(small()).await;
+    let alice = Agent::new(97);
+    let bob = Agent::new(98);
+    let ac = env
+        .connection("tracker", &alice, "key-a", &["p-1", "p-2", "p-3"])
+        .await;
+    let bc = env.connection("tracker", &bob, "key-b", &["p-9"]).await;
+    let state = with_limits(&env, 600, 120, 2);
+    let subscribe = |agent: &Agent, connection: &str, project: &str| {
+        let body =
+            json!({"source": "project", "parameters": {"projectId": project}, "events": ["task"]});
+        signed_request(
+            &state,
+            agent,
+            "POST",
+            &format!("/connections/{connection}/subscriptions"),
+            serde_json::to_vec(&body).unwrap(),
+        )
+    };
+    let send = |request: Request<Body>| {
+        let state = state.clone();
+        async move { crate::router(state).oneshot(request).await.unwrap() }
+    };
+    assert_eq!(
+        send(subscribe(&alice, &ac, "p-1")).await.status(),
+        StatusCode::CREATED
+    );
+    // A refused access check counts as well: it reached the provider.
+    assert_eq!(
+        send(subscribe(&alice, &ac, "p-404")).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let limited = send(subscribe(&alice, &ac, "p-3")).await;
+    assert_eq!(limited.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(limited.headers().contains_key("retry-after"));
+    assert_eq!(
+        send(subscribe(&bob, &bc, "p-9")).await.status(),
+        StatusCode::CREATED
+    );
+    env.drop_schema().await;
+}
+
 /// Waits up to ten seconds for `condition`, checking every 20 ms.
 async fn eventually(what: &str, condition: impl Fn() -> bool) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);

@@ -27,7 +27,10 @@ unset; `run-lane.mjs`/`serve.mjs` use the same default;
 one checkout serves every worktree on that pin). It
 then symlinks `browser` and `integrations/node_modules`, and runs `pnpm
 install --frozen-lockfile` in its `browser/` (pnpm 10, per its
-`packageManager`). It refuses to move a checkout that has uncommitted changes.
+`packageManager`). It refuses to move a checkout that has uncommitted changes,
+apart from the two files atomic-server's build regenerates
+(`BUILD_OUTPUT_PATHS` in `integrations/tooling/server-build.mjs`): when only
+those changed, it restores them and moves the checkout.
 Re-run it after `.atomic-server-ref` changes. `--check` verifies the layout
 without changing anything, and `run-lane.mjs` warns when `browser/` points at
 a checkout on some other commit. After that:
@@ -420,6 +423,7 @@ if [ ! -x "$DIR/target/e2e/atomic-server" ]; then
   (cd "$DIR" && SKIP_WASM_BUILD=1 VITE_E2E=true cargo build --profile e2e \
     -p atomic-server --no-default-features --features wasm-plugins \
     && git rev-parse HEAD > target/e2e/.built-for-atomic-plugins)
+  node -e "import('./integrations/tooling/server-build.mjs').then(m => m.restoreBuildOutputs(process.argv[1]))" "$DIR"
 fi
 export ATOMIC_SERVER_CHECKOUT=$DIR
 node integrations/tooling/link-atomic-server.mjs
@@ -439,9 +443,14 @@ lanes.
 - Treat `$DIR` as read-only once it's built. Never commit in it or change
   its checkout, because other sessions may be using it at the same moment.
   A branch with another pin uses that SHA's own `$DIR`, never this one.
-- The last line writes the stamp `serve.mjs` checks: it refuses a binary
-  whose stamp names another commit than its checkout. A binary without a
-  stamp is trusted, so always write it.
+- The cargo build's last line writes the stamp `serve.mjs` checks: it
+  refuses a binary whose stamp names another commit than its checkout. A
+  binary without a stamp is trusted, so always write it.
+- The `node -e` line restores the two tracked files the data-browser build
+  regenerates (`BUILD_OUTPUT_PATHS` in `integrations/tooling/server-build.mjs`:
+  `browser/data-browser/src/chunks/Website/runtime/search-view.html` and
+  `website-runtime.min.js` next to it). The binary embeds its own built copy,
+  so this changes nothing in it, and it leaves the checkout clean.
 - If you need atomic-server changes, make them in a separate worktree on a
   branch.
 - Delete old SHAs with `git -C ~/gh/ontola/atomic-server worktree remove`
@@ -560,6 +569,9 @@ In order, it:
   needed for the lanes (an IPv4 loopback address needs no IPv6; not verified
   in the cloud). The hook still sets it, so cloud lane servers bind
   `0.0.0.0`; changing that is left to a session that can test in the cloud;
+- restores the two tracked files atomic-server's build regenerates
+  (`BUILD_OUTPUT_PATHS` in `integrations/tooling/server-build.mjs`) before
+  linking, and again after a build;
 - runs `link-atomic-server.mjs` (its `pnpm install` included), builds
   `@tomic/lib`, and installs every plugin lockfile, as CI does;
 - installs Playwright's Chromium for `browser/e2e`. The proxy blocks

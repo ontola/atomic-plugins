@@ -13,6 +13,7 @@ pub fn state(security: Option<crate::security::Security>) -> AppState {
         base_url: BASE_URL.into(),
         public_origin: PUBLIC_ORIGIN.into(),
         catalog: crate::catalog::Catalog::for_test("github-issues"),
+        device: Default::default(),
         security,
         access: std::sync::Arc::new(crate::access::AllowAll),
         operator: crate::templates::Operator::new(
@@ -26,6 +27,7 @@ pub fn state(security: Option<crate::security::Security>) -> AppState {
         key_check_window: crate::KEY_CHECK_WINDOW,
         trust_forwarded_for: crate::config::TrustForwardedFor::None,
         webhooks: None,
+        pacer: std::sync::Arc::default(),
         test_upstream: None,
     }
 }

@@ -8,8 +8,9 @@ both base64 alphabets, and are canonicalized (`atomic:agent:` + unpadded
 base64url) before any comparison or storage. Weak (small-order) keys are
 refused and signatures are checked with `verify_strict`.
 
-Every request that reads or changes a connection is signed with Atomic's v2
-headers. The message covers the method, the full URL (the configured
+Connection administration uses Atomic v2 signatures. Reads additionally
+accept opt-in, owner-approved device bearer sessions restricted to selected
+connections and read scopes (DEVICE_AUTH.md). The signed message covers the method, the full URL (the configured
 `BASE_URL` plus the path and query as received, never the `Host` header),
 the timestamp and a SHA-256 of the body, under a fixed `atomic-request-v2`
 prefix, so a captured request cannot be replayed with another body, method,
@@ -28,7 +29,8 @@ A connection row holds one provider credential sealed with
 XChaCha20-Poly1305 under `ENCRYPTION_KEY`, with associated data binding the
 envelope to its row id, so an envelope copied into another row does not
 open. The row records its platform and owner. Only the owner (the agent that
-signed `/connect/redeem`) may delete it, delegate it, or list it. A delegation
+signed `/connect/redeem`) may delete it or delegate it. Device sessions may
+list only the connections the owner explicitly approved. A delegation
 names an app agent; a runtime registered by the owner names a node's agent
 that acts for a delegated app. Both are read on every proxied request, so
 revocation is immediate. A connection unused for 90 days is deleted with its
@@ -323,7 +325,8 @@ and apply request size, timeout, redirect, and response-size limits.
 Refresh tokens only at the provider token endpoint configured for that
 platform. Store rotated tokens atomically before returning a replacement
 credential. Do not forward the upstream's cookies or authorization headers.
-Rate-limit per owner, audit token use without logging secrets, and return
+Rate-limit per owner (not implemented: no limit on proxied requests per
+owner exists yet), audit token use without logging secrets, and return
 generic authentication errors.
 
 A composed document with a `$ref` path item (or a path item that is not an
@@ -412,6 +415,40 @@ heuristically.
   create match one of the same connection's earlier keys (on a no-credential
   connection the key is namespaced per connection, above). None of them
   widens what the catalog allows or which credential is sent.
+
+## Pacing under provider quotas (P4, unreleased)
+
+The proxy paces its own requests under `x-throttling` buckets partitioned by
+`sourceIp` or by nothing (README, "Pacing under provider quotas"). Without
+it, one tenant could spend a quota the provider counts on the proxy's
+address and every other tenant of that platform would be refused by the
+provider. What it changes for safety:
+
+- **Only authenticated requests count.** The log is taken after
+  authentication, delegation, the access policy and the catalog checks, so
+  nobody without a connection can fill a bucket. A tenant with a connection
+  still can, by sending up to the bucket's limit itself: the pacing keeps
+  the proxy's traffic under the provider's limit; it is not fair between
+  tenants, and nothing on this release bounds one tenant's share. (A
+  per-owner limit on proxied requests is proposed separately, and would not
+  bound this either: an owner is any agent key, and anyone can make more.)
+- **No-credential platforms.** A platform whose document needs no
+  credential (`security: []`) lets almost anyone create a connection: the
+  consent page asks for nothing and the owner is whichever agent signs. So
+  on such a platform anyone can spend its `sourceIp` bucket and keep other
+  tenants' requests refused with `429 provider_quota` for as long as they
+  keep sending. The only bound is the access policy: `ALLOWED_AGENTS` (an
+  allowlist of owners) or a deployment's own `AccessPolicy`;
+  `REVOKED_SUBJECTS` refuses known keys only, and anyone can make a new one.
+- **Bounded memory.** One log per declared bucket, keyed by platform and
+  bucket id from the server-owned catalog, never by anything a caller
+  sends; each log holds at most `requests` timestamps, and buckets above
+  10,000 are not paced.
+- **Nothing is learned about other tenants** beyond what a provider's `429`
+  already shows: a `provider_quota` refusal says the shared bucket is full
+  and when it frees, not who filled it.
+- **Fails open.** A malformed or unknown declaration paces nothing; the
+  provider's own limit still applies.
 
 ## Release gate
 
@@ -592,6 +629,65 @@ generic code.
   release creating dedicated hooks has to decide whether to keep narrow
   cleanup material.
 
+- **Rate limits.** On `POST /webhooks/…` the limits count refusals only.
+  Anyone can point a provider's hooks at junk URLs, or send junk to a real
+  endpoint, so the provider's own delivery addresses collect refusals too;
+  a limit that refused them would drop real deliveries, which GitHub does
+  not retry. A client network (120 a minute) counts the refusals it caused
+  (unknown or malformed ids, failed verification, oversized bodies; not
+  `400` or `408`, which a provider's own broken or slow upload causes).
+  Once over, its requests for ids that are malformed or name no endpoint
+  get `429` after the lookup, and it is held to a short queue for the
+  lookup itself (below). An endpoint (600 a minute) counts its failed verifications,
+  and once over answers further ones `429` instead of `401`; random ids
+  never take an endpoint's key. Neither saves the verification work: the
+  ingress gate's lookup, read and database slots bound that. Subscription
+  requests are limited per owner (20 an hour) before their access check
+  reaches the provider; every request counts, a client's retry of the same
+  subscription included. Over a limit: `429` with `Retry-After`, nothing
+  written. The windows are fixed, in memory and per instance; at most
+  10,000 keys are held per limit, and while all of them are live a new key
+  passes uncounted (a shared overflow window would let whoever fills the
+  map block every other key). Values come from
+  `WEBHOOK_INGRESS_LIMIT_PER_NETWORK`, `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`
+  and `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`, read only with the inbox on.
+  Behind a proxy such as Heroku's router, `TRUST_FORWARDED_FOR` must be
+  set (`heroku`), or every sender is one network: the router's.
+  There is one endpoint-lookup slot. Requests from networks over their
+  limit may wait for it, but at most 2 of them at a time across all such
+  networks; while 2 wait, any further request from a network over its
+  limit gets `429` at once. The slot's semaphore is fair, so a released
+  slot goes to the requests already waiting in order, and those 2 cannot
+  jump ahead of other networks' requests. What holds: a flood from
+  networks over their limit cannot hold up deliveries from other networks,
+  and a real delivery from a network over its limit still gets through
+  whenever fewer than 2 of its kind are waiting. What remains:
+  - A provider whose delivery addresses also carry junk (anyone can point
+    the provider's hooks at junk ids, so its network goes over the limit)
+    has its real deliveries compete for those 2 places with the junk. Under
+    a sustained flood through the provider's own addresses, a real delivery
+    can find both taken and get `429`, which GitHub does not retry; the
+    periodic full reads are the fallback.
+  - Many networks that each stay under the limit (120 refusals a minute
+    each, for example a client rotating IPv6 /64s) can still keep the slot
+    busy, and a delivery that waits 3 s for it gets `503`, which GitHub
+    does not retry either.
+
 Not yet verified: any real provider's deliveries (only the synthetic
-fixtures), and rate limits on verification work and subscription creation,
-which the plan requires but this release does not set.
+fixtures), and how the limits behave across several instances (each counts
+its own).
+
+## Local Thought device client sessions
+
+See [DEVICE_AUTH.md](DEVICE_AUTH.md) for the complete #565 contract and limits.
+The opt-in RFC 8628 path authenticates the approving Atomic owner with signed,
+replay-protected challenge and approval requests; a user code or submitted owner
+ID is not authentication. CLI bearer tokens resolve to that same canonical
+owner with an explicit connection/read scope. They never confer owner
+administration. Connections, AccessPolicy and catalog permissions are checked
+live on each request. Device/approval/token secrets are stored as hashes in
+PostgreSQL; grants are single-use and refresh families rotate under row locks.
+Refresh-token reuse revokes the family across instances. The local owner bridge
+is a dogfooding example, not a production login. Device routes omit query strings
+from tracing, and consume bearer headers before the provider request is built.
+No provider credential is returned by device/token/connection-discovery routes.

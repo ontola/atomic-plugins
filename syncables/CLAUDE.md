@@ -82,6 +82,17 @@ Data flows through four stages, each its own directory under `src/`:
    while any other read that is not complete (failed, or an undocumented
    short-page end) gets `spans: null`.
    `read/read.ts` adds ontology/type projection.
+   `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
+   (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
+   only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
+   `validate.py` (keep them in step), `parseProduces` reads nothing from a
+   declaration with any rule 2-6 violation, `discoverReadModel` puts a
+   resource's classes on each of its collections (`ReadCollection.produces`,
+   behind `ApiClient.produces`), `producedClasses`/`resourcesProducing`
+   read a document (also a Swagger 2.0 root `x-crudResources`), and
+   `lensFits` checks a caller-fetched lens's `target.class` and
+   `source.record.{provider,resource}` (the fields of the catalog lenses in
+   `ontology/lenses/`, `ontology-kit/lens.d.mts`). Nothing is fetched.
    `read/runtime-schemas.ts` is the consumer of the draft Runtime Schemas
    extension (`x-runtime-schema`, `openapi-extensions/spec/runtime-schemas/`,
    #398; the spec's `validate.py` `derive_class`/`read_members` are its
@@ -159,9 +170,18 @@ Data flows through four stages, each its own directory under `src/`:
    `route.absentRemoved`, else `removed`; `lookupPlanned` is the check gate
    (not `'none'`, an item GET or a declaration, and `absent: removed`,
    `'all'`, a parent of a `parentAbsent` collection, or nested writes). The
-   lookups (previously unconfirmed first, also when `!differs`) run in
-   `releaseRefreshed`'s vanished loop, counted against
-   `maxMissingRecordChecks` (`SyncRound.lookups`); `reportMissing` turns
+   lookups (per collection, previously unconfirmed first, then the read's
+   new candidates; also when `!differs`) run in `releaseRefreshed`'s
+   vanished loop (`checkVanished`), counted against
+   `maxMissingRecordChecks` per sync across collections
+   (`SyncRound.lookups`). Kept `unavailable` marks without queued or failed
+   writes (`unsettled`) are re-read where `lookupPlanned` in a second pass,
+   `recheckUnavailable` (from `SyncRound.unavailable`, before
+   `finishFeeds`), oldest `checked` first across collections (`checkTime`,
+   strictly increasing, stored with the mark; set by `checkVanished`'s
+   `onChecked` only when `findEvidence` returned evidence, so a record the
+   budget or a 429 left unread keeps its place), so they never take checks
+   from unconfirmed or newly missing records; `reportMissing` turns
    the evidence into marks (`setMark`: changes go to the client-level
    `untoldMarks`, the latest per record, kept across syncs until told).
    `tell()` sends removals at once (dropping a held change of the same
@@ -199,8 +219,14 @@ Data flows through four stages, each its own directory under `src/`:
    Metadata collection names and bound context identify storage namespaces;
    identical IDs in sibling parents stay separate. Legacy names remain paths.
    Writes are serialized per scoped record and retry with exponential backoff
-   (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
-   a declared `x-crud` create (`ClientRoute.create`, `created-identity.ts`)
+   (`retry.maxAttempts` is optional). A POST on a collection's URL is its
+   create (`createPath`) unless the resource has no identity in a CRUD
+   Causality document (list-only, read-only: `list-only.test.ts`); an
+   `x-crud` create of such a resource sets `createRefused` (rule 25), and
+   `restore` parks a create queued for a route without one (`failed`; one
+   in flight at the stop or already uncertain stays `uncertain` with its
+   error and a note; `resolveWrite` `retry` throws). Creates reconcile
+   server-assigned IDs; a declared `x-crud` create (`ClientRoute.create`, `created-identity.ts`)
    leaves `generated` `addedFields` out of the body (`createBody`) and reads
    the identity from its `url` source through the identity template in
    reverse (`createdIdentity`, after CRUD Causality 0.5.0's
@@ -221,7 +247,9 @@ Data flows through four stages, each its own directory under `src/`:
    `resolveWrite` `retry`, sets its field's first segment or deletes the
    record; `retry` refuses an `unknown` follow-up), an unknown outcome sets `awaitingRefresh` (read back first),
    and a `confirm`ed uncertain create queues them `awaitingRefresh`;
-   updates select declared PUT, otherwise PATCH; the chosen operation's
+   updates use the item-path PUT or PATCH whose `x-crud` declares
+   `action: update` for the resource (both declared: PUT; neither, or a
+   legacy document: PUT, else PATCH; `clientRoutes`); the chosen operation's
    `x-crud` `mode`/`patchFormat` sets the body (`applyChanges`,
    `merge-patch.ts`): `jsonMergePatch` sends the changes alone and applies
    RFC 7396 locally, `jsonPatch` makes `update()` throw, anything else (and
@@ -265,7 +293,7 @@ Data flows through four stages, each its own directory under `src/`:
    `auth` blocks, unless the read was sent before the latest renewal
    (then it is sent again). A source read's refusal is kept in
    `sourceErrors` by URL, with its epoch, and is not cached. The restore
-   check `missingSources` includes `write`.
+   check `missingSources` includes `write` and `list`.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone
@@ -498,7 +526,12 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
 - `validate.ts` checks a scheme against the spec's own rules (§9); an
   invalid scheme (e.g. a `type` outside `pageNumber`/`pageToken`/`nextLink`)
   is excluded from auto-detection rather than throwing — one broken scheme
-  in a document shouldn't disable the rest.
+  in a document shouldn't disable the rest. But when no valid scheme
+  matches an operation and an invalid one would (`invalidAutoDetected` in
+  `autodetect.ts`), `walkAllPages` reads the one response and sets the
+  walk's outcome not complete (naming the scheme), so a page is never
+  taken for the whole collection; the client's `paginated()` counts such
+  an operation as paginated.
 - `autodetect.ts`'s `resolveEffectiveScheme(document, operation)` picks the
   scheme that applies to an operation: an explicit `x-pagination` entry
   first, else auto-detection by matching the scheme's declared query
@@ -589,6 +622,18 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   else the previous page's fingerprint when no item has an id) runs on
   every offset walk as well as on short-page walks. The validator checks rule 24,
   `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
+- Pagination Schemes 0.8.0: a scheme's `response.incomplete`
+  (`IncompleteObject`; `responseIncomplete(marker, body)` in
+  `read/pages.ts`, after the spec's `response_incomplete`: own properties
+  along the field's names split on `.`, no bracket escapes, JSON equality)
+  marks a response; `walkAllPages` records the
+  first mark in `WalkOutcome.marked` and `walkPages` then ends the outcome
+  not complete with that reason, paging unchanged. `readCollections` gives
+  `notComplete`, `readPlatform` `ReadResult.incomplete`, `paginate` its
+  `outcome` option, and `sync()` the `upsertIncomplete` path. The
+  validator checks rule 26 (`checkIncomplete`, with the type restriction
+  to pageNumber/pageToken/nextLink). Tests:
+  `unit/read/incomplete-marker.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
@@ -681,6 +726,11 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   under an unavailable parent concluded at once and sent again after the
   parent returns, `record` on unavailable reports, and an unrecognised
   `notFound` read as `unavailable`.
+- `unit/client/update-modes.test.ts` covers update bodies (`mode`,
+  `patchFormat`, merge patches, conflicts, stored `updateBody`) and which
+  operation updates: a declared PATCH over an undeclared PUT, the reverse,
+  both declared, neither, another resource's `x-crud`, and a declared
+  `jsonPatch` PATCH throwing.
 - `unit/client/write-preconditions.test.ts` covers the client side of
   Write Preconditions: `ifMatch` (body version without a read, header
   version with one, `conflictStatus` and `header`), `refuseWhen`,
@@ -690,6 +740,12 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   three ways, `gone` over `notFound`, an update stopped), source objects
   (refused, unreadable then sent), `kind: none`, an unusable declaration
   and an unknown stored state.
+- `unit/client/calendar-recurring-refuse.test.ts` reads the repository's
+  Calendar write-preconditions overlay from `../overlays/` and applies its
+  operation updates to a Calendar-shaped document (K18 part 2): the
+  declarations parse under the placement rules, a series' master event
+  (`recurrence`) is refused for update and delete without a request, and a
+  single event and an exception are sent with `If-Match`.
 - `unit/client/deletion-feeds.test.ts` covers `x-deletion-feed`: tombstones
   for records the GET left undecided (on the collection or list operation,
   `idField`, no `tombstone` field, a restore after a tombstone), stored
@@ -727,10 +783,37 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   read, a restart, an unresolved bind, a refused declaration, a confirmed
   uncertain create, and no `followUps`; `compound-create-core.test.ts`
   the pure parts.
+- `unit/client/list-tombstones.test.ts` covers Deletion Feeds 0.3.0-draft
+  `x-list-tombstone` (`read/list-tombstones.ts`, after the reference
+  `list_tombstone`; parsed into `ReadCollection.listTombstone`, filtered in
+  `readCollections` into `CollectionSnapshot.tombstones`, and in `sync()`
+  the `listTombstoned` ids of the sync's reads are `findEvidence`'s first
+  evidence, `source: 'list'`) on the spec's §7.5 example
+  (`__tests__/fixtures/list-tombstones.ts`); the client's `Tombstone`
+  (feeds, read tombstones) is the same parsed object, so `except` applies
+  everywhere, tested with read tombstones there too. A list tombstone's
+  identity joins `readCollections`' repeated-identity check (a repeat fails
+  the read), and a read that ends with an error keeps `tombstones` empty.
+  In `performSync`'s pruning loop a write-less record in `listTombstoned` is
+  `deleted` with `source: 'list'` like `absent: deleted` (removed, or
+  `setMark` under `retainDeleted`; a kept mark goes to `recheck`), and the
+  vanished loop does not count it against `maxMissingRecordChecks`;
+  `upsertIncomplete` fails held heads of an incomplete read's list
+  tombstones (`listEvidence`, `failMissing`, `rebuild`).
+  `unit/client/list-tombstones-presence.test.ts` covers those paths
+  (presence, `retainDeleted`, marks, the check limit, incomplete reads,
+  repeated items, a restart), `completeness-outcomes.test.ts` a
+  `parentAbsent` parent concluded by a list tombstone, and
+  `deletion-declarations.test.ts` `except` on a deletion feed.
 - `unit/client/runtime-classes.test.ts` covers the classes in
   `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
   `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,
   a failed collection still throwing).
+- `unit/read/produced-classes.test.ts` runs Produced Classes on the spec's
+  example (read from `openapi-extensions/`), mirrors its `ValidationTests`
+  through `checkProduces`, covers `resourcesProducing`, the read model and
+  `ApiClient.produces`, and `lensFits` on the published lenses read from
+  `ontology/lenses/`.
 - `unit/read/runtime-schemas-reference.test.ts` mirrors the spec's
   `ReadingTests` (same TABLE and ROW) against `deriveRuntimeClass` and
   `readRuntimeMembers`, plus the declarations `runtimeSchemasOf` refuses.

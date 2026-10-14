@@ -91,8 +91,11 @@ export function describeSummary(s: SyncSummary): string {
   const partial = s.complete
     ? ''
     : ' The read was partial, so no missing task was checked.';
+  const unmapped = s.unmapped.length
+    ? ` ${s.unmapped.length} task${s.unmapped.length === 1 ? '' : 's'} could not be read through the catalog lens; ${s.unmapped.length === 1 ? 'its row keeps' : 'their rows keep'} their last values.`
+    : '';
 
-  return `${counts}; ${presence.join(', ')}.${partial}`;
+  return `${counts}; ${presence.join(', ')}.${partial}${unmapped}`;
 }
 
 /** "14:05", in the person's locale and time zone (tests pin both). */

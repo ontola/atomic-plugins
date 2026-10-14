@@ -687,6 +687,8 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
     // §4.3: kept with its last known values, not pruned, until a later
     // read settles it.
     expect(await client.get('/pets', '2')).toEqual(tom);
+    // The next sync reads it again (a kept unavailable record is re-checked
+    // where checks are made): still 404, still kept.
     await client.sync();
     expect(await client.get('/pets', '2')).toEqual(tom);
     // A new update of it is held for the next refresh, not sent.
@@ -711,6 +713,7 @@ describe('notFound: unavailable (Collection Completeness 0.2.0 §4.3)', () => {
     fake.pets.delete('2');
     await client.sync();
     expect(reports.map((r) => [r.id, r.evidence])).toEqual([
+      ['2', 'unavailable'],
       ['2', 'unavailable'],
       ['2', 'unavailable'],
       ['2', 'unavailable'],
@@ -1142,6 +1145,45 @@ describe('parentAbsent (Collection Completeness 0.2.0 §4.4)', () => {
     expect(await client.get('listTasks', 't3', { listId: 'L2' })).toEqual(t3);
     expect(await client.get('listTasks', 't1', { listId: 'L1' })).toEqual(t1);
   });
+
+  it.each([
+    ['with', false],
+    ['without', true],
+  ])(
+    "concludes a list returned as a list tombstone deleted (source 'list', no GET), and its tasks unavailable, %s an item GET for lists (Deletion Feeds 0.3.0-draft §4.5)",
+    async (_label, noItemGet) => {
+      const doc = nestedDocument((resources, paths) => {
+        (
+          (resources['taskList']!['collections'] as Record<string, Row>)[
+            'taskLists'
+          ] as Row
+        )['x-list-tombstone'] = { field: 'deleted', values: [true] };
+        // No way to read one list: only the list tombstone can conclude it.
+        if (noItemGet) delete paths['/users/me/lists/{listId}'];
+      });
+      const { client, fake, reports } = await listsThenGone({
+        doc,
+        edit: true,
+      });
+      // The lists read returns L2 again, as a list tombstone.
+      fake.hidden.delete('L2');
+      fake.lists.set('L2', { id: 'L2', deleted: true });
+      await client.sync();
+      expect(fake.requests).toEqual([
+        'GET /users/me/lists',
+        'GET /lists/L1/tasks',
+      ]);
+      expect(reports.map((r) => [r.id, r.evidence, r.source])).toEqual([
+        ['L2', 'deleted', 'list'],
+        ['t2', 'unavailable', 'parent'],
+        ['t3', 'unavailable', 'parent'],
+      ]);
+      expect(client.pendingWrites()).toMatchObject([
+        { id: 't2', state: 'failed', missingRecord: 'unavailable' },
+      ]);
+      expect(await client.get('listTasks', 't3', { listId: 'L2' })).toEqual(t3);
+    },
+  );
 
   it('checks a vanished list without writes when a task under it has a queued update, and fails that update as unavailable', async () => {
     const { client, fake, reports } = await listsThenGone({ edit: true });

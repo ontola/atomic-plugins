@@ -180,6 +180,11 @@ export interface StoredUnavailable {
       source?: string;
       /** Added later within version 1: when a read last returned it. */
       lastSeen?: string;
+      /**
+       * Added later within version 1: when a check last read it (an ISO
+       * time), for re-reading unavailable records oldest-checked first.
+       */
+      checked?: string;
     }
   >;
 }
@@ -326,7 +331,9 @@ export function isStoredUnavailable(
         (entry['source'] === undefined ||
           typeof entry['source'] === 'string') &&
         (entry['lastSeen'] === undefined ||
-          typeof entry['lastSeen'] === 'string'),
+          typeof entry['lastSeen'] === 'string') &&
+        (entry['checked'] === undefined ||
+          typeof entry['checked'] === 'string'),
     ) &&
     value['id'] === undefined
   );

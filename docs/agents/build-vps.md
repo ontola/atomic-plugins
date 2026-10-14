@@ -73,8 +73,9 @@ and is the only way to point a branch at a checkout for another pin.
   stamping someone else's build blind.
 - **Always write the stamp.** `serve.mjs` (#412) refuses a binary whose stamp
   names another commit than its checkout, and prints the build lines. A
-  binary without a stamp is trusted, so a build that skips the stamp is never
-  caught when its checkout moves. On 2026-10-12 the `e922179` (candidate21)
+  binary without a stamp is not refused when its checkout moves; `serve.mjs`
+  warns about it. Only the builder writes the stamp; anyone else tells the
+  coordinator (see above). On 2026-10-12 the `e922179` (candidate21)
   build had none; it was given its own SHA under the heavy lock after
   checking that the binary embeds that commit.
 

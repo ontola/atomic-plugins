@@ -7,9 +7,19 @@
  *   node usertest/catalog.mjs --record [out]   # after a version bump
  *
  * It first installs each app's plugin dependencies that have a lockfile and
- * no node_modules yet (`pnpm install --frozen-lockfile`, as run-lane.mjs and
+ * no node_modules yet, or a stale one installed from a different
+ * pnpm-lock.yaml (`pnpm install --frozen-lockfile`, as run-lane.mjs and
  * apps.mjs do through integrations/tooling/deps.mjs); `--no-install` skips
  * that. On CI, where every lockfile is installed first, it does nothing.
+ *
+ * Without USERTEST_LOG_URL it refuses to build (exit 2), because an app
+ * marked `report: true` would lose its collector prelude and a deploy would
+ * replace the logged module under the same version (2026-10-13), unless
+ * `--no-log` says an unlogged build is meant (local tries, e2e/samples.mjs);
+ * such a build writes `out/UNLOGGED`, which check-live.mjs and deploy.sh
+ * refuse. `--record` alone may build unlogged: it records the hashes (which
+ * leave the prelude out), then removes the unlogged catalog.json so it can't
+ * be deployed. A refused or failed build leaves no catalog.json either.
  *
  * With USERTEST_LOG_URL set (deploy it with
  * USERTEST_LOG_URL=https://logs.<base-domain>/log), the modules of apps
@@ -80,13 +90,16 @@ export const BUILDS = resolve(here, 'builds.json');
 const A = 'https://atomicdata.dev/properties/';
 const I = 'https://atomicdata.dev/integrations/properties/';
 
-/** Drive apps built here. `base` is the catalog entry whose copy they reuse. */
+/**
+ * Drive apps built here. `base` is the plugin: the catalog entry whose copy
+ * they reuse, and the folder `integrations/<base>/` whose app they build.
+ */
 export const VERSIONS = {
   calendar: 'usertest-12',
-  'issue-tracker': 'usertest-10',
-  money: 'usertest-6',
-  notion: 'usertest-11',
-  timesheets: 'usertest-11',
+  'issue-tracker': 'usertest-11',
+  money: 'usertest-7',
+  notion: 'usertest-12',
+  timesheets: 'usertest-12',
 };
 const APPS = {
   calendar: {
@@ -114,7 +127,7 @@ const APPS = {
  * provider fixture under sample-data/. Bump SAMPLE_VERSION whenever
  * sample-data/ or a fixture it imports changes.
  */
-export const SAMPLE_VERSION = 'sample-3';
+export const SAMPLE_VERSION = 'sample-4';
 const SAMPLES = {
   calendar: { provider: 'Google Calendar', name: 'Google Calendar' },
   'issue-tracker': { provider: 'GitHub', name: 'GitHub issues' },
@@ -127,9 +140,12 @@ const SAMPLES = {
  * the post a simple request: no CORS preflight from the frame's null
  * origin. A failing collector never affects the app.
  */
+/** The shape USERTEST_LOG_URL must have: the collector's https endpoint. */
+const LOG_URL = /^https:\/\/[^/\s]+\/log$/;
+
 function preludeFor(logUrl) {
   if (!logUrl) return '';
-  if (!/^https:\/\/[^/]+\/log$/.test(logUrl))
+  if (!LOG_URL.test(logUrl))
     throw new Error('USERTEST_LOG_URL must look like https://<host>/log');
 
   return `globalThis.__USERTEST_REPORT__=e=>{try{fetch(${JSON.stringify(logUrl)},{method:"POST",keepalive:!0,headers:{"content-type":"text/plain"},body:JSON.stringify(e)}).catch(()=>{})}catch{}};\n`;
@@ -210,23 +226,32 @@ function entryFor(source, id, version, bytes, fields) {
 /**
  * The folders whose lockfiles the apps built here need, relative to the
  * repository root: each app's plugin folders (deps.mjs
- * `pluginDependencyDirs`) and the shared packages its lane's `paths` import
- * from source (`sharedDependencyDirs`).
+ * `pluginDependencyDirs`), by its `base` plugin, and the shared packages
+ * that plugin's lane's `paths` import from source (`sharedDependencyDirs`).
  */
 export function dependencyDirs(lanes = loadLanes().lanes) {
   return [
     ...new Set(
-      Object.keys(APPS).flatMap(id => [
-        ...pluginDependencyDirs(id),
-        ...sharedDependencyDirs(lanes.find(l => l.id === id)?.paths),
+      Object.values(APPS).flatMap(({ base }) => [
+        ...pluginDependencyDirs(base),
+        ...sharedDependencyDirs(lanes.find(l => l.id === base)?.paths),
       ]),
     ),
   ];
 }
 
-/** The install loop CI runs for every plugin's own dependencies. */
+/** The ids of the apps built here, for tests. */
+export const APP_IDS = Object.keys(APPS);
+
+/** Each app's `base` plugin, for tests. */
+export const appBase = id => APPS[id].base;
+
+/**
+ * What to do when a build still misses a package: catalog.mjs installs a
+ * missing or stale node_modules itself, unless it ran with --no-install.
+ */
 const INSTALL =
-  'for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile); done';
+  'run catalog.mjs without --no-install, which installs a missing or stale node_modules. From the repository root, CI installs every one with: for lock in integrations/*/pnpm-lock.yaml integrations/*/app/pnpm-lock.yaml; do (cd "$(dirname "$lock")" && pnpm install --frozen-lockfile); done';
 
 /**
  * `run()`, with a build that fails on a missing package (esbuild's "Could
@@ -243,7 +268,7 @@ export async function explained(what, run) {
       /Could not resolve|Cannot find (module|package)/.test(text)
     )
       throw new Error(
-        `usertest: building ${what} failed on a missing package, so its plugin's dependencies are probably not installed here. From the repository root: ${INSTALL}\n${text}`,
+        `usertest: building ${what} failed on a missing package, so its plugin's dependencies are probably not installed here: ${INSTALL}\n${text}`,
         { cause: error },
       );
     throw error;
@@ -274,7 +299,9 @@ export async function buildCatalog(out, { logUrl } = {}) {
       id,
       () =>
         import(
-          pathToFileURL(resolve(repo, 'integrations', id, 'app/build.mjs')).href
+          pathToFileURL(
+            resolve(repo, 'integrations', app.base, 'app/build.mjs'),
+          ).href
         ),
     );
     const file = resolve(out, 'apps', id, version, 'ui.js');
@@ -401,16 +428,80 @@ export const recordedFor = modules =>
       .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
   );
 
+/**
+ * Why this build may not run without a log URL, or undefined: an app in it
+ * reports to the collector, USERTEST_LOG_URL is unset, and neither
+ * `--no-log` nor `--record` says an unlogged build is meant.
+ */
+export function logProblem(env, argv) {
+  if (env.USERTEST_LOG_URL)
+    return LOG_URL.test(env.USERTEST_LOG_URL)
+      ? undefined
+      : `USERTEST_LOG_URL is ${JSON.stringify(env.USERTEST_LOG_URL)}; it must look like https://<host>/log (the collector's endpoint).`;
+  if (argv.includes('--no-log') || argv.includes('--record')) return undefined;
+  const reporting = Object.entries(APPS)
+    .filter(([, app]) => app.report)
+    .map(([id]) => id);
+  if (!reporting.length) return undefined;
+
+  return (
+    `USERTEST_LOG_URL is not set, so ${reporting.join(', ')} would be built without the collector prelude, ` +
+    'and deploying that would replace the logged module under the same version. ' +
+    'Set it (USERTEST_LOG_URL=https://logs.<base-domain>/log), or pass --no-log for a build that is not deployed.'
+  );
+}
+
+/** Removes `out`'s catalog.json and UNLOGGED marker, if any. */
+export function clearOut(out) {
+  rmSync(resolve(out, 'catalog.json'), { force: true });
+  rmSync(resolve(out, 'UNLOGGED'), { force: true });
+}
+
+/**
+ * Marks `out` UNLOGGED when the build will have no collector prelude, before
+ * any catalog.json exists there, so no moment has an unmarked unlogged
+ * catalog on disk: check-live.mjs and deploy.sh refuse a marked one.
+ */
+export function markOut(out, env) {
+  if (env.USERTEST_LOG_URL) return;
+  mkdirSync(out, { recursive: true });
+  writeFileSync(
+    resolve(out, 'UNLOGGED'),
+    'Built without USERTEST_LOG_URL (catalog.mjs --no-log or --record): not for deploying.\n',
+  );
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const recording = argv.includes('--record');
   const out = resolve(
     argv.find(a => !a.startsWith('--')) ?? resolve(here, 'out'),
   );
+  const unlogged = logProblem(process.env, argv);
+
+  const clear = () => clearOut(out);
+  // Whatever happens below (a refusal, a failed install or build), no
+  // catalog.json from an earlier build stays to be deployed by mistake.
+  clear();
+
+  if (unlogged) {
+    console.error(`catalog: ${unlogged}`);
+    process.exit(2);
+  }
+
+  markOut(out, process.env);
+
   if (!argv.includes('--no-install')) installMissing(dependencyDirs());
-  const { catalog, modules } = await buildCatalog(out, {
-    logUrl: process.env.USERTEST_LOG_URL,
-  });
+  let built;
+
+  try {
+    built = await buildCatalog(out, { logUrl: process.env.USERTEST_LOG_URL });
+  } catch (error) {
+    clear();
+    throw error;
+  }
+
+  const { catalog, modules } = built;
   const { changed, unrecorded } = versionProblems(modules, readBuilds());
 
   if (changed.length) {
@@ -425,6 +516,16 @@ async function main() {
     console.info(
       `catalog: recorded ${modules.length} build(s) in usertest/builds.json`,
     );
+
+    if (!process.env.USERTEST_LOG_URL && !argv.includes('--no-log')) {
+      clear();
+      console.warn(
+        'catalog: catalog.json removed: built without USERTEST_LOG_URL, so not for deploying. Rebuild with it to deploy.',
+      );
+    } else if (!process.env.USERTEST_LOG_URL)
+      console.warn(
+        'catalog: catalog.json kept with out/UNLOGGED (--record --no-log): check-live.mjs and deploy.sh refuse it. Rebuild with USERTEST_LOG_URL to deploy.',
+      );
   } else for (const line of unrecorded) console.warn(`catalog: ${line}`);
 
   for (const entry of catalog)
