@@ -5,6 +5,8 @@
 # response. Repeating that write applies the change twice"; "When the request created a page
 # or a database, additional_data.committed_resource_id holds the ID of the new object."
 # The create's own response is the page object, whose id fills the identity template.
+# Only the page create is declared: for an append of block children, committed_resource_id
+# holds the parent block's id, which CRUD Causality 0.7.0 §4.3.3 says does not qualify.
 # This is the first write v1 does not declare: v1 is read-only. Unpublished; no dated catalog
 # selects it. Needs CRUD Causality 0.7.0 (openapi-extensions/spec/crud-causality, §4.3.3).
 overlay: 1.0.0
