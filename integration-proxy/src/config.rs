@@ -49,6 +49,8 @@ pub struct Config {
     pub trust_forwarded_for: TrustForwardedFor,
     /// `WEBHOOKS_ENABLED` and the webhook inbox's limits. Off by default.
     pub webhooks: WebhookConfig,
+    /// Registered public device clients and the owner approval bridge. Disabled by default.
+    pub device: crate::device::DeviceConfig,
 }
 
 /// The webhook inbox (ontola/atomic-plugins#369). Off unless
@@ -392,6 +394,7 @@ impl Config {
             key_check_limit_per_hour,
             trust_forwarded_for,
             webhooks,
+            device: crate::device::DeviceConfig::from_env()?,
         })
     }
 
@@ -487,6 +490,7 @@ mod tests {
             key_check_limit_per_hour: 0,
             trust_forwarded_for: TrustForwardedFor::None,
             webhooks: WebhookConfig::default(),
+            device: Default::default(),
         };
         assert_eq!(config.public_origin(), "https://proxy.example:8443");
         assert_eq!(config.public_host(), "proxy.example:8443");

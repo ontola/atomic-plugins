@@ -27,6 +27,7 @@ import {
   isNotionFieldType,
   notionFieldShortname,
   notionFieldValue,
+  notionFormattedText,
   notionPropertyValue,
   PAGE_RESOURCE,
 } from './projection.js';
@@ -204,8 +205,10 @@ export class NotionRowLenses {
   /**
    * Page -> row. Sets the name, the fixed columns and every projected value.
    * A Notion property that is empty (`null`, no option) is unset, so a value
-   * cleared in Notion is cleared in Atomic. One with no lossless plain value
-   * (formatted text) is neither set nor unset: the row keeps what it had.
+   * cleared in Notion is cleared in Atomic. Formatted text is set to its
+   * words without the formatting (the projection's value; usertest-findings
+   * #19). Any other value with no lossless plain form is neither set nor
+   * unset: the row keeps what it had.
    */
   read(page: FetchedRecord, title: string): AtomicProjection {
     const set: Record<string, AtomicValue> = { [ATOMIC_NAME]: page.name };
@@ -228,8 +231,13 @@ export class NotionRowLenses {
       const property = this.property(shortname);
       if (!property) continue;
       const value = notionFieldValue(type, raw[type]);
+
       if (value === null) unset.push(property);
       else if (value !== undefined) put(shortname, page.values[shortname]);
+      else if (notionFormattedText(type, raw[type]) !== undefined) {
+        if (page.values[shortname] === undefined) unset.push(property);
+        else put(shortname, page.values[shortname]);
+      }
     }
 
     return { set, unset };
@@ -239,8 +247,9 @@ export class NotionRowLenses {
    * Row -> page: `previous` with each bound, supported Notion property
    * replaced by the row's value (absent -> Notion's empty). Every other
    * property and page field passes through, and so does a property whose
-   * Notion value was never read (formatted text) while the row holds no value
-   * for it; a row value for one throws. The title column, not the row name,
+   * Notion value has no lossless plain form while the row holds no value for
+   * it, or, for formatted text, the same words read without the formatting;
+   * any other row value for one throws. The title column, not the row name,
    * is what writes the Notion title.
    */
   write(resource: AtomicResource, previous: FetchedRecord | undefined) {
@@ -260,6 +269,8 @@ export class NotionRowLenses {
       // the row; writing a plain value over them would lose them.
       if (notionFieldValue(type, raw[type]) === undefined) {
         if (desired === undefined) continue;
+        const words = notionFormattedText(type, raw[type]);
+        if (words !== undefined && desired === (words || undefined)) continue;
         throw new Error(
           `Notion property "${name}" has no lossless plain value; not overwriting it`,
         );

@@ -4,12 +4,17 @@ A Rust web server that holds OAuth grants and pasted API keys and tokens for thi
 platforms, and forwards catalog-allowlisted requests to them on behalf of
 [Atomic](https://github.com/ontola/atomic-server) agents.
 
-There are no proxy accounts, logins or tenants (issue
-[#54](https://github.com/ontola/atomic-plugins/issues/54)). The account is
-the caller's Atomic agent, `atomic:agent:<public key>`: every request that
-matters is signed with that key, and the proxy verifies it against the key
-inside the id, so it looks nothing up. A **connection** (one provider grant)
-is owned by the agent that redeemed it; the owner **delegates** it to app
+Connections retain Atomic agent ownership (issue
+[#54](https://github.com/ontola/atomic-plugins/issues/54)); the proxy has no
+standalone owner-account login. The owner is
+the caller's Atomic agent, `atomic:agent:<public key>`. Signed clients use
+that key and the proxy verifies it against the key inside the id. Opt-in
+device clients obtain a scoped bearer session approved by that same owner;
+see [DEVICE_AUTH.md](DEVICE_AUTH.md) for the contract, browser integration
+and runnable examples. This source change does not claim deployment to
+localthought.io.
+
+A **connection** (one provider grant) is owned by the agent that redeemed it; the owner **delegates** it to app
 agents, and may register **runtimes** (a node's app agent) for them. A plugin
 frame, which cannot keep a key, uses a short-lived **capability** signed by
 the owner and bound to a key the frame holds in memory.
@@ -153,12 +158,15 @@ Subscriptions, `openapi-extensions/spec/`):
   A wrong verifier does not burn the handoff.
 - `ANY /proxy/{connection_id}/{platform}/{path}` — **signed** by the owner, a
   delegated app agent, or a registered runtime of a delegated app; or carrying
-  a frame capability (below). The proxy attaches the provider credential,
+  a frame capability (below), or an opt-in Local Thought device access token
+  for approved GET/HEAD reads (DEVICE_AUTH.md). The proxy attaches the provider
+  credential,
   refreshing an expiring OAuth token (one refresh in flight per connection),
   and forwards only catalog-allowlisted methods and paths. The caller's
   `Authorization` and `x-atomic-*` headers are never forwarded: an
-  `Authorization` other than `Capability …` is refused with
-  `401 unsupported_authorization`, and a capability is consumed by the proxy.
+  `Authorization` must be a capability or a namespaced Local Thought device
+  access token; retired bearer connection codes remain refused. Both
+  presentations are consumed by the proxy.
   Of the caller's headers only `Content-Type`, `If-Match`, `If-None-Match` and
   `If-Modified-Since` go upstream, plus `Idempotency-Key` where the operation
   declares an `Idempotency-Key` header parameter (and the catalog sets no
@@ -178,7 +186,8 @@ Subscriptions, `openapi-extensions/spec/`):
   signer's runtimes. Never credentials. Shape:
   `{"owner", "connections": [{"connection_id", "platform", "owner", "label"?, "created_at", "last_used_at", "delegations": [...]}], "runtimes": [{"agent", "app", "label", "created_at", "last_used_at"}]}`.
   A connection's `label` is the key check's label (see `/connect/authorize`),
-  absent otherwise.
+  absent otherwise. A device bearer session instead returns only its approved
+  connections and canonical owner/client/session identity (DEVICE_AUTH.md).
 - `DELETE /connections/{id}` — **signed by the owner**; deletes the connection
   and its delegations. `204`.
 - `POST /connections/{id}/agents` — **signed by the owner**; body
