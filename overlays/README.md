@@ -206,6 +206,69 @@ Calendar overlay through the syncables client. No provider was called.
 | [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
 | [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
 
+## Google Calendar deletion feed
+
+[Google Calendar v3 deletion feed](APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md)
+`x-deletion-feed` on the `events` collection: the feed is the event list
+itself (`calendar.events.list`), read with the cursor `syncToken` and its
+pages only; the cursor for the next read is `nextSyncToken`, "present only
+on the very last page"; a 410 ("sync tokens are invalidated") drops the
+cursor; cancelled events are the tombstones, except items with
+`recurringEventId` (cancelled exceptions, which clients store), the same
+`except` as the read and list tombstones above. The pinned document's
+`syncToken` says "All events deleted since the previous list request will
+always be in the result set and it is not allowed to set showDeleted to
+False", so the feed needs no `showDeleted`, and every feed read sends the
+same parameters, as Google's
+[sync guide](https://developers.google.com/workspace/calendar/api/guides/sync)
+asks. So the first cursor comes from a feed read without a cursor, never
+from the drive app's own list read (`singleEvents=false&showDeleted=true`),
+whose token would then be sent without those parameters. That first read is
+a full listing and counts against the consumer's record budget (syncables'
+`maxRecords`, 5000 by default): a calendar with more events never completes
+it and never gets a cursor. Members and tombstones are those
+`singleEvents=false` (the default) returns: a series is its master event,
+plus exceptions with their own ids; a deleted series has one tombstone, the
+master's, and its instances get none.
+
+It composes with `app-crud-causality-32237fa5…` (the catalogs' choice) or
+`crud-causality-32237fa5…`, both tested, and is selected with
+`read-tombstone-v2-32237fa5…`, not the first revision. Do not select it with
+`pagination-v2-32237fa5…`, whose event-list description says "Full listing
+only: omit syncToken". The first read-tombstone revision's comment "Not
+declared: an `x-deletion-feed` over the event list" is stale since this
+overlay; that file is published and stays as it is. Not verified and not
+documented: that a feed read returns an event at most once; what it returns
+for the exceptions of a deleted series; how an event moved to another
+calendar (`events.move`) or an attendee's copy after the attendee is removed
+appears (both may appear cancelled in the source calendar while the event
+still exists elsewhere). No dated catalog selects it yet.
+`tests/test_calendar_deletion_feed.py` checks the declaration against the
+composed document and the pinned wording. No provider was called.
+
+## GitHub patch formats
+
+[GitHub Issues crud-causality v2](APIs/github.com/github-issues/1.1.4/crud-causality-v2-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml)
+and [GitHub REST crud-causality v2](APIs/github.com/api.github.com/1.1.4/crud-causality-v2-920631db31e628be547e9366821d3ebc7fa0ead5-overlay.yaml)
+replace v1's `patchFormat: merge`, which [CRUD Causality §4.6](../openapi-extensions/spec/crud-causality/README.md#46-patch-formats)
+does not define, so a consumer did not know the body format and sent the
+full record. The issue and comment PATCHes are `jsonMergePatch`: the body is
+a partial object, and GitHub's
+[Update an issue](https://docs.github.com/en/rest/issues/issues#update-an-issue)
+reference documents merge-patch behaviour for its fields ("use null to
+remove the current milestone"; labels and assignees replace the stored set,
+`[]` clears it). GitHub does not name RFC 7396 and takes `application/json`.
+In github-issues the two label writes keep `mode: patch` and say
+`patchFormat: custom`. v1 also gives its added fields (the issue `number`,
+the comment `id`) `source: server`, which §4.5 does not define; v2 says
+`generated`, so a consumer leaves its own placeholder for them out of the
+create body. Nothing else changes; v1 stays published. No dated
+catalog selects v2 yet. `tests/test_github_crud_patch_format.py` checks
+that every update of each composition names a rule-5 mode and a §4.6
+format, that v2 differs from v1 only there, and that the CRUD Causality
+validator passes. No provider was called.
+
 ## Google Calendar throttling
 
 [Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
@@ -276,6 +339,30 @@ version of the extension does not describe. No dated catalog selects it
 yet. `tests/test_asana_throttling.py` composes it alone and after the
 catalog's Asana overlays and classifies a synthetic 429. No provider was
 called.
+
+## Discord throttling
+
+[Discord API v10 throttling](APIs/discord.com/10/throttling-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+declares [Throttling 0.3.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Discord's [rate-limits page](https://docs.discord.com/developers/topics/rate-limits)
+and the pinned OAD's own headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
+`X-RateLimit-Reset-After` (in seconds), `Retry-After`, the 429 body's
+`retry_after`, and a 429 as `throttled` with no bucket named (Discord's
+per-route buckets are named only at run time). Discord types the reset and
+delay values as numbers and its example has a fraction (`retry_after:
+64.57`); the extension's units are whole seconds, so a fractional value is
+ignored and the consumer falls back to `Retry-After` or its own backoff.
+Plainly: a consumer that follows the spec cannot use a fractional
+`X-RateLimit-Reset-After` or `retry_after` at all, because the Throttling
+spec allows whole seconds only.
+Not declared: the global limit, which applies to bots and users ("Global
+rate limits apply to the total number of requests a bot or user makes") but
+has a published number only for bots ("All bots can make up to 50 requests
+per second"); the per-route limits, which have no published numbers; and the invalid-request limit, which counts only 401, 403 and 429
+responses. No dated catalog selects it yet.
+`tests/test_discord_throttling.py` composes it alone and after the
+catalog's Discord overlays and classifies synthetic responses, fractions
+included. No provider was called.
 
 ## Directory layout and OAD revisions
 
@@ -644,7 +731,6 @@ account or status IDs. Unpaged batch reads, directory offsets and instance
 peer reads are excluded. Server selection and dynamic OAuth registration
 remain separate from this pagination metadata.
 
-
 The six Google variants use opaque `nextPageToken` values as `pageToken`,
 with `pageSize` or `maxResults` only as declared on that operation. A short
 or empty page is not terminal while a token remains. Keep filters, masks,
@@ -992,3 +1078,19 @@ schema shows offset fields; if Box answered it with offset fields and no
 against its base, and validates v2 and the Box platform composed from the
 catalog. Declared from Box's documentation and the pinned OAD; no Box
 request was made.
+
+A standalone [throttling overlay](APIs/box.com/2.0.0/throttling-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
+declares Box's documented [rate limits](https://developer.box.com/guides/api-calls/permissions-and-errors/rate-limits)
+(Throttling 0.2.0-draft or later, `limits` and `headers`): 1000 requests per
+minute per user on every operation, plus 240 per minute per user on the two
+direct uploads, 6 per second and 60 per minute per user and 12 per second per
+enterprise on search, and Box Sign's 100 (create, resend) and 1000 (get, and
+also the list) per minute per user; and the `retry-after` header in seconds.
+Box does not say whether upload, search and Sign requests also count against
+the general 1000 per minute; keeping that bucket on them is the conservative
+choice, not a documented one, and makes the Sign read bucket duplicate it.
+No dated catalog selects the overlay. `tests/test_box_throttling.py` composes
+it with its pinned OAD, in either order with each Box pagination overlay a
+dated catalog selects (v3 in the newest, `catalog/2026-10-12-tasks-box-pages.json`;
+v2 and v1 in older ones), checks the buckets and their operations, and classifies
+a synthetic `429`. No provider was called.
