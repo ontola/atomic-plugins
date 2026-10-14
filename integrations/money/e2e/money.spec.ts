@@ -555,11 +555,14 @@ test.describe('money integration', () => {
       await page.unroute('**/app-write');
     }
 
-    // The host recovers. Since 0.4.5 (#539, #572) the failed sheet never
-    // offers its old preview again, which listed the transaction written
-    // before the failure. And a check of the same file made at once, before
-    // anything has waited for the app's copy of the table, reads the table
-    // first and proposes only the rest.
+    // The host recovers. Since 0.4.5 (#539, #572) the failed sheet checks
+    // the file again against the table and offers only the transaction that
+    // was not written, never its old preview of 2. Closing it and checking
+    // the same file at once, before anything has waited for the app's copy
+    // of the table, reads the table first and proposes the same one.
+    await expect(
+      sheet.getByRole('button', { name: 'Import 1 transaction' }),
+    ).toBeVisible({ timeout: 30_000 });
     await expect(
       sheet.getByRole('button', { name: 'Import 2 transactions' }),
     ).toHaveCount(0);

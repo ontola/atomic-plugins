@@ -222,7 +222,7 @@
     "https://atomicdata.dev/integrations/properties/app-row-name": "Bank transaction",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Bank transactions",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/money/0.4.5/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-pDyeRHmNqQ9gcduGpjAwsxrtvtUau+4b5Tr7uIbl1VnefUUTZZOkcguIZdyr1vj6"
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-UIacxspFtvsqH4Bf1Sdna4r+eY29FKEg1oN8ZIrPPficqZhGusb+TNe737wWSzCw"
   },
   {
     "https://atomicdata.dev/properties/localId": "moneybird",

@@ -622,6 +622,70 @@ describe('importing into the app’s own table by its own writes (write.ts)', ()
     expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
   });
 
+  it('a row the host could not read after a failure counts as an unchecked table, not as absent (#572 P2)', async () => {
+    const { store, controller } = harness({ data: 'own' });
+    await controller.load();
+    await controller.importFile(file(mt940));
+    const write = heldWrite(store, 2, true);
+    // The table lists the written row, but reading it fails.
+    const getMany = store.getMany!.bind(store);
+    let flaky = true;
+
+    store.getMany = async subjects => {
+      if (flaky) throw new Error('Host did not answer getMany in time');
+
+      return getMany(subjects);
+    };
+
+    write.release();
+    await controller.applyImport();
+    write.restore();
+    await settle();
+    const sheet = controller.state().importing;
+    expect(sheet?.step === 'preview' && sheet.unchecked).toBe(true);
+    flaky = false;
+    await controller.applyImport();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(1);
+    controller.closeImport();
+    await controller.importFile(file(mt940));
+    const again = controller.state().importing;
+    expect(again?.step === 'preview' && again.preview.fresh).toHaveLength(1);
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+  });
+
+  it('a table query that answers [] never empties what a check compares with (#572 P3)', async () => {
+    const { store, controller } = harness({ data: 'own' });
+    await controller.load();
+    await controller.importFile(file(mt940));
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+    // The host's collection swallows a server failure and answers [].
+    const query = store.query.bind(store);
+    let empty = true;
+
+    store.query = async args => (empty ? [] : query(args));
+    controller.closeImport();
+    await controller.importFile(file(mt940));
+    empty = false;
+    const sheet = controller.state().importing;
+    expect(sheet?.step === 'preview' && sheet.preview.fresh).toHaveLength(0);
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+  });
+
+  it('Import pressed twice before the first finishes writes once (#572 P4)', async () => {
+    const { store, controller } = harness({ data: 'own' });
+    await controller.load();
+    await controller.importFile(file(mt940));
+    await Promise.all([controller.applyImport(), controller.applyImport()]);
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+  });
+
   it('pressing Import again right after a failure never writes a row twice (#539)', async () => {
     const { store, controller } = await failedImport();
     // No wait: the old preview listed both rows; the first is written.

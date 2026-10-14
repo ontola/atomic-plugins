@@ -375,31 +375,51 @@ minified, one module). Screenshots, axe and the render budget:
 
 ## Verified
 
-At 0.4.5 (app module `apps/money/0.4.5/ui.js`, 122,103 bytes; `plugin.js`
-again 0.3.0's bundle with only the manifest's `version` changed) no import
-writes a row twice (#539, #572). What changed, and what covers it:
+At 0.4.5 (app module `apps/money/0.4.5/ui.js`, 122,545 bytes; `plugin.js`
+again 0.3.0's bundle with only the manifest's `version` changed) the paths
+by which one copy of the app wrote a row twice after a failed or overlapping
+import, found in #539 and the review of #572, are closed. What changed, and
+what covers it:
 
 - A failed import drops the preview that listed the rows it was writing
   and disables Import ("Checking what was written…") while it reads the
   table again; it then offers only the rest. Unit: Import pressed again at
   once after the failure (3 rows at 0.4.4); the view disables the button.
-- If that read fails, nothing is compared: Import stays off with "Couldn't
-  check what was written; close and check the file again." Unit: a read
-  failing after the failure (the old preview came back at 0.4.4).
+  Import pressed twice before the first press finishes writes once (unit).
+- A check trusts only a complete read. If the table can't be listed, or any
+  row it lists can't be read, nothing is compared: in the failed sheet
+  Import stays off with "Couldn't check what was written; close and check
+  the file again.", and a new check stops with "Couldn't check what is
+  already in this table". Unit: a listing that fails after the failure (the
+  old preview came back at 0.4.4), and a listed row whose read fails (3 rows
+  for 2 before this).
+- A check compares with every row the app knew before and after its read,
+  so a table listing that comes back empty without an error (the host's
+  query answers `[]` on a server failure) can't make written rows look new.
+  Unit: 4 rows for 2 before this.
 - Every check of a file waits for any import under way, whether or not its
-  sheet was closed, and reads the table first; a failed read stops the
-  check ("Couldn't check what is already in this table"). Unit: the file
-  checked again at once after a failure (2 proposed at 0.4.4), after closing
-  during an import that then fails (3 rows), and after closing during one
-  that succeeds (4 rows for 2).
+  sheet was closed, and reads the table first. Unit: the file checked again
+  at once after a failure (2 proposed at 0.4.4), after closing during an
+  import that then fails (3 rows), and after closing during one that
+  succeeds (4 rows for 2).
 - The installed-app e2e step (0.4.3, below) checks that the failed sheet
-  never offers "Import 2 transactions" again, that a check made at once,
-  before anything waited for the app's copy of the table, proposes New 1,
-  that the server ends with each transaction once, and that the file checked
-  again finds nothing new.
+  offers "Import 1 transaction" and never "Import 2 transactions" again,
+  that a check made at once after closing it, before anything waited for
+  the app's copy of the table, proposes New 1, that the server ends with
+  each transaction once, and that the file checked again finds nothing new.
+
+Not closed: a row is still told apart only by comparing with what the app
+could read, so a row can still be written twice when that read can't see
+it. Two cases remain: two tabs or devices importing the same file at the
+same moment (see "Identity and dedupe" above), and a row write that timed
+out on the app's side but whose commit lands on the server after the
+following read. Closing them needs the row's subject derived from the
+transaction's identity, so that a second write of it lands on the same
+resource; that changes where rows live and needs a migration of existing
+rows, so it is a follow-up, not part of 0.4.5.
 
 The five money e2e tests, this step included, passed on 2026-10-14 at
-0.4.5 against the pin `7dab1ce` (the build VPS's source build), in 5.6
+0.4.5 against the pin `7dab1ce` (the build VPS's source build), in 5.0
 minutes.
 
 At 0.4.3 (`plugin.js` sha256
