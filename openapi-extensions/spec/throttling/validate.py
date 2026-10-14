@@ -9,7 +9,6 @@ import email.utils
 import json
 import re
 import sys
-from fractions import Fraction
 from urllib.parse import urlparse
 
 DIMENSIONS = {"sourceIp", "user", "session", "application", "credential", "account", "operation"}
@@ -82,18 +81,19 @@ def validate_limit(name, limit):
         require("window" not in limit and "requests" not in limit, f"{name}: tiers replace requests and window")
         tiers = limit["tiers"]
         require(isinstance(tiers, list) and tiers, f"{name}.tiers: expected nonempty array")
-        names = []
+        plans = []
         for index, tier in enumerate(tiers):
             label = f"{name}.tiers[{index}]"
-            require(isinstance(tier, dict) and {"name", "requests", "window"} <= set(tier)
-                    <= {"name", "requests", "window", "description"}, f"{label}: name, requests and window required")
-            require(isinstance(tier["name"], str) and tier["name"], f"{label}.name: expected nonempty string")
-            names.append(tier["name"])
+            require(isinstance(tier, dict) and {"plans", "requests", "window"} <= set(tier)
+                    <= {"plans", "requests", "window", "description"}, f"{label}: plans, requests and window required")
+            require(isinstance(tier["plans"], list) and tier["plans"]
+                    and all(isinstance(p, str) and p for p in tier["plans"]), f"{label}.plans: expected nonempty strings")
+            plans.extend(tier["plans"])
             positive(tier["requests"], f"{label}.requests")
             if "description" in tier:
                 require(isinstance(tier["description"], str), f"{label}.description: expected string")
             validate_window(label, tier["window"])
-        require(len(set(names)) == len(names), f"{name}.tiers: duplicate names")
+        require(len(set(plans)) == len(plans), f"{name}.tiers: a plan in two tiers")
     else:
         require("window" in limit, f"{name}: window required")
         validate_window(name, limit["window"])
@@ -106,16 +106,27 @@ def validate_limit(name, limit):
             require(dimension in DIMENSIONS or (uri.scheme and (uri.path or uri.netloc)), f"{name}: unknown non-URI dimension")
 
 
-def select_tier(limit, tier=None):
-    """0.5.0: the {requests, window} in force: the limit itself, its tier named `tier`, else its most restrictive tier."""
+def limits_in_force(limit, plan=None):
+    """0.5.0: the [{requests, window}] a consumer keeps within, all at once.
+
+    Without tiers, the limit itself (no entry when it states no requests).
+    With tiers, the tier whose plans name `plan`; without a plan, or one no
+    tier names, every tier.
+    """
     tiers = limit.get("tiers")
     if not tiers:
-        return {k: limit[k] for k in ("requests", "window") if k in limit}
-    for candidate in tiers:
-        if candidate["name"] == tier:
-            return {"requests": candidate["requests"], "window": candidate["window"]}
-    strictest = min(tiers, key=lambda t: (Fraction(t["requests"], t["window"]["seconds"]), -t["window"]["seconds"]))
-    return {"requests": strictest["requests"], "window": strictest["window"]}
+        return [{"requests": limit["requests"], "window": limit["window"]}] if "requests" in limit else []
+    for tier in tiers:
+        if plan in tier["plans"]:
+            return [{"requests": tier["requests"], "window": tier["window"]}]
+    return [{"requests": tier["requests"], "window": tier["window"]} for tier in tiers]
+
+
+def fallback_window(limit, plan=None):
+    """0.5.0: the window seconds a time-less quotaExhausted falls back to: the plan's tier's, else the longest."""
+    if not limit.get("tiers"):
+        return limit["window"]["seconds"]
+    return max(entry["window"]["seconds"] for entry in limits_in_force(limit, plan))
 
 
 def validate_window(name, window):
@@ -338,7 +349,7 @@ def _body_text(body, path):
     return value.strip(WHITESPACE) if isinstance(value, str) else None
 
 
-def classify(document, status, headers, body, received_at, tier=None):
+def classify(document, status, headers, body, received_at, plan=None):
     """Classify one response under the document's x-throttling.
 
     `headers` maps names (any case) to a value, or to a list of values when the
@@ -402,7 +413,7 @@ def classify(document, status, headers, body, received_at, tier=None):
     elif "minDelaySeconds" in matched:
         retry_at = received_at + matched["minDelaySeconds"]
     elif matched["meaning"] == "quotaExhausted" and bucket in root.get("limits", {}):
-        retry_at = received_at + select_tier(root["limits"][bucket], tier)["window"]["seconds"]
+        retry_at = received_at + fallback_window(root["limits"][bucket], plan)
     else:
         retry_at = None
     return {"meaning": matched["meaning"], "bucket": bucket, "retryAt": retry_at}

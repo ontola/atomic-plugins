@@ -57,7 +57,7 @@ import pathlib
 
 import yaml
 
-from validate import classify, select_tier
+from validate import classify, fallback_window, limits_in_force
 
 EXAMPLES = pathlib.Path(__file__).parent / "examples"
 NOW = 1_800_000_000
@@ -415,13 +415,16 @@ class PlanTierTests(unittest.TestCase):
         for mutate in (lambda l: l.update(window={"seconds": 1, "kind": "fixed"}),
                        lambda l: l.update(requests=5),
                        lambda l: l.update(tiers=[]),
-                       lambda l: l["tiers"].append(dict(l["tiers"][0])),
+                       lambda l: l["tiers"].append(dict(l["tiers"][0])),  # FREE in two tiers
+                       lambda l: l["tiers"][1].update(plans=["PRO", "FREE"]),
                        lambda l: l["tiers"][0].pop("window"),
                        lambda l: l["tiers"][0].pop("requests"),
-                       lambda l: l["tiers"][0].update(name=""),
+                       lambda l: l["tiers"][0].update(plans=[]),
+                       lambda l: l["tiers"][0].update(plans=[""]),
+                       lambda l: l["tiers"][0].update(plans="FREE"),
+                       lambda l: l["tiers"][0].update(name="FREE"),
                        lambda l: l["tiers"][0].update(requests=0),
-                       lambda l: l["tiers"][0]["window"].update(kind="rolling"),
-                       lambda l: l["tiers"][0].update(extra=1)):
+                       lambda l: l["tiers"][0]["window"].update(kind="rolling")):
             d = self.document()
             mutate(self.limit(d))
             with self.subTest(), self.assertRaises(ValueError):
@@ -431,30 +434,32 @@ class PlanTierTests(unittest.TestCase):
         with self.assertRaises(ValueError):  # neither window nor tiers
             validate(d)
 
-    def test_select_tier(self):
+    def test_limits_in_force(self):
         limit = self.limit(self.document())
-        self.assertEqual(select_tier(limit, "ENTERPRISE")["requests"], 50)
-        # Unknown or no tier: the most restrictive, 30 per hour.
-        for tier in (None, "PREMIUM"):
-            chosen = select_tier(limit, tier)
-            self.assertEqual((chosen["requests"], chosen["window"]["seconds"]), (30, 3600))
-        # Equal rates: the longer window.
-        tied = {"tiers": [{"name": "a", "requests": 1, "window": {"seconds": 1, "kind": "fixed"}},
-                          {"name": "b", "requests": 60, "window": {"seconds": 60, "kind": "fixed"}}]}
-        self.assertEqual(select_tier(tied)["window"]["seconds"], 60)
-        # Without tiers, the limit itself.
+        pairs = lambda entries: sorted((e["requests"], e["window"]["seconds"]) for e in entries)
+        self.assertEqual(pairs(limits_in_force(limit, "PRO")), [(20, 1)])
+        self.assertEqual(pairs(limits_in_force(limit, "TRIAL")), [(20, 1)])
+        self.assertEqual(pairs(limits_in_force(limit, "ENTERPRISE")), [(50, 1)])
+        # No plan, or an unknown one: every tier at once. 30 per hour alone would allow
+        # 30 requests in one second, which 20 per second forbids.
+        for plan in (None, "PREMIUM"):
+            self.assertEqual(pairs(limits_in_force(limit, plan)), [(20, 1), (30, 3600), (50, 1)])
         plain = {"requests": 5, "window": {"seconds": 10, "kind": "fixed"}}
-        self.assertEqual(select_tier(plain, "x"), plain)
+        self.assertEqual(limits_in_force(plain, "x"), [plain])
+        self.assertEqual(limits_in_force({"window": {"seconds": 10, "kind": "fixed"}}), [])
 
     def test_quota_exhausted_falls_back_to_the_tier_window(self):
         d = self.document()
         self.assertEqual(classify(d, 429, {}, None, NOW),
                          {"meaning": "quotaExhausted", "bucket": "workspace", "retryAt": NOW + 3600})
-        self.assertEqual(classify(d, 429, {}, None, NOW, tier="ENTERPRISE")["retryAt"], NOW + 1)
+        self.assertEqual(classify(d, 429, {}, None, NOW, plan="ENTERPRISE")["retryAt"], NOW + 1)
+        self.assertEqual(fallback_window(self.limit(d)), 3600)
+        self.assertEqual(fallback_window(self.limit(d), "PRO"), 1)
 
     def test_0_4_documents_stay_valid(self):
         for name in ("windowed.yaml", "response-signals.yaml", "body-fields.yaml", "blocked.yaml"):
             validate(example(name))
+
 
 
 if __name__ == "__main__": unittest.main()
