@@ -59,13 +59,7 @@ export function invalidAutoDetected(
   const schemes = document.components?.paginationSchemes ?? {};
   for (const [schemeName, scheme] of Object.entries(schemes)) {
     if (valid.has(schemeName) || !isPlainObject(scheme)) continue;
-    let matches = false;
-    try {
-      matches = autoDetectMatches(scheme, operation);
-    } catch {
-      // A shape too broken to compare: not counted as a match.
-    }
-    if (matches)
+    if (autoDetectMatches(scheme, operation))
       return {
         schemeName,
         problems: validatePaginationScheme(schemeName, scheme),
@@ -102,8 +96,10 @@ function autoDetectMatches(
   if (scheme.autoDetect === false || scheme.type === 'rangeWindow') {
     return false;
   }
-  const options =
-    typeof scheme.autoDetect === 'object' ? scheme.autoDetect : {};
+  // Anything but an Auto-Detect Object (`true`, or an invalid `null`,
+  // string, number or array) means the default options: an invalid scheme
+  // that then matches makes its read not complete, never one page complete.
+  const options = isPlainObject(scheme.autoDetect) ? scheme.autoDetect : {};
   const requireAll = options.requireAll ?? true;
   const results: boolean[] = [];
 

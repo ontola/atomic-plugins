@@ -436,6 +436,20 @@ export function validatePaginationScheme(
       `${path}.type must be one of pageNumber, pageToken, nextLink, or rangeWindow (got "${String(scheme.type)}")`,
     );
   }
+  // The spec's schema.json: a boolean or an Auto-Detect Object. Anything
+  // else (`null`, a string) would break auto-detection of every operation.
+  const autoDetect: unknown = scheme.autoDetect;
+  if (
+    autoDetect !== undefined &&
+    typeof autoDetect !== 'boolean' &&
+    (typeof autoDetect !== 'object' ||
+      autoDetect === null ||
+      Array.isArray(autoDetect))
+  ) {
+    errors.push(
+      `${path}.autoDetect must be a boolean or an Auto-Detect Object (got ${JSON.stringify(autoDetect)})`,
+    );
+  }
   checkWindow(path, scheme, errors);
   checkShortPage(path, scheme, errors);
   checkIncomplete(path, scheme, errors);
