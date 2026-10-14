@@ -247,6 +247,28 @@ still exists elsewhere). No dated catalog selects it yet.
 `tests/test_calendar_deletion_feed.py` checks the declaration against the
 composed document and the pinned wording. No provider was called.
 
+## GitHub patch formats
+
+[GitHub Issues crud-causality v2](APIs/github.com/github-issues/1.1.4/crud-causality-v2-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml)
+and [GitHub REST crud-causality v2](APIs/github.com/api.github.com/1.1.4/crud-causality-v2-920631db31e628be547e9366821d3ebc7fa0ead5-overlay.yaml)
+replace v1's `patchFormat: merge`, which [CRUD Causality §4.6](../openapi-extensions/spec/crud-causality/README.md#46-patch-formats)
+does not define, so a consumer did not know the body format and sent the
+full record. The issue and comment PATCHes are `jsonMergePatch`: the body is
+a partial object, and GitHub's
+[Update an issue](https://docs.github.com/en/rest/issues/issues#update-an-issue)
+reference documents merge-patch behaviour for its fields ("use null to
+remove the current milestone"; labels and assignees replace the stored set,
+`[]` clears it). GitHub does not name RFC 7396 and takes `application/json`.
+In github-issues the two label writes keep `mode: patch` and say
+`patchFormat: custom`. v1 also gives its added fields (the issue `number`,
+the comment `id`) `source: server`, which §4.5 does not define; v2 says
+`generated`, so a consumer leaves its own placeholder for them out of the
+create body. Nothing else changes; v1 stays published. No dated
+catalog selects v2 yet. `tests/test_github_crud_patch_format.py` checks
+that every update of each composition names a rule-5 mode and a §4.6
+format, that v2 differs from v1 only there, and that the CRUD Causality
+validator passes. No provider was called.
+
 ## Google Calendar throttling
 
 [Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
@@ -736,7 +758,6 @@ RFC 8288 next relation; private relationship IDs can differ from visible
 account or status IDs. Unpaged batch reads, directory offsets and instance
 peer reads are excluded. Server selection and dynamic OAuth registration
 remain separate from this pagination metadata.
-
 
 The six Google variants use opaque `nextPageToken` values as `pageToken`,
 with `pageSize` or `maxResults` only as declared on that operation. A short
