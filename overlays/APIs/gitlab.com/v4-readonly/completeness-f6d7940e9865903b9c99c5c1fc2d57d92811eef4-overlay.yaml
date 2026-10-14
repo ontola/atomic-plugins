@@ -1,0 +1,53 @@
+# Reviewed 2026-10-13 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://docs.gitlab.com/api/rest/troubleshooting/ (status codes): 404 Not Found,
+#   "A resource couldn't be accessed. For example, an ID for a resource couldn't be found,
+#   or the user isn't authorized to access the resource."
+# Source: the pinned OAD's GET /projects/{id}/issues: `state` "Filter issues by state.",
+#   enum opened, closed, all, `default: all`.
+# Source: https://docs.gitlab.com/api/issues/ ("List project issues": scope "Return issues for
+#   the given scope: `created_by_me`, `assigned_to_me` or `all`. Defaults to `all`."; issue_type
+#   "Filter to a given type of issue. One of `issue`, `incident`, `test_case` or `task`.", no
+#   default stated. "Delete an issue": "Users who have the Planner or Owner role can delete any
+#   issue. Other project members can delete the issues they authored.")
+# Needs Collection Completeness 0.2.0-draft (notFound). Compose after
+# crud-causality-f6d7940e...-overlay.yaml, in either order: it deep-merges into its
+# `issue` resource.
+#
+# Without a declaration a consumer takes a 404 from an issue's own read as a deletion (the
+# notFound default). GitLab answers 404 for an issue the caller cannot read as well, so
+# this overlay says unavailable. Not declared on `projects`: the catalog narrows that list
+# with a membership=true query override, and a consumer drops a completeness declaration
+# that a selection narrows. Not declared: `gone` (GitLab documents no 410 for issues), and
+# `parentAbsent`, which needs a parent collection with a Completeness Object (§4.4); a
+# project's issues are left unconcluded when the project disappears.
+# Not verified: which issue types the list returns without issue_type (the catalog sends
+# none), and whether tasks and incidents are listed and read as issues are.
+overlay: 1.0.0
+info:
+  title: GitLab.com issues collection completeness
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/f6d7940e9865903b9c99c5c1fc2d57d92811eef4/APIs/gitlab.com/v4-readonly/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        issue:
+          collections:
+            projectIssues:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                description: >-
+                  A project's issue list, every page. An issue leaves it when
+                  deleted, and possibly in ways GitLab does not document here
+                  (made confidential to a caller who cannot see it, the caller
+                  losing access; the state filter defaults to all and scope to
+                  all, and which issue types are listed without issue_type is
+                  not verified), so absence is removed. GitLab answers 404 both when an issue cannot be
+                  found and when "the user isn't authorized to access the
+                  resource", so a 404 from its own read is unavailable. The
+                  list is paged by page number (offset pagination): an issue
+                  deleted during a read moves the later ones back one place,
+                  so the issue after it on the next page can be skipped. That
+                  issue still exists; it is absent from the read only, and
+                  its own read finds it present.
