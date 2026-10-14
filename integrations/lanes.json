@@ -279,6 +279,15 @@
       "e2e": ["integrations/google-tasks/e2e/google-tasks.spec.ts"]
     },
     {
+      "id": "google-keep",
+      "index": 21,
+      "platforms": ["google-keep"],
+      "tiers": ["typecheck", "unit", "e2e"],
+      "paths": ["integrations/sync-status/**"],
+      "note": "The Google Keep drive app (integrations/google-keep/app/, modelled on the Google Tasks app): two-way sync of the connected account's notes with the app's own table, every minute while the view is open, rows of a class the app creates in its own ontology (no shared note class exists). paths: it bundles the shared sync-status card (integrations/sync-status/, Q-084), so a card change runs this lane too. google-keep.spec.ts installs the app from the catalog's Drive apps section, as the committed apps/google-keep/<version>/ui.js, and drives it through the host's proxy relay against the SYNTHETIC google-keep fixture in fixtures/google-keep/ (hand-written from the Keep API v1 reference; no recording, and no live run), using its drivers to edit and trash notes in Keep.",
+      "e2e": ["integrations/google-keep/e2e/google-keep.spec.ts"]
+    },
+    {
       "id": "sync-status",
       "index": 18,
       "platforms": [],

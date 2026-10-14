@@ -179,6 +179,7 @@ function refuse(response: GoogleResponse, what: string, now: () => number) {
       header,
     );
   }
+
   if (response.status === 401 || response.status === 403)
     throw new GoogleError(
       `Google refused ${what} (${response.status}); reconnect Google Keep.`,
@@ -203,7 +204,11 @@ export interface ReadOptions {
  */
 export async function readNotes(
   call: KeepCall,
-  { pageSize = PAGE_SIZE, maxPages = MAX_PAGES, now = Date.now }: ReadOptions = {},
+  {
+    pageSize = PAGE_SIZE,
+    maxPages = MAX_PAGES,
+    now = Date.now,
+  }: ReadOptions = {},
 ): Promise<{ notes: Row[]; partial?: string }> {
   const byId = new Map<string, Row>();
   let token: string | undefined;
@@ -228,10 +233,12 @@ export async function readNotes(
     const notes = body.notes === undefined ? [] : body.notes;
     if (!Array.isArray(notes))
       throw new GoogleError(`Google sent no notes for page ${n}.`);
+
     for (const note of notes.filter(isRow)) {
       const id = noteId(note);
       if (id) byId.set(id, note);
     }
+
     const next = body.nextPageToken;
     if (typeof next !== 'string' || !next) return { notes: [...byId.values()] };
     token = next;
@@ -257,7 +264,11 @@ export async function lookupNotes(
     try {
       const response = await call('GET', notePath(id));
       if (isRateLimit(response)) refuse(response, `note ${id}`, now);
-      out.push({ id, status: response.status, body: response.body as JSONValue });
+      out.push({
+        id,
+        status: response.status,
+        body: response.body as JSONValue,
+      });
     } catch (error) {
       if (error instanceof GoogleRateLimited) throw error;
       out.push({
@@ -292,7 +303,11 @@ export async function deleteNote(
   now: () => number = Date.now,
 ): Promise<void> {
   const response = await call('DELETE', notePath(id));
-  if (response.status === 200 || response.status === 204 || response.status === 404)
+  if (
+    response.status === 200 ||
+    response.status === 204 ||
+    response.status === 404
+  )
     return;
   refuse(response, `deleting ${id}`, now);
 }

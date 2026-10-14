@@ -56,7 +56,12 @@ import {
   type RateLimitOptions,
   readNotes,
 } from './read.js';
-import type { HostProxy, JSONValue, PluginResource, PluginStore } from './store.js';
+import type {
+  HostProxy,
+  JSONValue,
+  PluginResource,
+  PluginStore,
+} from './store.js';
 
 /** The integration proxy's platform id for Google Keep. */
 export const PLATFORM = 'google-keep';
@@ -152,7 +157,9 @@ const parse = (value: JSONValue): Row | undefined => {
 };
 
 const titleOf = (row: { title: string; body: string }) =>
-  row.title.trim() || row.body.trim().split('\n')[0]?.slice(0, 60) || '(empty note)';
+  row.title.trim() ||
+  row.body.trim().split('\n')[0]?.slice(0, 60) ||
+  '(empty note)';
 
 interface TableRows {
   known: KnownRow[];
@@ -164,20 +171,32 @@ interface TableRows {
 
 async function tableRows(store: PluginStore, drive: Drive): Promise<TableRows> {
   const p = drive.properties;
-  const out: TableRows = { known: [], locals: [], resources: new Map(), held: [] };
+  const out: TableRows = {
+    known: [],
+    locals: [],
+    resources: new Map(),
+    held: [],
+  };
   const seen = new Set<string>();
 
-  for (const subject of await store.query({ property: PARENT, value: drive.table })) {
+  for (const subject of await store.query({
+    property: PARENT,
+    value: drive.table,
+  })) {
     const row = await store.getResource(subject);
     if (!asList(row.get(IS_A)).includes(drive.rowClass)) continue;
     out.resources.set(subject, row);
-    const local = { title: text(row.get(NAME)), body: text(row.get(DESCRIPTION)) };
+    const local = {
+      title: text(row.get(NAME)),
+      body: text(row.get(DESCRIPTION)),
+    };
     const id = text(row.get(p.noteId));
 
     if (!id) {
       out.locals.push({ subject, local });
       continue;
     }
+
     // A second row for the same note is left alone.
     if (seen.has(id)) continue;
     seen.add(id);
@@ -224,7 +243,9 @@ async function write(
   unset: string[] = [],
 ): Promise<boolean> {
   const changed = Object.entries(set).filter(([k, v]) => row.get(k) !== v);
-  const removed = unset.filter(k => row.get(k) !== undefined && row.get(k) !== '');
+  const removed = unset.filter(
+    k => row.get(k) !== undefined && row.get(k) !== '',
+  );
   if (!changed.length && !removed.length) return false;
   for (const [k, v] of changed) row.set(k, v);
   for (const k of removed) row.remove(k);
@@ -266,14 +287,20 @@ export async function syncNotes(
     throw new AccountMismatch(recorded, seenAccount);
   let account = recorded ?? seenAccount;
   const known = idList(await appValue(store, drive, 'known'));
-  let retiring = idList(await appValue(store, drive, 'retiring'));
+  const retiring = idList(await appValue(store, drive, 'retiring'));
+  /** Old notes this pass's replacements could not delete: retried next pass. */
+  const failedDeletes: string[] = [];
   const lastCompleteAt = await lastSync(store, drive, clock());
   const rows = await tableRows(store, drive);
   const complete = !partial;
-  const lookups = await lookupNotes(call, absentNotes(rows.known, notes, complete), {
-    ...(maxLookups === undefined ? {} : { maxLookups }),
-    now: clock,
-  });
+  const lookups = await lookupNotes(
+    call,
+    absentNotes(rows.known, notes, complete),
+    {
+      ...(maxLookups === undefined ? {} : { maxLookups }),
+      now: clock,
+    },
+  );
   const seenAt = now();
   const actions = plan({
     rows: rows.known,
@@ -309,12 +336,20 @@ export async function syncNotes(
   let writes = 0;
 
   /** Re-reads a row just before a Keep write: it may have changed, or another browser sent it. */
-  const fresh = async (subject: string, planned: { title: string; body: string }) => {
+  const fresh = async (
+    subject: string,
+    planned: { title: string; body: string },
+  ) => {
     const row = await store.getResource(subject).catch(() => undefined);
     if (!row) return undefined;
-    const now = { title: text(row.get(NAME)), body: text(row.get(DESCRIPTION)) };
+    const current = {
+      title: text(row.get(NAME)),
+      body: text(row.get(DESCRIPTION)),
+    };
 
-    return now.title === planned.title && now.body === planned.body ? row : undefined;
+    return current.title === planned.title && current.body === planned.body
+      ? row
+      : undefined;
   };
 
   const clearHold = [p.hold, p.incoming, p.lastSeen];
@@ -333,7 +368,11 @@ export async function syncNotes(
       }
 
       case 'pull': {
-        await write(rows.resources.get(action.subject)!, noteValues(action.note, drive), clearHold);
+        await write(
+          rows.resources.get(action.subject)!,
+          noteValues(action.note, drive),
+          clearHold,
+        );
         summary.updated++;
         break;
       }
@@ -370,54 +409,65 @@ export async function syncNotes(
       }
 
       case 'blocked': {
-        const local = byRow.get(action.subject)?.local ?? localOf.get(action.subject)!.local;
-        await write(rows.resources.get(action.subject)!, { [p.hold]: action.reason });
+        const local =
+          byRow.get(action.subject)?.local ??
+          localOf.get(action.subject)!.local;
+        await write(rows.resources.get(action.subject)!, {
+          [p.hold]: action.reason,
+        });
         summary.blocked.push({ title: titleOf(local), reason: action.reason });
         break;
       }
 
       case 'settle': {
-        const row = byRow.get(action.subject)!;
         const resource = rows.resources.get(action.subject)!;
         await write(resource, {
           [p.presence]: action.presence,
           [p.lastSeen]:
             text(resource.get(p.lastSeen)) || lastCompleteAt || seenAt,
         });
-        void row;
         break;
       }
 
       case 'removed-here': {
         const id = noteId(action.note)!;
-        summary.removedHere.push({ id, title: titleOf(noteFields(action.note)) });
+        summary.removedHere.push({
+          id,
+          title: titleOf(noteFields(action.note)),
+        });
         break;
       }
 
       case 'push':
+
       case 'create': {
         const planned =
           action.kind === 'push'
             ? byRow.get(action.subject)!.local
             : localOf.get(action.subject)!.local;
+
         if (writes >= maxWrites) {
           summary.waiting++;
           break;
         }
+
         const row = await fresh(action.subject, planned);
+
         // Edited again since the read, or (a new row) sent by another
         // browser meanwhile: the next pass decides afresh.
         if (!row || (action.kind === 'create' && text(row.get(p.noteId)))) {
           summary.waiting++;
           break;
         }
+
         writes++;
         let made: Row;
 
         try {
           made = await createNote(call, keepNote(action.fields), clock);
         } catch (error) {
-          if (error instanceof Error && error.name === 'GoogleRateLimited') throw error;
+          if (error instanceof Error && error.name === 'GoogleRateLimited')
+            throw error;
           summary.failed.push({
             title: titleOf(planned),
             reason: error instanceof Error ? error.message : String(error),
@@ -440,18 +490,20 @@ export async function syncNotes(
         try {
           await deleteNote(call, old, clock);
         } catch {
-          retiring = [...retiring, old];
+          failedDeletes.push(old);
         }
+
         break;
       }
     }
   }
 
-  // Old notes of earlier replacements: try the delete again.
-  const still: string[] = [];
+  // Old notes of earlier passes' replacements: try the delete again.
+  const still: string[] = [...failedDeletes];
 
   for (const id of retiring) {
     if (rows.held.includes(id)) continue;
+
     try {
       await deleteNote(call, id, clock);
     } catch {
@@ -490,15 +542,24 @@ export interface NoteRow {
   lastSeen?: string;
 }
 
-export async function listNotes(store: PluginStore, drive: Drive): Promise<NoteRow[]> {
+export async function listNotes(
+  store: PluginStore,
+  drive: Drive,
+): Promise<NoteRow[]> {
   const p = drive.properties;
   const out: NoteRow[] = [];
 
-  for (const subject of await store.query({ property: PARENT, value: drive.table })) {
+  for (const subject of await store.query({
+    property: PARENT,
+    value: drive.table,
+  })) {
     const row = await store.getResource(subject);
     if (!asList(row.get(IS_A)).includes(drive.rowClass)) continue;
     const id = text(row.get(p.noteId));
-    const local = { title: text(row.get(NAME)), body: text(row.get(DESCRIPTION)) };
+    const local = {
+      title: text(row.get(NAME)),
+      body: text(row.get(DESCRIPTION)),
+    };
     const optional = {
       noteId: id || undefined,
       hold: text(row.get(p.hold)) || undefined,
@@ -509,29 +570,44 @@ export async function listNotes(store: PluginStore, drive: Drive): Promise<NoteR
       title: titleOf(local),
       kind: text(row.get(p.kind)) || 'text',
       presence: id ? text(row.get(p.presence)) || 'present' : 'local',
-      ...Object.fromEntries(Object.entries(optional).filter(([, v]) => v !== undefined)),
+      ...Object.fromEntries(
+        Object.entries(optional).filter(([, v]) => v !== undefined),
+      ),
     });
   }
 
   return out.sort(
-    (a, b) => a.title.localeCompare(b.title) || a.subject.localeCompare(b.subject),
+    (a, b) =>
+      a.title.localeCompare(b.title) || a.subject.localeCompare(b.subject),
   );
 }
 
 /** A conflict settled for Keep's version: the row takes it. */
-export async function keepTheirs(store: PluginStore, drive: Drive, subject: string) {
+export async function keepTheirs(
+  store: PluginStore,
+  drive: Drive,
+  subject: string,
+) {
   const row = await store.getResource(subject);
   const incoming = parse(row.get(drive.properties.incoming));
   if (!incoming || !noteId(incoming)) return;
   const p = drive.properties;
-  await write(row, noteValues(incoming, drive), [p.hold, p.incoming, p.lastSeen]);
+  await write(row, noteValues(incoming, drive), [
+    p.hold,
+    p.incoming,
+    p.lastSeen,
+  ]);
 }
 
 /**
  * A conflict settled for this row's version: Keep's version becomes the
  * baseline, so the next pass sees only the row's edit and sends it.
  */
-export async function keepMine(store: PluginStore, drive: Drive, subject: string) {
+export async function keepMine(
+  store: PluginStore,
+  drive: Drive,
+  subject: string,
+) {
   const row = await store.getResource(subject);
   const p = drive.properties;
   const incoming = parse(row.get(p.incoming));
@@ -547,7 +623,11 @@ export async function keepMine(store: PluginStore, drive: Drive, subject: string
 }
 
 /** A note whose row was deleted here is imported again at the next pass. */
-export async function restoreRemoved(store: PluginStore, drive: Drive, id: string) {
+export async function restoreRemoved(
+  store: PluginStore,
+  drive: Drive,
+  id: string,
+) {
   const app = await store.getResource(drive.app);
   const known = idList(app.get(drive.properties.known));
   if (!known.includes(id)) return;

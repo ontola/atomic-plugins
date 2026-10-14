@@ -62,8 +62,11 @@ export async function acquire(
   { now = Date.now, sleep = timerSleep }: LeaseOptions = {},
 ): Promise<boolean> {
   const property = drive.properties.lease;
-  const current = parseLease((await store.getResource(drive.app)).get(property));
-  if (current && current.holder !== holder && current.until > now()) return false;
+  const current = parseLease(
+    (await store.getResource(drive.app)).get(property),
+  );
+  if (current && current.holder !== holder && current.until > now())
+    return false;
 
   const app = await store.getResource(drive.app);
   await app

@@ -126,7 +126,9 @@ export function noteFields(note: Row): NoteFields {
   const body = isRow(note.body) ? note.body : {};
 
   if (isRow(body.list)) {
-    const items = (Array.isArray(body.list.listItems) ? body.list.listItems : [])
+    const items = (
+      Array.isArray(body.list.listItems) ? body.list.listItems : []
+    )
       .map(itemOf)
       .filter((i): i is Item => !!i);
 
@@ -249,7 +251,9 @@ export function invalid(fields: NoteFields): string | undefined {
   const count = items.reduce((n, i) => n + 1 + i.children.length, 0);
   if (count > MAX_ITEMS)
     return `The list has ${count} items; Keep takes at most ${MAX_ITEMS}.`;
-  if (items.some(i => [i, ...i.children].some(c => c.text.length > MAX_ITEM_TEXT)))
+  if (
+    items.some(i => [i, ...i.children].some(c => c.text.length > MAX_ITEM_TEXT))
+  )
     return `A list item is longer than Keep's ${MAX_ITEM_TEXT} characters.`;
 
   return undefined;
@@ -303,9 +307,7 @@ export function accountOf(notes: Row[]): string | undefined {
         .filter(Boolean),
     );
     if (!emails.size) continue;
-    common = common
-      ? new Set([...common].filter(e => emails.has(e)))
-      : emails;
+    common = common ? new Set([...common].filter(e => emails.has(e))) : emails;
   }
 
   return common?.size === 1 ? [...common][0] : undefined;
@@ -411,10 +413,12 @@ export function plan({
 }): Action[] {
   const actions: Action[] = [];
   const byId = new Map<string, Row>();
+
   for (const note of notes) {
     const id = noteId(note);
     if (id && !byId.has(id)) byId.set(id, note);
   }
+
   const answers = new Map(lookups.map(l => [l.id, l]));
   const checked = new Set(absentNotes(rows, notes, complete));
   const held = new Set(rows.map(r => r.id));
@@ -428,11 +432,22 @@ export function plan({
         actions.push({ kind: 'unchanged', subject: row.subject });
         continue;
       }
+
       const answer = answers.get(row.id);
-      const body = answer && 'status' in answer && isRow(answer.body) ? answer.body : undefined;
+      const body =
+        answer && 'status' in answer && isRow(answer.body)
+          ? answer.body
+          : undefined;
       let presence: Presence = 'unconfirmed';
-      if (answer && 'status' in answer && answer.status === 404) presence = 'deleted';
-      else if (answer && 'status' in answer && answer.status === 200 && body && noteId(body) === row.id)
+      if (answer && 'status' in answer && answer.status === 404)
+        presence = 'deleted';
+      else if (
+        answer &&
+        'status' in answer &&
+        answer.status === 200 &&
+        body &&
+        noteId(body) === row.id
+      )
         presence = body.trashed === true ? 'trashed' : 'present';
 
       if (presence === 'present' && body) {
@@ -459,14 +474,16 @@ export function plan({
         actions.push({ kind: 'pull', subject: row.subject, note: current });
       else if (current.updateTime !== row.source.updateTime)
         actions.push({ kind: 'rebase', subject: row.subject, note: current });
-      else actions.push({ kind: 'unchanged', subject: row.subject, clean: true });
+      else
+        actions.push({ kind: 'unchanged', subject: row.subject, clean: true });
       continue;
     }
 
     if (remote) {
       if (now.kind === base.kind && sameNote(row.local, now, now.kind))
         actions.push({ kind: 'rebase', subject: row.subject, note: current });
-      else actions.push({ kind: 'conflict', subject: row.subject, note: current });
+      else
+        actions.push({ kind: 'conflict', subject: row.subject, note: current });
       continue;
     }
 
@@ -484,6 +501,7 @@ export function plan({
       actions.push({ kind: 'unchanged', subject: row.subject });
       continue;
     }
+
     const fields = fieldsOf(
       row.local,
       looksLikeList(row.local.body) ? 'list' : 'text',
@@ -501,7 +519,9 @@ export function plan({
 
   for (const [id, note] of byId) {
     if (held.has(id) || old.has(id)) continue;
-    actions.push(gone.has(id) ? { kind: 'removed-here', note } : { kind: 'import', note });
+    actions.push(
+      gone.has(id) ? { kind: 'removed-here', note } : { kind: 'import', note },
+    );
   }
 
   return actions;

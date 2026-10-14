@@ -198,9 +198,9 @@ async function byShortname(
   const out = new Map<string, string>();
 
   for (const subject of subjects) {
-    const shortname = (await store.getResource(subject).catch(() => undefined))?.get(
-      SHORTNAME,
-    );
+    const shortname = (
+      await store.getResource(subject).catch(() => undefined)
+    )?.get(SHORTNAME);
     if (typeof shortname === 'string') out.set(shortname, subject);
   }
 
@@ -238,7 +238,8 @@ async function ensureProperties(
     out[spec.key] = subject;
   }
 
-  if (created.length) await ontology.set(PROPERTIES, [...listed, ...created]).save();
+  if (created.length)
+    await ontology.set(PROPERTIES, [...listed, ...created]).save();
 
   return out;
 }
@@ -270,12 +271,17 @@ async function ensureClass(
     },
   });
   const again = await store.getResource(ontology);
-  await again.set(CLASSES, [...asList(again.get(CLASSES)), created.subject]).save();
+  await again
+    .set(CLASSES, [...asList(again.get(CLASSES)), created.subject])
+    .save();
 
   return created.subject;
 }
 
-async function appOntology(store: PluginStore, app: string): Promise<PluginResource> {
+async function appOntology(
+  store: PluginStore,
+  app: string,
+): Promise<PluginResource> {
   const own = (await store.getResource(app)).get(DEFAULT_ONTOLOGY);
   if (typeof own === 'string') return store.getResource(own);
   throw new Error('This app has no ontology of its own to add fields to.');
@@ -302,7 +308,9 @@ async function appProperty(
 /** The table shown is not this app's own (it was added as a view there). */
 export class OtherTable extends Error {
   constructor() {
-    super('This is another table. The Google Keep app syncs only its own table.');
+    super(
+      'This is another table. The Google Keep app syncs only its own table.',
+    );
     this.name = 'OtherTable';
   }
 }
@@ -328,7 +336,8 @@ export async function provision(store: PluginStore): Promise<Drive> {
 
   if (renders) {
     const list = asList(resource.get(renders) ?? []);
-    if (!list.includes(rowClass)) await resource.set(renders, [...list, rowClass]).save();
+    if (!list.includes(rowClass))
+      await resource.set(renders, [...list, rowClass]).save();
   }
 
   const table = await store.getResource(data.table);
