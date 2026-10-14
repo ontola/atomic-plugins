@@ -1,0 +1,83 @@
+# Reviewed 2026-10-12 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://docs.discord.com/developers/topics/rate-limits
+#   X-RateLimit-Limit "The number of requests that can be made"; X-RateLimit-Remaining "The
+#   number of remaining requests that can be made"; X-RateLimit-Reset "Epoch time (seconds
+#   since 00:00:00 UTC on January 1, 1970) at which the rate limit resets";
+#   X-RateLimit-Reset-After "Total time (in seconds) of when the current rate limit bucket
+#   will reset. Can have decimals to match previous millisecond ratelimit precision";
+#   X-RateLimit-Bucket "A unique string denoting the rate limit being
+#   encountered"; a 429 body has retry_after, "The number of seconds to wait before
+#   submitting another request", and applications should "rely on the Retry-After header or
+#   retry_after field to determine when to retry the request".
+# The pinned OAD declares the same X-RateLimit-* headers on its operations (Limit and
+# Remaining as integers, Reset and Reset-After as numbers) and a 429 "Client ratelimited
+# response" with retry_after (a number) and global.
+# Needs Throttling 0.3.0-draft (openapi-extensions/spec/throttling: headers, bodyFields,
+# signals).
+# The reset and delay values are declared in whole seconds (epochSeconds, deltaSeconds),
+# the only units the extension has. Discord's documentation and the pinned OAD type them as
+# numbers and its 429 example has a fraction (retry_after 64.57); a value with a fraction
+# does not parse in those units, so a consumer ignores it and falls back to another
+# declared value that parses, or else its own backoff, which may be shorter or longer than
+# Discord's wait. Plainly: when Discord sends a fractional
+# X-RateLimit-Reset-After or retry_after (its example values are 1.337 and 64.57), a consumer
+# that follows the Throttling spec cannot use that value at all; the spec allows whole
+# seconds only. The declarations help only when Discord sends whole seconds.
+# Not declared: the global limit. It applies to users as well as bots ("Global rate limits
+# apply to the total number of requests a bot or user makes, independent of any per-route
+# limits"), but the page publishes a number only for bots ("All bots can make up to 50
+# requests per second"), and the catalog connects a user through OAuth; a 429 from it is
+# still classified (X-RateLimit-Global, X-RateLimit-Scope global). The per-route
+# buckets, which have no published numbers and are named only at run time
+# (X-RateLimit-Bucket); and the invalid-request limit (10,000 per 10 minutes per IP), which
+# counts only 401, 403 and 429 responses, not every request.
+overlay: 1.0.0
+info:
+  title: Discord API v10 throttling
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9d0d73c6b23cb07ca2d225fb8b3848fede322b21/APIs/discord.com/10/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        headers:
+          X-RateLimit-Limit:
+            role: limit
+            description: >-
+              "The number of requests that can be made" in the bucket the
+              request counted against (X-RateLimit-Bucket names it).
+          X-RateLimit-Remaining:
+            role: remaining
+            description: '"The number of remaining requests that can be made" in that bucket.'
+          X-RateLimit-Reset-After:
+            role: reset
+            unit: deltaSeconds
+            description: >-
+              "Total time (in seconds) of when the current rate limit bucket
+              will reset. Can have decimals to match previous millisecond
+              ratelimit precision". Preferred over X-RateLimit-Reset (an epoch time),
+              which reports the same moment against Discord's clock. A
+              fractional value (Discord's example: 1.337) cannot be used by a
+              consumer that follows the Throttling spec, which allows whole
+              seconds only.
+          Retry-After:
+            role: retryAfter
+            unit: deltaSeconds
+            description: >-
+              The page tells applications to rely on "the Retry-After header or
+              retry_after field" for when to retry.
+        bodyFields:
+          retry_after:
+            role: retryAfter
+            unit: deltaSeconds
+            description: >-
+              In a 429 body, "The number of seconds to wait before submitting
+              another request"; a fraction (the page's example is 64.57) does
+              not parse in whole seconds and is ignored.
+        signals:
+          - status: [429]
+            meaning: throttled
+            description: >-
+              Discord's 429, from a per-route bucket, the global limit or a
+              shared resource (X-RateLimit-Scope). No bucket is named: the
+              buckets are known only at run time.

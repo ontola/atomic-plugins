@@ -38,6 +38,9 @@ async fn signed<'a>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<Signed<'a>, ApiError> {
+    if headers.contains_key(axum::http::header::AUTHORIZATION) {
+        return Err(ApiError::UnsupportedAuthorization);
+    }
     let security = state.security.as_ref().ok_or(ApiError::Unavailable)?;
     let signer =
         crate::signature::authenticate(state, security, method, uri, headers, body).await?;
@@ -94,6 +97,9 @@ pub async fn list(
 ) -> Response {
     respond(
         async {
+            if let Some(token) = crate::device::bearer(&headers)? {
+                return crate::device::connections(&state, token).await;
+            }
             let signed = signed(&state, &method, &uri, &headers, &body).await?;
             let (connections, runtimes) = signed
                 .security

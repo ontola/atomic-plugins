@@ -175,7 +175,10 @@ Data flows through four stages, each its own directory under `src/`:
    vanished loop (`checkVanished`), counted against
    `maxMissingRecordChecks` per sync across collections
    (`SyncRound.lookups`). Kept `unavailable` marks without queued or failed
-   writes (`unsettled`) are re-read where `lookupPlanned` in a second pass,
+   writes (`unsettled`; the `!differs` path skips unconfirmed marks with
+   failed writes too, and routes a list-tombstoned kept mark to
+   `vanished` whatever `lookupPlanned` says, as the `differs` path does)
+   are re-read where `lookupPlanned` in a second pass,
    `recheckUnavailable` (from `SyncRound.unavailable`, before
    `finishFeeds`), oldest `checked` first across collections (`checkTime`,
    strictly increasing, stored with the mark; set by `checkVanished`'s
@@ -232,6 +235,15 @@ Data flows through four stages, each its own directory under `src/`:
    reverse (`createdIdentity`, after CRUD Causality 0.5.0's
    `created_identity()`); without one the 2xx create is `uncertain` with
    `unbound` (stored), never resent, and `resolveWrite` `retry` throws;
+   with `matchUnboundCreates` (`uniqueFieldsOf`, resolved at construction)
+   a create that sent a declared unique value is remembered in memory
+   (`unboundKnown`: the scope's confirmed ids, the body, `readsStarted`)
+   if `completeScopes` has its scope (added only where a complete read is
+   applied: `confirmed.set`, or an unchanged read), and `matchUnbound` in `performSync`
+   (before the snapshot is applied) binds it on the first complete read of
+   the scope that started later: exactly one new, write-less candidate
+   equal on every sent field and claimed by no other create; then
+   `confirmedId` as `resolveWrite(confirm)`, `SyncResult.matched`;
    a create's `followUps` (CRUD Causality 0.5.0 §4.7, `compound-create.ts`
    after the reference `missing_value`/`follow_up_request`, parsed into
    `CreateDeclaration.followUps`; one it cannot use sets
@@ -526,7 +538,12 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
 - `validate.ts` checks a scheme against the spec's own rules (§9); an
   invalid scheme (e.g. a `type` outside `pageNumber`/`pageToken`/`nextLink`)
   is excluded from auto-detection rather than throwing — one broken scheme
-  in a document shouldn't disable the rest.
+  in a document shouldn't disable the rest. But when no valid scheme
+  matches an operation and an invalid one would (`invalidAutoDetected` in
+  `autodetect.ts`), `walkAllPages` reads the one response and sets the
+  walk's outcome not complete (naming the scheme), so a page is never
+  taken for the whole collection; the client's `paginated()` counts such
+  an operation as paginated.
 - `autodetect.ts`'s `resolveEffectiveScheme(document, operation)` picks the
   scheme that applies to an operation: an explicit `x-pagination` entry
   first, else auto-detection by matching the scheme's declared query
