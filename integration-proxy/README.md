@@ -4,12 +4,17 @@ A Rust web server that holds OAuth grants and pasted API keys and tokens for thi
 platforms, and forwards catalog-allowlisted requests to them on behalf of
 [Atomic](https://github.com/ontola/atomic-server) agents.
 
-There are no proxy accounts, logins or tenants (issue
-[#54](https://github.com/ontola/atomic-plugins/issues/54)). The account is
-the caller's Atomic agent, `atomic:agent:<public key>`: every request that
-matters is signed with that key, and the proxy verifies it against the key
-inside the id, so it looks nothing up. A **connection** (one provider grant)
-is owned by the agent that redeemed it; the owner **delegates** it to app
+Connections retain Atomic agent ownership (issue
+[#54](https://github.com/ontola/atomic-plugins/issues/54)); the proxy has no
+standalone owner-account login. The owner is
+the caller's Atomic agent, `atomic:agent:<public key>`. Signed clients use
+that key and the proxy verifies it against the key inside the id. Opt-in
+device clients obtain a scoped bearer session approved by that same owner;
+see [DEVICE_AUTH.md](DEVICE_AUTH.md) for the contract, browser integration
+and runnable examples. This source change does not claim deployment to
+localthought.io.
+
+A **connection** (one provider grant) is owned by the agent that redeemed it; the owner **delegates** it to app
 agents, and may register **runtimes** (a node's app agent) for them. A plugin
 frame, which cannot keep a key, uses a short-lived **capability** signed by
 the owner and bound to a key the frame holds in memory.
@@ -153,12 +158,15 @@ Subscriptions, `openapi-extensions/spec/`):
   A wrong verifier does not burn the handoff.
 - `ANY /proxy/{connection_id}/{platform}/{path}` — **signed** by the owner, a
   delegated app agent, or a registered runtime of a delegated app; or carrying
-  a frame capability (below). The proxy attaches the provider credential,
+  a frame capability (below), or an opt-in Local Thought device access token
+  for approved GET/HEAD reads (DEVICE_AUTH.md). The proxy attaches the provider
+  credential,
   refreshing an expiring OAuth token (one refresh in flight per connection),
   and forwards only catalog-allowlisted methods and paths. The caller's
   `Authorization` and `x-atomic-*` headers are never forwarded: an
-  `Authorization` other than `Capability …` is refused with
-  `401 unsupported_authorization`, and a capability is consumed by the proxy.
+  `Authorization` must be a capability or a namespaced Local Thought device
+  access token; retired bearer connection codes remain refused. Both
+  presentations are consumed by the proxy.
   Of the caller's headers only `Content-Type`, `If-Match`, `If-None-Match` and
   `If-Modified-Since` go upstream, plus `Idempotency-Key` where the operation
   declares an `Idempotency-Key` header parameter (and the catalog sets no
@@ -178,7 +186,8 @@ Subscriptions, `openapi-extensions/spec/`):
   signer's runtimes. Never credentials. Shape:
   `{"owner", "connections": [{"connection_id", "platform", "owner", "label"?, "created_at", "last_used_at", "delegations": [...]}], "runtimes": [{"agent", "app", "label", "created_at", "last_used_at"}]}`.
   A connection's `label` is the key check's label (see `/connect/authorize`),
-  absent otherwise.
+  absent otherwise. A device bearer session instead returns only its approved
+  connections and canonical owner/client/session identity (DEVICE_AUTH.md).
 - `DELETE /connections/{id}` — **signed by the owner**; deletes the connection
   and its delegations. `204`.
 - `POST /connections/{id}/agents` — **signed by the owner**; body
@@ -226,6 +235,7 @@ Signed endpoints answer errors as JSON, `{"error": "<code>", "message": "<text>"
 | 403 | `not_owner`, `not_delegated`, `capability_scope`, `platform_mismatch`, `access_denied` |
 | 404 | `unknown_connection` (deleted, idle-expired, or never existed: connect again) |
 | 400 | `bad_request`, `invalid_handoff` |
+| 429 | `provider_quota`, from `/proxy/…` only, with `Retry-After` in seconds: the proxy's own requests to the platform are at a quota the provider counts on the proxy's address (`x-throttling`; see "Pacing under provider quotas") |
 
 Catalog refusals and upstream failures from `/proxy/…` keep their plain-text
 bodies (`404 method or path is not in the catalog`, `502 upstream request failed`).
@@ -277,9 +287,12 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `OPERATOR_URL` | no | Absolute `http(s)` link for `OPERATOR_NAME` on those pages. Anything else (`javascript:`, a relative path, credentials in the URL) is refused at startup. 0.2.1 and later. |
 | `KEY_CHECK_LIMIT_PER_HOUR` | no | The most API key or token checks the consent form makes for one client network and platform in any hour (a sliding window, counted in PostgreSQL across instances). Defaults to `20`; `0` turns the limit off; more than `10000` stops the proxy at startup. Only platforms with a declared key check count. A client over it gets `429` and no key check. A network is an IPv4 address or an IPv6 /64. Unreleased. |
 | `WEBHOOKS_ENABLED` | no | `true` creates the webhook inbox's tables, runs its sweeper and mounts the webhook routes below (ontola/atomic-plugins#369; see [SECURITY.md](SECURITY.md#webhook-inbox-369-unreleased)). Unset, empty or `false` (the default): no inbox table, no sweeper, no webhook route. Any other value stops the proxy at startup. Unreleased. |
+| `WEBHOOK_INGRESS_LIMIT_PER_NETWORK` | no | Refusals (unknown or malformed endpoint id, failed verification, oversized body; not `400` or `408`) one client network (an IPv4 address or IPv6 /64, found as `TRUST_FORWARDED_FOR` says, which behind Heroku's router or another proxy must be set) may cause on `POST /webhooks/…` per minute. Over it, its requests for ids that name no endpoint get `429` with `Retry-After`, and at most 2 of its requests at a time may wait for the endpoint-lookup slot: while the slot is busy and 2 wait, any further request from such a network gets `429` at once, a delivery to an existing endpoint included (a provider that shares its delivery addresses with the junk sent to it can lose one that way; see SECURITY.md). Default `120`; `1` to `100000`. Per instance. Read only with `WEBHOOKS_ENABLED=true`. Unreleased. |
+| `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT` | no | Failed verifications one existing webhook endpoint counts per minute; over it, further ones get `429` instead of `401`. A delivery that verifies is never refused for it. Default `600`; `1` to `100000`. Per instance. Read only with `WEBHOOKS_ENABLED=true`. Unreleased. |
+| `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER` | no | Subscription requests per connection owner per hour, counted before the access check reaches the provider; every request counts, retries included. Default `20`; `1` to `100000`. Per instance. Read only with `WEBHOOKS_ENABLED=true`. Unreleased. |
 | `WEBHOOK_SECRET_<PLATFORM>` | with webhooks, per platform | The secret of a platform's shared application hook, as configured at the provider (`<PLATFORM>` is the catalog name, upper case, `-` as `_`). Read only with `WEBHOOKS_ENABLED=true`, for platforms whose composed document declares `x-webhook-deliveries`. Without it, every delivery to that platform is refused and no subscription to it is created. Unreleased. |
 | `WEBHOOK_INBOX_MAX_BYTES` | no | The deployment's inbox budget in bytes, payloads plus a stated per-row overhead. Defaults to `1073741824` (1 GiB); at least `268435456` (the per-owner budget). Read only with `WEBHOOKS_ENABLED=true`: with the inbox off it is ignored, even when invalid. Unreleased. |
-| `TRUST_FORWARDED_FOR` | no; `heroku` on Heroku | Where that limit finds the client address: `none` (default) uses the TCP peer and ignores `X-Forwarded-For`; `heroku` (synonym `rightmost`) uses only the right-most `X-Forwarded-For` entry, which Heroku's router (or one reverse proxy in front) appends, and never an entry to its left; when that entry is missing or not an address, one shared bucket. Set `heroku` only behind such a proxy: without one, a client writes that entry itself. Unreleased. |
+| `TRUST_FORWARDED_FOR` | no; `heroku` on Heroku | Where the key-check limit and the webhook per-network limit (`WEBHOOK_INGRESS_LIMIT_PER_NETWORK`) find the client address: `none` (default) uses the TCP peer and ignores `X-Forwarded-For`; `heroku` (synonym `rightmost`) uses only the right-most `X-Forwarded-For` entry, which Heroku's router (or one reverse proxy in front) appends, and never an entry to its left; when that entry is missing or not an address, one shared bucket. Set `heroku` only behind such a proxy: without one, a client writes that entry itself. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `OAUTH_<PLATFORM>_CLIENT_SECRET`, `OAUTH_<PLATFORM>_CLIENT_AUTH_METHOD` | per OAuth platform | See below. |
 
 OAuth credentials are provider-specific. For a catalog platform named
@@ -597,7 +610,8 @@ Merging that to its `main` deploys. Do not copy this source tree there: the
 wrapper is the whole repository now.
 
 0.3.0 limits key checks per client network
-(`KEY_CHECK_LIMIT_PER_HOUR`). On Heroku every request's peer address is the
+(`KEY_CHECK_LIMIT_PER_HOUR`), and the webhook inbox (unreleased) limits
+refusals per client network. On Heroku every request's peer address is the
 router's, so set `TRUST_FORWARDED_FOR=heroku` before deploying it, or all
 clients share one limit (the proxy logs a warning at startup when it finds
 Heroku's `DYNO` variable without it).
@@ -648,6 +662,36 @@ describes the controls and what is not yet verified.
 - Cookies are marked `Secure`, so in production `BASE_URL` must use
   `https://`. `http://localhost` works during local development because
   browsers treat `localhost` as a secure context.
+
+## Pacing under provider quotas
+
+A provider that counts requests per source address counts the proxy's
+address, shared by every tenant (pieces.md P4). When a platform's composed
+document declares such a quota in `x-throttling`
+([Throttling](../openapi-extensions/spec/throttling/README.md)), the proxy
+paces its own requests under it:
+
+- **Which buckets.** Those the operation selects (its own `x-throttling`
+  list, or the root `applies`) whose `partitionBy` is exactly `[sourceIp]`,
+  or `[]` (one counter for all callers: the proxy's traffic alone then stays
+  under the whole limit), with a known `requests` of at most 10,000 and a
+  `window.seconds`. Buckets partitioned by user, credential or anything else
+  are each caller's own and not paced; a bucket over 10,000 requests per
+  window is not paced either.
+- **How.** A sliding log per platform and bucket: at most `requests`
+  requests in any `window.seconds`, which stays under the limit for `fixed`
+  (with or without an `anchor`), `sliding` and `unspecified` windows alike.
+  A request is counted just before the provider is called, after
+  authentication, the catalog checks and any token refresh, and is not
+  given back if the provider then fails. A request that would exceed any
+  selected bucket is refused with `429 provider_quota` and `Retry-After`
+  (the seconds until the oldest counted request leaves the window, rounded
+  up); nothing is queued.
+- **Limits of the model.** The logs are in memory, per instance: N
+  instances behind one egress address may together send up to N times the
+  limit, and a restart starts empty. Other clients behind the same address
+  (or, for `[]`, anywhere) are not seen. The provider still enforces its own
+  limit, and its `429` and `Retry-After` are forwarded as before.
 
 ## Browser clients
 

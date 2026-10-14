@@ -24,6 +24,8 @@ pub enum ApiError {
     WrongAudience,
     CapabilityKeyMismatch,
     UnsupportedAuthorization,
+    InvalidToken,
+    TokenScope,
     CredentialRefreshFailed,
     // 403: the caller is known but not allowed.
     NotOwner,
@@ -36,6 +38,9 @@ pub enum ApiError {
     // 400
     BadRequest(&'static str),
     InvalidHandoff,
+    // 429: the proxy is pacing its own requests to the platform under the
+    // provider's announced quota; retry after this long.
+    ProviderQuota(std::time::Duration),
     // 5xx
     Unavailable,
     Internal,
@@ -57,13 +62,14 @@ impl ApiError {
             | CapabilityTooLong
             | WrongAudience
             | CapabilityKeyMismatch
+            | InvalidToken
             | UnsupportedAuthorization
             | CredentialRefreshFailed => StatusCode::UNAUTHORIZED,
-            NotOwner | NotDelegated | CapabilityScope | AccessDenied(_) | PlatformMismatch => {
-                StatusCode::FORBIDDEN
-            }
+            NotOwner | NotDelegated | CapabilityScope | TokenScope | AccessDenied(_)
+            | PlatformMismatch => StatusCode::FORBIDDEN,
             UnknownConnection => StatusCode::NOT_FOUND,
             BadRequest(_) | InvalidHandoff => StatusCode::BAD_REQUEST,
+            ProviderQuota(_) => StatusCode::TOO_MANY_REQUESTS,
             Unavailable => StatusCode::SERVICE_UNAVAILABLE,
             Internal => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -85,6 +91,8 @@ impl ApiError {
             WrongAudience => "wrong_audience",
             CapabilityKeyMismatch => "capability_key_mismatch",
             UnsupportedAuthorization => "unsupported_authorization",
+            InvalidToken => "invalid_token",
+            TokenScope => "insufficient_scope",
             CredentialRefreshFailed => "credential_refresh_failed",
             NotOwner => "not_owner",
             NotDelegated => "not_delegated",
@@ -94,6 +102,7 @@ impl ApiError {
             UnknownConnection => "unknown_connection",
             BadRequest(_) => "bad_request",
             InvalidHandoff => "invalid_handoff",
+            ProviderQuota(_) => "provider_quota",
             Unavailable => "unavailable",
             Internal => "internal",
         }
@@ -114,7 +123,9 @@ impl ApiError {
             CapabilityTooLong => "the capability is valid for more than 15 minutes".into(),
             WrongAudience => "the capability is for a different proxy".into(),
             CapabilityKeyMismatch => "the request is not signed by the capability's cnf key".into(),
-            UnsupportedAuthorization => "the only Authorization scheme accepted is Capability; connection codes (Bearer) were retired".into(),
+            UnsupportedAuthorization => "use an Atomic signature, Capability, or a Local Thought device access token; retired bearer connection codes are not accepted".into(),
+            InvalidToken => "the Local Thought access token is invalid, expired or revoked".into(),
+            TokenScope => "the client session does not grant this connection or operation".into(),
             CredentialRefreshFailed => "the provider refused to refresh this connection's token; connect again".into(),
             NotOwner => "only the connection's owner may do this".into(),
             NotDelegated => "the signing agent has no delegation for this connection".into(),
@@ -124,6 +135,7 @@ impl ApiError {
             UnknownConnection => "no such connection; it was deleted, expired after 90 idle days, or never existed".into(),
             BadRequest(message) => (*message).into(),
             InvalidHandoff => "invalid or expired connection code".into(),
+            ProviderQuota(_) => "the proxy's requests to this platform are at the provider's announced quota for the proxy's address; retry after Retry-After seconds".into(),
             Unavailable => "the proxy's database is unavailable".into(),
             Internal => "internal error".into(),
         }
@@ -132,6 +144,15 @@ impl ApiError {
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
+        let retry_after = match &self {
+            ApiError::ProviderQuota(retry) => Some(retry.as_secs().max(1)),
+            _ => None,
+        };
+        let bearer_error = match self {
+            ApiError::InvalidToken => Some("Bearer error=\"invalid_token\""),
+            ApiError::TokenScope => Some("Bearer error=\"insufficient_scope\""),
+            _ => None,
+        };
         let mut response = (
             self.status(),
             Json(serde_json::json!({"error": self.code(), "message": self.message()})),
@@ -140,6 +161,36 @@ impl IntoResponse for ApiError {
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
+        if let Some(error) = bearer_error {
+            response
+                .headers_mut()
+                .insert(header::WWW_AUTHENTICATE, error.parse().unwrap());
+        }
+        if let Some(seconds) = retry_after {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, seconds.into());
+        }
         response
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_quota_is_a_429_with_retry_after_in_whole_seconds() {
+        for (retry, header) in [(1, "1"), (40, "40"), (0, "1")] {
+            let response =
+                ApiError::ProviderQuota(std::time::Duration::from_secs(retry)).into_response();
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            assert_eq!(response.headers()[header::RETRY_AFTER], header);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        }
+        assert!(!ApiError::NotOwner
+            .into_response()
+            .headers()
+            .contains_key(header::RETRY_AFTER));
     }
 }

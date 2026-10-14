@@ -16,8 +16,9 @@
  *   arrived while this view is open (`state.arrived`), else the newest
  *   `imported` stamp among the table's stored statements. `arrived` counts
  *   every new row the table subscription brought in, from this view's import
- *   or from any other writer, so the rows line says how many "arrived at the
- *   last sync" rather than claiming them as this view's "added"; the card's
+ *   or from any other writer; the rows line says how many were "imported
+ *   here" (`arrived.source` import, 0.4.4) or "arrived" (any other writer),
+ *   rather than claiming them all as this view's "added"; the card's
  *   counts line (added, updated, unchanged) is not used, since nothing here
  *   counts updated or unchanged rows. A table
  *   whose statements are derived from its rows (an older importer table, a
@@ -75,9 +76,17 @@ export const IMPORT_STOPPED_TEXT =
 const plural = (n: number, [one, many]: [string, string]) =>
   `${n} ${n === 1 ? one : many}`;
 
-/** Ends the rows line once rows arrived: "2 arrived at the last sync". */
-export const arrivedText = (count: number) =>
-  `${count} arrived at the last sync`;
+/**
+ * Ends the rows line once rows arrived: "2 imported here at the last sync"
+ * after this view's import, else "2 arrived at the last sync".
+ */
+export const arrivedText = (
+  count: number,
+  source: 'import' | 'elsewhere' = 'elsewhere',
+) =>
+  source === 'import'
+    ? `${count} imported here at the last sync`
+    : `${count} arrived at the last sync`;
 
 /** The newest `imported` stamp among the stored statements, as epoch ms. */
 export function lastImportAt(state: State): number | undefined {
@@ -196,7 +205,7 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
         ? NO_DATES_SCOPE
         : 'in this table';
   status.rowsScope = state.arrived
-    ? `${scope}; ${arrivedText(state.arrived.count)}`
+    ? `${scope}; ${arrivedText(state.arrived.count, state.arrived.source)}`
     : scope;
 
   if (state.arrived) status.last = { ok: true, at: state.arrived.at };

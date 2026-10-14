@@ -26,6 +26,10 @@ describe('GitHub package', () => {
         : './browser/node_modules/.pnpm/node_modules/.bin/esbuild',
       [
         join(import.meta.dirname, 'plugin.ts'),
+        // As certify.mjs's bundleArguments: source paths stay repo-relative
+        // (`browser/lib/...` through the symlink), so the bytes do not
+        // depend on where the checkout or its atomic-server lives.
+        '--preserve-symlinks',
         '--bundle',
         '--format=esm',
         '--platform=neutral',
@@ -36,20 +40,9 @@ describe('GitHub package', () => {
       ],
       { encoding: 'utf8' },
     );
-    // Source paths depend on where the checkout and its atomic-server live:
-    // the `// path` comments above each module and esbuild's __commonJS keys.
-    const withoutSourcePaths = (value: string) =>
-      value
-        .replace(/^\/\/ .*\.(?:ts|js)$/gm, '// generated source')
-        .replace(
-          /^(\s*)"[^"\n]*\.js"(\(exports, module\))/gm,
-          '$1"generated source"$2',
-        );
-    expect(
-      withoutSourcePaths(
-        await readFile(join(import.meta.dirname, 'plugin.js'), 'utf8'),
-      ),
-    ).toBe(withoutSourcePaths(built));
+    expect(await readFile(join(import.meta.dirname, 'plugin.js'), 'utf8')).toBe(
+      built,
+    );
   });
   it('reads every page and excludes pull requests', async () => {
     const issues = Array.from({ length: 101 }, (_, i) => issue(i + 1));

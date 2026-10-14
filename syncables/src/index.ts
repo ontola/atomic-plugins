@@ -103,6 +103,19 @@ export type {
   RuntimeMembers,
   RuntimeProperty,
 } from './read/runtime-schemas.js';
+export {
+  absoluteIri,
+  checkProduces,
+  lensFits,
+  parseProduces,
+  producedClasses,
+  resourcesProducing,
+  sameSubject,
+} from './read/produced-classes.js';
+export type {
+  ProducedClass,
+  ResourceProduction,
+} from './read/produced-classes.js';
 export { buildBody, buildQuery } from './pagination/request-builder.js';
 export type { PageCursor } from './pagination/request-builder.js';
 export { parseLinkHeader } from './pagination/response-parser.js';
@@ -136,12 +149,17 @@ export type {
   WindowFormat,
   WindowUnit,
 } from './pagination/types.js';
-export { PageReadError } from './read/pages.js';
+export { PageReadError, responseIncomplete } from './read/pages.js';
 export type { WalkOutcome, WindowRange } from './read/pages.js';
-export type { ShortPageObject } from './pagination/types.js';
+export type {
+  IncompleteObject,
+  JsonScalar,
+  ShortPageObject,
+} from './pagination/types.js';
 
 export {
   PaginationSchemeError,
+  invalidAutoDetected,
   resolveEffectiveScheme,
 } from './pagination/autodetect.js';
 export type { EffectiveScheme } from './pagination/autodetect.js';

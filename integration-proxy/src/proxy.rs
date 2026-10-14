@@ -1,8 +1,8 @@
 //! `ANY /proxy/{connection_id}/{platform}/{path}`: proxied provider calls
 //! (issue #54).
 //!
-//! Every request is authenticated one of two ways, both ending in a v2
-//! request signature (see [`crate::signature`]):
+//! Every request is authenticated with an Atomic v2 proof or a scoped
+//! Local Thought device access token:
 //!
 //! - **Signed by an agent with standing** on the connection: its owner; an
 //!   app agent holding a delegation for it; or a runtime registered (by the
@@ -12,7 +12,10 @@
 //!   [`crate::capability`]) signed by the owner for a delegated app, plus a
 //!   request signature by the capability's `cnf` key.
 //!
-//! Nothing rotates: the connection id is not a secret, and a signature is
+//! - **A device access token** for this owner and explicitly approved
+//!   connection, allowing only GET/HEAD and checked live against its session.
+//!
+//! The connection id is not a secret, and a signature is
 //! accepted once. The connection id is in the path, so the signature covers
 //! it. The owner is then checked against the access policy.
 use axum::{
@@ -280,13 +283,14 @@ async fn refresh_connection(
 #[derive(Debug, PartialEq, Eq)]
 enum Caller {
     Owner,
+    Device,
     Delegate(String),
     Runtime { agent: String, app: String },
     Frame { app: String },
 }
 
 /// Authenticates a proxied request against the connection it names. See the
-/// module documentation for the two accepted presentations.
+/// module documentation for the accepted presentations.
 #[allow(clippy::too_many_arguments)]
 async fn authenticate(
     state: &AppState,
@@ -308,6 +312,16 @@ async fn authenticate(
         })
         .transpose()?;
     let caller = match authorization {
+        Some(_) if crate::device::bearer(headers)?.is_some() => {
+            let principal =
+                crate::device::principal(state, crate::device::bearer(headers)?.unwrap()).await?;
+            if principal.owner != owner
+                || !crate::device::store::may_read(&principal, &record.connection_id, method)
+            {
+                return Err(ApiError::TokenScope);
+            }
+            Caller::Device
+        }
         Some(value) => {
             let token = value
                 .strip_prefix("Capability ")
@@ -453,7 +467,7 @@ async fn forward_inner(
     .await?;
     // Only an authenticated use keeps a connection alive.
     let (delegate, runtime) = match &caller {
-        Caller::Owner => (None, None),
+        Caller::Owner | Caller::Device => (None, None),
         Caller::Delegate(agent) => (Some(agent.as_str()), None),
         Caller::Runtime { agent, app } => (
             Some(app.as_str()),
@@ -539,6 +553,16 @@ async fn forward_inner(
         }
         _ => None,
     };
+    // P4: the last check before the provider is called, so only
+    // authenticated, allowed and valid requests count against the
+    // provider's quota on the proxy's own address.
+    let paced = state
+        .catalog
+        .paced_buckets(platform, method.as_str(), &request_path);
+    state
+        .pacer
+        .take(platform, &paced)
+        .map_err(ApiError::ProviderQuota)?;
     let upstream = match upstream_request(
         &state.http_client,
         method.clone(),
@@ -2561,6 +2585,109 @@ mod tests {
         let body = body_json(post("other").await.unwrap()).await;
         assert_eq!(body["idempotency_key"], serde_json::Value::Null);
         assert_eq!(body["if_none_match"], "\"v1\"");
+    }
+
+    /// pieces.md P4: a `sourceIp` bucket of the platform's `x-throttling`
+    /// is shared by every connection and owner on this instance; once its
+    /// sliding window is full the proxy answers `429 provider_quota` with
+    /// `Retry-After` and does not call the provider. Refused requests spend
+    /// nothing, and operations that select no paced bucket are not paced.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_requests_are_paced_under_a_source_ip_quota_across_tenants() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = hits.clone();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let app = axum::Router::new().fallback(move || {
+            let counter = counter.clone();
+            async move {
+                counter.fetch_add(1, Ordering::SeqCst);
+                Json(json!([]))
+            }
+        });
+        let _server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let security = security().await;
+        let mut s = state(Some(security.clone()));
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            "pets",
+            json!({
+                "servers": [{"url": format!("http://{address}/api")}],
+                "security": [],
+                "x-throttling": {
+                    "limits": {"source": {"requests": 2, "window": {"seconds": 300, "kind": "unspecified"}, "partitionBy": ["sourceIp"]}},
+                    "applies": ["source"]
+                },
+                "paths": {
+                    "/pets": {"get": {}},
+                    "/health": {"get": {"x-throttling": []}}
+                }
+            }),
+            json!({}),
+        );
+        let mut tenants = Vec::new();
+        for seed in [41, 42] {
+            let owner = Agent::new(seed);
+            let id = security
+                .create_connection(
+                    "pets",
+                    &owner.id(),
+                    &serde_json::to_vec(&StoredCredential::NoCredential {
+                        provider: "pets".into(),
+                    })
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            tenants.push((owner, id));
+        }
+        let get = |tenant: usize, path: &str| {
+            let (owner, id) = &tenants[tenant];
+            let request = signed_request(
+                &s,
+                owner,
+                "GET",
+                &format!("/proxy/{id}/pets/api/{path}"),
+                vec![],
+            );
+            crate::router(s.clone()).oneshot(request)
+        };
+        // A stranger's refused requests spend nothing.
+        let (_, id) = &tenants[0];
+        let stranger = signed_request(
+            &s,
+            &Agent::new(43),
+            "GET",
+            &format!("/proxy/{id}/pets/api/pets"),
+            vec![],
+        );
+        assert_eq!(
+            crate::router(s.clone())
+                .oneshot(stranger)
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        // Two tenants share the proxy's address, and so the bucket.
+        assert_eq!(get(0, "pets").await.unwrap().status(), StatusCode::OK);
+        assert_eq!(get(1, "pets").await.unwrap().status(), StatusCode::OK);
+        for tenant in [0, 1] {
+            let response = get(tenant, "pets").await.unwrap();
+            assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+            let retry: u64 = response.headers()[header::RETRY_AFTER]
+                .to_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!((295..=300).contains(&retry), "{retry}");
+            assert_eq!(body_json(response).await["error"], "provider_quota");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 2);
+        // An operation that selects no bucket is not paced.
+        assert_eq!(get(0, "health").await.unwrap().status(), StatusCode::OK);
+        assert_eq!(hits.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]
