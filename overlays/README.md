@@ -319,6 +319,29 @@ catalog selects it yet. `tests/test_calendar_throttling.py` composes it
 alone and after the catalog's Calendar overlays, and classifies synthetic
 errors in the guide's shape. No provider was called.
 
+## Spotify playlists completeness
+
+[`completeness-2914e6be…-overlay.yaml`](APIs/spotify.com/1.0.0-readonly/completeness-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Spotify `playlists` collection (`GET /me/playlists`): `absent: removed`
+and `notFound: unavailable`. Spotify's
+[playlists concepts](https://developer.spotify.com/documentation/web-api/concepts/playlists)
+say "the notion of deleting a playlist is not relevant": removing one from
+the user's list is "simply unfollowing it", and restoring it is following it
+again. So a playlist absent from the list was unfollowed, not deleted, and its
+own read settles it. Spotify's
+[status codes](https://developer.spotify.com/documentation/web-api/concepts/api-calls)
+say a 404 "can be due to a temporary or permanent condition", so a 404 is not
+a deletion either. The list is whole only with both `playlist-read-private`
+and `playlist-read-collaborative`, which the catalog's auth overlay requests.
+Not declared: `gone` (no 410 listed); no `parentAbsent` (the list has no path
+variable). Not verified: what a playlist's read answers after its owner
+unfollows it. No dated catalog selects it yet.
+`tests/test_spotify_playlists_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays, in either order, runs both
+validators, checks the scopes and the outcomes `classify_read` gives. No
+provider was called.
+
 ## Spotify throttling
 
 [Spotify Web API throttling](APIs/spotify.com/1.0.0-readonly/throttling-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml)
