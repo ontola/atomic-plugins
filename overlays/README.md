@@ -191,6 +191,34 @@ yet. syncables reads both. `tests/test_calendar_read_tombstone_v2.py` and
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
 
+## Notion pages completeness
+
+[`completeness-0c8e2296…-overlay.yaml`](APIs/notion.com/2026-03-11/completeness-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Notion `pages` collection (a data source's query): `absent: removed`
+and `notFound: unavailable`. Notion's
+[status codes](https://developers.notion.com/reference/status-codes) say a 404
+`object_not_found` "can also indicate that the resource has not been shared
+with owner of the bearer token", so without this overlay a consumer would take
+a page no longer shared with the connection as deleted (the `notFound`
+default). The [query](https://developers.notion.com/reference/query-a-data-source)
+"returns non-archived pages" by default, so absence alone settles nothing.
+Inferred, not documented: that a trashed page leaves the query and that an
+archived or trashed page's own read still answers 2xx; neither changes an
+outcome. The query is capped at 10,000 results, so a catalog selects this
+overlay only together with `pagination-v3-0c8e2296…`, which marks a capped
+read incomplete; under an earlier pagination revision a query over 10,000
+results looks complete (the test asserts this pairing). Not declared:
+`gone` (no 410 documented), anything on `data_sources` (`POST /search`, not
+documented as returning every shared data source), and so `parentAbsent`,
+which needs a parent collection with a Completeness Object (§4.4). The pinned
+OAD is an authored subset without descriptions, so the evidence is Notion's
+reference. No dated catalog selects it yet.
+`tests/test_notion_pages_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays (and with pagination-v3), in
+either order, runs both validators, and checks the outcomes `classify_read`
+gives. No provider was called.
+
 ## Write preconditions
 
 Two standalone overlays declare [Write Preconditions 0.1.0-draft](../openapi-extensions/spec/write-preconditions/README.md)
