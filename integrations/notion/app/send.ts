@@ -30,6 +30,7 @@ import {
   notionPropertyValue,
   type JSONValue as LensValue,
 } from '../devonian/notion/index.js';
+import { BLOCKED_MESSAGE, isBlockedByNotion } from './errors.js';
 import {
   BASELINE_SHORTNAME,
   nameForTitle,
@@ -255,7 +256,10 @@ export async function sendChanges({
       report({
         ...who,
         status: 'failed',
-        message: notionMessage(answer.status, answer.body),
+        // Blocked by Notion is permanent, not a limit to wait out.
+        message: isBlockedByNotion(answer.body)
+          ? `${notionMessage(answer.status, answer.body).replace(/\.?$/, '.')} ${BLOCKED_MESSAGE}`
+          : notionMessage(answer.status, answer.body),
       });
       break;
     }
