@@ -38,6 +38,42 @@ function validSchemes(
   return map;
 }
 
+/**
+ * The first scheme that fails validation but whose auto-detection would
+ * match the operation, when no valid scheme matches it: the operation
+ * presumably pages, but the scheme cannot be applied. A read that makes
+ * one request must then not take that page as the whole collection.
+ * `undefined` when an explicit `x-pagination` applies, a valid scheme
+ * matches, or no invalid one would.
+ */
+export function invalidAutoDetected(
+  document: OpenApiDocument,
+  operation: OperationObject,
+): { schemeName: string; problems: string[] } | undefined {
+  const explicit = operation['x-pagination'];
+  if (explicit !== undefined && !(Array.isArray(explicit) && !explicit.length))
+    return undefined;
+  const valid = validSchemes(document);
+  for (const scheme of valid.values())
+    if (autoDetectMatches(scheme, operation)) return undefined;
+  const schemes = document.components?.paginationSchemes ?? {};
+  for (const [schemeName, scheme] of Object.entries(schemes)) {
+    if (valid.has(schemeName) || !isPlainObject(scheme)) continue;
+    let matches = false;
+    try {
+      matches = autoDetectMatches(scheme, operation);
+    } catch {
+      // A shape too broken to compare: not counted as a match.
+    }
+    if (matches)
+      return {
+        schemeName,
+        problems: validatePaginationScheme(schemeName, scheme),
+      };
+  }
+  return undefined;
+}
+
 function queryParamNames(operation: OperationObject): Set<string> {
   return new Set(
     (operation.parameters ?? [])

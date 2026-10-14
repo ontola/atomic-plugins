@@ -6,8 +6,10 @@ import {
   JSON_DATATYPE,
   notionFieldShortname,
   notionFieldValue,
+  notionFormattedText,
   notionPlainText,
   notionProjection,
+  notionTextWithoutFormatting,
 } from './projection.js';
 
 const DS = '248104cd-477e-80af-bc30-000bd28de8f9';
@@ -156,7 +158,8 @@ describe('notionProjection', () => {
     expect(() => key('')).toThrow(/empty/);
   });
 
-  it('leaves formatted text unprojected and reports it without failing the fetch', () => {
+  it('imports formatted text as plain text and reports it without failing the fetch', () => {
+    // usertest-findings#19: a skipped note read as a lost note.
     const bold = text('Loud');
     bold[0].annotations.bold = true;
     const projected = notionProjection(
@@ -167,10 +170,24 @@ describe('notionProjection', () => {
         }),
       ]),
     );
-    expect(projected.records.map(r => r.name)).toEqual(['Untitled', 'Quiet']);
-    expect(projected.records[0].values[key('title')]).toBeUndefined();
+    expect(projected.records.map(r => r.name)).toEqual(['Loud', 'Quiet']);
+    expect(projected.records[0].values[key('title')]).toBe('Loud');
     expect(projected.errors).toEqual([
-      expect.stringMatching(/p1 property "Name" \(title\).*unprojected/),
+      'Notion page p1 property "Name" (title) has formatting; imported as plain text',
+    ]);
+  });
+
+  it('still leaves a value with no plain form at all unprojected', () => {
+    const projected = notionProjection(
+      fixture([
+        page('p1', {
+          Tags: { id: 'tags', type: 'multi_select', multi_select: [{}] },
+        }),
+      ]),
+    );
+    expect(projected.records[0].values[key('tags')]).toBeUndefined();
+    expect(projected.errors).toEqual([
+      expect.stringMatching(/p1 property "Tags".*no lossless plain value/),
     ]);
   });
 
@@ -249,5 +266,19 @@ describe('notionFieldValue', () => {
     expect(notionPlainText(red)).toBeUndefined();
     expect(notionPlainText([...text('a'), ...text('b')])).toBe('ab');
     expect(notionPlainText([])).toBe('');
+  });
+
+  it('reads formatted text without its formatting, for reading only', () => {
+    const linked = text('docs');
+    (linked[0].text as { link: unknown }).link = { url: 'https://example.com' };
+    const mention = { type: 'mention', mention: {}, plain_text: '@Ada' };
+    const parts = [...text('See '), ...linked, mention];
+    expect(notionTextWithoutFormatting(parts)).toBe('See docs@Ada');
+    expect(notionFormattedText('rich_text', parts)).toBe('See docs@Ada');
+    // Plain text is not "formatted"; nor is anything that is not text.
+    expect(notionFormattedText('rich_text', text('plain'))).toBeUndefined();
+    expect(notionFormattedText('number', 3)).toBeUndefined();
+    expect(notionTextWithoutFormatting('nope')).toBeUndefined();
+    expect(notionTextWithoutFormatting([{ type: 'mention' }])).toBeUndefined();
   });
 });
