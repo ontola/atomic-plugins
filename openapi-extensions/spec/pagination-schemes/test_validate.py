@@ -971,9 +971,50 @@ class ItemCursorTests(unittest.TestCase):
     def test_a_marked_page_is_not_complete(self):
         scheme = copy.deepcopy(self.scheme(self.document()))
         scheme["response"]["incomplete"] = {"field": "capped", "equals": True}
-        request, _ = self.provider(3)
+        request, _ = self.provider(5)
         marked = lambda values: {**request(values), "capped": True}
         self.assertFalse(read_item_cursor(scheme, marked)["complete"])
+        # Only the first page marked: still not complete.
+        request, calls = self.provider(5)
+        first_only = lambda values: {**request(values), "capped": len(calls) == 1}
+        result = read_item_cursor(scheme, first_only)
+        self.assertEqual(len(result["items"]), 5)
+        self.assertFalse(result["complete"])
+
+    def test_an_empty_page_with_has_more_true_is_an_error(self):
+        scheme = self.scheme(self.document())
+        pages = iter([{"data": [{"id": "a"}], "has_more": True}, {"data": [], "has_more": True}])
+        with self.assertRaises(PageReadError) as raised:
+            read_item_cursor(scheme, lambda values: next(pages))
+        self.assertIn("hasMore true", str(raised.exception))
+        # Without has_more, an empty page ends it complete.
+        pages = iter([{"data": [{"id": "a"}]}, {"data": []}])
+        self.assertTrue(read_item_cursor(scheme, lambda values: next(pages))["complete"])
+
+    def test_floats_are_refused_and_items_without_an_id_use_the_whole_item(self):
+        scheme = self.scheme(self.document())
+        pages = iter([{"data": [{"id": 1.5}], "has_more": True}])
+        with self.assertRaises(PageReadError):
+            read_item_cursor(scheme, lambda values: next(pages))
+        # The default identity does not need an id field: no KeyError.
+        scheme = copy.deepcopy(scheme)
+        scheme["request"]["queryParameters"]["starting_after"]["fromLastItem"] = "key"
+        pages = iter([{"data": [{"key": "a"}, {"key": "b"}]}, {"data": []}])
+        self.assertTrue(read_item_cursor(scheme, lambda values: next(pages))["complete"])
+
+    def test_rules_28_and_29_review(self):
+        for mutate in (lambda s: s["response"]["bodyFields"].update(next={"role": "nextLink"}),
+                       lambda s: s["response"].update(headers={"X-Has-More": {"role": "hasMore"}})):
+            document = self.document()
+            mutate(self.scheme(document))
+            with self.subTest(), self.assertRaises(ValueError):
+                validate(document)
+        # hasMore without fromLastItem, even in a pageToken scheme.
+        document = self.document()
+        del self.scheme(document)["request"]["queryParameters"]["starting_after"]["fromLastItem"]
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("rule 29", str(raised.exception))
 
     def test_0_8_documents_stay_valid(self):
         for name in ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml",

@@ -466,11 +466,14 @@ def _item_cursor_problems(scheme):
         if scheme.get("type") != "pageToken":
             problems.append("request: fromLastItem only in a pageToken scheme (rule 28)")
         if len(fields) != 1:
-            problems.append("request: at most one fromLastItem field (rule 28)")
-        if {"nextPageToken", "nextCursor"} & set(roles):
-            problems.append("response: no nextPageToken or nextCursor beside a fromLastItem field (rule 28)")
-    if "hasMore" in roles and scheme.get("type") != "pageToken":
-        problems.append("response: role hasMore only in a pageToken scheme (rule 29)")
+            problems.append("request: exactly one fromLastItem field (rule 28)")
+        if {"nextPageToken", "nextCursor", "nextLink"} & set(roles):
+            problems.append("response: no nextPageToken, nextCursor or nextLink beside a fromLastItem field (rule 28)")
+    headers = scheme.get("response", {}).get("headers", {})
+    if any(isinstance(field, dict) and field.get("role") == "hasMore" for field in headers.values()):
+        problems.append("response.headers: role hasMore only in bodyFields (rule 29)")
+    if "hasMore" in roles and not fields:
+        problems.append("response: role hasMore only in a scheme with a fromLastItem field (rule 29)")
     return problems
 
 
@@ -709,16 +712,25 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
         offset = following
 
 
-def read_item_cursor(scheme, request, *, page_size=None, identity=lambda item: item["id"], max_pages=None):
+def _default_identity(item):
+    """An item's identity for the repeat check: its `id` when it has one, else the whole item."""
+    if isinstance(item, dict) and "id" in item:
+        return ("id", repr(item["id"]))
+    return ("item", json.dumps(item, sort_keys=True, default=repr))
+
+
+def read_item_cursor(scheme, request, *, page_size=None, identity=_default_identity, max_pages=None):
     """A read whose cursor is a field of the previous page's last item (§4.3.3, 0.9.0).
 
     `request(values)` sends one page, with `values` mapping (location, name)
     of the cursor field (absent on the first request) and of the `pageSize`
     field (when `page_size` is given) to their values, and returns the
-    response body. Returns {"items", "pages", "cursors", "complete"}. Raises
+    response body. Returns {"items", "pages", "cursors", "complete"}; a read
+    in which any response was marked (§4.4.6) is not complete. Raises
     PageReadError when the last item gives no usable cursor, the cursor does
-    not move, a page repeats an item, or `max_pages` pages were requested
-    without reaching the end; such a read is not complete.
+    not move, a page repeats an item, an empty page says hasMore true, or
+    `max_pages` pages were requested without reaching the end; such a read is
+    not complete.
     """
     fields = _item_cursor_fields(scheme)
     if len(fields) != 1:
@@ -726,6 +738,7 @@ def read_item_cursor(scheme, request, *, page_size=None, identity=lambda item: i
     [(location, name, path)] = fields
     size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
     items, seen, cursors = [], set(), []
+    marked = False
     cursor = None
     while True:
         if max_pages is not None and len(cursors) >= max_pages:
@@ -741,8 +754,11 @@ def read_item_cursor(scheme, request, *, page_size=None, identity=lambda item: i
             raise PageReadError(f"the page after {cursor!r} holds an item an earlier page returned")
         seen.update(ids)
         items.extend(page)
-        marked = response_incomplete(scheme, body)
-        if not page or _role_value(body, scheme, "hasMore") is False:
+        marked = marked or response_incomplete(scheme, body)
+        has_more = _role_value(body, scheme, "hasMore")
+        if not page and has_more is True:
+            raise PageReadError(f"the page after {cursor!r} is empty but says hasMore true; the read is not complete")
+        if not page or has_more is False:
             return {"items": items, "pages": len(cursors), "cursors": cursors, "complete": not marked}
         value = page[-1]
         for segment in path.split("."):
