@@ -27,6 +27,8 @@
  *   restoreNote(id)            out of the trash again.
  *   removeNote(id)             deleted for good: 404 by id.
  *   failNext(count, status = 503, only = 'any' | 'list' | 'lookup' | 'create' | 'delete')
+ *   reset()                    back to synthetic.mjs's five notes (a retried
+ *                              e2e starts from the same state).
  *   snapshot()                 every note, the trashed and deleted included.
  */
 import * as synthetic from './synthetic.mjs';
@@ -117,7 +119,7 @@ const notFound = {
 };
 
 export function googleKeepFixture() {
-  const notes = structuredClone(synthetic.notes);
+  let notes = structuredClone(synthetic.notes);
   /** Names `removeNote` or a DELETE took away: 404 by id. */
   const deleted = new Set();
   const failures = [];
@@ -309,6 +311,14 @@ export function googleKeepFixture() {
 
       return { failures: failures.map(f => ({ ...f })) };
     },
+    reset() {
+      notes = structuredClone(synthetic.notes);
+      deleted.clear();
+      failures.length = 0;
+      created = 0;
+
+      return { notes: notes.length };
+    },
     snapshot() {
       return { notes: structuredClone(notes), deleted: [...deleted] };
     },
@@ -327,6 +337,7 @@ export default {
     'restoreNote',
     'removeNote',
     'failNext',
+    'reset',
     'snapshot',
   ],
 };

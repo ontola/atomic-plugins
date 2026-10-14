@@ -421,11 +421,13 @@ export async function syncNotes(
 
       case 'settle': {
         const resource = rows.resources.get(action.subject)!;
-        await write(resource, {
+        const changed = await write(resource, {
           [p.presence]: action.presence,
           [p.lastSeen]:
             text(resource.get(p.lastSeen)) || lastCompleteAt || seenAt,
         });
+        if (changed) summary.updated++;
+        else summary.unchanged++;
         break;
       }
 

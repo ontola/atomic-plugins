@@ -26,7 +26,7 @@ const COLUMNS: [string, (n: NoteRow) => string][] = [
   ],
 ];
 
-const css = `.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.ss{margin:0 0 .75rem}td{padding:.25rem .75rem .25rem 0;vertical-align:top}\n${syncStatusCss}`;
+const css = `.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}.ss{margin:0 0 .75rem}th,td{padding:.25rem .75rem .25rem 0;vertical-align:top;text-align:left}.scroll{overflow-x:auto;max-width:100%}td button{white-space:nowrap}\n${syncStatusCss}`;
 
 export async function view({ root, store }: ViewArgs): Promise<void> {
   const doc = root.ownerDocument;
@@ -68,6 +68,10 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   table.append(thead, body);
   table.setAttribute('aria-label', 'Notes');
   table.style.borderCollapse = 'collapse';
+  // Narrow screens scroll the table sideways instead of clipping it.
+  const scroll = el('div');
+  scroll.className = 'scroll';
+  scroll.append(table);
   const removed = el('section');
   removed.setAttribute('aria-label', 'Deleted here, still in Google Keep');
   root.style.fontFamily = 'system-ui, sans-serif';
@@ -78,7 +82,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     card,
     controls,
     status,
-    table,
+    scroll,
     removed,
   );
 

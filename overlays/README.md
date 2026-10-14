@@ -86,6 +86,34 @@ deployment selects it yet; a proxy picks it up through `CATALOG_PATH`, with
 `tests/test_identity_overlays.py` (every catalog) and the pin validator; no
 live Google connection has been made with it.
 
+## Google Keep catalog
+
+`catalog/2026-10-14-google-keep.json` is `catalog/2026-10-12-tasks-box-pages.json`
+plus one platform, `google-keep`, for the two-way Google Keep drive app
+(`integrations/google-keep/`): the Keep v1 OAD at
+`091431739208d017c11b0b0589ab33293f8b3690` and its
+[auth overlay](APIs/googleapis.com/keep/v1/auth-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml),
+with `{"authenticationProfile": "googleKeep"}` selected. The profile's scheme
+has the one scope `https://www.googleapis.com/auth/keep` (the app creates and
+deletes notes; Keep has no narrower write scope) and covers four operations:
+list, get, create and delete a note.
+
+The pinned OAD names get and delete under `/v1/{name}`, whose `{name}` is a
+resource name with a slash (`notes/<id>`). The proxy matches a path segment by
+segment (`integration-proxy/src/catalog.rs` `path_matches`), so a request for
+`/v1/notes/<id>` would never match that template. The overlay therefore adds
+both operations again under `/v1/notes/{note}`, with `{note}` the bare id and
+the same upstream URL; `/v1/{name}` stays as it is, outside the profile (the
+proxy knows only `update` actions, so it cannot be removed). Sharing
+(`permissions:batchCreate`/`batchDelete`) stays outside the profile too.
+
+Google offers the Keep API to Google Workspace accounts only; a personal
+account's consent ends in `invalid_scope`. No proxy release or deployment
+selects this catalog yet; a proxy picks it up through `CATALOG_PATH`, with
+`OAUTH_GOOGLE_KEEP_CLIENT_ID`/`_CLIENT_SECRET` set. Composition is
+checked by `tests/test_google_keep.py` and the pin validator; no live Google
+connection has been made with it.
+
 ## Asana and Airtable onboarding catalog
 
 `catalog/2026-10-08-asana-airtable.json` retains the nine entries and pins in

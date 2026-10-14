@@ -201,7 +201,7 @@
     "https://atomicdata.dev/integrations/properties/app-row-name": "Note",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Notes",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-keep/0.1.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-6Osw7JVEIaXqavD0SHyJxd8RDvh/52xOQY8rcGVyzeUIQqjR7TQC9SpU+1ERKWCy"
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-NUD8q7sxnKwj+KGycUNpLRci8ZagKz3ziPB3Z+8t9IvH7CO2Ne5Hh+KaAsuDF6B3"
   },
   {
     "https://atomicdata.dev/properties/localId": "google-tasks",
