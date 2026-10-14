@@ -382,8 +382,12 @@ class BlockedTests(unittest.TestCase):
             d["x-throttling"]["limits"] = {"b": {"requests": 1, "window": {"seconds": 1, "kind": "fixed"}}}
             d["x-throttling"]["applies"] = ["b"]
             d["x-throttling"]["signals"][0].update(extra)
-            with self.subTest(extra=extra), self.assertRaises(ValueError):
+            with self.subTest(extra=extra), self.assertRaises(ValueError) as raised:
                 validate(d)
+            self.assertIn("bucket and minDelaySeconds are not allowed with blocked", str(raised.exception))
+            # A consumer still treats such a signal as blocked, ignoring the field (README).
+            self.assertEqual(classify(d, 429, {"Retry-After": "2"}, self.body("public_api_request_blocked"), NOW),
+                             {"meaning": "blocked", "bucket": None, "retryAt": None})
 
     def test_unrecognised_meaning_is_never_resent(self):
         d = self.document()
