@@ -88,6 +88,10 @@ describe('Money view: the shared class (#177)', () => {
     expect(store.accessRequests).toBe(0);
     expect(root.querySelectorAll('[data-row]')).toHaveLength(2);
     expect(text(root.querySelector('.pl-pill'))).toContain('Imported 2');
+    // The card says this view imported them (0.4.4).
+    expect(
+      text(root.querySelector('section[aria-label="Sync status"]')),
+    ).toContain('2 imported here at the last sync');
     // The statement the app stored: its closing balance in the strip.
     expect(text(root.querySelector('.m-seg .m-net'))).toMatch(/^€107\.66on/);
     // Its own rows need no "Allow editing".
@@ -275,15 +279,19 @@ describe('Money view: ledger', () => {
     expect(root.querySelectorAll('.m-row')).toHaveLength(400);
   });
 
-  it('shows new rows from an import without a reload, and says so', async () => {
+  it('shows rows another writer added without a reload, and says they arrived', async () => {
     const store = fakeStore({ rows: sampleRows() });
     const root = await open(store);
     store.addRows([seedRow('-9.99', '2026-09-23')]);
     await settle();
     await settle();
+    // Not this view's import (0.4.4): "arrived", like the card's rows line.
     expect(text(root.querySelector('[role="status"]'))).toBe(
-      'Imported 1 · just now',
+      '1 arrived · just now',
     );
+    expect(
+      text(root.querySelector('section[aria-label="Sync status"]')),
+    ).toContain('1 arrived at the last sync');
     expect(root.querySelectorAll('.m-row')).toHaveLength(15);
   });
 });

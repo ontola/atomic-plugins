@@ -149,12 +149,17 @@ export type {
   WindowFormat,
   WindowUnit,
 } from './pagination/types.js';
-export { PageReadError } from './read/pages.js';
+export { PageReadError, responseIncomplete } from './read/pages.js';
 export type { WalkOutcome, WindowRange } from './read/pages.js';
-export type { ShortPageObject } from './pagination/types.js';
+export type {
+  IncompleteObject,
+  JsonScalar,
+  ShortPageObject,
+} from './pagination/types.js';
 
 export {
   PaginationSchemeError,
+  invalidAutoDetected,
   resolveEffectiveScheme,
 } from './pagination/autodetect.js';
 export type { EffectiveScheme } from './pagination/autodetect.js';
