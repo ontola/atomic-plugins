@@ -30,19 +30,28 @@ export interface Quota {
 
 export class Pacer {
   private readonly sent = new Map<string, number[]>();
+  /** Every quota of each bucket, kept within at once. */
+  private readonly quotas = new Map<string, readonly Quota[]>();
 
   /**
    * `fraction` of each bucket's `requests` (rounded down, at least one) may
-   * be sent per window; it must be greater than 0 and at most 1.
+   * be sent per window; it must be greater than 0 and at most 1. `tiered`
+   * (Throttling 0.5.0 plan tiers, `ThrottlingDeclaration.tieredQuotas`)
+   * gives a bucket several quotas, each a separate count over the same
+   * requests: a request waits until it fits every one.
    */
   constructor(
-    private readonly quotas: ReadonlyMap<string, Quota>,
+    quotas: ReadonlyMap<string, Quota>,
     private readonly fraction = 0.8,
+    tiered: ReadonlyMap<string, readonly Quota[]> = new Map(),
   ) {
     if (!(fraction > 0 && fraction <= 1))
       throw new Error(
         `paceFraction must be greater than 0 and at most 1, not ${fraction}`,
       );
+    for (const [bucket, quota] of quotas) this.quotas.set(bucket, [quota]);
+    for (const [bucket, list] of tiered)
+      if (list.length) this.quotas.set(bucket, list);
   }
 
   /** The requests one window of `quota` allows this client. */
@@ -54,8 +63,16 @@ export class Pacer {
   delay(buckets: readonly string[], now: number): number {
     let wait = 0;
     for (const bucket of buckets) {
-      const quota = this.quotas.get(bucket);
-      if (quota) wait = Math.max(wait, this.bucketDelay(bucket, quota, now));
+      const quotas = this.quotas.get(bucket);
+      if (!quotas) continue;
+      // Older requests no longer count in any of the bucket's windows.
+      const longest = Math.max(...quotas.map((q) => q.seconds)) * 1000;
+      const times = (this.sent.get(bucket) ?? []).filter(
+        (t) => t > now - longest,
+      );
+      this.sent.set(bucket, times);
+      for (const quota of quotas)
+        wait = Math.max(wait, this.quotaDelay(times, quota, now));
     }
     return wait;
   }
@@ -70,11 +87,10 @@ export class Pacer {
       }
   }
 
-  private bucketDelay(bucket: string, quota: Quota, now: number): number {
+  private quotaDelay(all: number[], quota: Quota, now: number): number {
     const width = quota.seconds * 1000;
     // Older requests no longer count in any window that includes now.
-    const times = (this.sent.get(bucket) ?? []).filter((t) => t > now - width);
-    this.sent.set(bucket, times);
+    const times = all.filter((t) => t > now - width);
     const allowed = this.allowed(quota);
     if (quota.kind === 'fixed' && quota.anchor !== undefined) {
       const start =

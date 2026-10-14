@@ -30,7 +30,7 @@ The extension versions this source reads, against the specifications in
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.8.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) and its `response.incomplete` ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -506,6 +506,31 @@ const client = createApiClient(doc, {
     failure.status === 409 ? 'retry' : defaultWriteFailureClass(failure),
 });
 ```
+
+##### Plan tiers
+
+A Limit Object may declare `tiers` instead of `requests` and `window`
+(Throttling 0.5.0): one bucket whose amount and window depend on the
+account's plan, as Clockify documents (30 requests per hour on FREE, 20
+per second on TRIAL, BASIC, STANDARD and PRO, 50 per second on
+ENTERPRISE), each tier naming its `plans`. With `throttlingPlan` set to
+the account's plan, as the provider names it (`'PRO'`), the client paces
+by the tier whose `plans` include it, as by a plain limit. Without one, or
+with a plan no tier names, it keeps within every tier at once, each
+counted separately over the same requests (the spec's `limits_in_force`):
+no single tier is safe on its own, since a lower average rate over a
+longer window (30 per hour) still allows a burst a shorter tier forbids
+(20 per second). The window a time-less `quotaExhausted` answer waits out
+is the plan's tier's, else the longest (`fallback_window`). A limit whose
+tiers do not all parse (no `plans`, an empty or repeated plan, a
+`requests` or `window.seconds` that is not a positive integer) is left
+out, as other entries that do not parse are. `throttlingPlan` is an option
+of `createApiClient`, `readCollections`, `readPlatform` and `paginate`;
+`declaredThrottling(document, plan)` gives the tiers in force in
+`tieredQuotas` (a plan's tier goes into `quotas`), and `parseTiers`,
+`limitsInForce` and `fallbackWindow` are exported. How a client learns
+its plan is up to the caller. Pacing counts only this client's requests
+(above).
 
 #### Refused credentials
 
@@ -1969,6 +1994,16 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: Throttling 0.5.0 plan tiers: a Limit Object's `tiers`
+  is paced by the tier whose `plans` name `throttlingPlan`, else by every
+  tier at once, each counted separately; a time-less `quotaExhausted`
+  waits out the plan's tier's window, else the longest. `throttlingPlan`
+  is a new option of `createApiClient`, `readCollections`, `readPlatform`
+  and `paginate`; `ThrottlingDeclaration.tieredQuotas`, `Pacer`'s optional
+  third argument, `parseTiers`, `limitsInForce`, `fallbackWindow` and the
+  `Tier` type are new. A limit whose tiers do not all parse is left out.
+  Behaviour change only for documents whose `x-throttling` declares
+  `tiers` (before, such a limit had no window and was not paced).
 - **Unreleased**: `validatePaginationScheme` follows the spec's
   `schema.json`: a field the spec does not define (other than `x-`) on a
   scheme or an object in it, or a value of the wrong type, makes the
