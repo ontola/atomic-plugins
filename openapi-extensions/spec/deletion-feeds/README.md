@@ -45,14 +45,17 @@ The documents below are the OpenAPI documents that overlays in this
 repository's [`overlays/APIs/`](../../../overlays/APIs/) extend, at the
 `ontola/openapi-directory` commit those overlays pin. What is described here
 is what those documents state; none of it has been checked against the live
-APIs. No overlay declares `x-deletion-feed`. Google Calendar's
-`x-read-tombstone` is declared by
+APIs. Google Calendar's are declared by three overlays, which no dated catalog
+selects yet:
 [`read-tombstone-v2-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/read-tombstone-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
-(`status: cancelled` on the event read, except items with
+(`x-read-tombstone`, `status: cancelled` on the event read, except items with
 `recurringEventId`, from the document's own description; it supersedes the
-earlier revision without the exception) and its `x-list-tombstone` by
+earlier revision without the exception),
 [`list-tombstone-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/list-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
-on the event list; no dated catalog selects them yet.
+(`x-list-tombstone` on the event list) and
+[`deletion-feed-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(`x-deletion-feed`, the event list read with `syncToken`, with the same
+exception).
 
 | API (document) | Feed | Cursor | Tombstone |
 |----------------|------|--------|-----------|
@@ -67,19 +70,30 @@ on the event list; no dated catalog selects them yet.
 YNAB has the shape of this version (a change list with a cursor it returns
 and a tombstone marker), but its document does not say that a deleted
 transaction's own read answers 404 or 410 (§4.3); that is neither documented
-nor verified, as for Box below. The others do not fit (yet):
+nor verified, as for Box below.
 
-* Google Calendar's cancelled events are returned by the event's own `get`
-  (a 2xx with `status: cancelled`), and an organizer's can be restored. They
-  fit §4.3 only when the event resource declares that marker in
-  `x-read-tombstone` (§4.4). Its event list read with `showDeleted=true`
-  returns them among the other events; that fits `x-list-tombstone` (§4.5,
-  §7.5). Both declarations need the same `except` condition (§4.3): the
-  document gives "cancelled" to deleted events and to cancelled exceptions
-  of a recurring event, which "should no longer be presented" and which
-  clients "should store"; an exception carries `recurringEventId`, so it is
-  excluded and is not a deletion, whether a read or a list answers it. Whether the event list also fits `x-deletion-feed` is not
-  settled here (§8), and none of these declarations has live evidence.
+Google Calendar's cancelled events are returned by the event's own `get`
+(a 2xx with `status: cancelled`), and an organizer's can be restored. They
+fit §4.3 only when the event resource declares that marker in
+`x-read-tombstone` (§4.4). Its event list read with `showDeleted=true`
+returns them among the other events; that fits `x-list-tombstone` (§4.5,
+§7.5). The same list read with the cursor alone fits `x-deletion-feed`:
+the document's `syncToken` says "All events deleted since the previous
+list request will always be in the result set and it is not allowed to
+set showDeleted to False", so the feed needs no `showDeleted`, and a read
+without a cursor may leave deletions out (§4.1). The sync guide asks that
+every request of a sync use the same query parameters, so the first cursor
+comes from a feed read without one (§4.2), not from a list read with other
+parameters (`showDeleted=true`, say). All three declarations
+need the same `except` condition (§4.3): the document gives "cancelled" to
+deleted events and to cancelled exceptions of a recurring event, which
+"should no longer be presented" and which clients "should store"; an
+exception carries `recurringEventId`, so it is excluded and is not a
+deletion, whether a read, a list or the feed answers it. None of these
+declarations has live evidence.
+
+The others do not fit (yet):
+
 * Asana's `GET /events` needs the required query parameter `resource`; fixed
   query parameters of a feed are not covered (§8), so a consumer that sends
   only the cursor gets an error.
@@ -605,10 +619,11 @@ document in full. This example is not a declaration for Google Calendar.
   item (Stripe's `ending_before`).
 * Feeds whose items come newest first.
 * Cursors in a header or a request body, and fixed query parameters that the
-  feed needs (Asana's required `resource`). A collection's own fixed reads
-  (CRUD Causality §4.2.1) can carry Google Calendar's `showDeleted`, so a
-  list tombstone (§4.5) covers that list; an `x-deletion-feed` over it is
-  still not settled.
+  feed needs (Asana's required `resource`). Google Calendar's `showDeleted`
+  is not one: a read with its `syncToken` returns deleted events whatever
+  it says, so its feed is read with the cursor alone (§1.1). A collection's
+  own fixed reads (CRUD Causality §4.2.1) can carry `showDeleted`, and a
+  list tombstone (§4.5) covers that list.
 * Tombstones in a write answered 2xx; `x-read-tombstone` (§4.4) is about
   the `read` operation, `x-list-tombstone` (§4.5) about list reads.
 * Conditions on objects other than the item (a parent's state) to tell a
@@ -695,8 +710,10 @@ python3 validate.py examples/list-tombstones.yaml
   validator, tests and an example (§7.5). States one placement rule for
   read and list tombstones (a declaration that does not parse is ignored,
   §4.4) and what an object returned twice in one read means (§4.5). For
-  ontola/atomic-plugins pieces.md K18. A 0.2.0 document stays valid and
-  means the same.
+  ontola/atomic-plugins pieces.md K18. Settles that Google Calendar's event
+  list read with its `syncToken` alone fits `x-deletion-feed`, with the same
+  `except` (§1.1); §8 no longer lists its `showDeleted` as a fixed query
+  parameter a feed needs. A 0.2.0 document stays valid and means the same.
 - **0.2.0-draft**: `x-read-tombstone` (§4.4).
 - **0.1.0-draft**: `x-deletion-feed`.
 
