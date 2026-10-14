@@ -380,11 +380,27 @@ export function createController(
     /** Settles a conflict, then syncs. */
     async resolve(subject: string, side: 'mine' | 'theirs'): Promise<void> {
       const d = await ready();
-      if (!d || busy) return;
-      await (side === 'mine' ? keepMine : keepTheirs)(store, d, subject);
       const using = connection();
-      if (using) await controller.sync(using);
-      else set({ ...state, ...(await reread()) } as ViewState);
+      if (!d || busy || !using || !store.proxy) return;
+
+      try {
+        await (side === 'mine' ? keepMine : keepTheirs)(
+          store,
+          relayCall(store.proxy, using),
+          d,
+          subject,
+        );
+      } catch (error) {
+        return set({
+          kind: 'error',
+          connection: using,
+          message: message(error),
+          at: clock(),
+          ...(await reread()),
+        });
+      }
+
+      await controller.sync(using);
     },
 
     /** Brings a note whose row was deleted here back as a row at the next pass. */

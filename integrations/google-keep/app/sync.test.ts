@@ -163,7 +163,7 @@ describe('syncNotes', () => {
   });
 
   it('marks a conflict, and sends this row’s version once chosen', async () => {
-    const { store, drive, sync } = await setup();
+    const { store, drive, call, sync } = await setup();
     await sync();
     const { subject } = rowFor(store, drive, 'notes/synthetic-note-1');
     await edit(store, subject, { [NAME]: 'Mine' });
@@ -176,7 +176,7 @@ describe('syncNotes', () => {
     expect(store.resources.get(subject)![drive.properties.hold]).toBe(CONFLICT);
     expect(store.resources.get(subject)![NAME]).toBe('Mine');
 
-    await keepMine(store, drive, subject);
+    await keepMine(store, call, drive, subject);
     expect(await sync()).toMatchObject({ replaced: 1, conflicts: 0 });
     const keep = store.google.snapshot();
     expect(
@@ -190,13 +190,13 @@ describe('syncNotes', () => {
   });
 
   it('takes Keep’s version of a conflict when chosen', async () => {
-    const { store, drive, sync } = await setup();
+    const { store, drive, call, sync } = await setup();
     await sync();
     const { subject } = rowFor(store, drive, 'notes/synthetic-note-1');
     await edit(store, subject, { [NAME]: 'Mine' });
     store.google.editNote('synthetic-note-1', 'Theirs', 'x');
     await sync();
-    await keepTheirs(store, drive, subject);
+    await keepTheirs(store, call, drive, subject);
     expect(store.resources.get(subject)![NAME]).toBe('Theirs');
     expect(await sync()).toMatchObject({ replaced: 0, conflicts: 0 });
   });

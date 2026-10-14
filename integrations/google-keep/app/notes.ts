@@ -14,9 +14,10 @@
  *     - [x] Bread
  *       - [ ] Sourdough, if there is any
  *
- * Every row that came from Keep keeps the note as Keep last sent it (its
- * baseline, `google-keep-source`). A pass compares three versions of each
- * note, the row, the baseline and what Keep sends now:
+ * Every row that came from Keep keeps a fingerprint of the title and body
+ * both sides agreed on at the last sync (`google-keep-synced`, see
+ * `fingerprint`), and that note's kind. A pass compares the row and what
+ * Keep sends now with that fingerprint:
  *
  * - only Keep changed: the row takes Keep's version (`pull`);
  * - only the row changed: the row's version goes to Keep (`push`);
@@ -205,6 +206,37 @@ export function sameNote(
   );
 }
 
+/**
+ * A short, stable digest of a note as the row shows it: its kind, its
+ * trimmed title and its body as compared (`canonicalBody`). Two versions
+ * with the same fingerprint say the same (`sameNote`). Not a security
+ * measure: it only tells a pass which side changed since the last sync.
+ */
+export function fingerprint(
+  fields: { title: string; body: string },
+  kind: Kind,
+): string {
+  const input = `${kind}\n${fields.title.trim()}\n${canonicalBody(fields.body, kind)}`;
+  // cyrb53: two 32-bit FNV-like lanes, 53 bits together.
+  let h1 = 0xdeadbeef;
+  let h2 = 0x41c6ce57;
+
+  for (let i = 0; i < input.length; i++) {
+    const c = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
+  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
+  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0))
+    .toString(16)
+    .padStart(14, '0');
+}
+
 /** The request body of `POST /v1/notes` for a row's title and body. */
 export function keepNote(fields: {
   title: string;
@@ -318,8 +350,10 @@ export interface KnownRow {
   subject: string;
   /** The note's resource name. */
   id: string;
-  /** The note as Keep last sent it: the baseline. */
-  source: Row;
+  /** The note's kind at the last sync. */
+  kind: Kind;
+  /** The fingerprint both sides had at the last sync: the baseline. */
+  synced: string;
   presence: Presence;
   /** The row's Name and Description now. */
   local: { title: string; body: string };
@@ -341,7 +375,7 @@ export type Action =
   | { kind: 'import'; note: Row }
   /** Keep changed, the row did not: the row takes Keep's version. */
   | { kind: 'pull'; subject: string; note: Row }
-  /** Only the baseline is stale (Keep re-saved the same content). */
+  /** Both sides changed to the same: only the baseline moves on. */
   | { kind: 'rebase'; subject: string; note: Row }
   /** The row changed, Keep did not: the note is replaced by the row's version. */
   | { kind: 'push'; subject: string; note: Row; fields: NoteFields }
@@ -424,7 +458,6 @@ export function plan({
   const held = new Set(rows.map(r => r.id));
 
   for (const row of rows) {
-    const base = noteFields(row.source);
     const note = byId.get(row.id);
 
     if (!note) {
@@ -466,28 +499,26 @@ export function plan({
 
     const current = byId.get(row.id)!;
     const now = noteFields(current);
-    const remote = !sameNote(now, base, base.kind) || now.kind !== base.kind;
-    const local = !sameNote(row.local, base, base.kind);
+    const remote = fingerprint(now, now.kind) !== row.synced;
+    const local = fingerprint(row.local, row.kind) !== row.synced;
 
     if (!local) {
       if (remote || row.presence !== 'present')
         actions.push({ kind: 'pull', subject: row.subject, note: current });
-      else if (current.updateTime !== row.source.updateTime)
-        actions.push({ kind: 'rebase', subject: row.subject, note: current });
       else
         actions.push({ kind: 'unchanged', subject: row.subject, clean: true });
       continue;
     }
 
     if (remote) {
-      if (now.kind === base.kind && sameNote(row.local, now, now.kind))
+      if (now.kind === row.kind && sameNote(row.local, now, now.kind))
         actions.push({ kind: 'rebase', subject: row.subject, note: current });
       else
         actions.push({ kind: 'conflict', subject: row.subject, note: current });
       continue;
     }
 
-    const fields = fieldsOf(row.local, base.kind);
+    const fields = fieldsOf(row.local, row.kind);
     const reason = replaceBlock(current, account) ?? invalid(fields);
     actions.push(
       reason

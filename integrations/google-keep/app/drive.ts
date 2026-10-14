@@ -13,8 +13,8 @@
  * - Row properties, all strings: the note's resource name (the row's
  *   identity), its kind (text or list), its presence, why an edit here is
  *   held back (a conflict, or a note the app may not replace), Keep's
- *   `updateTime`, the note as Keep last sent it (the baseline a pass
- *   compares with, JSON text), Keep's version in a conflict (JSON text) and
+ *   `updateTime`, a short fingerprint of what both sides had at the last
+ *   sync (the baseline a pass compares with; `fingerprint` in notes.ts) and
  *   when a note that left the list was last seen.
  * - App properties: the last complete read and the last pass (ISO 8601
  *   UTC), every note id the table has held (JSON array; a note whose row is
@@ -57,8 +57,7 @@ export type OwnProperty =
   | 'presence'
   | 'hold'
   | 'updated'
-  | 'source'
-  | 'incoming'
+  | 'synced'
   | 'lastSeen'
   | 'lastSync'
   | 'lastPass'
@@ -110,18 +109,11 @@ export const PROPERTY_SPECS: PropertySpec[] = [
     description: 'When Google Keep last changed the note, as Keep reports it.',
   },
   {
-    key: 'source',
-    shortname: 'google-keep-source',
-    name: 'Keep source',
+    key: 'synced',
+    shortname: 'google-keep-synced',
+    name: 'Keep sync fingerprint',
     description:
-      'JSON text written by the Google Keep app: the note as Keep last sent it, the baseline the next sync compares both sides with. Edit it and the app can no longer tell which side changed.',
-  },
-  {
-    key: 'incoming',
-    shortname: 'google-keep-incoming',
-    name: 'Keep version in conflict',
-    description:
-      'JSON text written by the Google Keep app during a conflict: the note as Keep has it now, kept until you choose a version.',
+      'Written by the Google Keep app: a short digest of the title and text both sides had at the last sync. The next sync compares the row and Google Keep with it to tell which one changed.',
   },
   {
     key: 'lastSeen',
@@ -182,8 +174,7 @@ export const ROW_PROPERTIES: OwnProperty[] = [
   'hold',
   'updated',
   'lastSeen',
-  'source',
-  'incoming',
+  'synced',
 ];
 
 export const asList = (value: JSONValue): string[] =>

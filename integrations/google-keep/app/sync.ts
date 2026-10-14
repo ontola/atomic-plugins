@@ -35,7 +35,9 @@ import {
   absentNotes,
   accountOf,
   type Action,
+  fingerprint,
   isRow,
+  type Kind,
   keepNote,
   type KnownRow,
   type LocalRow,
@@ -49,9 +51,11 @@ import {
 import {
   createNote,
   deleteNote,
+  GoogleError,
   type GoogleResponse,
   type KeepCall,
   lookupNotes,
+  notePath,
   rateLimited,
   type RateLimitOptions,
   readNotes,
@@ -146,16 +150,6 @@ export interface SyncSummary {
 const text = (value: JSONValue): string =>
   typeof value === 'string' ? value : '';
 
-const parse = (value: JSONValue): Row | undefined => {
-  try {
-    const parsed: unknown = JSON.parse(text(value) || 'null');
-
-    return isRow(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-};
-
 const titleOf = (row: { title: string; body: string }) =>
   row.title.trim() ||
   row.body.trim().split('\n')[0]?.slice(0, 60) ||
@@ -202,16 +196,14 @@ async function tableRows(store: PluginStore, drive: Drive): Promise<TableRows> {
     seen.add(id);
     out.held.push(id);
     const presence = text(row.get(p.presence)) as Presence;
+    const kind: Kind = text(row.get(p.kind)) === 'list' ? 'list' : 'text';
     out.known.push({
       subject,
       id,
-      // An unreadable baseline counts as "Keep had what the row has", so
+      kind,
+      // A missing fingerprint counts as "Keep had what the row has", so
       // the next read is taken as Keep's change, never as an edit here.
-      source: parse(row.get(p.source)) ?? {
-        name: id,
-        title: local.title,
-        body: { text: { text: local.body } },
-      },
+      synced: text(row.get(p.synced)) || fingerprint(local, kind),
       presence: PRESENCE.includes(presence) ? presence : 'present',
       local,
     });
@@ -232,7 +224,7 @@ function noteValues(note: Row, drive: Drive): Record<string, JSONValue> {
     [p.kind]: fields.kind,
     [p.presence]: 'present',
     [p.updated]: text(note.updateTime as JSONValue),
-    [p.source]: JSON.stringify(note),
+    [p.synced]: fingerprint(fields, fields.kind),
   };
 }
 
@@ -342,17 +334,17 @@ export async function syncNotes(
   ) => {
     const row = await store.getResource(subject).catch(() => undefined);
     if (!row) return undefined;
-    const current = {
+    const latest = {
       title: text(row.get(NAME)),
       body: text(row.get(DESCRIPTION)),
     };
 
-    return current.title === planned.title && current.body === planned.body
+    return latest.title === planned.title && latest.body === planned.body
       ? row
       : undefined;
   };
 
-  const clearHold = [p.hold, p.incoming, p.lastSeen];
+  const clearHold = [p.hold, p.lastSeen];
 
   for (const action of actions as Action[]) {
     switch (action.kind) {
@@ -381,7 +373,11 @@ export async function syncNotes(
         const changed = await write(
           rows.resources.get(action.subject)!,
           {
-            [p.source]: JSON.stringify(action.note),
+            [p.synced]: fingerprint(
+              noteFields(action.note),
+              noteFields(action.note).kind,
+            ),
+            [p.kind]: noteFields(action.note).kind,
             [p.updated]: text(action.note.updateTime as JSONValue),
             [p.presence]: 'present',
           },
@@ -394,7 +390,7 @@ export async function syncNotes(
 
       case 'unchanged': {
         const row = rows.resources.get(action.subject)!;
-        if (action.clean) await write(row, {}, [p.hold, p.incoming]);
+        if (action.clean) await write(row, {}, [p.hold]);
         summary.unchanged++;
         break;
       }
@@ -402,7 +398,6 @@ export async function syncNotes(
       case 'conflict': {
         await write(rows.resources.get(action.subject)!, {
           [p.hold]: CONFLICT,
-          [p.incoming]: JSON.stringify(action.note),
         });
         summary.conflicts++;
         break;
@@ -584,43 +579,60 @@ export async function listNotes(
   );
 }
 
-/** A conflict settled for Keep's version: the row takes it. */
+/** Keep's version of a row's note now, read by id. */
+async function current(
+  call: KeepCall,
+  row: PluginResource,
+  drive: Drive,
+): Promise<Row> {
+  const id = text(row.get(drive.properties.noteId));
+  const response = await call('GET', notePath(id));
+  if (response.status !== 200 || !isRow(response.body))
+    throw new GoogleError(
+      response.status === 404
+        ? 'The note is no longer in Google Keep.'
+        : `Google Keep answered ${response.status} for the note.`,
+      response.status,
+    );
+
+  return response.body as Row;
+}
+
+/** A conflict settled for Keep's version: the row takes Keep's note as it is now. */
 export async function keepTheirs(
   store: PluginStore,
+  call: KeepCall,
   drive: Drive,
   subject: string,
 ) {
   const row = await store.getResource(subject);
-  const incoming = parse(row.get(drive.properties.incoming));
-  if (!incoming || !noteId(incoming)) return;
+  const note = await current(call, row, drive);
   const p = drive.properties;
-  await write(row, noteValues(incoming, drive), [
-    p.hold,
-    p.incoming,
-    p.lastSeen,
-  ]);
+  await write(row, noteValues(note, drive), [p.hold, p.lastSeen]);
 }
 
 /**
- * A conflict settled for this row's version: Keep's version becomes the
- * baseline, so the next pass sees only the row's edit and sends it.
+ * A conflict settled for this row's version: Keep's version now becomes
+ * the baseline, so the next pass sees only the row's edit and sends it.
  */
 export async function keepMine(
   store: PluginStore,
+  call: KeepCall,
   drive: Drive,
   subject: string,
 ) {
   const row = await store.getResource(subject);
+  const note = await current(call, row, drive);
   const p = drive.properties;
-  const incoming = parse(row.get(p.incoming));
-  if (!incoming || !noteId(incoming)) return;
+  const fields = noteFields(note);
   await write(
     row,
     {
-      [p.source]: JSON.stringify(incoming),
-      [p.updated]: text(incoming.updateTime as JSONValue),
+      [p.synced]: fingerprint(fields, fields.kind),
+      [p.kind]: fields.kind,
+      [p.updated]: text(note.updateTime as JSONValue),
     },
-    [p.hold, p.incoming],
+    [p.hold],
   );
 }
 

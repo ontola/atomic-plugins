@@ -37,16 +37,15 @@ There is no shared note class in `ontology/`, so on first open the app
 creates a `google-keep-note` Class in the App's own ontology and makes its
 table of that class. A row is one note:
 
-| Column                   | Holds                                                                                 |
-| ------------------------ | ------------------------------------------------------------------------------------- |
-| Name                     | The note's title (may be empty)                                                       |
-| Description              | A text note's text, or a list note as a Markdown checklist (below)                    |
-| Keep note                | The note's resource name, `notes/<id>`: the row's identity                            |
-| Keep note kind           | `text` or `list`                                                                      |
-| Keep presence            | `present`, `trashed`, `deleted` or `unconfirmed`                                      |
-| Keep sync held           | Why an edit here is not sent: `conflict`, or a reason (shared, attachment, too long)  |
-| Keep source              | The note exactly as Keep last sent it (JSON), the baseline each pass compares against |
-| Keep version in conflict | Keep's version during a conflict (JSON)                                               |
+| Column                | Holds                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------ |
+| Name                  | The note's title (may be empty)                                                      |
+| Description           | A text note's text, or a list note as a Markdown checklist (below)                   |
+| Keep note             | The note's resource name, `notes/<id>`: the row's identity                           |
+| Keep note kind        | `text` or `list`                                                                     |
+| Keep presence         | `present`, `trashed`, `deleted` or `unconfirmed`                                     |
+| Keep sync held        | Why an edit here is not sent: `conflict`, or a reason (shared, attachment, too long) |
+| Keep sync fingerprint | A short digest of the title and text both sides had at the last sync (the baseline)  |
 
 A list note's checklist, one line per item, a child item (Keep allows one
 level) indented by two spaces:
@@ -63,15 +62,18 @@ Description is a checkbox line, a text note otherwise.
 ## A pass
 
 Reads first (every page of `GET /v1/notes`, then `GET /v1/notes/{id}` for
-each note that left the list); a failed read writes nothing. Then each row
-is compared with its baseline and with what Keep sent:
+each note that left the list); a failed read writes nothing. Then the row
+and what Keep sent are each compared with the row's sync fingerprint: a
+digest of the kind, the trimmed title and the body as compared, taken
+when both sides last agreed. A change Keep makes to what a row does not
+hold (colour, a pin) leaves the fingerprint as it is.
 
-| Keep changed | Row changed | Result                                                                  |
-| ------------ | ----------- | ----------------------------------------------------------------------- |
-| no           | no          | nothing written                                                         |
-| yes          | no          | the row takes Keep's version                                            |
-| no           | yes         | the note is replaced by the row's version (below)                       |
-| yes          | yes         | a conflict: nothing written but the mark; the view offers both versions |
+| Keep changed | Row changed | Result                                                                 |
+| ------------ | ----------- | ---------------------------------------------------------------------- |
+| no           | no          | nothing written                                                        |
+| yes          | no          | the row takes Keep's version                                           |
+| no           | yes         | the note is replaced by the row's version (below)                      |
+| yes          | yes         | a conflict: nothing written but the mark; the view offers both choices |
 
 A row made here becomes a new note. A note that is new in Keep becomes a
 row. A row deleted here is not imported again, and is not deleted in Keep:

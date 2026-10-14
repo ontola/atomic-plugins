@@ -4,6 +4,7 @@ import * as synthetic from '../fixtures/google-keep/synthetic.mjs';
 import {
   accountOf,
   canonicalBody,
+  fingerprint,
   invalid,
   keepNote,
   looksLikeList,
@@ -149,10 +150,32 @@ const known = (
 ): KnownRow => ({
   subject: `row:${note.name}`,
   id: note.name as string,
-  source: note,
+  kind: noteFields(note).kind,
+  synced: fingerprint(noteFields(note), noteFields(note).kind),
   presence: 'present',
   local: { title: local.title, body: local.body },
   ...over,
+});
+
+describe('fingerprint', () => {
+  it('is short, and the same exactly when the note reads the same', () => {
+    const fields = noteFields(listNote);
+    const print = fingerprint(fields, 'list');
+    expect(print).toMatch(/^[0-9a-f]{14}$/);
+    expect(
+      fingerprint(
+        { title: ` ${fields.title} `, body: `${fields.body}\n\n` },
+        'list',
+      ),
+    ).toBe(print);
+    expect(
+      fingerprint(
+        { ...fields, body: fields.body.replace('[ ]', '[x]') },
+        'list',
+      ),
+    ).not.toBe(print);
+    expect(fingerprint(fields, 'text')).not.toBe(print);
+  });
 });
 
 describe('plan', () => {
@@ -165,6 +188,18 @@ describe('plan', () => {
       known: [],
     });
     expect(actions.map(a => a.kind)).toEqual(Array(5).fill('import'));
+  });
+
+  it('does nothing when Keep only re-saved the note', () => {
+    expect(
+      plan({
+        rows: [known(textNote)],
+        locals: [],
+        notes: [{ ...textNote, updateTime: '2026-03-05T00:00:00Z' }],
+        complete: true,
+        known: [],
+      })[0],
+    ).toMatchObject({ kind: 'unchanged', clean: true });
   });
 
   it('does nothing when neither side changed', () => {
