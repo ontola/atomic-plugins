@@ -191,6 +191,34 @@ yet. syncables reads both. `tests/test_calendar_read_tombstone_v2.py` and
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
 
+## Notion pages completeness
+
+[`completeness-0c8e2296…-overlay.yaml`](APIs/notion.com/2026-03-11/completeness-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Notion `pages` collection (a data source's query): `absent: removed`
+and `notFound: unavailable`. Notion's
+[status codes](https://developers.notion.com/reference/status-codes) say a 404
+`object_not_found` "can also indicate that the resource has not been shared
+with owner of the bearer token", so without this overlay a consumer would take
+a page no longer shared with the connection as deleted (the `notFound`
+default). The [query](https://developers.notion.com/reference/query-a-data-source)
+"returns non-archived pages" by default, so absence alone settles nothing.
+Inferred, not documented: that a trashed page leaves the query and that an
+archived or trashed page's own read still answers 2xx; neither changes an
+outcome. The query is capped at 10,000 results, so a catalog selects this
+overlay only together with `pagination-v3-0c8e2296…`, which marks a capped
+read incomplete; under an earlier pagination revision a query over 10,000
+results looks complete (the test asserts this pairing). Not declared:
+`gone` (no 410 documented), anything on `data_sources` (`POST /search`, not
+documented as returning every shared data source), and so `parentAbsent`,
+which needs a parent collection with a Completeness Object (§4.4). The pinned
+OAD is an authored subset without descriptions, so the evidence is Notion's
+reference. No dated catalog selects it yet.
+`tests/test_notion_pages_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays (and with pagination-v3), in
+either order, runs both validators, and checks the outcomes `classify_read`
+gives. No provider was called.
+
 ## Write preconditions
 
 Two standalone overlays declare [Write Preconditions 0.1.0-draft](../openapi-extensions/spec/write-preconditions/README.md)
@@ -205,6 +233,34 @@ Calendar overlay through the syncables client. No provider was called.
 | --- | --- | --- |
 | [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
 | [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
+
+## GitLab issues completeness
+
+[`completeness-f6d7940e…-overlay.yaml`](APIs/gitlab.com/v4-readonly/completeness-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the GitLab.com `projectIssues` collection: `absent: removed` and
+`notFound: unavailable`. GitLab's
+[status codes](https://docs.gitlab.com/api/rest/troubleshooting/) give one 404
+for "an ID for a resource couldn't be found" and for "the user isn't
+authorized to access the resource", so without this overlay a consumer would
+take a confidential or no-longer-accessible issue as deleted (the `notFound`
+default). The list's `state` defaults to `all` (the pinned OAD's
+`default: all`) and its `scope` "Defaults to `all`" (the
+[issues reference](https://docs.gitlab.com/api/issues/)), but an issue also
+leaves the list when it becomes confidential to the caller or the caller loses
+access, so absence alone settles nothing. Page-number paging can skip the
+issue after one deleted during a read; that issue still exists, and its own
+read finds it present. Not verified: which issue types (tasks, incidents)
+the list returns without `issue_type`, and whether they are read as issues
+are. Not
+declared: `gone` (no 410 documented for issues), anything on `projects` (the
+catalog narrows it with `membership=true`, and a consumer drops a declaration
+a selection narrows), and so `parentAbsent`, which needs a parent collection
+with a Completeness Object (§4.4). No dated catalog selects it yet.
+`tests/test_gitlab_issues_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays of the same pin, in either order,
+runs both validators, and checks the outcomes `classify_read` gives. No
+provider was called.
 
 ## Google Calendar deletion feed
 
@@ -391,6 +447,39 @@ responses. No dated catalog selects it yet.
 `tests/test_discord_throttling.py` composes it alone and after the
 catalog's Discord overlays and classifies synthetic responses, fractions
 included. No provider was called.
+
+## Collections with fixed reads
+
+Two standalone overlays declare [CRUD Causality 0.4.0](../openapi-extensions/spec/crud-causality/README.md#421-reading-a-collection)
+`listQuery`; no dated catalog selects them yet.
+`tests/test_crud_fixed_query_overlays.py` composes each with its pinned OAD and
+pagination overlay, runs the collection-read validator, and checks that each
+fixed read is the request the drive app sends. No provider was called.
+
+| Overlay | Fixed read | Evidence |
+| --- | --- | --- |
+| [Google Tasks v1, crud-causality v2](APIs/googleapis.com/tasks/v1/crud-causality-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | v1 (#378) plus envelopes (with `emptyWhenAbsent`, as pagination v2's), the task-list read and descriptions; task lists and tasks, read only; the `tasks` collection fixes `showCompleted=true` and `showHidden=true`. Deleted tasks stay excluded, and so do tasks assigned to the user (`showAssigned`, default false, is not in the pinned OAD). | The pinned OAD's parameter descriptions; [tasks.list](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
+| [Google Calendar v3 app v2](APIs/googleapis.com/calendar/v3/app-crud-causality-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | v1's resources and operations; the `events` collection fixes `showDeleted=true` and `singleEvents=false` (hidden invitations stay out: `showHiddenInvitations` defaults to false), and the event update declares `mode: patch` with `patchFormat: jsonMergePatch` (v1 declares no `mode`, against CRUD Causality rule 5). | The pinned OAD's parameter descriptions; [events.list](https://developers.google.com/workspace/calendar/api/v3/reference/events/list); [patch semantics](https://developers.google.com/workspace/calendar/api/guides/performance) |
+
+## Collection completeness
+
+Two standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
+`x-completeness`, which syncables reads (`absent`, `notFound`, `gone`,
+`parentAbsent`). No dated catalog selects them yet.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [Google Tasks v1 completeness](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks `absent: removed`, `notFound: unavailable`; tasks `parentAbsent: unavailable`; the task read tombstone `deleted: true`. Needs crud-causality v2 (the fixed read that returns hidden tasks). | The pinned OAD (tasklists.list "Returns all the authenticated user's task lists"; Task.deleted "Flag indicating whether the task has been deleted"); what a 404 means is not documented |
+| [GitHub Issues completeness](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | Issues `absent: removed`, `notFound: unavailable`, no `gone`; comments the same plus `parentAbsent: unavailable`. Page-number paging can skip an issue deleted or transferred during a read; it stays unconfirmed until its GET settles it. | [Get an issue](https://docs.github.com/en/rest/issues/issues#get-an-issue): 301 when transferred, 404 when transferred or deleted out of the caller's reach, 410 when deleted where the caller can read, and 410 for every issue when issues are turned off, so neither a 404 nor a 410 is declared a deletion |
+
+A Todoist overlay drafted with these is left out: Todoist's API reference
+could not be read for the task fields and single-task read it relies on,
+and its pinned OAD is an authored subset without descriptions.
+`tests/test_completeness_overlays.py` and
+`tests/test_github_issues_completeness.py` compose each overlay with the
+overlays it needs, run the Collection Completeness and CRUD Causality
+validators, and classify synthetic reads with the spec's `classify_read`.
+No provider was called.
 
 ## Directory layout and OAD revisions
 
