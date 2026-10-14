@@ -313,6 +313,9 @@ def classify(document, status, headers, body, received_at):
     when the response is not throttling, else a dict with `meaning`, `bucket`
     (or None) and `retryAt` (epoch seconds, or None when the consumer's own
     backoff applies). A 429 is throttling with or without declared signals.
+    Since 0.4.0 the meaning can be `blocked` (also for a signal whose meaning
+    is not recognised, with any bucket or delay it carries ignored): then
+    `retryAt` None means never retry automatically, not the consumer's backoff.
     """
     root = document.get("x-throttling") or {}
     headers = {name.lower(): value for name, value in headers.items()}
