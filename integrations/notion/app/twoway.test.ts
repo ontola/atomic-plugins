@@ -135,10 +135,11 @@ describe('compare on open', () => {
       version: 1,
       fields: { [POINTS]: 3, [DONE]: false, [TITLE]: 'Launch plan' },
     });
-    // Formatted text was never read, so it has no baseline value.
+    // Formatted text is read as plain text (usertest-findings#19), so its
+    // baseline is those words.
     expect(
       parseBaseline(rowOf(RETRO)[1][column(BASELINE_SHORTNAME)])!.fields,
-    ).not.toHaveProperty(NOTES);
+    ).toMatchObject({ [NOTES]: 'Keep this bold' });
     expect(changesOf(controller.state())).toEqual([]);
   });
 

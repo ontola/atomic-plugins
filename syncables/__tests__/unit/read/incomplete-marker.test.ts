@@ -4,7 +4,9 @@ import {
   createApiClient,
   paginate,
   readCollections,
+  invalidAutoDetected,
   readPlatform,
+  resolveEffectiveScheme,
   responseIncomplete,
   validatePaginationScheme,
   type OpenApiDocument,
@@ -373,6 +375,55 @@ describe('a read with a marked response is not complete', () => {
     expect(items.map((r) => r['id'])).toEqual(['a', 'b']);
     expect(outcome.complete).toBe(false);
     expect(outcome.reason).toMatch(/marked the result incomplete/);
+    // The same outcome passed to a walk with no marked response: the
+    // earlier walk's mark does not carry over.
+    fake.set([[a], [b]]);
+    await paginate(document(), {
+      transport: fake.transport,
+      path: '/data_sources/{data_source_id}/query',
+      method: 'POST',
+      pathParams: context,
+      outcome,
+    });
+    expect(outcome).toEqual({ complete: true });
+  });
+
+  it('reads an auto-detected scheme whose marker the validator refuses as not complete', async () => {
+    const scheme = {
+      ...capped({ field: 'request_status.type' }),
+      autoDetect: true,
+    } as unknown as PaginationSchemeObject;
+    expect(validatePaginationScheme('cappedQuery', scheme)).not.toEqual([]);
+    const doc = document({ scheme });
+    const operation = doc.paths['/data_sources/{data_source_id}/query']!.post!;
+    delete (operation as Record<string, unknown>)['x-pagination'];
+    // The body declares the scheme's fields, so it would be auto-detected.
+    operation.requestBody!.content!['application/json']!.schema = {
+      type: 'object',
+      properties: {
+        start_cursor: { type: 'string' },
+        page_size: { type: 'integer' },
+      },
+    };
+    expect(resolveEffectiveScheme(doc, operation)).toBeUndefined();
+    expect(invalidAutoDetected(doc, operation)).toMatchObject({
+      schemeName: 'cappedQuery',
+    });
+    // Two pages; without a scheme only the first is read, and it is not
+    // taken for the whole collection.
+    const fake = server();
+    fake.set([[a, b], [c]]);
+    const result = await readCollections(doc, {
+      transport: fake.transport,
+      constants: context,
+    });
+    const snapshot = result.collections[0]!;
+    expect(snapshot.error).toBeUndefined();
+    expect(snapshot.items.map((r) => r['id'])).toEqual(['a', 'b']);
+    expect(snapshot.complete).toBe(false);
+    expect(snapshot.notComplete).toMatch(
+      /"cappedQuery" matches this operation by auto-detection but is invalid/,
+    );
   });
 });
 
