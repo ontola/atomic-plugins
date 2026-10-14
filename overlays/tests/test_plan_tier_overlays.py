@@ -92,15 +92,15 @@ class PlanTierOverlayTests(unittest.TestCase):
         self.assertEqual(tiers(limits["asana"]["perToken"]), {("Free",): (150, 60), ("Paid",): (1500, 60)})
         self.assertEqual(tiers(limits["notion"]["perConnection"]),
                          {("Business", "Enterprise"): (600, 60), ("All other plans",): (180, 60)})
-        self.assertEqual(tiers(limits["clockify"]["perWorkspace"]), {
-            ("FREE",): (30, 3600), ("TRIAL", "BASIC", "STANDARD", "PRO"): (20, 1), ("ENTERPRISE",): (50, 1)})
+        self.assertEqual(tiers(limits["clockify"]["perWorkspace"]), {("Free",): (30, 3600), ("Paid",): (50, 1)})
         # Without a plan, every tier at once.
         in_force = throttling.limits_in_force
         self.assertEqual(pairs(in_force(limits["asana"]["perToken"])), [(150, 60), (1500, 60)])
         self.assertEqual(pairs(in_force(limits["notion"]["perConnection"], "Plus")), [(180, 60), (600, 60)])
-        self.assertEqual(pairs(in_force(limits["clockify"]["perWorkspace"])), [(20, 1), (30, 3600), (50, 1)])
-        # With one, its tier.
-        self.assertEqual(pairs(in_force(limits["clockify"]["perWorkspace"], "PRO")), [(20, 1)])
+        self.assertEqual(pairs(in_force(limits["clockify"]["perWorkspace"])), [(30, 3600), (50, 1)])
+        # With one, its tier; a plan no tier names (a trial) keeps within both.
+        self.assertEqual(pairs(in_force(limits["clockify"]["perWorkspace"], "Paid")), [(50, 1)])
+        self.assertEqual(pairs(in_force(limits["clockify"]["perWorkspace"], "TRIAL")), [(30, 3600), (50, 1)])
         self.assertEqual(pairs(in_force(limits["notion"]["perConnection"], "Enterprise")), [(600, 60)])
         self.assertEqual(pairs(in_force(limits["asana"]["perToken"], "Paid")), [(1500, 60)])
 
