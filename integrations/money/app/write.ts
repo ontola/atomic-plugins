@@ -93,7 +93,16 @@ export async function writeImport(
   target: WriteTarget,
   preview: Preview,
   onProgress?: (progress: WriteProgress) => void,
-  { concurrency = 4, today = localToday } = {},
+  {
+    concurrency = 4,
+    today = localToday,
+    onWritten,
+  }: {
+    concurrency?: number;
+    today?: () => string;
+    /** Each transaction row whose write resolved, with what it wrote (#572). */
+    onWritten?: (subject: string, values: Record<string, JSONValue>) => void;
+  } = {},
 ): Promise<ImporterRun> {
   const { entries, statements, format } = preview;
   const fresh = statements.filter(
@@ -110,11 +119,13 @@ export async function writeImport(
       const entry = entries[next++];
 
       try {
-        await store.newResource({
+        const values = rowValues(entry, target.fields);
+        const created = await store.newResource({
           parent: target.table,
           isA: [BANK_TRANSACTION],
-          propVals: rowValues(entry, target.fields),
+          propVals: values,
         });
+        onWritten?.(created.subject, values);
       } catch (error) {
         failed ??= error;
 

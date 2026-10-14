@@ -386,17 +386,23 @@ what covers it:
   table again; it then offers only the rest. Unit: Import pressed again at
   once after the failure (3 rows at 0.4.4); the view disables the button.
   Import pressed twice before the first press finishes writes once (unit).
-- A check trusts only a complete read. If the table can't be listed, or any
-  row it lists can't be read, nothing is compared: in the failed sheet
-  Import stays off with "Couldn't check what was written; close and check
-  the file again.", and a new check stops with "Couldn't check what is
-  already in this table". Unit: a listing that fails after the failure (the
-  old preview came back at 0.4.4), and a listed row whose read fails (3 rows
-  for 2 before this).
-- A check compares with every row the app knew before and after its read,
-  so a table listing that comes back empty without an error (the host's
-  query answers `[]` on a server failure) can't make written rows look new.
-  Unit: 4 rows for 2 before this.
+- A check trusts only a complete read of the rows the table lists. If the
+  listing fails with an error, or any row it lists can't be read (an error,
+  or a resource that comes back with no `isA` at all), nothing is compared:
+  in the failed sheet Import stays off with "Couldn't check what was
+  written; close and check the file again.", and a new check stops with
+  "Couldn't check what is already in this table". Unit: a listing that
+  fails after the failure (the old preview came back at 0.4.4), a listed
+  row whose read fails (3 rows for 2 before this), and one read back empty.
+- A check also compares with every complete row read since the app loaded
+  and every row this app wrote itself (its write resolved), not only with
+  the current listing. The host's `query` can answer `[]`, or leave out a
+  page of 500 that failed, without an error, so a short listing is not
+  detected; this way it can't make a row the app has seen or written look
+  new. Unit: a listing answering `[]` after the failure (the row written
+  before it was proposed again), and two checks in a row while it does (4
+  rows for 2 before this). The cost: a row deleted elsewhere still counts
+  as already imported until the app is loaded again.
 - Every check of a file waits for any import under way, whether or not its
   sheet was closed, and reads the table first. Unit: the file checked again
   at once after a failure (2 proposed at 0.4.4), after closing during an
@@ -409,14 +415,22 @@ what covers it:
   each transaction once, and that the file checked again finds nothing new.
 
 Not closed: a row is still told apart only by comparing with what the app
-could read, so a row can still be written twice when that read can't see
-it. Two cases remain: two tabs or devices importing the same file at the
-same moment (see "Identity and dedupe" above), and a row write that timed
-out on the app's side but whose commit lands on the server after the
-following read. Closing them needs the row's subject derived from the
-transaction's identity, so that a second write of it lands on the same
-resource; that changes where rows live and needs a migration of existing
-rows, so it is a follow-up, not part of 0.4.5.
+could read or wrote itself, so a row can still be written twice when
+neither covers it. These cases remain:
+
+- two tabs or devices importing the same file at the same moment (see
+  "Identity and dedupe" above);
+- a row write that failed or timed out on the app's side but whose commit
+  lands on the server anyway, when the next listing doesn't show it;
+- a listing that is short without an error (the host's `[]`, or a skipped
+  page) for rows this copy of the app never saw, in particular while the
+  app loads: a load during such a failure starts from the short listing.
+
+The app can't choose a row's subject (under a DID drive the server mints it
+from the signed genesis commit), so a second write can't be made to land on
+the same resource. The follow-up finds duplicates when reading instead, and
+counts each transaction once; the host side (a `query` that rejects on a
+failed page, an idempotent create) is not this repository's to change.
 
 The five money e2e tests, this step included, passed on 2026-10-14 at
 0.4.5 against the pin `7dab1ce` (the build VPS's source build), in 5.0

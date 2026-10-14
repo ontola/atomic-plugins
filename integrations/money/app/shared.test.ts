@@ -677,6 +677,105 @@ describe('importing into the app’s own table by its own writes (write.ts)', ()
     expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
   });
 
+  /** The second row write fails; returns the restore. */
+  const failSecondWrite = (store: ReturnType<typeof harness>['store']) => {
+    const original = store.newResource.bind(store);
+    let calls = 0;
+
+    store.newResource = async args => {
+      if (++calls === 2) throw new Error('Simulated write failure');
+
+      return original(args);
+    };
+
+    return () => (store.newResource = original);
+  };
+
+  it('a row this app wrote counts after a failure even when the listing answers [] (#572 Q1)', async () => {
+    const { store, controller } = harness({ data: 'own' });
+    await controller.load();
+    await controller.importFile(file(mt940));
+    const restore = failSecondWrite(store);
+    const query = store.query.bind(store);
+    let empty = true;
+
+    store.query = async args => (empty ? [] : query(args));
+    await controller.applyImport();
+    restore();
+    await settle();
+    empty = false;
+    const sheet = controller.state().importing;
+    expect(sheet?.step === 'preview' && sheet.preview.fresh).toHaveLength(1);
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+  });
+
+  it('a second check while the listing answers [] still knows every row seen (#572 Q2)', async () => {
+    const { store, controller } = harness({ data: 'own' });
+    await controller.load();
+    await controller.importFile(file(mt940));
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+    const query = store.query.bind(store);
+
+    store.query = async () => [];
+
+    for (let i = 0; i < 2; i++) {
+      controller.closeImport();
+      await controller.importFile(file(mt940));
+      const sheet = controller.state().importing;
+      expect(sheet?.step === 'preview' && sheet.preview.fresh).toHaveLength(0);
+    }
+
+    store.query = query;
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+  });
+
+  it('a row read back with no isA counts as unread, not as no row (#572 Q3)', async () => {
+    const { store, controller } = harness({ data: 'own' });
+    await controller.load();
+    await controller.importFile(file(mt940));
+    const restore = failSecondWrite(store);
+    const getMany = store.getMany!.bind(store);
+    let hollow = true;
+
+    store.getMany = async subjects =>
+      hollow
+        ? subjects.map(subject => ({
+            subject,
+            props: {},
+            get: () => undefined,
+            set() {
+              return this;
+            },
+            remove() {
+              return this;
+            },
+            save: async () => {
+              throw new Error('not here');
+            },
+            destroy: async () => {},
+          }))
+        : getMany(subjects);
+    await controller.applyImport();
+    restore();
+    await settle();
+    const sheet = controller.state().importing;
+    expect(sheet?.step === 'preview' && sheet.unchecked).toBe(true);
+    hollow = false;
+    controller.closeImport();
+    await controller.importFile(file(mt940));
+    const again = controller.state().importing;
+    expect(again?.step === 'preview' && again.preview.fresh).toHaveLength(1);
+    await controller.applyImport();
+    await settle();
+    expect(rowsOf(store, OWN_TABLE)).toHaveLength(2);
+  });
+
   it('Import pressed twice before the first finishes writes once (#572 P4)', async () => {
     const { store, controller } = harness({ data: 'own' });
     await controller.load();

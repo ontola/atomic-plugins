@@ -29,6 +29,7 @@ import {
   canAnnotate,
   classFields,
   readMany,
+  readRow,
   readRows,
   readRowsReport,
   readStatement,
@@ -313,6 +314,21 @@ export function createController(
    * `Infinity` while an import runs, then 15 s after it applied, else 0.
    */
   let importedUntil = 0;
+  /**
+   * Every complete row read since `load()`, by subject, and every row this
+   * app wrote itself (its `newResource` resolved), for the controller's
+   * lifetime. A check compares a file with all of them as well as with the
+   * table as listed now (#572): the host's `query` can answer `[]`, or skip
+   * a page of 500 that failed, with no error, and a refresh is suppressed
+   * while an import writes. So a row once seen or written stays known;
+   * one deleted elsewhere reads as already imported until the next load.
+   */
+  const seen = new Map<string, Txn>();
+  const written = new Map<string, Txn>();
+
+  const remember = (rows: Txn[]) => {
+    for (const row of rows) seen.set(row.subject, row);
+  };
 
   const update = (patch: Partial<State>) => {
     state = { ...state, ...patch };
@@ -361,6 +377,7 @@ export function createController(
       ...added.rows,
     ];
     const incomplete = added.incomplete;
+    remember(added.rows);
     const arrived = freshRows.filter(
       row => !wereIncomplete.has(row.subject),
     ).length;
@@ -425,15 +442,17 @@ export function createController(
   };
 
   /**
-   * The rows a check compares a file with: those known before the table was
-   * read again, and those it shows now (#572). The host's query can answer
-   * [] when the server failed, which would empty the table; a row that
-   * vanished from one read only makes the check more cautious.
+   * The rows a check compares a file with: the table as listed now, every
+   * row seen since `load()` and every row this app wrote (`seen`, `written`;
+   * #572). Grows only: a row missing from one listing makes a check more
+   * cautious, never less.
    */
-  const rowsForCheck = (before: Txn[]): Txn[] => {
-    const listed = new Set(state.rows.map(row => row.subject));
+  const rowsForCheck = (): Txn[] => {
+    const all = new Map<string, Txn>();
+    for (const row of [...written.values(), ...seen.values(), ...state.rows])
+      all.set(row.subject, row);
 
-    return [...state.rows, ...before.filter(row => !listed.has(row.subject))];
+    return [...all.values()];
   };
 
   const queueRefresh = () => {
@@ -473,7 +492,6 @@ export function createController(
     const mine = run;
     const text = pendingText;
     pendingPreview = undefined;
-    const before = state.rows;
     const current = state.importing;
     if (current?.step === 'preview')
       update({
@@ -495,11 +513,7 @@ export function createController(
         await loadStatements().catch(() => undefined);
         const parsed = fresh && text ? read(text) : undefined;
         if (parsed && parsed.ok)
-          checked = compare(
-            parsed.format,
-            parsed.statements,
-            rowsForCheck(before),
-          );
+          checked = compare(parsed.format, parsed.statements, rowsForCheck());
       } finally {
         const sheet = state.importing;
 
@@ -585,7 +599,13 @@ export function createController(
           },
           preview,
           onProgress,
-          { today },
+          {
+            today,
+            onWritten: (subject, values) => {
+              const row = readRow({ subject, get: p => values[p] }, fields);
+              if (row && !row.incomplete) written.set(subject, row);
+            },
+          },
         );
       } finally {
         writing = false;
@@ -706,6 +726,8 @@ export function createController(
               });
           }),
         );
+        seen.clear();
+        remember(rows);
         update({
           rows,
           incomplete,
@@ -888,7 +910,6 @@ export function createController(
       await importing?.catch(() => undefined);
       if (recheck) await recheck;
       if (stale()) return;
-      const before = state.rows;
 
       if (!(await readNow())) {
         if (!stale())
@@ -902,11 +923,7 @@ export function createController(
       }
 
       if (stale()) return;
-      const checked = compare(
-        parsed.format,
-        parsed.statements,
-        rowsForCheck(before),
-      );
+      const checked = compare(parsed.format, parsed.statements, rowsForCheck());
       if (!checked.ok) return stop(checked.problem);
       pendingText = text;
       pendingPreview = checked.preview;

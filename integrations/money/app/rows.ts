@@ -466,9 +466,11 @@ export async function readRows(
 
 /**
  * `readRows`, also saying how many subjects could not be read at all (a
- * failed `getMany` batch, an entry with an error, a failed `getResource`),
- * as against resources read and found to be no row. A check of a file must
- * not trust a table read that left any out (#572).
+ * failed `getMany` batch, an entry with an error, a failed `getResource`,
+ * or a resource that came back with no `isA` at all), as against resources
+ * read and found to be no row. A check of a file must not trust a table
+ * read that left any out (#572). Every real child of a table, a View
+ * included, has an `isA`; one without is a read that returned nothing.
  */
 export async function readRowsReport(
   store: PluginStore,
@@ -478,13 +480,24 @@ export async function readRowsReport(
   onProgress?: (loaded: number) => void,
   concurrency = 16,
 ): Promise<{ items: Txn[]; unread: number }> {
-  return readManyReport(
+  let hollow = 0;
+  const report = await readManyReport(
     store,
     subjects,
-    r => readRow(r, fields, rowClass),
+    r => {
+      if (!list(r.get(atomic.isA)).length) {
+        hollow++;
+
+        return undefined;
+      }
+
+      return readRow(r, fields, rowClass);
+    },
     onProgress,
     concurrency,
   );
+
+  return { items: report.items, unread: report.unread + hollow };
 }
 
 /** Reads `subjects` into `T`s (see `readRows`); unreadable ones are skipped. */
