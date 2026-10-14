@@ -216,8 +216,15 @@ on the GitLab.com `projectIssues` collection: `absent: removed` and
 for "an ID for a resource couldn't be found" and for "the user isn't
 authorized to access the resource", so without this overlay a consumer would
 take a confidential or no-longer-accessible issue as deleted (the `notFound`
-default). The [issues reference](https://docs.gitlab.com/api/issues/) does not
-state the list's `state` default, so absence alone settles nothing. Not
+default). The list's `state` defaults to `all` (the pinned OAD's
+`default: all`) and its `scope` "Defaults to `all`" (the
+[issues reference](https://docs.gitlab.com/api/issues/)), but an issue also
+leaves the list when it becomes confidential to the caller or the caller loses
+access, so absence alone settles nothing. Page-number paging can skip the
+issue after one deleted during a read; that issue still exists, and its own
+read finds it present. Not verified: which issue types (tasks, incidents)
+the list returns without `issue_type`, and whether they are read as issues
+are. Not
 declared: `gone` (no 410 documented for issues), anything on `projects` (the
 catalog narrows it with `membership=true`, and a consumer drops a declaration
 a selection narrows), and so `parentAbsent`, which needs a parent collection
