@@ -109,20 +109,26 @@ Limit Object with `tiers` declares each of them, instead of `requests` and
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `name` | string, required | The provider's plan or plans this tier applies to, as it names them. Unique within the limit's `tiers`. |
+| `plans` | nonempty array of strings, required | The provider's plans this tier applies to, as it names them. A plan appears in at most one tier of the limit. |
 | `requests` | positive integer, required | Announced maximum number of counted requests in the window, on this tier. |
 | `window` | Window Object, required | Duration and known window semantics, on this tier. |
 | `description` | string, optional | Qualifications, such as the source of the claim. |
 
 The limit's `partitionBy` and `description` apply to every tier, and so does
-the bucket's identity: one bucket, whose amount and window depend on the tier
-in use. A consumer that knows which tier an account is on (from its own
-configuration; this extension does not say how to find out) uses that tier.
-One that does not, or whose tier is not among them, uses the most
-restrictive tier: the lowest `requests` divided by `window.seconds`, and of
-two equal rates the one with the longer window. That choice can wait longer
-than needed, never less. Where the provider gives a tier no number, leave it
+the bucket's identity: one bucket, whose amount and window depend on the
+account's plan. A consumer that knows the account's plan (from its own
+configuration; this extension does not say how to find out) uses the tier
+whose `plans` name it. One that does not, or whose plan no tier names, MUST
+keep within every tier at once, each tier's `requests` in its own `window`
+as a separate count over the same requests. No single tier is safe on its
+own: a lower average rate over a longer window can still allow a burst that
+a shorter tier forbids (30 per hour permits 30 requests in one second, which
+breaks 20 per second). Where the provider gives a tier no number, leave it
 out; with no numbered tier, declare no `tiers` and no `requests`.
+
+When a `quotaExhausted` response names such a bucket and gives no time, the
+bucket window it falls back to (Earliest retry time) is the configured tier's
+window, or, without one, the longest window among the tiers.
 
 ```yaml
 x-throttling:
@@ -131,15 +137,16 @@ x-throttling:
       partitionBy: [account]
       description: Counted per workspace for requests with an API key.
       tiers:
-        - { name: FREE, requests: 30, window: { seconds: 3600, kind: unspecified } }
-        - { name: TRIAL, requests: 20, window: { seconds: 1, kind: unspecified } }
-        - { name: BASIC STANDARD PRO, requests: 20, window: { seconds: 1, kind: unspecified } }
-        - { name: ENTERPRISE, requests: 50, window: { seconds: 1, kind: unspecified } }
+        - { plans: [FREE], requests: 30, window: { seconds: 3600, kind: unspecified } }
+        - { plans: [TRIAL, BASIC, STANDARD, PRO], requests: 20, window: { seconds: 1, kind: unspecified } }
+        - { plans: [ENTERPRISE], requests: 50, window: { seconds: 1, kind: unspecified } }
   applies: [workspace]
 ```
 
-A consumer without a configured tier paces this bucket at 30 per hour, the
-FREE tier. A 0.4.0 validator rejects a Limit Object with `tiers`, and one
+A consumer told that the workspace is on PRO keeps to 20 per second. One
+without a configured plan keeps to 30 per hour, 20 per second and 50 per
+second together; the last adds nothing beside 20 per second, but each is
+counted. A 0.4.0 validator rejects a Limit Object with `tiers`, and one
 without `window`.
 
 ### Windows
@@ -372,10 +379,15 @@ x-throttling:
 
 A `blocked` response is not throttling, even with status `429`: the default
 below does not apply once the signal matches, and the earliest retry time is
-not computed. A consumer that does not recognise a signal's `meaning` treats
-a response that matches it as `blocked`: it never resends automatically on a
-meaning it cannot read. A 0.3.0 validator rejects a document that declares
-`blocked`, so a document that uses it needs a 0.4.0 consumer.
+not computed. A consumer MUST NOT resend automatically a request whose
+response matches a `blocked` signal, or a signal whose `meaning` it does not
+recognise: it MUST treat a response matching a signal with an unrecognised
+`meaning` as `blocked`. It MUST also treat a `blocked` signal that carries a
+`bucket` or `minDelaySeconds` (which a valid document does not) as `blocked`,
+ignoring those fields, rather than dropping the signal. It MAY stop sending
+other requests with the same credentials until a person or the application
+acts. A 0.3.0 validator rejects a document that declares `blocked`, so a
+document that uses it needs a 0.4.0 consumer.
 
 A signal declares a response the API documents as a rate-limit refusal. That
 the refused request was not applied is an inference, as for any refusal before
@@ -401,7 +413,8 @@ JSON's whitespace (RFC 8259 §2), which includes a header's optional
 whitespace (RFC 9110 §5.6.3). Other characters, such as U+00A0 or U+3000,
 are kept, so a value that holds them does not parse.
 
-**Earliest retry time.** For a matching response, a consumer computes:
+**Earliest retry time.** For a matching response whose meaning is not
+`blocked`, a consumer computes:
 
 1. T1, from the `retryAfter` header or body field, when it is declared,
    present and parses (the later of the two when both do);
@@ -429,7 +442,9 @@ signals; those are consumer decisions.
 
 **Classification.** A response with status `429` (RFC 6585) is throttling,
 with the meaning `throttled`, unless a Signal Object matches it first; this
-holds whether or not `signals` is present. When `signals` is present, a
+holds whether or not `signals` is present. A `blocked` signal (or one with an
+unrecognised meaning) that matches first makes the response not throttling
+and not to be resent (above). When `signals` is present, a
 consumer classifies any other response as throttling only when it matches a
 Signal Object; in particular, a `403` that matches no signal is not
 throttling. When `signals` is absent, this extension says nothing about
@@ -568,8 +583,9 @@ and security requirements.
 
 Validators MUST check object shapes, positive integer amounts/durations, known
 window kinds, since 0.5.0 a Limit Object with either `window` or a nonempty
-`tiers` (never both, and no `requests` beside `tiers`), unique nonempty tier
-names and each tier's `requests` and `window`, anchor format and placement, unique partition dimensions, and
+`tiers` (never both, and no `requests` beside `tiers`), each tier's nonempty
+`plans` of nonempty strings, no plan in two tiers, and each tier's
+`requests` and `window`, anchor format and placement, unique partition dimensions, and
 unique/defined bucket references at the root and every operation. An operation
 selection without root definitions is invalid. Unknown numeric capacity and
 unknown partitioning are valid and must remain distinguishable from zero and
@@ -617,10 +633,12 @@ API throttling.
 
 - **0.5.0-draft** (2026-10-13): adds `tiers` to the Limit Object (Plan tiers):
   one bucket whose amount and window depend on the account's plan, as Asana,
-  Notion and Clockify document. A consumer uses the tier it is configured
-  for, else the most restrictive one; the bucket window `quotaExhausted`
-  falls back to is that tier's. `select_tier()` in the validator, an example
-  and tests. A 0.4.0 document stays valid and means the same.
+  Notion and Clockify document, each tier naming its `plans`. A consumer
+  uses the tier its configured plan is in; without one it keeps within every
+  tier at once, since no single tier bounds both bursts and averages. The
+  window `quotaExhausted` falls back to is the configured tier's, else the
+  longest. `limits_in_force()` in the validator, an example and tests. A
+  0.4.0 document stays valid and means the same.
 - **0.4.0-draft** (2026-10-12): adds the signal meaning `blocked`, for a
   refusal the API documents as not worth retrying (Notion's
   `public_api_request_blocked`): not throttling, never resent automatically,

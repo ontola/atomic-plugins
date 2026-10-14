@@ -5,8 +5,8 @@ info:
   description: >-
     Synthetic, shaped like Clockify's documented API-key limits: counted per
     workspace, 30 requests per hour on the free plan and 20 or 50 per second
-    on paid plans. A consumer without a configured plan paces at the free
-    plan's rate.
+    on trial and paid plans. A consumer without a configured plan keeps
+    within every tier at once.
 servers:
   - url: https://api.example.com
 x-throttling:
@@ -15,13 +15,13 @@ x-throttling:
       partitionBy: [account]
       description: Counted per workspace for requests with an API key.
       tiers:
-        - name: FREE
+        - plans: [FREE]
           requests: 30
           window: { seconds: 3600, kind: unspecified }
-        - name: BASIC STANDARD PRO
+        - plans: [TRIAL, BASIC, STANDARD, PRO]
           requests: 20
           window: { seconds: 1, kind: unspecified }
-        - name: ENTERPRISE
+        - plans: [ENTERPRISE]
           requests: 50
           window: { seconds: 1, kind: unspecified }
   applies: [workspace]
