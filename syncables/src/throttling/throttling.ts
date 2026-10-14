@@ -158,10 +158,14 @@ const isPositiveInteger = (value: unknown): value is number =>
 /**
  * Reads the document's root `x-throttling`. Undefined when absent or not an
  * object. A `headers` entry that does not parse (an unknown role, a missing
- * or misplaced unit, a role or a name already taken) is left out. The
- * `signals` array is left out as a whole when any Signal Object does not
- * parse, since the objects are tested in order and a gap would change the
- * meaning of the rest; a 429 then stays throttling and nothing else does.
+ * or misplaced unit, a role or a name already taken) is left out. A signal
+ * whose meaning is `blocked`, or missing, not a string or not recognised, is
+ * kept as `blocked` (Throttling 0.4.0), with any `bucket` or
+ * `minDelaySeconds` ignored. The `signals` array is left out as a whole
+ * when any other Signal Object does not parse (a bad status list or
+ * predicate), since the objects are tested in order and a gap would change
+ * the meaning of the rest; a 429 then stays throttling and nothing else
+ * does.
  */
 export function declaredThrottling(
   document: OpenApiDocument,
@@ -295,12 +299,15 @@ function parseSignal(value: unknown): SignalObject | undefined {
     )
   )
     return undefined;
-  // 0.4.0: a meaning this consumer does not recognise is read as blocked,
-  // so it never resends on a meaning it cannot read.
-  if (typeof meaning !== 'string' || meaning === '') return undefined;
+  // 0.4.0: a meaning this consumer does not recognise (missing, not a
+  // string, empty or unknown) is read as blocked, as the spec's classify()
+  // does, so it never resends on a meaning it cannot read.
   const signal: SignalObject = {
     status: [...(status as number[])],
-    meaning: MEANINGS.has(meaning) ? (meaning as ThrottlingMeaning) : 'blocked',
+    meaning:
+      typeof meaning === 'string' && MEANINGS.has(meaning)
+        ? (meaning as ThrottlingMeaning)
+        : 'blocked',
   };
   if (header !== undefined) {
     const parsed = parseHeaderPredicate(header);

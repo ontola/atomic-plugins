@@ -532,7 +532,7 @@ describe('blocked (Throttling 0.4.0)', () => {
   });
 
   it('keeps a blocked signal that has a bucket or a delay as blocked, ignoring them (fails safe)', () => {
-    for (const meaning of ['blocked', 'suspended']) {
+    for (const meaning of ['blocked', 'suspended', '', 7, null, undefined]) {
       for (const extra of [
         { minDelaySeconds: 30 },
         { bucket: 'b' },
