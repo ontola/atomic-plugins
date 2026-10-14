@@ -364,6 +364,39 @@ responses. No dated catalog selects it yet.
 catalog's Discord overlays and classifies synthetic responses, fractions
 included. No provider was called.
 
+## Collections with fixed reads
+
+Two standalone overlays declare [CRUD Causality 0.4.0](../openapi-extensions/spec/crud-causality/README.md#421-reading-a-collection)
+`listQuery`; no dated catalog selects them yet.
+`tests/test_crud_fixed_query_overlays.py` composes each with its pinned OAD and
+pagination overlay, runs the collection-read validator, and checks that each
+fixed read is the request the drive app sends. No provider was called.
+
+| Overlay | Fixed read | Evidence |
+| --- | --- | --- |
+| [Google Tasks v1, crud-causality v2](APIs/googleapis.com/tasks/v1/crud-causality-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | v1 (#378) plus envelopes (with `emptyWhenAbsent`, as pagination v2's), the task-list read and descriptions; task lists and tasks, read only; the `tasks` collection fixes `showCompleted=true` and `showHidden=true`. Deleted tasks stay excluded, and so do tasks assigned to the user (`showAssigned`, default false, is not in the pinned OAD). | The pinned OAD's parameter descriptions; [tasks.list](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
+| [Google Calendar v3 app v2](APIs/googleapis.com/calendar/v3/app-crud-causality-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | v1's resources and operations; the `events` collection fixes `showDeleted=true` and `singleEvents=false` (hidden invitations stay out: `showHiddenInvitations` defaults to false), and the event update declares `mode: patch` with `patchFormat: jsonMergePatch` (v1 declares no `mode`, against CRUD Causality rule 5). | The pinned OAD's parameter descriptions; [events.list](https://developers.google.com/workspace/calendar/api/v3/reference/events/list); [patch semantics](https://developers.google.com/workspace/calendar/api/guides/performance) |
+
+## Collection completeness
+
+Two standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
+`x-completeness`, which syncables reads (`absent`, `notFound`, `gone`,
+`parentAbsent`). No dated catalog selects them yet.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [Google Tasks v1 completeness](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks `absent: removed`, `notFound: unavailable`; tasks `parentAbsent: unavailable`; the task read tombstone `deleted: true`. Needs crud-causality v2 (the fixed read that returns hidden tasks). | The pinned OAD (tasklists.list "Returns all the authenticated user's task lists"; Task.deleted "Flag indicating whether the task has been deleted"); what a 404 means is not documented |
+| [GitHub Issues completeness](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | Issues `absent: removed`, `notFound: unavailable`, no `gone`; comments the same plus `parentAbsent: unavailable`. Page-number paging can skip an issue deleted or transferred during a read; it stays unconfirmed until its GET settles it. | [Get an issue](https://docs.github.com/en/rest/issues/issues#get-an-issue): 301 when transferred, 404 when transferred or deleted out of the caller's reach, 410 when deleted where the caller can read, and 410 for every issue when issues are turned off, so neither a 404 nor a 410 is declared a deletion |
+
+A Todoist overlay drafted with these is left out: Todoist's API reference
+could not be read for the task fields and single-task read it relies on,
+and its pinned OAD is an authored subset without descriptions.
+`tests/test_completeness_overlays.py` and
+`tests/test_github_issues_completeness.py` compose each overlay with the
+overlays it needs, run the Collection Completeness and CRUD Causality
+validators, and classify synthetic reads with the spec's `classify_read`.
+No provider was called.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
