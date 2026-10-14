@@ -989,6 +989,16 @@ pub async fn redeem(
     }
 }
 
+/// An owner write refused because the owner was retired meanwhile (#410)
+/// answers `agent_retired`; any other failure, `unavailable`.
+pub(crate) fn owner_write_error(error: String) -> ApiError {
+    if error == crate::security::OWNER_RETIRED {
+        ApiError::AgentRetired
+    } else {
+        ApiError::Unavailable
+    }
+}
+
 async fn redeem_inner(
     state: &AppState,
     method: &Method,
@@ -998,7 +1008,6 @@ async fn redeem_inner(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let security = state.security.as_ref().ok_or(ApiError::Unavailable)?;
     let owner = crate::signature::authenticate(state, security, method, uri, headers, body).await?;
-    crate::refuse_retired(security, &owner).await?;
     crate::check_access(state, &owner).await?;
     let request: Redemption = serde_json::from_slice(body)
         .map_err(|_| ApiError::BadRequest("body must be {\"code\", \"code_verifier\"}"))?;
@@ -1024,7 +1033,7 @@ async fn redeem_inner(
             handoff.label.as_deref(),
         )
         .await
-        .map_err(|_| ApiError::Unavailable)?;
+        .map_err(owner_write_error)?;
     let mut answer = serde_json::json!({
         "connection_id": connection_id,
         "platform": handoff.platform,

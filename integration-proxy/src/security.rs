@@ -124,6 +124,8 @@ CREATE TABLE IF NOT EXISTS retired_agents (
 pub enum TransferError {
     /// The old or the new id is already retired.
     Retired,
+    /// The old id has webhook subscriptions that are not closed.
+    Blocked,
     /// The move would collide with something the new id already holds (a
     /// runtime with the same agent); the whole statement was undone.
     Conflict,
@@ -222,6 +224,10 @@ fn db_error(error: tokio_postgres::Error) -> String {
 #[derive(Clone)]
 pub struct Security {
     database: Arc<RwLock<Arc<Client>>>,
+    /// Dedicated connections for the owner writes that must not race a key
+    /// transfer (#410): each runs in a transaction holding the owners'
+    /// advisory locks ([`lock_owners`]).
+    owner_writes: Arc<crate::webhooks::pool::Pool>,
     encryption_key: [u8; 32],
     /// `HMAC-SHA256(ENCRYPTION_KEY, KEY_CHECK_SUBKEY_LABEL)`: the key of the
     /// key-check buckets, so the encryption key itself is used only by
@@ -233,6 +239,42 @@ pub struct Security {
 }
 
 const KEY_CHECK_SUBKEY_LABEL: &[u8] = b"integration-proxy-key-check-limit-v1";
+
+/// The error text of an owner write refused because the owner was retired
+/// by a key transfer; callers answer `agent_retired`.
+pub const OWNER_RETIRED: &str = "owner retired";
+
+/// Takes the transaction-scoped advisory lock of each owner, in sorted
+/// order so two transactions locking the same pair cannot deadlock. Every
+/// write that creates or changes what an owner holds (a connection, a
+/// runtime, a delegation) and every transfer take these locks first, so a
+/// transfer and such a write never interleave: the write either commits
+/// before the transfer moves things, or sees the owner retired.
+async fn lock_owners(tx: &tokio_postgres::Transaction<'_>, owners: &[&str]) -> Result<(), String> {
+    let mut owners = owners.to_vec();
+    owners.sort_unstable();
+    owners.dedup();
+    for owner in owners {
+        tx.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            &[&owner],
+        )
+        .await
+        .map_err(db_error)?;
+    }
+    Ok(())
+}
+
+async fn retired_in(tx: &tokio_postgres::Transaction<'_>, agents: &[&str]) -> Result<bool, String> {
+    let agents: Vec<String> = agents.iter().map(|agent| agent.to_string()).collect();
+    tx.query_one(
+        "SELECT EXISTS (SELECT 1 FROM retired_agents WHERE agent = ANY($1))",
+        &[&agents],
+    )
+    .await
+    .map(|row| row.get(0))
+    .map_err(db_error)
+}
 const IDEMPOTENCY_SUBKEY_LABEL: &[u8] = b"integration-proxy-idempotency-key-v1";
 
 fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
@@ -278,6 +320,7 @@ impl Security {
         spawn_reconnect_supervisor(database_url.to_string(), database.clone(), connection);
         Ok(Self {
             database,
+            owner_writes: Arc::new(crate::webhooks::pool::Pool::new(database_url, 4)),
             key_check_key: hmac_sha256(&encryption_key, &[KEY_CHECK_SUBKEY_LABEL]),
             idempotency_key: hmac_sha256(&encryption_key, &[IDEMPOTENCY_SUBKEY_LABEL]),
             encryption_key,
@@ -581,15 +624,47 @@ impl Security {
         let label_envelope = label
             .map(|label| self.seal(label.as_bytes(), &connection_label_aad(&connection_id)))
             .transpose()?;
+        let mut client = self.owner_writes.get().await?;
+        let tx = client.transaction().await.map_err(db_error)?;
+        lock_owners(&tx, &[owner]).await?;
+        if retired_in(&tx, &[owner]).await? {
+            return Err(OWNER_RETIRED.into());
+        }
+        tx.execute(
+            "INSERT INTO agent_connections (connection_id, platform, owner, envelope, label_envelope) VALUES ($1,$2,$3,$4,$5)",
+            &[&connection_id, &platform, &owner, &envelope, &label_envelope],
+        )
+        .await
+        .map_err(db_error)?;
+        tx.commit().await.map_err(db_error)?;
+        Ok(connection_id)
+    }
+
+    /// Test-only: points a connection at `owner` directly, as a row stranded
+    /// before the owner locks existed would be.
+    #[cfg(test)]
+    pub(crate) async fn force_owner_for_tests(&self, connection_id: &str, owner: &str) {
         self.client()
             .await
             .execute(
-                "INSERT INTO agent_connections (connection_id, platform, owner, envelope, label_envelope) VALUES ($1,$2,$3,$4,$5)",
-                &[&connection_id, &platform, &owner, &envelope, &label_envelope],
+                "UPDATE agent_connections SET owner = $2 WHERE connection_id = $1",
+                &[&connection_id, &owner],
             )
             .await
-            .map_err(db_error)?;
-        Ok(connection_id)
+            .unwrap();
+    }
+
+    /// Test-only: adds a delegation without the owner checks.
+    #[cfg(test)]
+    pub(crate) async fn force_delegation_for_tests(&self, connection_id: &str, agent: &str) {
+        self.client()
+            .await
+            .execute(
+                "INSERT INTO connection_delegations (connection_id, agent) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                &[&connection_id, &agent],
+            )
+            .await
+            .unwrap();
     }
 
     /// Whether `agent` was retired by a transfer (#410).
@@ -607,47 +682,89 @@ impl Security {
     /// (a runtime `to` already has) undoes the retirement too. Refused when
     /// either id is retired. Delegations are keyed by connection and app
     /// agent and need no change.
+    ///
+    /// One transaction, holding both owners' advisory locks ([`lock_owners`])
+    /// and the old owner's connection rows (`FOR UPDATE`): retirement is
+    /// checked under the locks, so of two concurrent transfers A→B and B→C
+    /// the second sees the first's retirement; a connection, runtime or
+    /// delegation write of either owner waits for it; and a webhook
+    /// subscription (which takes its connection row `FOR SHARE`) either
+    /// committed before the open-subscriptions check, which then refuses
+    /// the transfer, or finds the connection moved. The subscriptions table
+    /// is checked whenever it exists, also with the webhook inbox off.
     pub async fn transfer_owner(&self, from: &str, to: &str) -> Result<Transferred, TransferError> {
-        let row = self
-            .client()
+        let database = |error: tokio_postgres::Error| {
+            if error.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
+                TransferError::Conflict
+            } else {
+                TransferError::Database(db_error(error))
+            }
+        };
+        let mut client = self
+            .owner_writes
+            .get()
             .await
+            .map_err(TransferError::Database)?;
+        let tx = client.transaction().await.map_err(database)?;
+        lock_owners(&tx, &[from, to])
+            .await
+            .map_err(TransferError::Database)?;
+        if retired_in(&tx, &[from, to])
+            .await
+            .map_err(TransferError::Database)?
+        {
+            return Err(TransferError::Retired);
+        }
+        tx.execute(
+            "SELECT 1 FROM agent_connections WHERE owner = $1 FOR UPDATE",
+            &[&from],
+        )
+        .await
+        .map_err(database)?;
+        let open: bool = tx
             .query_one(
-                "WITH retired AS (
-                   INSERT INTO retired_agents (agent, successor)
-                   SELECT $1, $2
-                   WHERE NOT EXISTS (SELECT 1 FROM retired_agents WHERE agent = $2)
-                   ON CONFLICT (agent) DO NOTHING
-                   RETURNING agent
-                 ),
-                 connections AS (
-                   UPDATE agent_connections SET owner = $2
-                   WHERE owner = $1 AND EXISTS (SELECT 1 FROM retired)
-                   RETURNING connection_id
-                 ),
-                 runtimes AS (
-                   UPDATE app_runtimes SET owner = $2
-                   WHERE owner = $1 AND EXISTS (SELECT 1 FROM retired)
-                   RETURNING agent
-                 )
-                 SELECT (SELECT COUNT(*) FROM retired),
-                        (SELECT COUNT(*) FROM connections),
-                        (SELECT COUNT(*) FROM runtimes)",
+                "SELECT to_regclass('webhook_subscriptions') IS NOT NULL",
+                &[],
+            )
+            .await
+            .map_err(database)?
+            .get(0);
+        if open
+            && tx
+                .query_one(
+                    "SELECT EXISTS (SELECT 1 FROM webhook_subscriptions WHERE owner = $1 AND state <> 'closed')",
+                    &[&from],
+                )
+                .await
+                .map_err(database)?
+                .get::<_, bool>(0)
+        {
+            return Err(TransferError::Blocked);
+        }
+        tx.execute(
+            "INSERT INTO retired_agents (agent, successor) VALUES ($1, $2)",
+            &[&from, &to],
+        )
+        .await
+        .map_err(database)?;
+        let connections = tx
+            .execute(
+                "UPDATE agent_connections SET owner = $2 WHERE owner = $1",
                 &[&from, &to],
             )
             .await
-            .map_err(|error| {
-                if error.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
-                    TransferError::Conflict
-                } else {
-                    TransferError::Database(db_error(error))
-                }
-            })?;
-        if row.get::<_, i64>(0) == 0 {
-            return Err(TransferError::Retired);
-        }
+            .map_err(database)?;
+        let runtimes = tx
+            .execute(
+                "UPDATE app_runtimes SET owner = $2 WHERE owner = $1",
+                &[&from, &to],
+            )
+            .await
+            .map_err(database)?;
+        tx.commit().await.map_err(database)?;
         Ok(Transferred {
-            connections: row.get(1),
-            runtimes: row.get(2),
+            connections: connections as i64,
+            runtimes: runtimes as i64,
         })
     }
 
@@ -783,38 +900,60 @@ impl Security {
             .map_err(db_error)
     }
 
-    /// Adds (or relabels) a delegation. The caller has checked ownership.
+    /// Adds (or relabels) a delegation of a connection `owner` owns, under
+    /// the owner's lock. `false` when the connection is not `owner`'s (any
+    /// more): nothing is written.
     pub async fn put_delegation(
         &self,
         connection_id: &str,
+        owner: &str,
         agent: &str,
         label: Option<&str>,
-    ) -> Result<(), String> {
-        self.client()
-            .await
+    ) -> Result<bool, String> {
+        let mut client = self.owner_writes.get().await?;
+        let tx = client.transaction().await.map_err(db_error)?;
+        lock_owners(&tx, &[owner]).await?;
+        if retired_in(&tx, &[owner]).await? {
+            return Err(OWNER_RETIRED.into());
+        }
+        let rows = tx
             .execute(
-                "INSERT INTO connection_delegations (connection_id, agent, label) VALUES ($1,$2,$3) ON CONFLICT (connection_id, agent) DO UPDATE SET label = EXCLUDED.label",
-                &[&connection_id, &agent, &label],
+                "INSERT INTO connection_delegations (connection_id, agent, label)
+                 SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM agent_connections WHERE connection_id = $1 AND owner = $4)
+                 ON CONFLICT (connection_id, agent) DO UPDATE SET label = EXCLUDED.label",
+                &[&connection_id, &agent, &label, &owner],
             )
             .await
-            .map(|_| ())
-            .map_err(db_error)
+            .map_err(db_error)?;
+        tx.commit().await.map_err(db_error)?;
+        Ok(rows == 1)
     }
 
+    /// Removes a delegation of a connection `owner` owns, under the owner's
+    /// lock; `false` when there was none (or the connection is not
+    /// `owner`'s).
     pub async fn delete_delegation(
         &self,
         connection_id: &str,
+        owner: &str,
         agent: &str,
     ) -> Result<bool, String> {
-        self.client()
-            .await
+        let mut client = self.owner_writes.get().await?;
+        let tx = client.transaction().await.map_err(db_error)?;
+        lock_owners(&tx, &[owner]).await?;
+        if retired_in(&tx, &[owner]).await? {
+            return Err(OWNER_RETIRED.into());
+        }
+        let rows = tx
             .execute(
-                "DELETE FROM connection_delegations WHERE connection_id = $1 AND agent = $2",
-                &[&connection_id, &agent],
+                "DELETE FROM connection_delegations d WHERE d.connection_id = $1 AND d.agent = $2
+                 AND EXISTS (SELECT 1 FROM agent_connections c WHERE c.connection_id = $1 AND c.owner = $3)",
+                &[&connection_id, &agent, &owner],
             )
             .await
-            .map(|rows| rows == 1)
-            .map_err(db_error)
+            .map_err(db_error)?;
+        tx.commit().await.map_err(db_error)?;
+        Ok(rows == 1)
     }
 
     /// Registers `agent` as a runtime of installation `app` for `owner`
@@ -827,15 +966,19 @@ impl Security {
         app: &str,
         label: Option<&str>,
     ) -> Result<(), String> {
-        self.client()
-            .await
-            .execute(
-                "INSERT INTO app_runtimes (owner, agent, app, label) VALUES ($1,$2,$3,$4) ON CONFLICT (owner, agent) DO UPDATE SET app = EXCLUDED.app, label = EXCLUDED.label",
-                &[&owner, &agent, &app, &label],
-            )
-            .await
-            .map(|_| ())
-            .map_err(db_error)
+        let mut client = self.owner_writes.get().await?;
+        let tx = client.transaction().await.map_err(db_error)?;
+        lock_owners(&tx, &[owner]).await?;
+        if retired_in(&tx, &[owner]).await? {
+            return Err(OWNER_RETIRED.into());
+        }
+        tx.execute(
+            "INSERT INTO app_runtimes (owner, agent, app, label) VALUES ($1,$2,$3,$4) ON CONFLICT (owner, agent) DO UPDATE SET app = EXCLUDED.app, label = EXCLUDED.label",
+            &[&owner, &agent, &app, &label],
+        )
+        .await
+        .map_err(db_error)?;
+        tx.commit().await.map_err(db_error)
     }
 
     pub async fn delete_runtime(&self, owner: &str, agent: &str) -> Result<bool, String> {
@@ -1203,7 +1346,7 @@ pub(crate) mod tests {
 
         // 89 idle days: still there. 90: gone, and swept with its delegations.
         security
-            .put_delegation(&a, "atomic:agent:app", None)
+            .put_delegation(&a, &owner, "atomic:agent:app", None)
             .await
             .unwrap();
         admin
@@ -1269,7 +1412,7 @@ pub(crate) mod tests {
             Standing::None
         );
         security
-            .put_delegation(&id, &app, Some("Plugin"))
+            .put_delegation(&id, &owner, &app, Some("Plugin"))
             .await
             .unwrap();
         assert_eq!(
@@ -1312,7 +1455,7 @@ pub(crate) mod tests {
         assert_eq!(runtimes.len(), 1);
         assert!(runtimes[0].last_used_at.is_some());
         // Revoking the delegation cuts off the app and its runtime at once.
-        assert!(security.delete_delegation(&id, &app).await.unwrap());
+        assert!(security.delete_delegation(&id, &owner, &app).await.unwrap());
         assert_eq!(
             security.standing(&id, &owner, &app).await.unwrap(),
             Standing::None
@@ -1321,7 +1464,10 @@ pub(crate) mod tests {
             security.standing(&id, &owner, &node).await.unwrap(),
             Standing::None
         );
-        security.put_delegation(&id, &app, None).await.unwrap();
+        security
+            .put_delegation(&id, &owner, &app, None)
+            .await
+            .unwrap();
         assert!(security.delete_runtime(&owner, &node).await.unwrap());
         assert_eq!(
             security.standing(&id, &owner, &node).await.unwrap(),

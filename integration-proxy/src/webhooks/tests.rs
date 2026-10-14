@@ -308,35 +308,45 @@ fn ended_reason(error: InboxError) -> (String, String) {
 
 // --- the abandonment proof -----------------------------------------------------
 
-/// One signup, then nothing from the consumer ever again, while events
-/// keep arriving every hour for a month: retention stops at the lease, and
-/// after the sweeps nothing of the subscription is left but the shared hook.
-/// #410: an owner with a subscription that is not closed has open
-/// subscriptions, which block a key transfer; another owner has none, and
-/// closing the subscription clears it.
+/// #410: a key transfer is refused while the old owner has a subscription
+/// that is not closed (subscriptions, receipts and usage are keyed by
+/// owner), checked inside the transfer's transaction; another owner's
+/// subscriptions do not count; once it is closed, the transfer goes through.
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
-async fn open_subscriptions_are_counted_per_owner_until_closed() {
+async fn a_key_transfer_waits_for_the_owners_subscriptions_to_close() {
     let env = env(Policy::pilot(1 << 30)).await;
     let owner = agent("transferer");
     let other = agent("bystander");
-    assert!(!env.store.has_open_subscriptions(&owner).await.unwrap());
+    let successor = agent("successor");
     let connection = env.connection(&owner).await;
+    let theirs = env.connection(&other).await;
     let hook = env.shared().await;
     let sub = env
         .subscribe(&owner, &connection, &hook.hook_id, "p-1", at(0))
         .await
         .unwrap();
-    assert!(env.store.has_open_subscriptions(&owner).await.unwrap());
-    assert!(!env.store.has_open_subscriptions(&other).await.unwrap());
-    // Through the transfer's trait as well.
-    let check: &dyn crate::transfer::OpenSubscriptions = env.store.as_ref();
-    assert_eq!(check.has_open(&owner).await, Ok(true));
+    env.subscribe(&other, &theirs, &hook.hook_id, "p-2", at(0))
+        .await
+        .unwrap();
+    assert!(matches!(
+        env.security.transfer_owner(&owner, &successor).await,
+        Err(crate::security::TransferError::Blocked)
+    ));
+    assert!(!env.security.is_retired(&owner).await.unwrap());
     env.store.close(&sub.id, "test", at(60)).await.unwrap();
-    assert!(!env.store.has_open_subscriptions(&owner).await.unwrap());
-    assert_eq!(check.has_open(&owner).await, Ok(false));
+    let moved = env
+        .security
+        .transfer_owner(&owner, &successor)
+        .await
+        .unwrap();
+    assert_eq!(moved.connections, 1);
+    assert!(env.security.is_retired(&owner).await.unwrap());
 }
 
+/// One signup, then nothing from the consumer ever again, while events
+/// keep arriving every hour for a month: retention stops at the lease, and
+/// after the sweeps nothing of the subscription is left but the shared hook.
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
 async fn permanent_abandonment_stops_retention_while_events_keep_arriving() {

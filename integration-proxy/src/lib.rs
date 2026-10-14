@@ -105,9 +105,6 @@ struct AppState {
     /// The sliding logs pacing this instance's requests under providers'
     /// `x-throttling` quotas on the proxy's own address (pieces.md P4).
     pacer: Arc<pacing::Pacer>,
-    /// Whether an owner still has open webhook subscriptions, which block a
-    /// key transfer (#410).
-    subscriptions: Arc<dyn transfer::OpenSubscriptions>,
     #[cfg(test)]
     test_upstream: Option<String>,
 }
@@ -135,23 +132,22 @@ pub(crate) fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// Asks the access policy about `owner`.
-/// Refuses an agent that a key transfer retired (#410) as an owner.
-pub(crate) async fn refuse_retired(
-    security: &security::Security,
-    agent: &AgentId,
-) -> Result<(), api_error::ApiError> {
-    match security.is_retired(agent.as_str()).await {
-        Ok(false) => Ok(()),
-        Ok(true) => Err(api_error::ApiError::AgentRetired),
-        Err(_) => Err(api_error::ApiError::Unavailable),
-    }
-}
-
+/// Asks whether `owner` may own and use connections: refused when a key
+/// transfer retired it (#410), then the access policy. Every signed route
+/// asks this about the connection owner (or the signer that will become
+/// one), so a retired owner is refused everywhere: management, redeem,
+/// transfers, proxied requests by any caller, and the webhook routes.
 pub(crate) async fn check_access(
     state: &AppState,
     owner: &AgentId,
 ) -> Result<(), api_error::ApiError> {
+    if let Some(security) = &state.security {
+        match security.is_retired(owner.as_str()).await {
+            Ok(false) => {}
+            Ok(true) => return Err(api_error::ApiError::AgentRetired),
+            Err(_) => return Err(api_error::ApiError::Unavailable),
+        }
+    }
     match state.access.check(owner).await {
         Access::Allowed => Ok(()),
         Access::Denied(reason) => Err(api_error::ApiError::AccessDenied(reason)),
@@ -281,10 +277,6 @@ pub async fn build_app_with_access(
         key_check_limit: config.key_check_limit_per_hour,
         key_check_window: KEY_CHECK_WINDOW,
         trust_forwarded_for: config.trust_forwarded_for,
-        subscriptions: match &webhooks {
-            Some(webhooks) => webhooks.store.clone(),
-            None => Arc::new(transfer::NoSubscriptions),
-        },
         webhooks,
         pacer: Arc::default(),
         #[cfg(test)]

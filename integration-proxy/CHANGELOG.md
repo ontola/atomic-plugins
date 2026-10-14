@@ -60,7 +60,15 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   the new id in one statement and retires the old id (new `retired_agents`
   table). Planned rotation only; a lost or compromised key is out of scope
   (SECURITY.md, "Key rotation"). New errors `invalid_transfer_proof`,
-  `agent_retired`, `transfer_blocked`, `transfer_conflict`.
+  `agent_retired`, `transfer_blocked`, `transfer_conflict`. The transfer, and
+  every write that adds a connection, runtime or delegation, run in a
+  transaction under per-owner advisory locks; the access check refuses a
+  retired owner on every route. **Rolling deploys and downgrades:** a binary
+  older than this one ignores `retired_agents` and takes no owner lock, so
+  while one runs it serves a retired owner and can race a transfer. Finish a
+  rolling deploy before relying on transfers, and expect a downgrade to
+  re-admit retired ids (the table is left in place and is honoured again on
+  upgrade).
 
 ## 0.3.0 (2026-10-06)
 

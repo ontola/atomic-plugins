@@ -29,9 +29,6 @@
 //! Scope: planned rotation, where the user still holds the old key. A lost
 //! or compromised key is not handled here (SECURITY.md, "Key rotation").
 
-use std::future::Future;
-use std::pin::Pin;
-
 use axum::{
     body::Bytes,
     extract::{OriginalUri, State},
@@ -48,43 +45,6 @@ const PROOF_LABEL: &str = "integration-proxy-agent-transfer-v1";
 /// The message the new key signs for a transfer.
 pub fn proof_message(from: &str, to: &str, origin: &str, timestamp: &str) -> String {
     format!("{PROOF_LABEL}\n{from}\n{to}\n{origin}\n{timestamp}")
-}
-
-/// Whether an owner still has open webhook subscriptions, which a transfer
-/// would orphan (they are keyed by owner). A transfer is refused while it
-/// does. The webhook inbox's store answers when `WEBHOOKS_ENABLED=true`;
-/// without the inbox there are none ([`NoSubscriptions`]).
-pub trait OpenSubscriptions: Send + Sync + 'static {
-    fn has_open<'a>(
-        &'a self,
-        owner: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + 'a>>;
-}
-
-/// No webhook subscriptions to check: the inbox is off.
-pub struct NoSubscriptions;
-
-impl OpenSubscriptions for NoSubscriptions {
-    fn has_open<'a>(
-        &'a self,
-        _owner: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + 'a>> {
-        Box::pin(async { Ok(false) })
-    }
-}
-
-/// The webhook inbox answers from its subscriptions table.
-impl OpenSubscriptions for crate::webhooks::store::Store {
-    fn has_open<'a>(
-        &'a self,
-        owner: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + 'a>> {
-        Box::pin(async move {
-            self.has_open_subscriptions(owner)
-                .await
-                .map_err(|error| error.to_string())
-        })
-    }
 }
 
 #[derive(Deserialize)]
@@ -121,7 +81,6 @@ async fn transfer_inner(
 ) -> Result<Response, ApiError> {
     let security = state.security.as_ref().ok_or(ApiError::Unavailable)?;
     let from = crate::signature::authenticate(state, security, method, uri, headers, body).await?;
-    crate::refuse_retired(security, &from).await?;
     crate::check_access(state, &from).await?;
     let request: TransferBody = serde_json::from_slice(body)
         .map_err(|_| ApiError::BadRequest("body must be {\"to\", \"proof\"}"))?;
@@ -140,21 +99,13 @@ async fn transfer_inner(
     if !to.verify(message.as_bytes(), &request.proof) {
         return Err(ApiError::InvalidTransferProof);
     }
-    crate::refuse_retired(security, &to).await?;
     crate::check_access(state, &to).await?;
-    if state
-        .subscriptions
-        .has_open(from.as_str())
-        .await
-        .map_err(|_| ApiError::Unavailable)?
-    {
-        return Err(ApiError::TransferBlocked);
-    }
     let moved = security
         .transfer_owner(from.as_str(), to.as_str())
         .await
         .map_err(|error| match error {
             TransferError::Retired => ApiError::AgentRetired,
+            TransferError::Blocked => ApiError::TransferBlocked,
             TransferError::Conflict => ApiError::TransferConflict,
             TransferError::Database(error) => {
                 tracing::warn!(%error, "agent transfer failed");
@@ -269,7 +220,7 @@ mod tests {
             );
         }
         security
-            .put_delegation(&ids[0], &app.id(), Some("Plugin"))
+            .put_delegation(&ids[0], &old.id(), &app.id(), Some("Plugin"))
             .await
             .unwrap();
         security
@@ -530,30 +481,8 @@ mod tests {
         .await;
         assert!(unchanged().await);
 
-        // Open webhook subscriptions block it.
-        struct Open;
-        impl OpenSubscriptions for Open {
-            fn has_open<'a>(
-                &'a self,
-                _owner: &'a str,
-            ) -> Pin<Box<dyn Future<Output = Result<bool, String>> + Send + 'a>> {
-                Box::pin(async { Ok(true) })
-            }
-        }
-        let mut blocked = w.s.clone();
-        blocked.subscriptions = std::sync::Arc::new(Open);
-        let now = unique_now_ms();
-        expect(
-            send(
-                &blocked,
-                transfer_request(&blocked, &w.old, &w.new, PUBLIC_ORIGIN, now, now),
-            )
-            .await,
-            StatusCode::CONFLICT,
-            "transfer_blocked",
-        )
-        .await;
-        assert!(unchanged().await);
+        // (Open webhook subscriptions: webhooks::tests::
+        // a_key_transfer_waits_for_the_owners_subscriptions_to_close.)
 
         // The new id already has a runtime for the same node agent: the
         // statement fails and nothing moves, the old id included.
@@ -569,5 +498,151 @@ mod tests {
         .await;
         assert!(unchanged().await);
         assert_eq!(w.list_as(&w.old).await.status(), StatusCode::OK);
+    }
+
+    async fn owned_by_retired(security: &crate::security::Security, ids: &[String]) -> usize {
+        let mut count = 0;
+        for id in ids {
+            let owner = security.load_connection(id).await.unwrap().unwrap().owner;
+            if security.is_retired(&owner).await.unwrap() {
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// B1 (security review of #551): A→B and B→C on two database
+    /// connections at once. They share B's lock, so they run one after the
+    /// other: either both apply (everything ends with C) or the second
+    /// finds B retired. Never does a connection end up owned by a retired
+    /// id. Repeated to give the race a chance.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_concurrent_chained_transfers_never_strand_a_connection() {
+        let one = security().await;
+        let two = security().await;
+        for _ in 0..20 {
+            let (a, b, c) = (fresh().id(), fresh().id(), fresh().id());
+            let mut ids = Vec::new();
+            for owner in [&a, &b] {
+                ids.push(
+                    one.create_connection("github-issues", owner, b"{}")
+                        .await
+                        .unwrap(),
+                );
+            }
+            let (first, second) =
+                tokio::join!(one.transfer_owner(&a, &b), two.transfer_owner(&b, &c));
+            assert!(first.is_ok() || second.is_ok());
+            if first.is_err() {
+                assert!(matches!(
+                    first,
+                    Err(crate::security::TransferError::Retired)
+                ));
+            }
+            assert_eq!(owned_by_retired(&one, &ids).await, 0);
+        }
+    }
+
+    /// B1: a connection created for, a runtime registered by, or a
+    /// delegation added by the old owner while its transfer runs either
+    /// lands before the move (and moves with it) or is refused as retired.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_owner_writes_racing_a_transfer_are_moved_or_refused() {
+        let one = security().await;
+        let two = security().await;
+        for _ in 0..20 {
+            let (old, new, app, node) = (fresh().id(), fresh().id(), fresh().id(), fresh().id());
+            let existing = one
+                .create_connection("github-issues", &old, b"{}")
+                .await
+                .unwrap();
+            let (moved, created, runtime, delegated) = tokio::join!(
+                one.transfer_owner(&old, &new),
+                two.create_connection("github-issues", &old, b"{}"),
+                two.put_runtime(&old, &node, &app, None),
+                two.put_delegation(&existing, &old, &app, None),
+            );
+            moved.unwrap();
+            fn retired<T>(result: &Result<T, String>) -> bool {
+                match result {
+                    Ok(_) => false,
+                    Err(error) => {
+                        assert_eq!(error, crate::security::OWNER_RETIRED);
+                        true
+                    }
+                }
+            }
+            let mut ids = vec![existing.clone()];
+            if let Ok(id) = &created {
+                ids.push(id.clone());
+            }
+            retired(&created);
+            assert_eq!(owned_by_retired(&one, &ids).await, 0);
+            // A runtime either moved to the new owner or was refused.
+            if !retired(&runtime) {
+                let (_, runtimes) = one.list_for_owner(&new).await.unwrap();
+                assert_eq!(runtimes.len(), 1);
+            }
+            // A delegation either landed before the move or was refused:
+            // never on a connection the old id no longer owns.
+            if !retired(&delegated) && delegated == Ok(true) {
+                assert!(one.is_delegated(&existing, &app).await.unwrap());
+            }
+            let (left, _) = one.list_for_owner(&old).await.unwrap();
+            assert!(left.is_empty());
+        }
+    }
+
+    /// B2: a connection that still names a retired owner (as a stranded row
+    /// would) is refused through `/proxy`, whether the old key signs as
+    /// owner or mints a capability for a frame, and the refusal does not
+    /// keep it alive.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_retired_owner_cannot_use_a_stranded_connection() {
+        let w = world().await;
+        assert_eq!(
+            send(&w.s, w.transfer(PUBLIC_ORIGIN)).await.status(),
+            StatusCode::OK
+        );
+        w.security
+            .force_owner_for_tests(&w.ids[1], &w.old.id())
+            .await;
+        let path = format!("/proxy/{}/github-issues/records", w.ids[1]);
+        expect(
+            send(&w.s, signed_request(&w.s, &w.old, "GET", &path, vec![])).await,
+            StatusCode::FORBIDDEN,
+            "agent_retired",
+        )
+        .await;
+        let frame = fresh();
+        w.security
+            .force_delegation_for_tests(&w.ids[1], &w.app.id())
+            .await;
+        let token = crate::capability::mint(
+            &w.old,
+            &crate::capability::Claims {
+                v: 2,
+                connection_id: w.ids[1].clone(),
+                platform: "github-issues".into(),
+                aud: PUBLIC_ORIGIN.into(),
+                app: w.app.id(),
+                cnf: frame.id(),
+                exp: crate::now_secs() + 600,
+            },
+        );
+        let mut request = signed_request(&w.s, &frame, "GET", &path, vec![]);
+        request.headers_mut().insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Capability {token}").parse().unwrap(),
+        );
+        expect(
+            send(&w.s, request).await,
+            StatusCode::FORBIDDEN,
+            "agent_retired",
+        )
+        .await;
     }
 }

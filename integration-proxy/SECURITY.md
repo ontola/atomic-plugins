@@ -467,25 +467,41 @@ agent id and retires the old one (README, routes).
   used at another proxy, or attached to another request.
 - **Admission.** The old agent passes the access policy as any signer
   does, and so must the new one before anything moves.
-- **All or nothing.** One SQL statement retires the old id and moves its
-  connections and runtimes; a collision (the new agent already has a runtime
-  with the same agent) undoes all of it, the retirement included.
-- **Afterwards.** The old id is refused as the signer of management calls,
-  `/connect/redeem` and transfers, and as a transfer target. Capabilities it
-  signed fail at once, because the connections' owner key changed.
-  Delegated app agents keep working: delegations name the connection and the
-  app, not the owner.
-- **Webhooks.** While the old agent has open webhook subscriptions (keyed
-  by owner) the transfer is refused with `409 transfer_blocked`: any
-  subscription of the old agent that is not yet closed, live or in cleanup,
-  blocks it (`Store::has_open_subscriptions`, read without locking). With
-  `WEBHOOKS_ENABLED` off there is no inbox and nothing to block.
-- **Not covered.** A connection redeemed by the old key in the same instant
-  as its transfer can still end up owned by the retired id (the redeem's
-  retired check and the move are not serialized); such a connection can no
-  longer be managed and idles out after 90 days. The audit trail is the
-  `retired_agents` row (old id, successor, time) and a log line with the
-  counts moved, not the ids.
+- **All or nothing, and serialized.** One transaction retires the old id
+  and moves its connections and runtimes; a collision (the new agent already
+  has a runtime with the same agent) undoes all of it, the retirement
+  included. The transaction holds a transaction-scoped advisory lock per
+  owner (`hashtextextended(id, 0)`, both ids, in sorted order) and checks
+  retirement under them. Every write that adds to what an owner holds
+  (a connection at redeem, a runtime, a delegation, which is also bound to
+  the connection's owner) takes the same lock and the same check. So two
+  transfers sharing an id (A→B and B→C on two instances) run one after the
+  other, and a write by the old key either lands before the move, and moves
+  with it, or is refused as retired.
+- **Afterwards.** The old id is refused as an owner everywhere: the access
+  check every signed route makes about the connection owner (or the signer
+  about to become one) refuses a retired id first (`403 agent_retired`).
+  That covers management calls, `/connect/redeem`, transfers (from or to
+  it), `/proxy` requests by any caller of a connection that still names it,
+  and the webhook routes. Capabilities it signed fail at once for moved
+  connections, because the owner key changed. Delegated app agents keep
+  working: delegations name the connection and the app, not the owner.
+- **Webhooks.** While the old agent has a webhook subscription that is not
+  yet closed (live or in cleanup; subscriptions, receipts and usage are
+  keyed by owner), the transfer is refused with `409 transfer_blocked`. The
+  check runs inside the transfer's transaction, after it has taken the old
+  owner's connection rows `FOR UPDATE`; a subscription takes its connection
+  row `FOR SHARE` first, so it either committed before the check or finds
+  the connection moved. The table is checked whenever it exists, so a
+  deployment that turned `WEBHOOKS_ENABLED` off keeps its old subscriptions
+  in mind.
+- **Stranded rows.** With the locks above, no connection should end up
+  owned by a retired id. One that does anyway (written by an older binary
+  during a rolling deploy, which knows nothing of `retired_agents`) is
+  inert: every use is refused, so nothing refreshes its `last_used_at`, and
+  it is deleted after 90 idle days like any other.
+- **Audit.** The `retired_agents` row (old id, successor, time) and a log
+  line with the counts moved, not the ids.
 
 ## Release gate
 

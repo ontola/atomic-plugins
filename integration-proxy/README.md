@@ -193,7 +193,9 @@ Subscriptions, `openapi-extensions/spec/`):
   and retires the signer (key rotation, #410). `proof` is `to`'s Ed25519
   signature (base64, either alphabet) over
   `integration-proxy-agent-transfer-v1\n{old id}\n{new id}\n{proxy origin}\n{this request's x-atomic-timestamp}`,
-  ids canonical. `to` must pass the access policy and must not be retired.
+  ids canonical. The proxy origin is `BASE_URL`'s scheme, host and port only
+  (no path, no trailing `/`), the same `aud` a frame capability carries;
+  `BASE_URL` itself, path included, is what the request signature covers. `to` must pass the access policy and must not be retired.
   Delegations stay as they are. Afterwards the old id is refused
   (`403 agent_retired`) as the signer of management calls, of
   `/connect/redeem` and of another transfer, and capabilities it signed no

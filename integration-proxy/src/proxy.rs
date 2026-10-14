@@ -1909,7 +1909,7 @@ mod tests {
         let app = Agent::new(74);
         let frame = Agent::new(75);
         f.security
-            .put_delegation(&f.id, &app.id(), None)
+            .put_delegation(&f.id, &f.owner.id(), &app.id(), None)
             .await
             .unwrap();
         let token = mint(&f.owner, &f.claims(&app, &frame));
@@ -2926,7 +2926,7 @@ mod tests {
         let node = Agent::new(36);
         expect_error(f.get_as(&app).await, StatusCode::FORBIDDEN, "not_delegated").await;
         f.security
-            .put_delegation(&f.id, &app.id(), Some("Plugin"))
+            .put_delegation(&f.id, &f.owner.id(), &app.id(), Some("Plugin"))
             .await
             .unwrap();
         assert_eq!(f.get_as(&app).await.status(), StatusCode::OK);
@@ -2943,7 +2943,7 @@ mod tests {
         assert_eq!(f.get_as(&node).await.status(), StatusCode::OK);
         // Revoke the app's delegation: the app and its runtime stop at once.
         f.security
-            .delete_delegation(&f.id, &app.id())
+            .delete_delegation(&f.id, &f.owner.id(), &app.id())
             .await
             .unwrap();
         expect_error(f.get_as(&app).await, StatusCode::FORBIDDEN, "not_delegated").await;
@@ -2955,7 +2955,7 @@ mod tests {
         .await;
         // Restore, then remove only the runtime.
         f.security
-            .put_delegation(&f.id, &app.id(), None)
+            .put_delegation(&f.id, &f.owner.id(), &app.id(), None)
             .await
             .unwrap();
         f.security
@@ -2994,7 +2994,7 @@ mod tests {
         let mut f = fixture(37).await;
         let app = Agent::new(38);
         f.security
-            .put_delegation(&f.id, &app.id(), None)
+            .put_delegation(&f.id, &f.owner.id(), &app.id(), None)
             .await
             .unwrap();
         assert_eq!(f.get_as(&app).await.status(), StatusCode::OK);
@@ -3032,7 +3032,7 @@ mod tests {
         )
         .await;
         f.security
-            .put_delegation(&f.id, &app.id(), None)
+            .put_delegation(&f.id, &f.owner.id(), &app.id(), None)
             .await
             .unwrap();
         assert_eq!(f.frame_get(&token, &frame).await.status(), StatusCode::OK);
@@ -3076,7 +3076,7 @@ mod tests {
         .await;
         // Revoking the delegation stops the capability immediately.
         f.security
-            .delete_delegation(&f.id, &app.id())
+            .delete_delegation(&f.id, &f.owner.id(), &app.id())
             .await
             .unwrap();
         expect_error(
@@ -3094,7 +3094,7 @@ mod tests {
         let app = Agent::new(44);
         let frame = Agent::new(45);
         f.security
-            .put_delegation(&f.id, &app.id(), None)
+            .put_delegation(&f.id, &f.owner.id(), &app.id(), None)
             .await
             .unwrap();
         type Edit = Box<dyn Fn(&mut Claims)>;
