@@ -2,7 +2,9 @@
 /**
  * Pacing against the quotas a document's `x-throttling` announces (draft
  * Throttling extension, pieces.md K2): a Limit Object with `requests` and a
- * Window Object. The extension describes the quota; how a client keeps
+ * Window Object, or the Tier Objects of a Limit Object with `tiers`
+ * (Throttling 0.5.0: the plan's tier, else every tier, each a separate
+ * count over the same requests). The extension describes the quota; how a client keeps
  * under it is this consumer's choice, not a spec rule. The pacer counts the
  * requests this client sends, per bucket, and says how long the next one
  * must wait so that at most `fraction` of `requests` are sent in a window.
@@ -19,7 +21,7 @@
  * user, can still run out (pieces.md P4). Counts are kept in memory.
  */
 
-/** A bucket the pacer keeps under: from a Limit Object with `requests`. */
+/** A quota the pacer keeps under: from a Limit Object with `requests`, or a Tier Object. */
 export interface Quota {
   requests: number;
   seconds: number;
@@ -65,7 +67,7 @@ export class Pacer {
     for (const bucket of buckets) {
       const quotas = this.quotas.get(bucket);
       if (!quotas) continue;
-      // Older requests no longer count in any of the bucket's windows.
+      // Kept for the longest window; each quota counts its own below.
       const longest = Math.max(...quotas.map((q) => q.seconds)) * 1000;
       const times = (this.sent.get(bucket) ?? []).filter(
         (t) => t > now - longest,

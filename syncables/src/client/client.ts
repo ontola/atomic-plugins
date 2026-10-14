@@ -1794,12 +1794,12 @@ export function createApiClient(
   // get here (with their own limits); a wait here covers only a request
   // that another one took the room of meanwhile.
   const pacer =
-    (throttling?.quotas.size || throttling?.tieredQuotas.size) &&
+    (throttling?.quotas.size || throttling?.tieredQuotas?.size) &&
     options.pace !== false
       ? new Pacer(
           throttling.quotas,
           options.paceFraction ?? 0.8,
-          throttling.tieredQuotas,
+          throttling.tieredQuotas ?? new Map(),
         )
       : undefined;
   /**

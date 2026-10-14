@@ -109,8 +109,8 @@ describe('declaredThrottling with plan tiers', () => {
     const declaration = declaredThrottling(doc())!;
     expect(declaration.quotas.has('workspace')).toBe(false);
     expect(
-      declaration.tieredQuotas
-        .get('workspace')
+      declaration
+        .tieredQuotas!.get('workspace')
         ?.map((q) => [q.requests, q.seconds]),
     ).toEqual([
       [30, 3600],
@@ -122,7 +122,7 @@ describe('declaredThrottling with plan tiers', () => {
 
   it('with a plan: its tier, as a plain limit', () => {
     const declaration = declaredThrottling(doc(), 'ENTERPRISE')!;
-    expect(declaration.tieredQuotas.size).toBe(0);
+    expect(declaration.tieredQuotas!.size).toBe(0);
     expect(declaration.quotas.get('workspace')).toMatchObject({
       requests: 50,
       seconds: 1,
@@ -136,7 +136,7 @@ describe('declaredThrottling with plan tiers', () => {
     )!;
     expect(declaration.windows.has('workspace')).toBe(false);
     expect(declaration.quotas.has('workspace')).toBe(false);
-    expect(declaration.tieredQuotas.has('workspace')).toBe(false);
+    expect(declaration.tieredQuotas!.has('workspace')).toBe(false);
   });
 
   it('leaves a plain limit as before, whatever the plan', () => {
@@ -147,7 +147,7 @@ describe('declaredThrottling with plan tiers', () => {
       }),
       'ENTERPRISE',
     )!;
-    expect(declaration.tieredQuotas.size).toBe(0);
+    expect(declaration.tieredQuotas!.size).toBe(0);
     expect(declaration.quotas.get('api')).toMatchObject({
       requests: 100,
       seconds: 60,

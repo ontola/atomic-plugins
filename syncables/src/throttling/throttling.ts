@@ -84,7 +84,7 @@ export interface ThrottlingDeclaration {
    * (`limitsInForce`). Such a bucket has no entry in `quotas`; one whose
    * tier names the plan has its tier there, as a plain limit.
    */
-  tieredQuotas: Map<string, Quota[]>;
+  tieredQuotas?: Map<string, Quota[]>;
   /** The default bucket selection (`applies`). */
   applies: string[];
   /** Header Role Objects by lower-cased header name. */
@@ -178,12 +178,15 @@ export interface Tier {
 }
 
 /**
- * A Limit Object's `tiers`, parsed as the spec's validator checks them: a
- * nonempty array of Tier Objects, each with a nonempty `plans` of nonempty
- * strings (no plan in two tiers), a positive integer `requests` and a
- * window with positive integer `seconds`. Undefined when any of that
- * fails: a tier that does not parse might be the one that binds, so none
- * is guessed and the limit is left out.
+ * A Limit Object's `tiers`, with the spec validator's checks that decide
+ * which tier binds: a nonempty array of Tier Objects, each with a nonempty
+ * `plans` of nonempty strings (no plan in two tiers), a positive integer
+ * `requests` and a window with positive integer `seconds`. Undefined when
+ * any of that fails: a tier that does not parse might be the one that
+ * binds, so none is guessed and the limit is left out. More lenient than
+ * the validator elsewhere, as for a plain limit: an unknown window `kind`
+ * reads as `sliding`, an `anchor` that does not parse is left out, and
+ * unknown fields (or `requests`/`window` beside `tiers`) are ignored.
  */
 export function parseTiers(tiers: unknown): Tier[] | undefined {
   if (!Array.isArray(tiers) || tiers.length === 0) return undefined;
