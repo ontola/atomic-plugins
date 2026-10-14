@@ -3,10 +3,11 @@ info:
   title: Illustrative per-plan rate limit
   version: 1.0.0
   description: >-
-    Synthetic, shaped like Clockify's documented API-key limits: counted per
-    workspace, 30 requests per hour on the free plan and 20 or 50 per second
-    on trial and paid plans. A consumer without a configured plan keeps
-    within every tier at once.
+    Synthetic, shaped like Clockify's documented workspace limits: 30 API
+    requests per hour for a newly created Free workspace, 50 per second on
+    any paid plan, and a third, invented tier to show three plans in one
+    tier. A consumer without a configured plan keeps within every tier at
+    once.
 servers:
   - url: https://api.example.com
 x-throttling:
