@@ -497,6 +497,14 @@ agent id and retires the old one (README, routes).
   the connection moved. The table is checked whenever it exists, so a
   deployment that turned `WEBHOOKS_ENABLED` off keeps its old subscriptions
   in mind.
+- **Device sessions** (RFC 8628 CLI logins, DEVICE_AUTH.md) belong to the
+  owner that approved them and do not move with a transfer. Every use of
+  one asks the access check about that owner, so after the transfer they
+  answer `403 agent_retired`; the user approves the CLI again with the new
+  key. Neither key can revoke the old sessions (the owner-signed session
+  routes refuse the retired id, and the new id does not own them), so they
+  stay inert until they expire, at most 30 days after approval; the CLI that
+  holds one can still end it with `/oauth/device/revoke`.
 - **Stranded rows.** With the locks above, no connection should end up
   owned by a retired id. One that does anyway (written by an older binary
   during a rolling deploy, which knows nothing of `retired_agents`) is

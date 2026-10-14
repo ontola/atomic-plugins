@@ -248,7 +248,11 @@ const KEY_CHECK_SUBKEY_LABEL: &[u8] = b"integration-proxy-key-check-limit-v1";
 pub const OWNER_RETIRED: &str = "owner retired";
 
 /// Takes the transaction-scoped advisory lock of each owner, in sorted
-/// order so two transactions locking the same pair cannot deadlock. Every
+/// order so two transactions locking the same pair cannot deadlock. The
+/// key is `hashtextextended(owner, 0)` in PostgreSQL's single advisory-lock
+/// key space, shared with the schema setup lock and the device store's
+/// allocation lock (fixed keys): a collision with one of them, or between
+/// two owners, only makes unrelated transactions wait for each other. Every
 /// write that creates or changes what an owner holds (a connection, a
 /// runtime, a delegation) and every transfer take these locks first, so a
 /// transfer and such a write never interleave: the write either commits
@@ -721,7 +725,7 @@ impl Security {
             return Err(TransferError::Retired);
         }
         tx.execute(
-            "SELECT 1 FROM agent_connections WHERE owner = $1 FOR UPDATE",
+            "SELECT 1 FROM agent_connections WHERE owner = $1 ORDER BY connection_id FOR UPDATE",
             &[&from],
         )
         .await
