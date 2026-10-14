@@ -32,10 +32,15 @@ describe('Notion drive-plugin bundle', async () => {
     // 117 969. 0.5.2 measured 144 024 on 2026-10-09: syncables 0.21.0's
     // read path (Pagination Schemes 0.4.0/0.5.0 link checks and windows,
     // the Throttling 0.2.0 classifier, CRUD Causality fixed reads), with no
-    // change to the app's own code. 0.5.3 measured 145 070 on 2026-10-13:
+    // change to the app's own code. 0.5.4 measured 178 881 on 2026-10-14:
+    // syncables 0.23.0's read path in place of 0.21.0's (+33 811 bytes; the
+    // app's own code is unchanged), the growth Pets measured for 0.22.0
+    // (time zones, runtime schemas, pages, throttling, produced classes) plus
+    // 0.23.0's invalid-auto-detected check, incomplete markers and list
+    // tombstones. 0.5.3 measured 145 070 on 2026-10-13:
     // formatted text imported as plain text (usertest-findings#19). A change
     // that needs more should say why and re-measure.
-    expect(bytes).toBeLessThan(159_600);
+    expect(bytes).toBeLessThan(196_800);
   });
 
   it('carries no credential handling or network access of its own', () => {

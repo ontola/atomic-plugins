@@ -93,14 +93,14 @@ proxy. No credential ever reaches the frame.
   (0.4.0; see the limits below for the shape), and the translation between
   option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
   at the host boundary.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 145,070 bytes for
-  0.5.3 (144,024 for 0.5.2, with syncables 0.21.0; 125,914 for 0.5.1 with devonian 0.9.0 and
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 178,881 bytes for
+  0.5.4 with syncables 0.23.0 (145,070 for 0.5.3; 144,024 for 0.5.2, with syncables 0.21.0; 125,914 for 0.5.1 with devonian 0.9.0 and
   syncables 0.19.0; 125,712 for 0.5.0; 115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
   document, syncables' read path, devonian's Atomic Data API and the shared
   sync-status card with its `card.css` (through `cssRawPlugin` from
   `integrations/sync-status/build.mjs`). `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
   `validateDatatype` only; `build.test.ts` pins both to the real library).
-- Dependencies: `syncables@0.21.0` and `devonian@0.9.0` from npm, exact
+- Dependencies: `syncables@0.23.0` and `devonian@0.9.0` from npm, exact
   versions in `package.json`, locked in `pnpm-lock.yaml`, installed into this
   folder's `node_modules/` (`pnpm install --frozen-lockfile` here; CI's
   "Install plugin npm dependencies" step does it for every
