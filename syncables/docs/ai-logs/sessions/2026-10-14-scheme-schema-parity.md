@@ -13,7 +13,7 @@ plan first.
 
 **Assistant:** proposed porting `schema.json`'s structural constraints
 (unknown fields, types) into `validatePaginationScheme`, after #573 found
-`autoDetect: null` slipping through. Measured on all 493 schemes in the
+`autoDetect: null` slipping through. Measured on all 493 schemes (491 in `overlays/`, 2 in the vendored fixtures) in the
 repository with Python's `jsonschema`: the verdicts differed on 5
 (Calendar's four `incrementalSync` schemes, refused here because not
 implemented, and Shutterstock's `pageNumber`, which the spec refuses);
@@ -51,3 +51,19 @@ that is not a plain object, so a malformed operation cannot throw.
 skipped too). Tests: a non-array `parameters`, a `null` and a string
 entry do not throw, and a well-formed parameter beside a malformed one
 still matches; three fail on the code before. Changelog sentence added.
+
+## Turn 4
+
+**Human (via the coordinator session):** the #574 review: `checkEnvelope`
+accepts `envelope: []`, which `schema.json` refuses (the only gap a
+24,790-variant fuzz found); the README overstated the parameters fix
+("the read of that collection", not "every read of the document"); 491
+schemes under `overlays/`; optionally guard `model.ts` and `pages.ts`
+the same way.
+
+**Assistant:** `checkEnvelope` uses `isObject`, with a test; README
+corrected; the count says 491 under `overlays/` (493 with the two
+vendored fixtures); `declaredQueryParameters` (`model.ts`) and the
+page-size schema lookup (`pages.ts`) read a non-array `parameters` as
+none. Merged `overrides` are not validated by the parity test (left
+open).

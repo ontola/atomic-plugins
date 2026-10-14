@@ -340,7 +340,7 @@ function checkEnvelope(
   errors: string[],
 ): void {
   if (envelope === undefined) return;
-  if (typeof envelope !== 'object' || envelope === null) {
+  if (!isObject(envelope)) {
     errors.push(`${path}.envelope must be an object`);
     return;
   }

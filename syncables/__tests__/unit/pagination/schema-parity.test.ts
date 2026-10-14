@@ -12,7 +12,7 @@ import type { PaginationSchemeObject } from '../../../src/pagination/types.js';
 // (openapi-extensions/spec/pagination-schemes/), beyond the numbered rules:
 // fields the spec does not define (other than `x-`) and the types it
 // states. The cases below were checked against schema.json with Python's
-// jsonschema on 2026-10-14, as were all 493 schemes in the repository's
+// jsonschema on 2026-10-14, as were all 491 schemes in the repository's
 // overlays: the verdicts agree, apart from `incrementalSync`, which the
 // spec allows and this client does not implement (refused, as before).
 
@@ -140,6 +140,11 @@ describe('the structure schema.json gives a scheme', () => {
       'an unknown response field member',
       variant((s) => (at(s, 'response', 'bodyFields', 'next')['path'] = 'a')),
       /next\.path is not a Response Field Object field/,
+    ],
+    [
+      'an envelope that is an array',
+      variant((s) => (at(s, 'response')['envelope'] = [])),
+      /envelope must be an object/,
     ],
     [
       'an unknown Envelope Object field',
