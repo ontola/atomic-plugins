@@ -1820,7 +1820,13 @@ const { records, ontology, errors } = await readPlatform(document, {
   instead. `x-pagination: []` applies nothing and does not opt out: the
   operation is still matched by auto-detection. A scheme whose
   `autoDetect` is neither a boolean nor an object (`null`) is invalid
-  too, and auto-detection reads it as the default options.
+  too, and auto-detection reads it as the default options. The validator
+  follows the spec's `schema.json` as well as its numbered rules: a field
+  the spec does not define (other than an `x-` extension) on a scheme or
+  an object in it, or a value of the wrong type, makes the scheme
+  invalid, so a typo such as `respnse:` is not silently read as a scheme
+  without a response. It refuses an `incrementalSync` scheme, which the
+  spec allows, because this client does not implement it.
   An `outcome` passed to `paginate` again starts clean: an earlier walk's
   mark does not carry over.
 - **User-defined fields** (draft
@@ -1965,6 +1971,19 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: `validatePaginationScheme` follows the spec's
+  `schema.json`: a field the spec does not define (other than `x-`) on a
+  scheme or an object in it, or a value of the wrong type, makes the
+  scheme invalid, and a scheme that is not an object no longer makes it
+  throw. Stricter validation can turn a read that used to page into one
+  that is not complete (an auto-detected scheme that is now invalid), or
+  one that fails (an explicit `x-pagination` naming it). In this
+  repository's overlays the one scheme affected is Shutterstock's
+  `pageNumber` (`response.properties` where `bodyFields` was meant), in
+  no catalog; every scheme a catalog applies explicitly is still valid.
+  Auto-detection also skips a malformed operation `parameters` (not an
+  array) or parameter entry (not an object) instead of throwing, so such
+  an operation no longer makes the read of that collection fail.
 - **Unreleased**: `readPlatform` reports coverage: `ReadResult.coverage`
   (`CollectionCoverage`) lists each collection's `ReadCoverage` with
   `collection` and `context`, as `SyncResult.coverage` does. Before,
