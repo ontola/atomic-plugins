@@ -336,6 +336,30 @@ it yet. `tests/test_spotify_throttling.py` composes it alone and after the
 catalog's Spotify overlays and classifies synthetic responses. No provider
 was called.
 
+## Airtable table records completeness
+
+[`completeness-1f5368e0…-overlay.yaml`](APIs/airtable.com/1.0-readonly/completeness-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Airtable `tableRecords` collection: `absent: removed` and
+`notFound: unavailable`. Airtable's
+[errors page](https://airtable.com/developers/web/api/errors) says a 404 is
+returned "if the resource doesn't exist (e.g. has been deleted)", but a
+record read's 404 answers just as well for a deleted or renamed table
+(`tableIdOrName` may be a name) or a deleted base, and the pinned OAD adds
+"or is not accessible"; the answer does not say which, so a 404 is not
+taken as the record's deletion. [List records](https://airtable.com/developers/web/api/list-records)
+returns every record when no view or `filterByFormula` is given, in
+arbitrary order; nothing is documented about records skipped during offset
+paging, so absence is `removed` and settled by the record's own read. Not
+declared: `gone` (no 410 documented), anything on bases or tables, and
+`parentAbsent` (no resource binds `tableIdOrName`). Not verified: whether a
+deleted record can be restored (the interface has a trash; the API reference
+does not mention it). No dated catalog selects it yet.
+`tests/test_airtable_records_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays, in either order, runs both
+validators, checks the pinned wording and the outcomes `classify_read` gives.
+No provider was called.
+
 ## Airtable throttling
 
 [Airtable Web API throttling](APIs/airtable.com/1.0-readonly/throttling-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml)
