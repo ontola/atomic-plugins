@@ -470,6 +470,7 @@ def validate(document, warnings=None):
                 errors.append(f"{where}.resource: {crud.get('resource')!r} is not a crudResources key (rule 2)")
                 continue
             errors += _follow_up_errors(document, crud, where, item, operation)
+            errors += _committed_error_errors(crud, where, resource)
             if crud.get("action") != "list":
                 continue
             collection = (resource.get("collections") or {}).get(crud.get("collection"))
@@ -536,6 +537,44 @@ def _bind_key(key):
     """(kind, name) of a bind key, the header name lower-cased."""
     kind, _, name = key.partition(".")
     return kind, name.lower() if kind == "header" else name
+
+
+def _committed_error_errors(crud, where, resource):
+    """Rules 27 and 28 (0.7.0)."""
+    if "committedErrors" not in crud:
+        return []
+    if crud.get("action") != "create":
+        return [f"{where}.committedErrors: allowed only on action create (rule 27)"]
+    entries = crud["committedErrors"]
+    if not isinstance(entries, list) or not entries:
+        return [f"{where}.committedErrors: expected a nonempty array (rule 27)"]
+    template = (resource.get("identity") or {}).get("urlTemplate")
+    variables = set(VARIABLE.findall(template)) if isinstance(template, str) else set()
+    errors = []
+    for index, entry in enumerate(entries):
+        at = f"{where}.committedErrors[{index}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{at}: expected an object (rule 28)")
+            continue
+        unknown = {k for k in entry if k not in ("status", "identity", "description") and not str(k).startswith("x-")}
+        if unknown:
+            errors.append(f"{at}: unknown fields {sorted(unknown)} (rule 28)")
+        status = entry.get("status")
+        if not (isinstance(status, list) and status and len(set(map(repr, status))) == len(status)
+                and all(type(s) is int and 400 <= s <= 599 for s in status)):
+            errors.append(f"{at}.status: expected unique integer statuses 400-599 (rule 28)")
+        identity = entry.get("identity")
+        if not isinstance(identity, dict) or not identity:
+            errors.append(f"{at}.identity: expected a nonempty object (rule 28)")
+            continue
+        for variable, path in identity.items():
+            if variable not in variables:
+                errors.append(f"{at}.identity.{variable}: not a variable of identity.urlTemplate (rule 28)")
+            if not _well_formed_path(path):
+                errors.append(f"{at}.identity.{variable}: expected a dot-path (rule 28)")
+        if "description" in entry and not isinstance(entry["description"], str):
+            errors.append(f"{at}.description: expected a string (rule 28)")
+    return errors
 
 
 def _follow_up_errors(document, crud, where, create_item, create_operation):
@@ -701,6 +740,31 @@ def created_identity(document, crud, created, headers=None, sent=None):
             return None
         values[binding.get("field")] = value
     return values
+
+
+def committed_identity(document, crud, status, body):
+    """§4.3.3 (0.7.0): {identity variable: value} from an error response that says the create was applied, else None.
+
+    `status` is the response status and `body` its parsed JSON body (None when
+    it is not JSON). Values are strings; an integer is given in decimal form.
+    None means the response matches no Committed Error Object: the outcome
+    stays unknown.
+    """
+    if crud.get("action") != "create" or not isinstance(body, (dict, list)):
+        return None
+    for entry in crud.get("committedErrors") or []:
+        if not isinstance(entry, dict) or status not in (entry.get("status") or []):
+            continue
+        values = {}
+        for variable, path in (entry.get("identity") or {}).items():
+            value = get_path(body, path)
+            if isinstance(value, bool) or not isinstance(value, (str, int)) or value == "":
+                values = None
+                break
+            values[variable] = str(value) if isinstance(value, int) else value
+        if values:
+            return values
+    return None
 
 
 def missing_value(follow_up, planned, created):

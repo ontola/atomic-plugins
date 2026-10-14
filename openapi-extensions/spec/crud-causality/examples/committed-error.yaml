@@ -1,0 +1,43 @@
+openapi: 3.0.3
+info:
+  title: Illustrative create whose 503 can follow a saved object
+  version: 1.0.0
+  description: >-
+    Synthetic, shaped like Notion's page create: a 503 can follow a create
+    that was saved, and its additional_data.committed_resource_id then holds
+    the new page's id.
+servers:
+  - url: https://api.example.com
+components:
+  crudResources:
+    page:
+      identity:
+        urlTemplate: /pages/{page_id}
+        bindings:
+          page_id: { field: id }
+paths:
+  /pages:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object }
+      x-crud:
+        action: create
+        resource: page
+        url: { source: template }
+        committedErrors:
+          - status: [503]
+            identity:
+              page_id: additional_data.committed_resource_id
+            description: The provider documents that this 503 can follow a saved create.
+      responses:
+        '200': { description: The new page. }
+        '503': { description: Unavailable, or the page was saved but the response could not be built in time. }
+  /pages/{page_id}:
+    get:
+      parameters:
+        - { name: page_id, in: path, required: true, schema: { type: string } }
+      x-crud: { action: read, resource: page }
+      responses:
+        '200': { description: One page. }
