@@ -1029,6 +1029,32 @@ fixes the older validator's rejection of required properties defined inside
 Notion body-schema cases check optional first-page requests, preserved extra
 fields, page-size bounds, and opaque cursor types.
 
+## Stripe pagination v2: a cursor from the last item
+
+[`pagination-v2-dec74da7…`](APIs/stripe.com/2022-11-15/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
+declares [Pagination Schemes 0.9.0](../openapi-extensions/spec/pagination-schemes/README.md)
+`fromLastItem` under rule (a) of §4.3.3: Stripe's
+[pagination reference](https://docs.stripe.com/api/pagination) says every v1
+list method takes `starting_after`, "an object ID that defines your place in
+the list" (receive objects "ending with `obj_foo`" and send
+`starting_after=obj_foo`), and that `has_more` false means "this set
+comprises the end of the list". Objects come newest first; rule (a) needs no
+ascending order. v1 declared the `cursor` scheme but applied it to no
+operation and had no way to find the next cursor; v2 redefines it
+(`starting_after` from the last item's `id`, items in `data`, `has_more` as
+`hasMore`) and applies it to all 99 list operations of the pinned document
+that take `starting_after`. 97 of them describe it in the words above;
+exchange rates say "the currency that defines your place in the list" (an
+exchange rate's id is its currency code); treasury financial accounts say
+only "An object ID cursor for use in pagination", covered by the reference
+page's statement about all list methods. Not declared: `ending_before` (it
+pages backwards) and the `/v2` APIs. It needs a 0.9.0 reader. Of the
+catalog and overlay platforms, Stripe is the only one whose docs describe a
+rule (a) cursor; Discord's two lists use rule (b) (#586). No dated catalog
+selects it. `tests/test_stripe_pagination_v2.py` validates it, checks the
+operation set and the pinned wording, and reads synthetic pages with the
+reference `read_item_cursor`. No provider was called.
+
 ## Swagger 2.0 documents
 
 The 2026-10-02 collection audit behind
