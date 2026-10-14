@@ -33,6 +33,7 @@ import { readCollections, type CollectionReadOptions } from './collections.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
 import { declaredThrottling } from '../throttling/throttling.js';
 import type { RuntimeDescriber, RuntimeMembers } from './runtime-schemas.js';
+import type { ReadCoverage } from './time-zone.js';
 
 /**
  * Applies overlays in order, then resolves local `$ref`s. The other read
@@ -111,6 +112,12 @@ export interface ReadRecord {
   runtime?: RuntimeMembers;
 }
 
+/** A collection's `ReadCoverage`, with the path parameters it was read under. */
+export interface PlatformCoverage extends ReadCoverage {
+  collection: string;
+  context: Record<string, string>;
+}
+
 export interface ReadResult {
   platform: string;
   ontology: Ontology;
@@ -142,6 +149,14 @@ export interface ReadResult {
     context: Record<string, string>;
     reason: string;
   }[];
+  /**
+   * What each collection's query asked for (Filtering 0.2.0-draft
+   * `x-time-zone`, with `selection` or `ranges`), as `SyncResult.coverage`
+   * gives it: one entry per collection read with coverage, absent when
+   * none had any. It describes the query, not the records (see the
+   * README's `x-time-zone` section).
+   */
+  coverage?: PlatformCoverage[];
 }
 
 const TIMESTAMP =
@@ -230,12 +245,24 @@ export async function readPlatform(
       context: { ...s.pathParams },
       reason: s.notComplete as string,
     }));
+  const coverage = result.collections.flatMap((s): PlatformCoverage[] =>
+    s.coverage
+      ? [
+          {
+            collection: s.collection.name,
+            context: { ...s.pathParams },
+            ...s.coverage,
+          },
+        ]
+      : [],
+  );
   return {
     platform: options.platform,
     ontology,
     records,
     errors: result.errors,
     ...(incomplete.length ? { incomplete } : {}),
+    ...(coverage.length ? { coverage } : {}),
     ...(result.describers ? { describers: result.describers } : {}),
     ...(result.describerErrors
       ? { describerErrors: result.describerErrors }
