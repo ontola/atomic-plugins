@@ -257,6 +257,21 @@ test('changedPaths: a rename reports both sides, so it refuses', () => {
   }
 });
 
+test('changedPaths: a path in two entries is reported once', () => {
+  const f = dirtyFixture();
+
+  try {
+    // Renamed in the index, then a new file intended to add at the old
+    // path: status lists "other.txt" both as " A" and as the rename source.
+    f.run('mv', 'other.txt', 'moved.txt');
+    writeFileSync(join(f.dir, 'other.txt'), 'new\n');
+    f.run('add', '--intent-to-add', 'other.txt');
+    assert.deepEqual(changedPaths(f.dir).sort(), ['moved.txt', 'other.txt']);
+  } finally {
+    f.done();
+  }
+});
+
 test('changedPaths: an intent-to-add rename (" R") reports both sides whole', () => {
   const f = dirtyFixture();
 

@@ -191,7 +191,8 @@ export const pages = [
     done: false,
     points: null,
     tags: [DOCS],
-    // Formatted text: the read-only lens leaves this unprojected and says so.
+    // Formatted text: imported as plain text ("Keep this bold"), reported,
+    // and never written back (usertest-findings#19).
     notes: [text('Keep this '), text('bold', { bold: true })],
   }),
 ];
