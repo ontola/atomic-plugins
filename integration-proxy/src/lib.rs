@@ -4,8 +4,9 @@
 //! Clients authenticate with their Atomic agent key (issue #54): every
 //! request that matters carries an Atomic v2 request signature, a connection
 //! is owned by the agent that redeemed it, and apps use it through
-//! owner-signed delegations. There are no accounts, logins, tenants or
-//! rotating codes.
+//! owner-signed delegations. Opt-in RFC 8628 device sessions provide scoped
+//! bearer authentication to the same canonical owner; they do not create
+//! another account identity or revive provider connection codes.
 //!
 //! This crate is the whole service; the `integration-proxy` binary in this
 //! package, and any deployment wrapper (e.g. the Heroku app that serves
@@ -46,6 +47,7 @@ mod client_addr;
 mod config;
 mod connect;
 mod connections;
+mod device;
 #[cfg(test)]
 mod identity_catalog_tests;
 mod oauth;
@@ -79,6 +81,7 @@ pub use config::{
     Config, TrustForwardedFor, WebhookConfig, DEFAULT_CATALOG_PATH,
     DEFAULT_KEY_CHECK_LIMIT_PER_HOUR, DEFAULT_OPERATOR_NAME, DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
 };
+pub use device::DeviceConfig;
 
 #[derive(Clone)]
 struct AppState {
@@ -90,6 +93,7 @@ struct AppState {
     /// accepted on the consent form.
     public_origin: String,
     catalog: catalog::Catalog,
+    device: DeviceConfig,
     security: Option<security::Security>,
     access: Arc<dyn AccessPolicy>,
     /// `OPERATOR_NAME`, `OPERATOR_URL` and the `BASE_URL` host, for the pages.
@@ -232,6 +236,7 @@ pub async fn build_app_with_access(
     access: Arc<dyn AccessPolicy>,
 ) -> Result<Router, Error> {
     let base_url = config::validate_base_url(&config.base_url).map_err(Error::Config)?;
+    config.device.validate().map_err(Error::Config)?;
     let key = match &config.session_secret {
         Some(secret) => Key::from(&Sha512::digest(secret.as_bytes())),
         None => {
@@ -271,6 +276,7 @@ pub async fn build_app_with_access(
         base_url,
         public_origin: config.public_origin(),
         catalog,
+        device: config.device.clone(),
         security: Some(security),
         access,
         operator: templates::Operator::from_config(config),
@@ -386,6 +392,7 @@ fn router(state: AppState) -> Router {
     };
     Router::new()
         .merge(webhook_routes)
+        .merge(device::router())
         .route("/", get(home))
         .route("/healthz", get(healthz))
         .route("/logo.png", get(logo))
@@ -413,7 +420,9 @@ fn router(state: AppState) -> Router {
         .route("/catalog", get(catalog::list))
         .route("/catalog/:file", get(catalog::document))
         .layer(browser_cors())
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
+            tracing::info_span!("http_request", method = %request.method(), path = request.uri().path())
+        }))
         .with_state(state)
 }
 

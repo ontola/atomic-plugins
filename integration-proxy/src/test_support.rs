@@ -13,6 +13,7 @@ pub fn state(security: Option<crate::security::Security>) -> AppState {
         base_url: BASE_URL.into(),
         public_origin: PUBLIC_ORIGIN.into(),
         catalog: crate::catalog::Catalog::for_test("github-issues"),
+        device: Default::default(),
         security,
         access: std::sync::Arc::new(crate::access::AllowAll),
         operator: crate::templates::Operator::new(

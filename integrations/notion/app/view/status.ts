@@ -182,7 +182,7 @@ export function syncStatusFor(input: StatusInput): SyncStatus {
   if (perDatabase)
     problems.push({
       lead: `${plural(perDatabase, 'note')} from the last sync.`,
-      text: 'Formatting Notion keeps, archived pages and read errors, listed per database.',
+      text: 'Text copied without its formatting, archived pages and read errors, listed per database.',
       ...(input.onDetails
         ? {
             action: {

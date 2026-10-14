@@ -92,3 +92,20 @@ proxy. Cross-implementation vectors are checked here (atomic-server's
 `lib/src/authentication_v2_vectors.json`, vendored verbatim at the pin), but
 only atomic-server's Rust signer generated them; that its TypeScript signer
 produces the same is atomic-server's own test, not verified here.
+
+## Device client authentication (#565)
+
+`device::tests` covers config/body/scope bounds; verified owner challenges and
+explicit selections; single approval/redemption across two PostgreSQL stores;
+pending/slow polling, denial and expiry; rotating refresh families and concurrent
+reuse revocation; per-session logout/owner revocation; scoped discovery and
+read-only proxy requests; canonical owner/AccessPolicy/connection checks; and
+provider token isolation. A separate process captures TRACE output and checks
+that device/user codes, approval challenges, bearer/refresh tokens and provider
+credentials never appear. `complete_http_contract_supports_the_cli_and_refresh_logout`
+checks the public routes against `tests/fixtures/device-contract.json`.
+`browser_owner_bridge_approves_an_outbound_only_client` is opt-in with
+`DEVICE_BROWSER_TEST=1`, Node and Playwright: actual local owner bridge, browser
+review/selection and signed approval, outbound-only token polling, provider GET,
+write refusal and logout. It is local invented-provider evidence, not live
+GitHub or localthought.io deployment evidence. See DEVICE_AUTH.md.
