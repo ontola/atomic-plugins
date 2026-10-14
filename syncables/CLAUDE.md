@@ -549,8 +549,10 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `autoDetect: false`); an explicit `x-pagination` with a valid scheme
   wins, and `x-pagination: []` does not opt out. `validatePaginationScheme`
   also refuses an `autoDetect` that is neither a boolean nor an object
-  (the spec's `schema.json`), and `invalidAutoDetected` catches a scheme
-  too broken to compare. Tests: `unit/client/autodetect-invalid.test.ts`.
+  (the spec's `schema.json`); `autoDetectMatches` reads any `autoDetect`
+  that is not an Auto-Detect Object as the default options, so such an
+  invalid scheme still counts as a match. Tests:
+  `unit/client/autodetect-invalid.test.ts`.
 - `autodetect.ts`'s `resolveEffectiveScheme(document, operation)` picks the
   scheme that applies to an operation: an explicit `x-pagination` entry
   first, else auto-detection by matching the scheme's declared query

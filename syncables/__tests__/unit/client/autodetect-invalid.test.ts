@@ -202,23 +202,33 @@ describe('an invalid pagination scheme that auto-detection would apply', () => {
     );
   });
 
-  it('ignores a scheme too broken to compare (autoDetect: null), without throwing', async () => {
-    const broken = { ...valid, autoDetect: null };
-    // Invalid (the spec's schema: a boolean or an object); before, the
-    // validator let it through and every read of the document threw.
-    expect(validatePaginationScheme('cursor', broken as never)).toContainEqual(
-      expect.stringMatching(/autoDetect must be a boolean/),
-    );
-    const doc = document(broken);
-    expect(invalidAutoDetected(doc, doc.paths['/pets']!.get!)).toBeUndefined();
-    const fake = server();
-    const result = await createApiClient(doc, {
-      transport: fake.transport,
-    }).sync();
-    // Read as unpaginated, as before: one request, complete.
-    expect(fake.requests).toEqual(['/api/pets']);
-    expect(result.incomplete).toEqual([]);
-  });
+  it.each([
+    ['null', null],
+    ['a string', 'yes'],
+    ['a number', 1],
+    ['an array', []],
+  ])(
+    'reads not complete under an autoDetect that is %s (invalid, matched with the defaults)',
+    async (_label, autoDetect) => {
+      const broken = { ...valid, autoDetect };
+      // Invalid (the spec's schema: a boolean or an object); before, null
+      // made every read of the document throw, and the others were taken
+      // as the default options of a valid scheme.
+      expect(
+        validatePaginationScheme('cursor', broken as never),
+      ).toContainEqual(expect.stringMatching(/autoDetect must be a boolean/));
+      const doc = document(broken);
+      expect(invalidAutoDetected(doc, doc.paths['/pets']!.get!)).toMatchObject({
+        schemeName: 'cursor',
+      });
+      const fake = server();
+      const result = await createApiClient(doc, {
+        transport: fake.transport,
+      }).sync();
+      expect(fake.requests).toEqual(['/api/pets']);
+      expect(result.incomplete).toHaveLength(1);
+    },
+  );
 
   it('is not served from the conditional cache, unlike an unpaginated operation', async () => {
     // Unpaginated (the only scheme is valid but not auto-detected): the

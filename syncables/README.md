@@ -1818,8 +1818,7 @@ const { records, ontology, errors } = await readPlatform(document, {
   instead. `x-pagination: []` applies nothing and does not opt out: the
   operation is still matched by auto-detection. A scheme whose
   `autoDetect` is neither a boolean nor an object (`null`) is invalid
-  too, and one too malformed to compare with the operation is not
-  counted as a match.
+  too, and auto-detection reads it as the default options.
   An `outcome` passed to `paginate` again starts clean: an earlier walk's
   mark does not carry over.
 - **User-defined fields** (draft
@@ -1964,10 +1963,14 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **0.23.0**: Pagination Schemes 0.8.0 `response.incomplete`, Deletion
-  Feeds 0.3.0-draft list tombstones and `except`, re-reads of kept
-  unavailable records, and `matchUnboundCreates`. Behaviour changes to know
-  before upgrading, the first for every document:
+- **0.23.0**: a data-loss fix for pagination schemes that auto-detection
+  would apply but that are invalid; Pagination Schemes 0.8.0
+  `response.incomplete`; Deletion Feeds 0.3.0-draft list tombstones and
+  `except`; re-reads of kept unavailable records; and the opt-in
+  `matchUnboundCreates`. Behaviour changes to know before upgrading. The
+  first four bullets apply without any new declaration; the last three
+  only to documents that declare `x-list-tombstone`, `except` or
+  `response.incomplete`:
   - **Data-loss fix (0.22.1 and earlier):** a pagination scheme that
     auto-detection would apply to a list operation but that fails
     validation was dropped, and the read made one request and took that
@@ -1980,17 +1983,21 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
     set `autoDetect: false` on it); `x-pagination: []` does not opt out.
     `invalidAutoDetected` (exported) tells whether an operation is in that
     case;
-  - so reads that used to be complete can now be listed in
-    `SyncResult.incomplete`: for example, Box's first pagination overlay
-    (`pagination-dec74da…`, selected by the 2026-10-11 catalogs) declares
-    two invalid schemes, `offset` and `marker`, without `autoDetect:
-    false`, so the list operations they match by auto-detection now read
-    not complete (which operations those are was not checked here); the
-    later Box overlays (2026-10-12 catalogs) declare valid schemes that
-    are not auto-detected. `validatePaginationScheme` also
-    refuses an `autoDetect` that is neither a boolean nor an object (the
-    spec's schema); before, `autoDetect: null` made every read of the
-    document throw;
+  - so a read that used to be complete can now be not complete. For
+    example, Box's first pagination overlay (`pagination-dec74da…`,
+    selected by the 2026-10-11 catalogs) declares two invalid schemes,
+    `offset` and `marker`, without `autoDetect: false`. `offset` matches
+    14 GET list operations by auto-detection (`marker` matches 3 of them
+    as well). That document declares no `crudResources`, so `sync()` and
+    `readPlatform` read none of them; `paginate()` on them still returns
+    the first page but now fills its `outcome` as not complete, and
+    `createApiClient` no longer sends conditional GETs to them. The later
+    Box overlays (2026-10-12 catalogs) declare valid schemes with
+    `autoDetect: false`, applied by explicit `x-pagination`, and are not
+    affected. `validatePaginationScheme` also refuses an `autoDetect` that
+    is neither a boolean nor an object (the spec's schema): before,
+    `autoDetect: null` made reads of the document throw, and a string,
+    number or array was taken as the default options;
   - a record kept `unavailable` without writes is read again by later
     syncs wherever its collection makes checks (`missingRecordChecks:
     'all'`, `absent: removed`, a `parentAbsent` parent), unless it has
@@ -2007,6 +2014,12 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
     kept, and `onMissingRecord` is called on every re-check. An unchanged
     read also no longer re-checks an `unconfirmed` record with failed
     writes (before, only queued writes kept it out);
+  - a Tombstone Object's `field` must be a dot-path of property names
+    without an empty segment: `a..b`, `.a` and `a.` no longer parse (the
+    declaration is ignored), a bracket-quoted segment such as `["a.b"]` is
+    now read as a literal name, and each name is read from an object's own
+    fields only (not through an array index). A stored presence mark with
+    `source: 'list'` is restored; an older client drops that source;
   - Deletion Feeds 0.3.0-draft list tombstones (`x-list-tombstone`):
     items of a collection's read that carry the declared marker, and match
     no `except` condition, are not members. `CollectionSnapshot.tombstones`
@@ -2022,12 +2035,9 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   - `except` conditions on every Tombstone Object (Deletion Feeds
     0.3.0-draft): a feed item or a read tombstone that matches one is not
     a tombstone (a cancelled exception of a recurring event read by GET is
-    `filtered`, not `deleted`). Only for documents that declare `except`;
-  - a Tombstone Object's `field` must be a dot-path without an empty
-    segment (`a..b`, `.a` and `a.` no longer parse, so the declaration is
-    ignored), and each name is read from the item's own fields only. A
-    stored presence mark with `source: 'list'` is restored; an older
-    client drops that source;
+    `filtered`, not `deleted`); a malformed `except` makes the Tombstone
+    Object, and so its feed or read-tombstone declaration, ignored. Only
+    for documents that declare `except`;
   - Pagination Schemes 0.8.0 `response.incomplete` (§4.4.6): a response
     body value that marks a capped result (Notion's
     `request_status.type: incomplete` past 10,000 results). A read with
@@ -2041,14 +2051,23 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   without an error but not completely: range windows, undocumented short
   pages, marked results, invalid auto-detected schemes); an `outcome`
   option on `paginate`, which starts clean on every walk;
-  `responseIncomplete` and the `IncompleteObject` type;
-  `invalidAutoDetected`; and `matchUnboundCreates: { uniqueFields }` (off
-  by default), which binds an unbound create (CRUD Causality 0.5.0
-  §4.3.2) from the first complete read of its collection after the
-  create's answer, when it sent a value of a field the app declares
-  unique and exactly one new record of that read matches every field it
-  sent and no other create; bound creates are listed on
-  `SyncResult.matched`. Before, only `resolveWrite` `confirm` bound one.
+  `responseIncomplete` and the `IncompleteObject` and `JsonScalar` types;
+  `invalidAutoDetected`; `MissingRecord.source` gains `'list'` (an
+  exhaustive switch over it needs the new case); and
+  `matchUnboundCreates: { uniqueFields }` (off by default), which binds an
+  unbound create (CRUD Causality 0.5.0 §4.3.2) from the first complete
+  read of its collection after the create's answer, when it sent a value
+  of a field the app declares unique and exactly one new record of that
+  read matches every field it sent and no other create; bound creates are
+  listed on `SyncResult.matched` (`MatchedCreate`). It binds only after a
+  complete read of the collection was applied before the create was
+  answered, and each create gets one read. Residual risk: if a listed
+  value is not in fact unique (another client or a person creates the
+  same value in that window) and the record this create made is not
+  listed, the create is bound to the other record, and its later updates
+  and deletes go there. Declare only fields whose uniqueness the provider
+  enforces or the app alone assigns. Before, only `resolveWrite`
+  `confirm` bound one.
 - **0.22.1**: CRUD Causality 0.6.0 list-only resources and Produced Classes
   0.1.1-draft. Behaviour change to know before upgrading: in a CRUD
   Causality document, `create()` on a resource without `identity` now
