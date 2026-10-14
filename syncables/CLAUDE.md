@@ -347,6 +347,19 @@ Data flows through four stages, each its own directory under `src/`:
    `pauseForOperation`, `operationBuckets`; the read transport waits within
    `limits.timeoutMs`), until the answer's time or else the write's backoff;
    `mayHaveApplied` ignores the verdict, so a 5xx create stays uncertain.
+   Plan tiers (Throttling 0.5.0): `declaredThrottling(document, plan)`
+   reads a Limit Object with `tiers` through `parseTiers` (the spec
+   validator's checks that decide which tier binds: nonempty `plans` of
+   nonempty strings, no plan twice, positive integer `requests` and
+   `window.seconds`; lenient elsewhere, as a plain limit; any failure leaves the limit
+   out) and `limitsInForce` (the tier naming `plan`, else every tier, after
+   the reference `limits_in_force`): one in force goes into `quotas`,
+   several into `tieredQuotas`; `windows` gets `fallbackWindow` (the
+   plan's tier's, else the longest). `Pacer`'s third argument takes
+   `tieredQuotas`: one request log per bucket, checked against every
+   quota, pruned at the longest window. The `throttlingPlan` option
+   reaches it from the client, `readCollections`/`readPlatform` and
+   `paginate` (`unit/throttling/plan-tiers.test.ts`).
    Pacing (K2, `throttling/pacing.ts`): `declaredThrottling`'s `quotas`
    (Limit Objects with `requests`) feed a `Pacer` (`pace`, `paceFraction`,
    default 0.8). The `baseTransport` wrapper counts every request when it

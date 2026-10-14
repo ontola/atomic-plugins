@@ -126,8 +126,11 @@ export type { LinkResolutionObject } from './pagination/types.js';
 export {
   classifyThrottling,
   declaredThrottling,
+  fallbackWindow,
   headerTime,
+  limitsInForce,
   operationBuckets,
+  parseTiers,
 } from './throttling/throttling.js';
 export type {
   BodyPredicate,
@@ -136,6 +139,7 @@ export type {
   HeaderRoleObject,
   SignalObject,
   ThrottlingDeclaration,
+  Tier,
   ThrottlingMeaning,
   ThrottlingResponse,
   ThrottlingVerdict,
