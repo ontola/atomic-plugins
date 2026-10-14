@@ -26,7 +26,7 @@
  * running on this host is stale and removed. Once built, the directory is
  * read-only for everyone, like the shared `<sha>` build.
  */
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import {
   copyFileSync,
   existsSync,
@@ -50,6 +50,51 @@ export const routesBuildDir = (sha, env = process.env) =>
   resolve(buildCache(env), `${sha}${ROUTES_SUFFIX}`);
 
 export const binaryIn = dir => resolve(dir, 'target/e2e/atomic-server');
+
+/**
+ * Tracked files of an atomic-server checkout that its build rewrites: the
+ * data-browser build that `cargo build` runs (server/build.rs) regenerates
+ * them with a small diff. The binary embeds its own built copy, not these
+ * sources, so restoring them after a build changes nothing in the binary.
+ * Left modified, they make the checkout dirty, and link-atomic-server.mjs
+ * would refuse to move it to the next pin. So that script tolerates these
+ * paths (restoring them before it moves the checkout) and no others, and
+ * this build, the session-start hook and AGENTS.md's shared-build recipe
+ * restore them after building. Relative to the checkout root; the one list.
+ */
+export const BUILD_OUTPUT_PATHS = Object.freeze([
+  'browser/data-browser/src/chunks/Website/runtime/search-view.html',
+  'browser/data-browser/src/chunks/Website/runtime/website-runtime.min.js',
+]);
+
+/**
+ * Restores BUILD_OUTPUT_PATHS in `checkout` to HEAD (index and working tree),
+ * skipping any that HEAD doesn't track (an older commit may predate them).
+ * Returns the paths it restored.
+ */
+export function restoreBuildOutputs(checkout) {
+  const git = args =>
+    execFileSync('git', ['-C', checkout, ...args], { encoding: 'utf8' });
+  const tracked = git([
+    'ls-tree',
+    '-z',
+    '--name-only',
+    'HEAD',
+    '--',
+    ...BUILD_OUTPUT_PATHS,
+  ])
+    .split('\0')
+    .filter(Boolean);
+  if (tracked.length) git(['checkout', 'HEAD', '--', ...tracked]);
+
+  return tracked;
+}
+
+/** restoreBuildOutputs(checkout) as a build step. */
+export const restoreBuildOutputsStep = checkout => ({
+  what: 'restore the tracked files the build regenerates',
+  restore: checkout,
+});
 
 /** The commit a checkout is at, or undefined when it is not a git checkout. */
 export function checkoutSha(checkout) {
@@ -91,7 +136,8 @@ export function worktreeSteps({ dir, sha, repo, fetch }) {
 
 /**
  * The commands that build the binary in `dir`, in order, as
- * `{ what, cwd, command, args, env? }` or `{ what, copy: [[from, toDir]] }`.
+ * `{ what, cwd, command, args, env? }`, `{ what, copy: [[from, toDir]] }`
+ * or `{ what, restore: checkout }` (restoreBuildOutputs, the last step).
  * The same recipe as AGENTS.md's shared build and ci.yml's build-server, with
  * the extra feature. `wasmPack` is a command line (array).
  */
@@ -153,6 +199,7 @@ export function buildSteps({ dir, wasmPack }) {
       ],
       env: { SKIP_WASM_BUILD: '1', VITE_E2E: 'true' },
     },
+    restoreBuildOutputsStep(dir),
   ];
 }
 
@@ -291,6 +338,12 @@ function runStep(step, env) {
       mkdirSync(to, { recursive: true });
       copyFileSync(from, resolve(to, basename(from)));
     }
+
+    return;
+  }
+
+  if (step.restore) {
+    restoreBuildOutputs(step.restore);
 
     return;
   }

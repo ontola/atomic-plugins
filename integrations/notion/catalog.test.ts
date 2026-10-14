@@ -338,10 +338,11 @@ describe('read-only lens over the fixture pages', () => {
     expect(changelog!.values[key('BJXS')]).toBe(true);
     expect(changelog!.values[key('Tg%5Cq')]).toEqual([]);
     expect(retro!.values).not.toHaveProperty(key('n%3D1'));
-    // Formatted rich text is reported, not flattened.
-    expect(retro!.values).not.toHaveProperty(key('Nt0s'));
+    // Formatted rich text is imported as plain text, and reported
+    // (usertest-findings#19).
+    expect(retro!.values[key('Nt0s')]).toBe('Keep this bold');
     expect(projected.errors).toEqual([
-      `Notion page ${retro!.id} property "Notes" (rich_text) has no lossless plain value; left unprojected`,
+      `Notion page ${retro!.id} property "Notes" (rich_text) has formatting; imported as plain text`,
     ]);
   });
 

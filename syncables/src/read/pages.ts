@@ -3,7 +3,10 @@ import type {
   OperationObject,
   SchemaObject,
 } from '../openapi/types.js';
-import { resolveEffectiveScheme } from '../pagination/autodetect.js';
+import {
+  invalidAutoDetected,
+  resolveEffectiveScheme,
+} from '../pagination/autodetect.js';
 import { locateItemsField } from '../pagination/items.js';
 import { resolveLink } from '../pagination/links.js';
 import {
@@ -24,6 +27,7 @@ import {
   splitPath,
 } from '../pagination/response-parser.js';
 import type {
+  IncompleteObject,
   PaginationResponseState,
   PaginationSchemeObject,
 } from '../pagination/types.js';
@@ -412,9 +416,11 @@ export interface PageWalk {
    */
   range?: WindowRange;
   /**
-   * An item's identity, for a windowed read: an item that a later window
-   * returns again (its field changed during the read) is yielded once
-   * (§4.6.4 rule 3).
+   * An item's identity. A windowed read yields an item that a later window
+   * returns again (its field changed during the read) once (§4.6.4 rule 3);
+   * an offset read and a page-number read with `shortPage` end with
+   * `PageReadError` at a page holding an identity an earlier page returned
+   * (§4.3.2, §4.4.5).
    */
   identity?: (item: Record<string, unknown>) => string;
   /**
@@ -444,6 +450,43 @@ export interface WindowRange {
 export interface WalkOutcome {
   complete: boolean;
   reason?: string;
+  /**
+   * Pagination Schemes 0.8.0 §4.4.6: set when a response of the walk was
+   * marked incomplete by the scheme's `response.incomplete` (why, in words).
+   */
+  marked?: string;
+}
+
+const jsonEqual = (a: unknown, b: unknown): boolean =>
+  typeof a === 'number' && typeof b === 'number'
+    ? a === b
+    : typeof a === typeof b && (a === b || (a === null && b === null));
+
+/**
+ * Pagination Schemes 0.8.0 §4.4.6, after the spec's `response_incomplete`:
+ * whether a response body carries the Incomplete Object's value. The
+ * dot-path's names are read literally (split on `.`, own properties of
+ * objects only); the value equals `equals`, or one of `in`, by JSON
+ * equality (`1` equals `1.0`; `"1"`, `true` and `1` differ). A body without
+ * a value there, or with another value, is not marked.
+ */
+export function responseIncomplete(
+  marker: IncompleteObject,
+  body: unknown,
+): boolean {
+  let value: unknown = body;
+  for (const name of marker.field.split('.')) {
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      Array.isArray(value) ||
+      !Object.hasOwn(value, name)
+    )
+      return false;
+    value = (value as Record<string, unknown>)[name];
+  }
+  if ('equals' in marker) return jsonEqual(value, marker.equals);
+  return marker.in.some((candidate) => jsonEqual(value, candidate));
 }
 
 export interface Page {
@@ -495,12 +538,21 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
   if (outcome) {
     outcome.complete = false;
     delete outcome.reason;
+    // An outcome passed again: an earlier walk's mark is not this one's.
+    delete outcome.marked;
   }
   const result: WalkOutcome = { complete: true };
   yield* walkAllPages({ ...walk, outcome: result });
+  // §4.4.6: a marked response makes the read not complete; paging itself
+  // went on as the scheme says.
+  if (result.marked !== undefined && result.complete) {
+    result.complete = false;
+    result.reason = result.marked;
+  }
   if (outcome) {
     outcome.complete = result.complete;
     if (result.reason !== undefined) outcome.reason = result.reason;
+    if (result.marked !== undefined) outcome.marked = result.marked;
   }
 }
 
@@ -615,6 +667,14 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
     } catch {
       throw new Error(`${request.method} ${url.pathname} did not return JSON`);
     }
+    const marker = scheme?.response?.incomplete;
+    if (
+      marker &&
+      walk.outcome &&
+      walk.outcome.marked === undefined &&
+      responseIncomplete(marker, body)
+    )
+      walk.outcome.marked = `the server marked the result incomplete (${request.method} ${url.pathname}: ${marker.field} ${JSON.stringify('equals' in marker ? marker.equals : marker.in)}): not a complete read (Pagination Schemes 0.8.0 §4.4.6)`;
 
     const envelope = declaredEnvelope(walk, scheme);
     const items =
@@ -685,6 +745,14 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
     yield { url, items, body };
 
     if (!scheme) {
+      // A scheme that would have been auto-detected but is invalid: the
+      // operation presumably pages, so this one page is not the whole
+      // collection. Its items stand; nothing is concluded from absence.
+      const invalid = invalidAutoDetected(document, operation);
+      if (invalid && walk.outcome) {
+        walk.outcome.complete = false;
+        walk.outcome.reason = `the pagination scheme "${invalid.schemeName}" matches this operation by auto-detection but is invalid (${invalid.problems.join('; ')}), so only its first response was read: not a complete read`;
+      }
       return;
     }
     const state =

@@ -105,7 +105,7 @@ describe('syncNotion', () => {
       dataSources: 1,
     });
     expect(result.warnings).toEqual([
-      `Notion page ${pages[2]!.id} property "Notes" (rich_text) has no lossless plain value; left unprojected`,
+      `Notion page ${pages[2]!.id} property "Notes" (rich_text) has formatting; imported as plain text`,
     ]);
 
     const byShortname = new Map<string, string>();
@@ -217,7 +217,8 @@ describe('syncNotion', () => {
     });
     expect(rows[1]![column('n%3D1')]).toBe(0);
     expect(rows[1]![tags]).toEqual([]);
-    expect(rows[2]).not.toHaveProperty(column('Nt0s'));
+    // Formatted Notes, as plain text (usertest-findings#19).
+    expect(rows[2]![column('Nt0s')]).toBe('Keep this bold');
     expect(rows[2]).not.toHaveProperty(column('n%3D1'));
     expect(typeof rows[0]![byShortname.get('notion-last-edited')!]).toBe(
       'number',
@@ -400,6 +401,87 @@ describe('syncNotion', () => {
     expect(again).toMatchObject({ created: 0, updated: 1, unchanged: 2 });
     expect(row('Launch plan')).not.toHaveProperty(points);
     expect(row('Retrospective')[notes]).toBe('Written in Atomic');
+  });
+
+  it("follows Notion's words in formatted text, unless the row was edited here (usertest-findings#19)", async () => {
+    const { store, transport } = await run();
+    const notes = [...store.resources].find(
+      ([, p]) => p[atomic.shortname] === notionFieldShortname('Nt0s'),
+    )![0];
+    const retro = () =>
+      [...store.resources.values()].find(
+        p => p[PARENT] === TABLE && p[atomic.name] === 'Retrospective',
+      )!;
+    expect(retro()[notes]).toBe('Keep this bold');
+
+    // Notion's Notes change, still formatted.
+    const reworded =
+      (words: string): typeof readPlatform =>
+      async (doc, options) => {
+        const result = await readPlatform(doc, options);
+
+        for (const record of result.records)
+          if (record.id === pages[2]!.id) {
+            const values = structuredClone(record.values) as {
+              properties: Record<string, Record<string, unknown>>;
+            };
+            const parts = values.properties.Notes!.rich_text as {
+              text: { content: string };
+              plain_text: string;
+            }[];
+            parts[0]!.text.content = parts[0]!.plain_text = words;
+            record.values = values as typeof record.values;
+          }
+
+        return result;
+      };
+
+    await syncNotion(store, transport, reworded('Drop this '));
+    expect(retro()[notes]).toBe('Drop this bold');
+
+    // Edited here: the edit stays (the review refuses to send it).
+    retro()[notes] = 'Mine';
+    await syncNotion(store, transport, reworded('Again '));
+    expect(retro()[notes]).toBe('Mine');
+  });
+
+  it('fills a formatted cell on a row synced by 0.5.2, which never held the words (#536 review)', async () => {
+    const { store, transport } = await run();
+    const find = (shortname: string) =>
+      [...store.resources].find(
+        ([, p]) => p[atomic.shortname] === shortname,
+      )![0];
+    const notes = find(notionFieldShortname('Nt0s'));
+    const baseline = find('notion-sync-baseline');
+    const retro = () =>
+      [...store.resources.values()].find(
+        p => p[PARENT] === TABLE && p[atomic.name] === 'Retrospective',
+      )!;
+    // As 0.5.2 left it: no Notes on the row, none in its baseline.
+    delete retro()[notes];
+    const stored = JSON.parse(retro()[baseline] as string) as {
+      fields: Record<string, unknown>;
+    };
+    delete stored.fields[notionFieldShortname('Nt0s')];
+    retro()[baseline] = JSON.stringify(stored);
+
+    await syncNotion(store, transport);
+    expect(retro()[notes]).toBe('Keep this bold');
+  });
+
+  it('keeps a formatted cell cleared here cleared, rather than refilling it (#536 review)', async () => {
+    const { store, transport } = await run();
+    const notes = [...store.resources].find(
+      ([, p]) => p[atomic.shortname] === notionFieldShortname('Nt0s'),
+    )![0];
+    const retro = () =>
+      [...store.resources.values()].find(
+        p => p[PARENT] === TABLE && p[atomic.name] === 'Retrospective',
+      )!;
+    expect(retro()[notes]).toBe('Keep this bold');
+    delete retro()[notes];
+    await syncNotion(store, transport);
+    expect(retro()).not.toHaveProperty(notes);
   });
 
   it('only ever reads: every relayed request is a POST list', async () => {
