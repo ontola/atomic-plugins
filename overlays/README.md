@@ -206,51 +206,6 @@ Calendar overlay through the syncables client. No provider was called.
 | [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
 | [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
 
-## GitHub patch formats
-
-[GitHub Issues crud-causality v2](APIs/github.com/github-issues/1.1.4/crud-causality-v2-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml)
-and [GitHub REST crud-causality v2](APIs/github.com/api.github.com/1.1.4/crud-causality-v2-920631db31e628be547e9366821d3ebc7fa0ead5-overlay.yaml)
-replace v1's `patchFormat: merge`, which [CRUD Causality §4.6](../openapi-extensions/spec/crud-causality/README.md#46-patch-formats)
-does not define, so a consumer did not know the body format and sent the
-full record. The issue and comment PATCHes are `jsonMergePatch`: the body is
-a partial object, and GitHub's
-[Update an issue](https://docs.github.com/en/rest/issues/issues#update-an-issue)
-reference documents merge-patch behaviour for its fields ("use null to
-remove the current milestone"; labels and assignees replace the stored set,
-`[]` clears it). GitHub does not name RFC 7396 and takes `application/json`.
-In github-issues the two label writes keep `mode: patch` and say
-`patchFormat: custom`. v1 also gives its added fields (the issue `number`,
-the comment `id`) `source: server`, which §4.5 does not define; v2 says
-`generated`, so a consumer leaves its own placeholder for them out of the
-create body. Nothing else changes; v1 stays published. No dated
-catalog selects v2 yet. `tests/test_github_crud_patch_format.py` checks
-that every update of each composition names a rule-5 mode and a §4.6
-format, that v2 differs from v1 only in patch formats, added-field sources
-and descriptions, and that the CRUD Causality validator passes. No provider was called.
-
-## GitHub compound creates
-
-[GitHub Issues compound create](APIs/github.com/github-issues/1.1.4/compound-create-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml)
-declares a [CRUD Causality 0.5.0](../openapi-extensions/spec/crud-causality/README.md#47-compound-creates)
-compound create for an issue with labels: the create sends `labels`
-(`create: include`), and the follow-up `issues-add-labels` adds those the
-created issue lacks (`itemKey: name`). GitHub's
-[Create an issue](https://docs.github.com/en/rest/issues/issues#create-an-issue)
-says "Only users with push access can set labels for new issues. Labels are
-silently dropped otherwise", and the follow-up can be refused after the issue
-exists, so the create is then partly applied. It composes after
-crud-causality v2, not v1: v2's issue number is a `generated` added field,
-so a create body leaves the client's placeholder out. syncables reads `followUps` since 0.22.0. Declared, not verified
-against a live account. No dated catalog selects it yet.
-`tests/test_github_compound_create.py` checks it with the spec's
-`compound_create`. `tests/github_compound_create_syncables.test.ts` runs it
-through syncables on the catalog's bytes (a dropped label added by the
-follow-up; a 403 follow-up failed, the create not sent again). No CI
-workflow runs the `overlays/tests/*.test.ts` files (overlays CI runs only
-`test_*.py`, and syncables' vitest config covers only `syncables/__tests__`),
-so run it by hand from `syncables/` after `npm ci`:
-`npx vitest run --root .. overlays/tests/github_compound_create_syncables.test.ts`.
-
 ## Google Calendar deletion feed
 
 [Google Calendar v3 deletion feed](APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
@@ -291,6 +246,52 @@ appears (both may appear cancelled in the source calendar while the event
 still exists elsewhere). No dated catalog selects it yet.
 `tests/test_calendar_deletion_feed.py` checks the declaration against the
 composed document and the pinned wording. No provider was called.
+
+## GitHub patch formats
+
+[GitHub Issues crud-causality v2](APIs/github.com/github-issues/1.1.4/crud-causality-v2-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml)
+and [GitHub REST crud-causality v2](APIs/github.com/api.github.com/1.1.4/crud-causality-v2-920631db31e628be547e9366821d3ebc7fa0ead5-overlay.yaml)
+replace v1's `patchFormat: merge`, which [CRUD Causality §4.6](../openapi-extensions/spec/crud-causality/README.md#46-patch-formats)
+does not define, so a consumer did not know the body format and sent the
+full record. The issue and comment PATCHes are `jsonMergePatch`: the body is
+a partial object, and GitHub's
+[Update an issue](https://docs.github.com/en/rest/issues/issues#update-an-issue)
+reference documents merge-patch behaviour for its fields ("use null to
+remove the current milestone"; labels and assignees replace the stored set,
+`[]` clears it). GitHub does not name RFC 7396 and takes `application/json`.
+In github-issues the two label writes keep `mode: patch` and say
+`patchFormat: custom`. v1 also gives its added fields (the issue `number`,
+the comment `id`) `source: server`, which §4.5 does not define; v2 says
+`generated`, so a consumer leaves its own placeholder for them out of the
+create body. Nothing else changes; v1 stays published. No dated
+catalog selects v2 yet. `tests/test_github_crud_patch_format.py` checks
+that every update of each composition names a rule-5 mode and a §4.6
+format, that v2 differs from v1 only in patch formats, added-field sources
+and descriptions, and that the CRUD Causality validator passes. No provider
+was called.
+
+## GitHub compound creates
+
+[GitHub Issues compound create](APIs/github.com/github-issues/1.1.4/compound-create-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml)
+declares a [CRUD Causality 0.5.0](../openapi-extensions/spec/crud-causality/README.md#47-compound-creates)
+compound create for an issue with labels: the create sends `labels`
+(`create: include`), and the follow-up `issues-add-labels` adds those the
+created issue lacks (`itemKey: name`). GitHub's
+[Create an issue](https://docs.github.com/en/rest/issues/issues#create-an-issue)
+says "Only users with push access can set labels for new issues. Labels are
+silently dropped otherwise", and the follow-up can be refused after the issue
+exists, so the create is then partly applied. It composes after
+crud-causality v2, not v1: v2's issue number is a `generated` added field,
+so a create body leaves the client's placeholder out. syncables reads
+`followUps` since 0.22.0. Declared, not verified against a live account. No
+dated catalog selects it yet. `tests/test_github_compound_create.py` checks it with the spec's
+`compound_create`. `tests/github_compound_create_syncables.test.ts` runs it
+through syncables on the catalog's bytes (a dropped label added by the
+follow-up; a 403 follow-up failed, the create not sent again). No CI
+workflow runs the `overlays/tests/*.test.ts` files (overlays CI runs only
+`test_*.py`, and syncables' vitest config covers only `syncables/__tests__`),
+so run it by hand from `syncables/` after `npm ci`:
+`npx vitest run --root .. overlays/tests/github_compound_create_syncables.test.ts`.
 
 ## Google Calendar throttling
 
@@ -753,7 +754,6 @@ RFC 8288 next relation; private relationship IDs can differ from visible
 account or status IDs. Unpaged batch reads, directory offsets and instance
 peer reads are excluded. Server selection and dynamic OAuth registration
 remain separate from this pagination metadata.
-
 
 The six Google variants use opaque `nextPageToken` values as `pageToken`,
 with `pageSize` or `maxResults` only as declared on that operation. A short
