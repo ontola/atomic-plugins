@@ -148,34 +148,46 @@ fails through 2026-10-11 and reads as empty through this catalog;
 and stepped over under v3); run them from `syncables/` with
 `npx vitest run --root .. overlays/tests/<file>`.
 
-## Read tombstones
+## Read and list tombstones
 
-[Google Calendar v3 read tombstones](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
-declares [Deletion Feeds 0.2.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#44-read-tombstones)
-`x-read-tombstone: { field: status, values: [cancelled] }` on the event read
-(`GET /calendars/{calendarId}/events/{eventId}`). The pinned document's
-`Event.status` says "cancelled" is "The event is cancelled (deleted)", that
-"The get method always returns them", and that on the organizer's calendar
-cancelled events "can be restored (undeleted)"; a consumer treats every
-read tombstone as restorable. The document sets cancelled exceptions of a
-recurring event apart: "Cancelled exceptions of an uncancelled recurring
-event indicate that this instance should no longer be presented to the
-user. Clients should store these events for the lifetime of the parent
-recurring event." They are declared too: the object is that one instance
-(its own event id), its status is the same "cancelled" defined as
-"(deleted)", and an instance that should no longer be presented is that
-occurrence's deletion, not an archived state of a live object; a consumer
-concludes about the instance it read, never about the series, and a read
-tombstone does not remove a stored exception. A consumer that lists events
-with `showDeleted=true`, or with `syncToken` or `updatedMin`, never hits
-this, because cancelled events then appear in the list itself; the Calendar
-drive app lists with `showDeleted=true`. It is declared on the operation, so it
-applies with either crud-causality overlay, and no dated catalog selects
-it yet. syncables reads it (`x-read-tombstone`, since #330): when a pending
-edit's event is missing from a complete read and its GET answers
-`status: cancelled`, the edit fails as `deleted` rather than `filtered`. No
-deletion feed over the event list is declared (Deletion Feeds §8).
-`tests/test_calendar_read_tombstone.py` composes it after the catalog's
+Google Calendar v3 declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#43-tombstone-object)
+tombstones on its events with one reading, wherever an event is answered:
+
+* [read tombstones, revision 2](APIs/googleapis.com/calendar/v3/read-tombstone-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml):
+  `x-read-tombstone: { field: status, values: [cancelled], except: [{
+  field: recurringEventId, present: true }] }` on the event read
+  (`GET /calendars/{calendarId}/events/{eventId}`);
+* [list tombstones](APIs/googleapis.com/calendar/v3/list-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml):
+  `x-list-tombstone` with the same marker and exception on the event list
+  (`GET /calendars/{calendarId}/events`).
+
+The pinned document's `Event.status` says "cancelled" is "The event is
+cancelled (deleted)", that "The get method always returns them", that the
+list returns them with `showDeleted=true` or on incremental sync, and that
+on the organizer's calendar cancelled events "can be restored (undeleted)";
+a consumer treats every such tombstone as restorable. The document gives
+"cancelled" a second meaning: "Cancelled exceptions of an uncancelled
+recurring event indicate that this instance should no longer be presented
+to the user. Clients should store these events for the lifetime of the
+parent recurring event", and "All other cancelled events represent deleted
+events". A cancelled exception carries `recurringEventId`, so the `except`
+condition keeps it out of both declarations: it is not a deletion, whether a
+read or a list answers it, as Deletion Feeds §4.3 requires of a marked state
+the provider documents as something else. A cancelled exception of a
+deleted series is kept too (the item does not say its series' state). In a
+`singleEvents=false` list, as the Calendar drive app reads, the series' own
+item, which has no `recurringEventId`, reports the series. With
+`singleEvents=true` there is no series item: every instance carries
+`recurringEventId`, so the instances of a deleted series are kept as
+members and nothing in that list reports the deletion. This supersedes the reading of
+the first read-tombstone revision,
+[`read-tombstone-32237fa5…`](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(#489), which declared cancelled exceptions as deletions of their
+occurrence; that file stays, as published revision files are immutable,
+and no catalog selects it. Both declarations are on operations, so they
+apply with either crud-causality overlay, and no dated catalog selects them
+yet. syncables reads both. `tests/test_calendar_read_tombstone_v2.py` and
+`tests/test_calendar_list_tombstone.py` compose them after the catalog's
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
 
@@ -193,6 +205,47 @@ Calendar overlay through the syncables client. No provider was called.
 | --- | --- | --- |
 | [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
 | [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
+
+## Google Calendar deletion feed
+
+[Google Calendar v3 deletion feed](APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md)
+`x-deletion-feed` on the `events` collection: the feed is the event list
+itself (`calendar.events.list`), read with the cursor `syncToken` and its
+pages only; the cursor for the next read is `nextSyncToken`, "present only
+on the very last page"; a 410 ("sync tokens are invalidated") drops the
+cursor; cancelled events are the tombstones, except items with
+`recurringEventId` (cancelled exceptions, which clients store), the same
+`except` as the read and list tombstones above. The pinned document's
+`syncToken` says "All events deleted since the previous list request will
+always be in the result set and it is not allowed to set showDeleted to
+False", so the feed needs no `showDeleted`, and every feed read sends the
+same parameters, as Google's
+[sync guide](https://developers.google.com/workspace/calendar/api/guides/sync)
+asks. So the first cursor comes from a feed read without a cursor, never
+from the drive app's own list read (`singleEvents=false&showDeleted=true`),
+whose token would then be sent without those parameters. That first read is
+a full listing and counts against the consumer's record budget (syncables'
+`maxRecords`, 5000 by default): a calendar with more events never completes
+it and never gets a cursor. Members and tombstones are those
+`singleEvents=false` (the default) returns: a series is its master event,
+plus exceptions with their own ids; a deleted series has one tombstone, the
+master's, and its instances get none.
+
+It composes with `app-crud-causality-32237fa5…` (the catalogs' choice) or
+`crud-causality-32237fa5…`, both tested, and is selected with
+`read-tombstone-v2-32237fa5…`, not the first revision. Do not select it with
+`pagination-v2-32237fa5…`, whose event-list description says "Full listing
+only: omit syncToken". The first read-tombstone revision's comment "Not
+declared: an `x-deletion-feed` over the event list" is stale since this
+overlay; that file is published and stays as it is. Not verified and not
+documented: that a feed read returns an event at most once; what it returns
+for the exceptions of a deleted series; how an event moved to another
+calendar (`events.move`) or an attendee's copy after the attendee is removed
+appears (both may appear cancelled in the source calendar while the event
+still exists elsewhere). No dated catalog selects it yet.
+`tests/test_calendar_deletion_feed.py` checks the declaration against the
+composed document and the pinned wording. No provider was called.
 
 ## GitHub patch formats
 
@@ -286,6 +339,30 @@ version of the extension does not describe. No dated catalog selects it
 yet. `tests/test_asana_throttling.py` composes it alone and after the
 catalog's Asana overlays and classifies a synthetic 429. No provider was
 called.
+
+## Discord throttling
+
+[Discord API v10 throttling](APIs/discord.com/10/throttling-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+declares [Throttling 0.3.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Discord's [rate-limits page](https://docs.discord.com/developers/topics/rate-limits)
+and the pinned OAD's own headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
+`X-RateLimit-Reset-After` (in seconds), `Retry-After`, the 429 body's
+`retry_after`, and a 429 as `throttled` with no bucket named (Discord's
+per-route buckets are named only at run time). Discord types the reset and
+delay values as numbers and its example has a fraction (`retry_after:
+64.57`); the extension's units are whole seconds, so a fractional value is
+ignored and the consumer falls back to `Retry-After` or its own backoff.
+Plainly: a consumer that follows the spec cannot use a fractional
+`X-RateLimit-Reset-After` or `retry_after` at all, because the Throttling
+spec allows whole seconds only.
+Not declared: the global limit, which applies to bots and users ("Global
+rate limits apply to the total number of requests a bot or user makes") but
+has a published number only for bots ("All bots can make up to 50 requests
+per second"); the per-route limits, which have no published numbers; and the invalid-request limit, which counts only 401, 403 and 429
+responses. No dated catalog selects it yet.
+`tests/test_discord_throttling.py` composes it alone and after the
+catalog's Discord overlays and classifies synthetic responses, fractions
+included. No provider was called.
 
 ## Directory layout and OAD revisions
 
@@ -654,7 +731,6 @@ account or status IDs. Unpaged batch reads, directory offsets and instance
 peer reads are excluded. Server selection and dynamic OAuth registration
 remain separate from this pagination metadata.
 
-
 The six Google variants use opaque `nextPageToken` values as `pageToken`,
 with `pageSize` or `maxResults` only as declared on that operation. A short
 or empty page is not terminal while a token remains. Keep filters, masks,
@@ -1002,3 +1078,19 @@ schema shows offset fields; if Box answered it with offset fields and no
 against its base, and validates v2 and the Box platform composed from the
 catalog. Declared from Box's documentation and the pinned OAD; no Box
 request was made.
+
+A standalone [throttling overlay](APIs/box.com/2.0.0/throttling-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
+declares Box's documented [rate limits](https://developer.box.com/guides/api-calls/permissions-and-errors/rate-limits)
+(Throttling 0.2.0-draft or later, `limits` and `headers`): 1000 requests per
+minute per user on every operation, plus 240 per minute per user on the two
+direct uploads, 6 per second and 60 per minute per user and 12 per second per
+enterprise on search, and Box Sign's 100 (create, resend) and 1000 (get, and
+also the list) per minute per user; and the `retry-after` header in seconds.
+Box does not say whether upload, search and Sign requests also count against
+the general 1000 per minute; keeping that bucket on them is the conservative
+choice, not a documented one, and makes the Sign read bucket duplicate it.
+No dated catalog selects the overlay. `tests/test_box_throttling.py` composes
+it with its pinned OAD, in either order with each Box pagination overlay a
+dated catalog selects (v3 in the newest, `catalog/2026-10-12-tasks-box-pages.json`;
+v2 and v1 in older ones), checks the buckets and their operations, and classifies
+a synthetic `429`. No provider was called.

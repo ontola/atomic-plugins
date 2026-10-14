@@ -1,0 +1,149 @@
+# Synthetic: the §7.1 widget lifecycle with §7.3's second collection and
+# §7.4's targeted delete, and §7.6's time entries that reference projects.
+# Every rule of §8 holds. Not a real provider.
+openapi: 3.0.3
+info:
+  title: Illustrative widget lifecycle and references
+  version: 1.0.0
+servers:
+  - url: https://api.example.com
+components:
+  schemas:
+    Widget:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        createdAt: { type: string, format: date-time }
+    TimeEntry:
+      type: object
+      properties:
+        id: { type: string }
+        description: { type: string }
+        projectId: { type: string, nullable: true }
+  crudResources:
+    widget:
+      schema:
+        $ref: '#/components/schemas/Widget'
+      identity:
+        urlTemplate: /widgets/{widgetId}
+        bindings:
+          widgetId: { field: id }
+      collections:
+        widgets:
+          urlTemplate: /widgets
+          envelope: { itemsField: results }
+        recentWidgets:
+          urlTemplate: /widgets/recent
+    project:
+      identity:
+        urlTemplate: /workspaces/{workspaceId}/projects/{projectId}
+        bindings:
+          projectId: { field: id }
+      collections:
+        projects:
+          urlTemplate: /workspaces/{workspaceId}/projects
+    timeEntry:
+      schema:
+        $ref: '#/components/schemas/TimeEntry'
+      identity:
+        urlTemplate: /workspaces/{workspaceId}/time-entries/{timeEntryId}
+        bindings:
+          timeEntryId: { field: id }
+      references:
+        project:
+          resource: project
+          required: false
+          bindings:
+            projectId: { field: projectId }
+      collections:
+        timeEntries:
+          urlTemplate: /workspaces/{workspaceId}/time-entries
+paths:
+  /widgets:
+    post:
+      operationId: createWidget
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Widget' }
+      x-crud:
+        action: create
+        resource: widget
+        url: { source: header, name: Location }
+        addedFields:
+          id:
+            schema: { type: string, format: uuid }
+            source: generated
+          createdAt:
+            schema: { type: string, format: date-time }
+            source: generated
+        memberOf: [widgets, recentWidgets]
+      responses:
+        '201': { description: Created }
+    get:
+      operationId: listWidgets
+      x-crud: { action: list, resource: widget, collection: widgets }
+      responses:
+        '200': { description: Widgets }
+  /widgets/recent:
+    get:
+      operationId: listRecentWidgets
+      x-crud: { action: list, resource: widget, collection: recentWidgets }
+      responses:
+        '200': { description: Recently created widgets }
+  /widgets/{widgetId}:
+    parameters:
+      - { name: widgetId, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getWidget
+      x-crud: { action: read, resource: widget }
+      responses:
+        '200': { description: A widget }
+    put:
+      operationId: replaceWidget
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Widget' }
+      x-crud: { action: update, mode: replace, resource: widget }
+      responses:
+        '200': { description: The widget }
+    patch:
+      operationId: patchWidget
+      requestBody:
+        content:
+          application/merge-patch+json:
+            schema: { type: object }
+      x-crud: { action: update, mode: patch, patchFormat: jsonMergePatch, resource: widget }
+      responses:
+        '200': { description: The widget }
+    delete:
+      operationId: deleteWidget
+      x-crud: { action: delete, resource: widget, removesFrom: '*' }
+      responses:
+        '204': { description: Deleted }
+  /widgets/{widgetId}/recent:
+    parameters:
+      - { name: widgetId, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: forgetRecentWidget
+      x-crud: { action: delete, resource: widget, removesFrom: [recentWidgets] }
+      responses:
+        '204': { description: No longer listed as recent }
+  /workspaces/{workspaceId}/projects:
+    parameters:
+      - { name: workspaceId, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listProjects
+      x-crud: { action: list, resource: project, collection: projects }
+      responses:
+        '200': { description: Projects }
+  /workspaces/{workspaceId}/time-entries:
+    parameters:
+      - { name: workspaceId, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: listTimeEntries
+      x-crud: { action: list, resource: timeEntry, collection: timeEntries }
+      responses:
+        '200': { description: Time entries }

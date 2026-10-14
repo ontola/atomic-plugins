@@ -20,13 +20,13 @@ After the thank-you, end your final message with the exact token [END] on its ow
 
 This session runs on invented sample data. The app is already connected when it opens and syncs by itself: there is no Notion sign-in and no page picker. A yellow line above the app says so. Not seeing Notion, or the content not being theirs, is expected and not a finding; the page picker can only be tested with a real account (`notion.md`). If they install the real "Notion" entry by mistake, steer them back to the one marked "(sample data)".
 
-The sample workspace: "Roadmap" with "Launch plan" (In progress, 3 points), "Write changelog" (Done) and "Retrospective" (Not started); "Reading list" with "Thinking in Systems" (Reading) and "Local-first software" (Finished). One roadmap note has bold text, which is not copied.
+The sample workspace: "Roadmap" with "Launch plan" (In progress, 3 points), "Write changelog" (Done) and "Retrospective" (Not started); "Reading list" with "Thinking in Systems" (Reading) and "Local-first software" (Finished). One roadmap note has bold text: it is copied as plain text, without the bold, and an edit to it is not sent back (from Notion 0.5.3).
 
 What success looks like, never to be said:
 
 - Task 2: they install "Notion (sample data)". It syncs on open, and both databases go into one table with a Data source column. The app itself shows only a status card: the two databases with their row counts, the last sync, and an "Open table" button; the rows are in the table (also in the sidebar, under the app, as "Pages").
 - Task 3: the status card says "Roadmap 3 rows" and "Reading list 2 rows". Counting in the table also counts.
-- Task 4: "Sync details" in the app lists what was skipped and why (the formatted note). The question is whether they find and understand it.
+- Task 4: "Sync details" in the app lists what was skipped or changed and why (the formatted note, copied as plain text). The question is whether they find and understand it.
 - Task 5: they edit Points in the table, go back to the app, see "1 change in 1 row not sent to Notion yet", open "Review changes" (3 → 5), and press Send; "Sent to Notion" shows. Whether they expect the edit to reach Notion by itself, and whether they find the review, are the findings.
 - Task 6: More (⋯) → Disconnect Notion…, then confirm. The rows stay.
 

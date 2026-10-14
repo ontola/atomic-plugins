@@ -482,6 +482,29 @@ def _role_value(body, scheme, role):
     return None
 
 
+def _json_equal(a, b):
+    """JSON equality of two scalars: numbers by value (1 equals 1.0), everything else by type and value."""
+    number = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    if number(a) and number(b):
+        return a == b
+    return type(a) is type(b) and a == b
+
+
+def response_incomplete(scheme, body):
+    """Whether a response body is marked incomplete by the scheme's Incomplete Object (§4.4.6)."""
+    marker = scheme.get("response", {}).get("incomplete")
+    if not isinstance(marker, dict):
+        return False
+    value = body
+    for segment in marker["field"].split("."):
+        if not isinstance(value, dict) or segment not in value:
+            return False
+        value = value[segment]
+    if "equals" in marker:
+        return _json_equal(value, marker["equals"])
+    return any(_json_equal(value, v) for v in marker.get("in", []))
+
+
 def _count(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
@@ -522,6 +545,7 @@ def read_pages(scheme, request, *, page_size=None, maximum=None, identity=lambda
     size = page_size if short["size"] == "request" else (
         min(short["size"], page_size) if size_fields else short["size"])
     items, seen, pages = [], set(), 0
+    marked = False  # §4.4.6: any marked response makes the read not complete
     number = first
     while True:
         if max_pages is not None and pages >= max_pages:
@@ -531,6 +555,7 @@ def read_pages(scheme, request, *, page_size=None, maximum=None, identity=lambda
         body = request(values)
         page = page_items(body, scheme)
         pages += 1
+        marked = marked or response_incomplete(scheme, body)
         reported = _count(_role_value(body, scheme, "pageSize"))
         full = reported if reported else size
         if len(page) > full:
@@ -550,9 +575,10 @@ def read_pages(scheme, request, *, page_size=None, maximum=None, identity=lambda
                 if short["assurance"] == "documented":
                     raise PageReadError(f"page {number} is short, but the response says more pages follow")
                 return {"items": items, "pages": pages, "complete": False}
-            return {"items": items, "pages": pages, "complete": ended or short["assurance"] == "documented"}
+            return {"items": items, "pages": pages,
+                    "complete": (ended or short["assurance"] == "documented") and not marked}
         if ended:
-            return {"items": items, "pages": pages, "complete": True}
+            return {"items": items, "pages": pages, "complete": not marked}
         number += 1
 
 
@@ -594,6 +620,7 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
     if links_lead and follow is None:
         raise ValueError("a scheme that declares a nextLink needs follow")
     items, seen, offsets, links = [], set(), [], []
+    marked = False  # §4.4.6: any marked response makes the read not complete
     offset = 0
     link = None
     while True:
@@ -610,6 +637,7 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
             offsets.append(offset)
             where = f"the page at offset {offset}"
         page = page_items(body, scheme)
+        marked = marked or response_incomplete(scheme, body)
         ids = [identity(item) for item in page]
         if any(i in seen for i in ids):
             raise PageReadError(f"{where} holds an item an earlier page returned")
@@ -621,7 +649,7 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
             if link is None or link == "":
                 total_count = _count(_role_value(body, scheme, "totalCount"))
                 return {"items": items, "pages": len(offsets) + len(links), "offsets": offsets, "links": links,
-                        "complete": total_count is None or total_count <= len(items)}
+                        "complete": (total_count is None or total_count <= len(items)) and not marked}
             continue
         total_count = _count(_role_value(body, scheme, "totalCount"))
         if advance == "pageSize":
@@ -633,13 +661,16 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
             following = offset + step
             if total_count is not None:
                 if following >= total_count:
-                    return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links, "complete": True}
+                    return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links,
+                            "complete": not marked}
             elif not page:
-                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links, "complete": True}
+                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links,
+                        "complete": not marked}
         else:
             following = offset + len(page)
             if not page or (total_count is not None and following >= total_count):
-                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links, "complete": True}
+                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links,
+                        "complete": not marked}
         offset = following
 
 
