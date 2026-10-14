@@ -68,6 +68,8 @@ const REFRESH_LEASE_SECONDS: f64 = 30.0;
 /// Schema, created idempotently at startup. The tables of the tenant era
 /// (`oauth_states`, `connection_codes`) are no longer read or written; they
 /// are left in place rather than dropped, see the README's flag-day notes.
+pub(crate) const SCHEMA_LOCK: i64 = 7_316_186_474_691_124_077;
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS used_challenges (nonce TEXT PRIMARY KEY, expires_at TIMESTAMPTZ NOT NULL);
 CREATE INDEX IF NOT EXISTS used_challenges_expires_at_idx ON used_challenges (expires_at);
@@ -200,6 +202,7 @@ fn db_error(error: tokio_postgres::Error) -> String {
 #[derive(Clone)]
 pub struct Security {
     database: Arc<RwLock<Arc<Client>>>,
+    pub(crate) device_pool: Arc<crate::webhooks::pool::Pool>,
     encryption_key: [u8; 32],
     /// `HMAC-SHA256(ENCRYPTION_KEY, KEY_CHECK_SUBKEY_LABEL)`: the key of the
     /// key-check buckets, so the encryption key itself is used only by
@@ -239,13 +242,14 @@ impl Security {
             let driver = tokio::spawn(setup_connection);
             let transaction = setup.transaction().await.map_err(db_error)?;
             transaction
-                .query_one(
-                    "SELECT pg_advisory_xact_lock($1)",
-                    &[&7_316_186_474_691_124_077_i64],
-                )
+                .query_one("SELECT pg_advisory_xact_lock($1)", &[&SCHEMA_LOCK])
                 .await
                 .map_err(db_error)?;
             transaction.batch_execute(SCHEMA).await.map_err(db_error)?;
+            transaction
+                .batch_execute(crate::device::store::SCHEMA)
+                .await
+                .map_err(db_error)?;
             transaction.commit().await.map_err(db_error)?;
             drop(setup);
             let _ = driver.await;
@@ -255,6 +259,7 @@ impl Security {
         let database = Arc::new(RwLock::new(Arc::new(client)));
         spawn_reconnect_supervisor(database_url.to_string(), database.clone(), connection);
         Ok(Self {
+            device_pool: Arc::new(crate::webhooks::pool::Pool::new(database_url, 4)),
             database,
             key_check_key: hmac_sha256(&encryption_key, &[KEY_CHECK_SUBKEY_LABEL]),
             idempotency_key: hmac_sha256(&encryption_key, &[IDEMPOTENCY_SUBKEY_LABEL]),
@@ -285,7 +290,7 @@ impl Security {
     /// The client currently backing this connection. Held only for the
     /// duration of one query: a reconnect replaces the shared client without
     /// invalidating a client already in hand.
-    async fn client(&self) -> Arc<Client> {
+    pub(crate) async fn client(&self) -> Arc<Client> {
         self.database.read().await.clone()
     }
 

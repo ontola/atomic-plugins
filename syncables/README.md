@@ -771,10 +771,28 @@ known values stay visible, marked by the `onMissingRecord` report and
 stored in the outbox (`unavailable`, added within version 1), until a later
 read settles it (a complete read that returns it, a GET that answers 2xx,
 or evidence of its deletion, after which the record is removed again; a
-write to it that the provider accepts also ends the mark). Not yet: a kept
-record without writes is not looked up again by itself, so it stays kept
-until a read returns it or a new write to it is checked (lookups of such
-records are the next step). A new `update()` or `remove()` of a kept record
+write to it that the provider accepts also ends the mark). A kept record
+without writes is read again by later syncs wherever the collection makes
+checks (the same rule as for a vanished record: `missingRecordChecks:
+'all'`, `absent: removed`, or a parent of a `parentAbsent` collection;
+never under `'none'`). A kept record with queued or failed writes is not:
+its writes say what became of it, and a failed one is resolved with
+`resolveWrite`. The re-reads come in a second pass, after every
+collection's unconfirmed records and the records its read newly lacks
+(those go first within each collection), and share what is left of
+`maxMissingRecordChecks`, a limit per sync across all collections. Within
+that pass the record checked longest ago goes first (one never checked
+before any other; the time is stored with the mark), so a small limit
+reads each kept record in turn rather than the same one every sync. The
+time moves only when a check ran: a record that the request budget
+(`limits.maxRequests`, the timeout) or a 429 left unread keeps its place
+and goes first next time. Each
+re-read is reported to `onMissingRecord` again, whatever it finds. A 404
+under `notFound: unavailable` keeps it kept, and tells `onPresence` nothing
+again; a 2xx shows
+it exists outside the collection, so it leaves the copy (told `removed`);
+an answer the document concludes as deletion removes it (told `deleted`).
+A new `update()` or `remove()` of a kept record
 is held for the next refresh, which checks the record again. A queued
 delete of a record a complete read no longer returns is held like an update
 and checked first: released and sent when the read says deleted, present
@@ -1519,11 +1537,12 @@ from its local copy). A client from before the presence marks, which already
 keeps unavailable records, keeps the kept records but not their `presence`
 or `source`: once it
 stores the outbox again, `unconfirmed` and retained `deleted` marks come
-back after an upgrade as `unavailable` for good (kept, not checked again by
-themselves). A `presence` value this client does not know is read as
-`unavailable` in the same way. A client from before `lastSeen` drops it
-the same way. The version stays `1` because an older client can
-read every write it holds and either sends it or keeps it unchanged, with
+back after an upgrade as `unavailable` (kept, and read again only where
+the collection makes checks). A `presence` value this client does not know
+is read as `unavailable` in the same way. A client from before `lastSeen`
+drops it the same way, and one from before `checked` (when a re-read last
+checked a kept record) drops that, so its records count as never checked.
+The version stays `1` because an older client can read every write it holds and either sends it or keeps it unchanged, with
 those caveats: settle or discard merge-patch updates, unbound creates and
 writes held as unavailable before downgrading. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
@@ -1753,7 +1772,17 @@ const { records, ontology, errors } = await readPlatform(document, {
   of `equals` and `in`, a value that is not a JSON scalar, or a scheme
   other than pageNumber, pageToken or nextLink) makes the scheme
   invalid, so a read that applies it explicitly fails rather than being
-  taken as complete.
+  taken as complete. A scheme that auto-detection would apply but that is
+  invalid for any reason (such a declaration included) is not applied;
+  when no valid scheme matches the operation instead, the read makes one
+  request and is not complete: `readCollections` gives `complete: false`
+  with a `notComplete` naming the scheme and its problems, `paginate`
+  fills an `outcome`, and `sync()` applies it as an incomplete read
+  (nothing removed, checked or concluded from absence). Apply such a
+  scheme with an explicit `x-pagination` entry to have the read fail
+  instead.
+  An `outcome` passed to `paginate` again starts clean: an earlier walk's
+  mark does not carry over.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -1934,6 +1963,30 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   ignored, and each name is read from the item's own fields only. Before, any
   nonempty string was read as a path. A stored presence mark with
   `source: 'list'` is restored; an older client drops that mark's source.
+- **Unreleased**: A record kept `unavailable` without writes is read
+  again by later syncs wherever its collection makes checks
+  (`missingRecordChecks: 'all'`, `absent: removed`, a `parentAbsent`
+  parent), unless it has queued or failed writes. Before, it stayed kept
+  until a list read returned it. The re-reads run in a second pass, after
+  every collection's unconfirmed and newly missing records, within what is
+  left of `maxMissingRecordChecks` (a limit per sync, across collections),
+  the record checked longest ago first (a record the request budget or a
+  429 left unread keeps its place); the outbox stores that time with the
+  mark (`checked`, added within version 1). A 2xx now removes it from
+  the copy (it exists outside the collection), and an answer concluding
+  deletion removes it; a 404 under `notFound: unavailable` keeps it
+  without telling `onPresence` again. Behaviour change: more item GETs
+  where such records are kept, and `onMissingRecord` is called again on
+  every re-check.
+- **Unreleased**: Behaviour fix: a pagination scheme that auto-detection
+  would apply to an operation but that fails validation was dropped, and
+  the read made one request and took that page as the whole collection,
+  so `absent: removed` or `deleted` (or `missingRecordChecks`) could
+  remove or conclude records that were on later pages. When no valid
+  scheme matches, such a read is now not complete (`notComplete` names the
+  scheme; `sync()` lists it in `SyncResult.incomplete` and removes
+  nothing). `invalidAutoDetected` (exported) tells whether an operation is
+  in that case.
 - **0.22.1**: CRUD Causality 0.6.0 list-only resources and Produced Classes
   0.1.1-draft. Behaviour change to know before upgrading: in a CRUD
   Causality document, `create()` on a resource without `identity` now
