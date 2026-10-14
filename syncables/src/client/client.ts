@@ -4374,8 +4374,9 @@ export function createApiClient(
   const conditionalTransport: Transport = async (request) => {
     const operation = readOperation(request);
     // A paginated operation is not cached conditionally. An explicit
-    // x-pagination that cannot be applied counts as paginated here; the read
-    // itself fails on it (walkPages).
+    // x-pagination that cannot be applied counts as paginated here (the read
+    // itself fails on it, walkPages), and so does an invalid scheme that
+    // auto-detection would apply (the read is not complete).
     const cacheable = request.method === 'GET' && !paginated(operation);
     const key = request.url.href;
     const cached = cacheable ? conditionalCache.get(key) : undefined;

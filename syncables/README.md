@@ -1007,8 +1007,9 @@ becomes the cursor, and without one the cursor is dropped, so the next read
 has none. A declaration that does not parse (no GET operation with that
 `operationId`, a cursor without `parameter` or `responseField`, `tombstone`
 `values` that are not a non-empty list of strings, numbers and booleans, and
-so on) is ignored. No overlay declares `x-deletion-feed`, and the behaviour
-has not been verified against a real provider.
+so on) is ignored. Which overlays declare `x-deletion-feed` is listed in
+[`overlays/`](../overlays/); the behaviour has not been verified against a
+real provider.
 
 ### Read tombstones
 
@@ -1808,9 +1809,16 @@ const { records, ontology, errors } = await readPlatform(document, {
   request and is not complete: `readCollections` gives `complete: false`
   with a `notComplete` naming the scheme and its problems, `paginate`
   fills an `outcome`, and `sync()` applies it as an incomplete read
-  (nothing removed, checked or concluded from absence). Apply such a
-  scheme with an explicit `x-pagination` entry to have the read fail
-  instead.
+  (nothing removed, checked or concluded from absence). Such an
+  operation reads not complete on every sync, until the document changes:
+  fix the scheme, set `autoDetect: false` on it (the operation is then
+  read unpaginated, one request taken as the whole list, so only where
+  that is true), or apply a valid scheme with an explicit `x-pagination`
+  entry. An explicit entry naming the invalid scheme makes the read fail
+  instead. `x-pagination: []` applies nothing and does not opt out: the
+  operation is still matched by auto-detection. A scheme whose
+  `autoDetect` is neither a boolean nor an object (`null`) is invalid
+  too, and auto-detection reads it as the default options.
   An `outcome` passed to `paginate` again starts clean: an earlier walk's
   mark does not carry over.
 - **User-defined fields** (draft
@@ -1955,81 +1963,111 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **Unreleased** (for 0.23.0): Pagination Schemes 0.8.0 `response.incomplete`
-  (§4.4.6): a response body value that marks a capped result (Notion's
-  `request_status.type: incomplete` past 10,000 results). A read in which
-  any response is marked is not complete: it pages on as before, but
-  `sync()` applies it as an incomplete read (nothing removed, checked or
-  concluded from absence) and lists it in `SyncResult.incomplete`.
-  `readPlatform` gains `ReadResult.incomplete`, which lists every
-  collection read without an error but not completely (range windows,
-  undocumented short pages, and now marked results), and `paginate` takes
-  an `outcome` to fill. The validator checks rule 26; a scheme it refuses
-  is invalid, so an explicit application fails the read.
-  `responseIncomplete` and the `IncompleteObject` type are exported.
-  Behaviour change only for documents whose scheme declares
-  `response.incomplete`, apart from the additive `ReadResult.incomplete`.
-- **Unreleased**: Deletion Feeds 0.3.0-draft `except` conditions on every
-  Tombstone Object: a feed item or a read tombstone that matches one is not
-  a tombstone (a cancelled exception of a recurring event read by GET is
-  `filtered`, not `deleted`). Behaviour change only for documents that
-  declare `except`.
-- **Unreleased**: Deletion Feeds 0.3.0-draft list tombstones
-  (`x-list-tombstone`, K18): items of a collection's read that carry the
-  declared marker, and match no `except` condition, are not members:
-  `CollectionSnapshot.tombstones` lists their ids, `readPlatform` makes no
-  record of them, and `sync()` takes them as `deleted` evidence
-  (`source: 'list'`, no GET): a record without writes is told `deleted` and
-  removed (kept marked under `retainDeleted`, uncounted against
-  `maxMissingRecordChecks`), a held update fails as deleted and a held
-  delete is released and sent, also from a read that ends without an error
-  but is not complete. An object one read returns twice, as a member or a
-  list tombstone, fails the read as a repeated identity. Behaviour change
-  only for documents that declare `x-list-tombstone`, apart from the next
-  bullet.
-- **Unreleased**: A Tombstone Object's `field` (a feed's or a read
-  tombstone's, as a list tombstone's) must be a dot-path without an empty
-  segment: `a..b`, `.a` and `a.` no longer parse, so such a declaration is
-  ignored, and each name is read from the item's own fields only. Before, any
-  nonempty string was read as a path. A stored presence mark with
-  `source: 'list'` is restored; an older client drops that mark's source.
-- **Unreleased**: A record kept `unavailable` without writes is read
-  again by later syncs wherever its collection makes checks
-  (`missingRecordChecks: 'all'`, `absent: removed`, a `parentAbsent`
-  parent), unless it has queued or failed writes. Before, it stayed kept
-  until a list read returned it. The re-reads run in a second pass, after
-  every collection's unconfirmed and newly missing records, within what is
-  left of `maxMissingRecordChecks` (a limit per sync, across collections),
-  the record checked longest ago first (a record the request budget or a
-  429 left unread keeps its place); the outbox stores that time with the
-  mark (`checked`, added within version 1). A 2xx now removes it from
-  the copy (it exists outside the collection), and an answer concluding
-  deletion removes it; a 404 under `notFound: unavailable` keeps it
-  without telling `onPresence` again. Behaviour change: more item GETs
-  where such records are kept, and `onMissingRecord` is called again on
-  every re-check. Also changed with it: an unchanged read no longer
-  re-checks an `unconfirmed` record that has failed (held) writes either,
-  only one with no writes at all (before, only queued writes kept it
-  out), as a changed read already did; its failed writes say what became
-  of it. And a kept mark that an unchanged read lists as a list tombstone
-  is now settled as `deleted` even where the collection makes no checks,
-  as a changed read already did.
-- **Unreleased**: Behaviour fix: a pagination scheme that auto-detection
-  would apply to an operation but that fails validation was dropped, and
-  the read made one request and took that page as the whole collection,
-  so `absent: removed` or `deleted` (or `missingRecordChecks`) could
-  remove or conclude records that were on later pages. When no valid
-  scheme matches, such a read is now not complete (`notComplete` names the
-  scheme; `sync()` lists it in `SyncResult.incomplete` and removes
-  nothing). `invalidAutoDetected` (exported) tells whether an operation is
-  in that case.
-- **Unreleased**: `matchUnboundCreates` (off by default): an unbound
-  create (CRUD Causality 0.5.0 §4.3.2: a 2xx that did not identify the
-  record) is bound from the next complete read of its collection when it
-  sent a value of a field the app declares unique (`uniqueFields`) and
-  exactly one new record of that read matches every field it sent and no
-  other create. Bound creates are listed on `SyncResult.matched`. Before,
-  only `resolveWrite` `confirm` bound one.
+- **0.23.0**: a data-loss fix for pagination schemes that auto-detection
+  would apply but that are invalid; Pagination Schemes 0.8.0
+  `response.incomplete`; Deletion Feeds 0.3.0-draft list tombstones and
+  `except`; re-reads of kept unavailable records; and the opt-in
+  `matchUnboundCreates`. Behaviour changes to know before upgrading. The
+  first four bullets apply without any new declaration; the last three
+  only to documents that declare `x-list-tombstone`, `except` or
+  `response.incomplete`:
+  - **Data-loss fix (0.22.1 and earlier):** a pagination scheme that
+    auto-detection would apply to a list operation but that fails
+    validation was dropped, and the read made one request and took that
+    page as the whole collection, so `absent: removed`, `absent: deleted`
+    or `missingRecordChecks` could remove or conclude records that were on
+    later pages. When no valid scheme matches, such a read is now not
+    complete: `notComplete` names the scheme and its problems, and
+    `sync()` lists it in `SyncResult.incomplete` and removes nothing. It
+    stays so on every sync until the document changes (fix the scheme, or
+    set `autoDetect: false` on it); `x-pagination: []` does not opt out.
+    `invalidAutoDetected` (exported) tells whether an operation is in that
+    case;
+  - so a read that used to be complete can now be not complete. For
+    example, Box's first pagination overlay (`pagination-dec74da…`,
+    selected by the 2026-10-11 catalogs) declares two invalid schemes,
+    `offset` and `marker`, without `autoDetect: false`. `offset` matches
+    14 GET list operations by auto-detection (`marker` matches 3 of them
+    as well). That document declares no `crudResources`, so `sync()` and
+    `readPlatform` read none of them; `paginate()` on them still returns
+    the first page but now fills its `outcome` as not complete, and
+    `createApiClient` no longer sends conditional GETs to them. The later
+    Box overlays (2026-10-12 catalogs) declare valid schemes with
+    `autoDetect: false`, applied by explicit `x-pagination`, and are not
+    affected. `validatePaginationScheme` also refuses an `autoDetect` that
+    is neither a boolean nor an object (the spec's schema): before,
+    `autoDetect: null` made reads of the document throw, and a string,
+    number or array was taken as the default options;
+  - a record kept `unavailable` without writes is read again by later
+    syncs wherever its collection makes checks (`missingRecordChecks:
+    'all'`, `absent: removed`, a `parentAbsent` parent), unless it has
+    queued or failed writes; before, it stayed kept until a list read
+    returned it. The re-reads run in a second pass after every
+    collection's unconfirmed and newly missing records, within what is
+    left of `maxMissingRecordChecks` (a limit per sync, across
+    collections), the record checked longest ago first (one the request
+    budget or a 429 left unread keeps its place; the outbox stores the
+    time as `checked`, within version 1). A 2xx removes it from the copy
+    (it exists outside the collection), an answer concluding deletion
+    removes it, and a 404 under `notFound: unavailable` keeps it without
+    telling `onPresence` again. More item GETs where such records are
+    kept, and `onMissingRecord` is called on every re-check. An unchanged
+    read also no longer re-checks an `unconfirmed` record with failed
+    writes (before, only queued writes kept it out);
+  - a Tombstone Object's `field` must be a dot-path of property names
+    without an empty segment: `a..b`, `.a` and `a.` no longer parse (the
+    declaration is ignored), a bracket-quoted segment such as `["a.b"]` is
+    now read as a literal name, and each name is read from an object's own
+    fields only (not through an array index). A stored presence mark with
+    `source: 'list'` is restored; an older client drops that source;
+  - Deletion Feeds 0.3.0-draft list tombstones (`x-list-tombstone`):
+    items of a collection's read that carry the declared marker, and match
+    no `except` condition, are not members. `CollectionSnapshot.tombstones`
+    lists their ids, `readPlatform` makes no record of them, and `sync()`
+    takes them as `deleted` evidence (`source: 'list'`, no GET, not
+    counted against `maxMissingRecordChecks`): a record without writes is
+    told `deleted` and removed (kept marked under `retainDeleted`), also
+    from a read with unchanged members and where the collection makes no
+    checks; a held update fails as deleted and a held delete is released
+    and sent, also from a read that is not complete. An object one read
+    returns twice, as a member or a list tombstone, fails the read.
+    Only for documents that declare `x-list-tombstone`;
+  - `except` conditions on every Tombstone Object (Deletion Feeds
+    0.3.0-draft): a feed item or a read tombstone that matches one is not
+    a tombstone (a cancelled exception of a recurring event read by GET is
+    `filtered`, not `deleted`); a malformed `except` makes the Tombstone
+    Object, and so its feed or read-tombstone declaration, ignored. Only
+    for documents that declare `except`;
+  - Pagination Schemes 0.8.0 `response.incomplete` (§4.4.6): a response
+    body value that marks a capped result (Notion's
+    `request_status.type: incomplete` past 10,000 results). A read with
+    any marked response pages on as before but is not complete: `sync()`
+    applies it as an incomplete read and lists it in
+    `SyncResult.incomplete`. The validator checks rule 26, and an explicit
+    application of a scheme it refuses fails the read. Only for documents
+    whose scheme declares `response.incomplete`.
+
+  Added: `ReadResult.incomplete` on `readPlatform` (every collection read
+  without an error but not completely: range windows, undocumented short
+  pages, marked results, invalid auto-detected schemes); an `outcome`
+  option on `paginate`, which starts clean on every walk;
+  `responseIncomplete` and the `IncompleteObject` and `JsonScalar` types;
+  `invalidAutoDetected`; `MissingRecord.source` gains `'list'` (an
+  exhaustive switch over it needs the new case); and
+  `matchUnboundCreates: { uniqueFields }` (off by default), which binds an
+  unbound create (CRUD Causality 0.5.0 §4.3.2) from the first complete
+  read of its collection after the create's answer, when it sent a value
+  of a field the app declares unique and exactly one new record of that
+  read matches every field it sent and no other create; bound creates are
+  listed on `SyncResult.matched` (`MatchedCreate`). It binds only after a
+  complete read of the collection was applied before the create was
+  answered, and each create gets one read. Residual risk: if a listed
+  value is not in fact unique (another client or a person creates the
+  same value in that window) and the record this create made is not
+  listed, the create is bound to the other record, and its later updates
+  and deletes go there. Declare only fields whose uniqueness the provider
+  enforces or the app alone assigns. Before, only `resolveWrite`
+  `confirm` bound one.
 - **0.22.1**: CRUD Causality 0.6.0 list-only resources and Produced Classes
   0.1.1-draft. Behaviour change to know before upgrading: in a CRUD
   Causality document, `create()` on a resource without `identity` now
