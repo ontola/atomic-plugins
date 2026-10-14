@@ -26,6 +26,14 @@
  * exponential backoff, clamped to a day; Google rarely sends the header, so
  * the default wait usually applies. The same pattern as the Todoist app's,
  * kept inside this folder.
+ *
+ * Two refusals are neither a wait nor a lost grant (`googleRefusal`, 0.1.1):
+ * a used-up daily quota (403 `dailyLimitExceeded`, or a google.rpc ErrorInfo
+ * `RATE_LIMIT_EXCEEDED` whose `quota_limit` is per day) and the Tasks API
+ * turned off in the integration's Google project (403 `accessNotConfigured`,
+ * ErrorInfo `SERVICE_DISABLED`). Neither is retried, and neither asks for a
+ * reconnect: `GoogleRefused` says what would help instead. Taken from
+ * Google's documented error reasons; not seen from Google.
  */
 import type { JSONValue } from './store.js';
 import { isRow, type Lookup, type Row, type TaskListEntry } from './tasks.js';
@@ -57,6 +65,26 @@ export class GoogleError extends Error {
     readonly status?: number,
   ) {
     super(message);
+  }
+}
+
+/** A refusal that waiting or reconnecting does not fix (`googleRefusal`). */
+export type Refusal = 'daily-quota' | 'api-disabled';
+
+/** Google refused for a reason a reconnect does not fix; never retried. */
+export class GoogleRefused extends GoogleError {
+  constructor(
+    readonly what: string,
+    readonly refusal: Refusal,
+    status: number,
+  ) {
+    super(
+      refusal === 'daily-quota'
+        ? `Google Tasks' daily quota for this app is used up (${status} for ${what}). It resets once a day; reconnecting won't help.`
+        : `The Google Tasks API is turned off for the Google project behind this connection (${status} for ${what}). Reconnecting won't help.`,
+      status,
+    );
+    this.name = 'GoogleRefused';
   }
 }
 
@@ -121,12 +149,67 @@ export function parseRetryAfter(
 /** The reasons Google's 403 error body gives for a quota overrun. */
 const RATE_LIMIT_REASONS = ['rateLimitExceeded', 'userRateLimitExceeded'];
 
+/** `error.errors[].reason` (the legacy list) and the ErrorInfo details. */
+function errorReasons(body: unknown): {
+  reasons: string[];
+  infos: { reason?: unknown; metadata?: unknown }[];
+} {
+  const error = isRow(body) ? body.error : undefined;
+  if (!isRow(error)) return { reasons: [], infos: [] };
+  const reasons = Array.isArray(error.errors)
+    ? error.errors
+        .map(e => (isRow(e) ? e.reason : undefined))
+        .filter((r): r is string => typeof r === 'string')
+    : [];
+  const infos = Array.isArray(error.details)
+    ? error.details.filter(
+        (d): d is Row =>
+          isRow(d) &&
+          typeof d['@type'] === 'string' &&
+          d['@type'].endsWith('google.rpc.ErrorInfo'),
+      )
+    : [];
+
+  return { reasons, infos };
+}
+
+/**
+ * A refusal that neither a wait nor a reconnect fixes, or `undefined`:
+ * - `daily-quota`: 403 or 429 with `dailyLimitExceeded`, or an ErrorInfo
+ *   `RATE_LIMIT_EXCEEDED` whose `metadata.quota_limit` names a per-day
+ *   limit (a per-minute one stays a rate limit to wait out);
+ * - `api-disabled`: 403 with `accessNotConfigured`, or an ErrorInfo
+ *   `SERVICE_DISABLED`.
+ */
+export function googleRefusal(response: GoogleResponse): Refusal | undefined {
+  if (response.status !== 403 && response.status !== 429) return undefined;
+  const { reasons, infos } = errorReasons(response.body);
+  const perDay = infos.some(
+    i =>
+      i.reason === 'RATE_LIMIT_EXCEEDED' &&
+      isRow(i.metadata) &&
+      typeof i.metadata.quota_limit === 'string' &&
+      /per ?day/i.test(i.metadata.quota_limit),
+  );
+  if (reasons.includes('dailyLimitExceeded') || perDay) return 'daily-quota';
+  if (response.status !== 403) return undefined;
+  if (
+    reasons.includes('accessNotConfigured') ||
+    infos.some(i => i.reason === 'SERVICE_DISABLED')
+  )
+    return 'api-disabled';
+
+  return undefined;
+}
+
 /**
  * Whether an answer is Google saying "slow down": a 429, or a 403 whose
  * `error.errors[].reason` is a rate-limit reason (or whose `error.status`
  * is `RESOURCE_EXHAUSTED`). Any other 403 is a refusal, not a rate limit.
  */
 export function isRateLimit(response: GoogleResponse): boolean {
+  // A used-up daily quota is not a wait of seconds (`googleRefusal`).
+  if (googleRefusal(response)) return false;
   if (response.status === 429) return true;
   if (response.status !== 403 || !isRow(response.body)) return false;
   const error = response.body.error;
@@ -222,6 +305,9 @@ function page(
       header,
     );
   }
+
+  const refusal = googleRefusal(response);
+  if (refusal) throw new GoogleRefused(what, refusal, response.status);
 
   if (response.status === 401 || response.status === 403)
     throw new GoogleError(

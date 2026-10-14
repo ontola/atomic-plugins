@@ -16,6 +16,8 @@ import {
   GoogleRateLimited,
   type GoogleGet,
   type GoogleResponse,
+  googleRefusal,
+  GoogleRefused,
   isRateLimit,
   lookupTasks,
   MAX_INLINE_RETRIES,
@@ -27,7 +29,11 @@ import {
   readTasks,
   retryWait,
 } from './read.js';
-import { RATE_LIMIT_403 } from './fakeStore.js';
+import {
+  API_DISABLED_403,
+  DAILY_LIMIT_403,
+  RATE_LIMIT_403,
+} from './fakeStore.js';
 
 const NOW = Date.UTC(2026, 9, 6, 12, 0, 0);
 const ok = (items?: unknown[], nextPageToken?: string): GoogleResponse => ({
@@ -122,6 +128,79 @@ describe('isRateLimit', () => {
     ).toBe(false);
     expect(isRateLimit({ status: 403, body: 'Forbidden' })).toBe(false);
     expect(isRateLimit({ status: 503, body: {} })).toBe(false);
+  });
+});
+
+describe('googleRefusal (0.1.1)', () => {
+  const perDay = (limit: string, status = 429) => ({
+    status,
+    body: {
+      error: {
+        code: status,
+        status: 'RESOURCE_EXHAUSTED',
+        details: [
+          {
+            '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+            reason: 'RATE_LIMIT_EXCEEDED',
+            metadata: { quota_limit: limit },
+          },
+        ],
+      },
+    },
+  });
+
+  it('a used-up daily quota is daily-quota, and not a rate limit to wait out', () => {
+    const daily = { status: 403, body: DAILY_LIMIT_403 };
+    expect(googleRefusal(daily)).toBe('daily-quota');
+    expect(isRateLimit(daily)).toBe(false);
+    expect(googleRefusal(perDay('defaultPerDayPerProject'))).toBe(
+      'daily-quota',
+    );
+    expect(isRateLimit(perDay('defaultPerDayPerProject'))).toBe(false);
+    // A per-minute ErrorInfo stays a rate limit.
+    expect(
+      googleRefusal(perDay('ReadRequestsPerMinutePerUser')),
+    ).toBeUndefined();
+    expect(isRateLimit(perDay('ReadRequestsPerMinutePerUser'))).toBe(true);
+  });
+
+  it('the API turned off is api-disabled', () => {
+    expect(googleRefusal({ status: 403, body: API_DISABLED_403 })).toBe(
+      'api-disabled',
+    );
+    expect(
+      googleRefusal({
+        status: 403,
+        body: { error: { errors: [{ reason: 'accessNotConfigured' }] } },
+      }),
+    ).toBe('api-disabled');
+  });
+
+  it('anything else is no such refusal', () => {
+    expect(
+      googleRefusal({ status: 403, body: RATE_LIMIT_403 }),
+    ).toBeUndefined();
+    expect(
+      googleRefusal({
+        status: 403,
+        body: { error: { errors: [{ reason: 'insufficientPermissions' }] } },
+      }),
+    ).toBeUndefined();
+    expect(googleRefusal({ status: 403, body: 'Forbidden' })).toBeUndefined();
+    expect(
+      googleRefusal({ status: 500, body: DAILY_LIMIT_403 }),
+    ).toBeUndefined();
+  });
+
+  it('a list read refused that way throws GoogleRefused, with no wait', async () => {
+    const get = rateLimited(
+      async () => ({ status: 403, body: DAILY_LIMIT_403 }),
+      { now: () => NOW, sleep: async () => expect.fail('no wait') },
+    );
+    const error = await readTaskLists(get).catch(e => e);
+    expect(error).toBeInstanceOf(GoogleRefused);
+    expect(error).toMatchObject({ refusal: 'daily-quota', status: 403 });
+    expect(error.message).toMatch(/daily quota .* reconnecting won't help/);
   });
 });
 
