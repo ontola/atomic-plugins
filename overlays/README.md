@@ -318,6 +318,30 @@ yet. `tests/test_asana_throttling.py` composes it alone and after the
 catalog's Asana overlays and classifies a synthetic 429. No provider was
 called.
 
+## Discord throttling
+
+[Discord API v10 throttling](APIs/discord.com/10/throttling-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+declares [Throttling 0.3.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Discord's [rate-limits page](https://docs.discord.com/developers/topics/rate-limits)
+and the pinned OAD's own headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
+`X-RateLimit-Reset-After` (in seconds), `Retry-After`, the 429 body's
+`retry_after`, and a 429 as `throttled` with no bucket named (Discord's
+per-route buckets are named only at run time). Discord types the reset and
+delay values as numbers and its example has a fraction (`retry_after:
+64.57`); the extension's units are whole seconds, so a fractional value is
+ignored and the consumer falls back to `Retry-After` or its own backoff.
+Plainly: a consumer that follows the spec cannot use a fractional
+`X-RateLimit-Reset-After` or `retry_after` at all, because the Throttling
+spec allows whole seconds only.
+Not declared: the global limit, which applies to bots and users ("Global
+rate limits apply to the total number of requests a bot or user makes") but
+has a published number only for bots ("All bots can make up to 50 requests
+per second"); the per-route limits, which have no published numbers; and the invalid-request limit, which counts only 401, 403 and 429
+responses. No dated catalog selects it yet.
+`tests/test_discord_throttling.py` composes it alone and after the
+catalog's Discord overlays and classifies synthetic responses, fractions
+included. No provider was called.
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
