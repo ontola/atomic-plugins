@@ -191,6 +191,34 @@ yet. syncables reads both. `tests/test_calendar_read_tombstone_v2.py` and
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
 
+## Notion pages completeness
+
+[`completeness-0c8e2296…-overlay.yaml`](APIs/notion.com/2026-03-11/completeness-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Notion `pages` collection (a data source's query): `absent: removed`
+and `notFound: unavailable`. Notion's
+[status codes](https://developers.notion.com/reference/status-codes) say a 404
+`object_not_found` "can also indicate that the resource has not been shared
+with owner of the bearer token", so without this overlay a consumer would take
+a page no longer shared with the connection as deleted (the `notFound`
+default). The [query](https://developers.notion.com/reference/query-a-data-source)
+"returns non-archived pages" by default, so absence alone settles nothing.
+Inferred, not documented: that a trashed page leaves the query and that an
+archived or trashed page's own read still answers 2xx; neither changes an
+outcome. The query is capped at 10,000 results, so a catalog selects this
+overlay only together with `pagination-v3-0c8e2296…`, which marks a capped
+read incomplete; under an earlier pagination revision a query over 10,000
+results looks complete (the test asserts this pairing). Not declared:
+`gone` (no 410 documented), anything on `data_sources` (`POST /search`, not
+documented as returning every shared data source), and so `parentAbsent`,
+which needs a parent collection with a Completeness Object (§4.4). The pinned
+OAD is an authored subset without descriptions, so the evidence is Notion's
+reference. No dated catalog selects it yet.
+`tests/test_notion_pages_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays (and with pagination-v3), in
+either order, runs both validators, and checks the outcomes `classify_read`
+gives. No provider was called.
+
 ## Write preconditions
 
 Two standalone overlays declare [Write Preconditions 0.1.0-draft](../openapi-extensions/spec/write-preconditions/README.md)
@@ -205,6 +233,34 @@ Calendar overlay through the syncables client. No provider was called.
 | --- | --- | --- |
 | [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
 | [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
+
+## GitLab issues completeness
+
+[`completeness-f6d7940e…-overlay.yaml`](APIs/gitlab.com/v4-readonly/completeness-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the GitLab.com `projectIssues` collection: `absent: removed` and
+`notFound: unavailable`. GitLab's
+[status codes](https://docs.gitlab.com/api/rest/troubleshooting/) give one 404
+for "an ID for a resource couldn't be found" and for "the user isn't
+authorized to access the resource", so without this overlay a consumer would
+take a confidential or no-longer-accessible issue as deleted (the `notFound`
+default). The list's `state` defaults to `all` (the pinned OAD's
+`default: all`) and its `scope` "Defaults to `all`" (the
+[issues reference](https://docs.gitlab.com/api/issues/)), but an issue also
+leaves the list when it becomes confidential to the caller or the caller loses
+access, so absence alone settles nothing. Page-number paging can skip the
+issue after one deleted during a read; that issue still exists, and its own
+read finds it present. Not verified: which issue types (tasks, incidents)
+the list returns without `issue_type`, and whether they are read as issues
+are. Not
+declared: `gone` (no 410 documented for issues), anything on `projects` (the
+catalog narrows it with `membership=true`, and a consumer drops a declaration
+a selection narrows), and so `parentAbsent`, which needs a parent collection
+with a Completeness Object (§4.4). No dated catalog selects it yet.
+`tests/test_gitlab_issues_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays of the same pin, in either order,
+runs both validators, and checks the outcomes `classify_read` gives. No
+provider was called.
 
 ## Google Calendar deletion feed
 
@@ -339,6 +395,34 @@ version of the extension does not describe. No dated catalog selects it
 yet. `tests/test_asana_throttling.py` composes it alone and after the
 catalog's Asana overlays and classifies a synthetic 429. No provider was
 called.
+
+## GitLab throttling
+
+[GitLab.com REST API v4 throttling](APIs/gitlab.com/v4-readonly/throttling-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the read-only GitLab.com document, from GitLab.com's
+[rate-limits page](https://docs.gitlab.com/user/gitlab_com/rate_limits/):
+"Authenticated API traffic for a user" ("2,000 requests each minute", per
+user) and "All traffic from an IP address" ("2,000 requests each minute",
+`sourceIp`, shared by everyone behind a proxy) on every operation; the
+project list's own limit ("2,000 requests every 10 minutes") and the single
+project read's ("400 requests each minute") on those two operations, with no
+partition, since the rows do not say per what they count. The page's
+tier-aware limits are proposed, not in effect. Also the documented
+[response headers](https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/)
+`RateLimit-Limit` (adjusted "to approximately the nearest 60-minute period"
+for a throttle whose period is not a minute), `RateLimit-Observed`,
+`RateLimit-Remaining`, `RateLimit-Reset` (Unix time) and, on a 429,
+`Retry-After` (seconds), and a 429 as `throttled` with no bucket named.
+"Rate limiting responses for the Projects, Groups, and Users APIs do not
+include informational headers", so a 429 from the project list's or project
+read's own limit has no `RateLimit-*` or `Retry-After`.
+Not declared: `RateLimit-ResetTime`, `RateLimit-Name` and the
+unauthenticated limit ("500 requests each minute" per IP, in effect; every
+operation here sends a user's token); the page names no limit for the issue
+reads. No dated catalog selects it yet. `tests/test_gitlab_throttling.py`
+composes it alone and after the catalog's GitLab overlays and classifies synthetic
+responses. No provider was called.
 
 ## Discord throttling
 

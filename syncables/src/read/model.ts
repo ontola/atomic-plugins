@@ -333,10 +333,13 @@ export function listOperation(
 export function declaredQueryParameters(
   operation: OperationObject,
 ): Set<string> {
+  // A malformed `parameters` (not an array) reads as none, as auto-detection does.
+  const parameters: unknown = operation.parameters;
+  if (!Array.isArray(parameters)) return new Set();
   return new Set(
-    (operation.parameters ?? [])
-      .filter((parameter) => isRecord(parameter) && parameter.in === 'query')
-      .map((parameter) => parameter.name),
+    parameters
+      .filter((parameter) => isRecord(parameter) && parameter['in'] === 'query')
+      .map((parameter) => parameter['name'] as string),
   );
 }
 
