@@ -1982,6 +1982,14 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   Auto-detection also skips a malformed operation `parameters` (not an
   array) or parameter entry (not an object) instead of throwing, so such
   an operation no longer makes the read of that collection fail.
+- **Unreleased**: the webhook inbox consumer's `reconcile` may answer
+  `'pending'` (the full read runs as separate work): the consumer then
+  records the gap, reports nothing, returns a `reconciling` step and asks
+  again on later steps (ontola/atomic-plugins#369 step 4b). `InboxClient`
+  also refuses a base URL whose host is an IP literal other than a
+  dotted-decimal IPv4 address without leading zeros or shorthand (no
+  `127.1`, `0x7f.0.0.1`, `010.0.0.1`, no IPv6 literal), and, where `URL`
+  exists, one that `URL` would rewrite.
 - **0.23.0**: a data-loss fix for pagination schemes that auto-detection
   would apply but that are invalid; Pagination Schemes 0.8.0
   `response.incomplete`; Deletion Feeds 0.3.0-draft list tombstones and

@@ -88,3 +88,27 @@ segment), with tests; the changelog has an Unreleased bullet for the inbox
 consumer, including the trailing-`/` change; the `acknowledge` doc states
 the read-your-writes requirement; the decoder's doc says it ignores
 trailing bits.
+
+## Turn 4
+
+**Human (relayed by the coordinator):** `CANONICAL_BASE` still lets through
+IP-literal forms that `URL` rewrites (`127.1`, `0x7f.0.0.1`, `010.0.0.1`,
+non-compressed IPv6, `1.2.3.4.5`).
+
+**Assistant:** A host whose last label is a number (decimal or `0x` hex)
+must be four decimal octets without leading zeros; IPv6 literals are
+refused; and where `URL` exists, a base it would rewrite is refused too.
+Tests cover the forms named, with and without `URL`.
+
+## Turn 5
+
+**Human (relayed by the coordinator):** Rebuild the GitHub issues inbox
+plugin on atomic-server's sync-session protocol; leave a gap's
+reconciliation pending until a work item says the full read is done (option
+B); put the changelog clause for `'pending'` back with its implementation.
+
+**Assistant:** `InboxConsumerOptions.reconcile` may now resolve `'pending'`:
+the gap is recorded, nothing is reported, and the receiver keeps asking on
+later steps (`StepResult` `reconciling`); `deferred.test.ts` covers it. The
+fake receiver honours `limit`, which the plugin's per-run cap relies on in
+its tests. The plugin itself lives in `integrations/issue-tracker/inbox/`.
