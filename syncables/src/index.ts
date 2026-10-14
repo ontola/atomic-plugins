@@ -30,6 +30,7 @@ export type {
   SyncResult,
   CollectionCoverage,
   IncompleteRead,
+  MatchedCreate,
   PendingWriteInfo,
   PendingWriteState,
   PendingWriteType,
