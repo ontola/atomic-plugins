@@ -206,6 +206,34 @@ Calendar overlay through the syncables client. No provider was called.
 | [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
 | [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
 
+## GitLab issues completeness
+
+[`completeness-f6d7940e…-overlay.yaml`](APIs/gitlab.com/v4-readonly/completeness-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the GitLab.com `projectIssues` collection: `absent: removed` and
+`notFound: unavailable`. GitLab's
+[status codes](https://docs.gitlab.com/api/rest/troubleshooting/) give one 404
+for "an ID for a resource couldn't be found" and for "the user isn't
+authorized to access the resource", so without this overlay a consumer would
+take a confidential or no-longer-accessible issue as deleted (the `notFound`
+default). The list's `state` defaults to `all` (the pinned OAD's
+`default: all`) and its `scope` "Defaults to `all`" (the
+[issues reference](https://docs.gitlab.com/api/issues/)), but an issue also
+leaves the list when it becomes confidential to the caller or the caller loses
+access, so absence alone settles nothing. Page-number paging can skip the
+issue after one deleted during a read; that issue still exists, and its own
+read finds it present. Not verified: which issue types (tasks, incidents)
+the list returns without `issue_type`, and whether they are read as issues
+are. Not
+declared: `gone` (no 410 documented for issues), anything on `projects` (the
+catalog narrows it with `membership=true`, and a consumer drops a declaration
+a selection narrows), and so `parentAbsent`, which needs a parent collection
+with a Completeness Object (§4.4). No dated catalog selects it yet.
+`tests/test_gitlab_issues_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays of the same pin, in either order,
+runs both validators, and checks the outcomes `classify_read` gives. No
+provider was called.
+
 ## Google Calendar deletion feed
 
 [Google Calendar v3 deletion feed](APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)

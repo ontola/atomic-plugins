@@ -69,11 +69,23 @@ export function invalidAutoDetected(
   return undefined;
 }
 
+/**
+ * The operation's query parameter names. A malformed `parameters` (not an
+ * array) or entry (not an object) is skipped rather than thrown on, so a
+ * broken operation cannot make auto-detection, and every read that runs
+ * it, throw.
+ */
 function queryParamNames(operation: OperationObject): Set<string> {
+  const parameters: unknown = operation.parameters;
+  if (!Array.isArray(parameters)) return new Set();
   return new Set(
-    (operation.parameters ?? [])
-      .filter((parameter) => parameter.in === 'query')
-      .map((parameter) => parameter.name),
+    parameters
+      .filter(
+        (parameter): parameter is { in: unknown; name: unknown } =>
+          isPlainObject(parameter) && parameter['in'] === 'query',
+      )
+      .map((parameter) => parameter.name)
+      .filter((name): name is string => typeof name === 'string'),
   );
 }
 
