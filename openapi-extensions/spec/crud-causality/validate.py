@@ -561,8 +561,8 @@ def _committed_error_errors(crud, where, resource):
             errors.append(f"{at}: unknown fields {sorted(unknown)} (rule 28)")
         status = entry.get("status")
         if not (isinstance(status, list) and status and len(set(map(repr, status))) == len(status)
-                and all(type(s) is int and 400 <= s <= 599 for s in status)):
-            errors.append(f"{at}.status: expected unique integer statuses 400-599 (rule 28)")
+                and all(type(s) is int and 500 <= s <= 599 for s in status)):
+            errors.append(f"{at}.status: expected unique integer statuses 500-599 (rule 28)")
         identity = entry.get("identity")
         if not isinstance(identity, dict) or not identity:
             errors.append(f"{at}.identity: expected a nonempty object (rule 28)")
@@ -746,9 +746,12 @@ def committed_identity(document, crud, status, body):
     """§4.3.3 (0.7.0): {identity variable: value} from an error response that says the create was applied, else None.
 
     `status` is the response status and `body` its parsed JSON body (None when
-    it is not JSON). Values are strings; an integer is given in decimal form.
-    None means the response matches no Committed Error Object: the outcome
-    stays unknown.
+    it is not JSON). Unlike `created_identity`, which returns {object field:
+    value}, this returns {identity template variable: value}, the identity
+    map's keys. Values are strings: a non-blank string without `/`, `?` or
+    `#`, or a non-negative integer in decimal form; anything else leaves the
+    entry unmatched. None means the response matches no Committed Error
+    Object: the outcome stays unknown.
     """
     if crud.get("action") != "create" or not isinstance(body, (dict, list)):
         return None
@@ -758,7 +761,9 @@ def committed_identity(document, crud, status, body):
         values = {}
         for variable, path in (entry.get("identity") or {}).items():
             value = get_path(body, path)
-            if isinstance(value, bool) or not isinstance(value, (str, int)) or value == "":
+            usable = (isinstance(value, int) and not isinstance(value, bool) and value >= 0) or (
+                isinstance(value, str) and value.strip() != "" and not set(value) & set("/?#"))
+            if not usable:
                 values = None
                 break
             values[variable] = str(value) if isinstance(value, int) else value
