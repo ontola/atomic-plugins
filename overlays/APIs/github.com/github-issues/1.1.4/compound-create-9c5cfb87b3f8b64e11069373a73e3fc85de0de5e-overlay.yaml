@@ -1,3 +1,4 @@
+# Reviewed 2026-10-14 against the pinned OAD and official provider documentation; no live calls.
 overlay: 1.0.0
 extends: https://raw.githubusercontent.com/ontola/openapi-directory/9c5cfb87b3f8b64e11069373a73e3fc85de0de5e/APIs/github.com/github-issues/1.1.4/openapi.yaml
 info:
@@ -5,10 +6,11 @@ info:
   version: 1.0.0
 # CRUD Causality 0.5.0 compound create (openapi-extensions/spec/crud-causality
 # §4.7) for creating an issue with labels (ontola/atomic-plugins pieces.md K8).
-# Compose after crud-causality-v2-9c5cfb87...-overlay.yaml (or v1), which declares
-# the create's x-crud and adds the follow-up operation issues-add-labels; with v2
-# the issue number is a `generated` added field, so a create body leaves a
-# client's placeholder for it out. syncables reads followUps since 0.22.0. No
+# Compose after crud-causality-v2-9c5cfb87...-overlay.yaml, which declares the
+# create's x-crud and adds the follow-up operation issues-add-labels; v2's issue
+# number is a `generated` added field, so a create body leaves a client's
+# placeholder for it out. Not with v1: its `source: server` fails the CRUD
+# Causality validator, and syncables would send a placeholder number. syncables reads followUps since 0.22.0. No
 # dated catalog selects it yet.
 #
 # GitHub's "Create an issue" takes `labels`, and says: "Only users with push
