@@ -21,6 +21,10 @@ export default {
         'app/node_modules/devonian/build/src/lenses/index.js',
       ),
       devonian: at('app/node_modules/devonian/build/src/main.js'),
+      // The webhook inbox (inbox/) uses the syncables inbox consumer, which
+      // is not in a published syncables release yet: its source, as
+      // inbox/build.mjs bundles it.
+      'syncables/browser': at('../../syncables/src/browser.ts'),
       // devonian's @tomic/lib peer, and the host modules the lens was written
       // against (its consumer used to supply them), resolve to the symlinked
       // atomic-server checkout, like every other import under integrations/.
@@ -59,6 +63,8 @@ export default {
       'todoist-app/**/*.test.ts',
       'devonian/**/*.test.{ts,mjs}',
       'fixtures/**/*.test.ts',
+      // The webhook inbox sandbox plugin (#369 step 4b).
+      'inbox/*.test.ts',
       // The live check's offline tests (the mock GitHub); never the live run.
       'live/*.test.ts',
       // The Todoist live check's offline tests (the mock Todoist fixture).
