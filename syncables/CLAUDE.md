@@ -239,9 +239,10 @@ Data flows through four stages, each its own directory under `src/`:
    a create that sent a declared unique value is remembered in memory
    (`unboundKnown`: the scope's confirmed ids, the body, `readsStarted`)
    if `completeScopes` has its scope (added only where a complete read is
-   applied: `confirmed.set`, or an unchanged read), and `matchUnbound` in `performSync`
-   (before the snapshot is applied) binds it on the first complete read of
-   the scope that started later: exactly one new, write-less candidate
+   applied: `confirmed.set`, or an unchanged read), and `matchUnbound` in
+   `performSync` (before the snapshot is applied) binds it on the first
+   complete read of the scope that started later: exactly one new,
+   write-less candidate (not an id another write holds as `confirmedId`)
    equal on every sent field and claimed by no other create; then
    `confirmedId` as `resolveWrite(confirm)`, `SyncResult.matched`;
    a create's `followUps` (CRUD Causality 0.5.0 §4.7, `compound-create.ts`
@@ -543,7 +544,26 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   `autodetect.ts`), `walkAllPages` reads the one response and sets the
   walk's outcome not complete (naming the scheme), so a page is never
   taken for the whole collection; the client's `paginated()` counts such
-  an operation as paginated.
+  an operation as paginated (no conditional cache). It is always not
+  complete until the document changes (fix the scheme, or
+  `autoDetect: false`); an explicit `x-pagination` with a valid scheme
+  wins, and `x-pagination: []` does not opt out. `validatePaginationScheme`
+  also refuses an `autoDetect` that is neither a boolean nor an object
+  (the spec's `schema.json`); `autoDetectMatches` reads any `autoDetect`
+  that is not an Auto-Detect Object as the default options, so such an
+  invalid scheme still counts as a match. Tests:
+  `unit/client/autodetect-invalid.test.ts`.
+  `checkStructure` runs first and ports the rest of `schema.json`'s
+  structure: no fields but the spec's (and `x-`) on the scheme, `request`,
+  `response`, request and response fields, the Auto-Detect, Envelope and
+  Link Resolution Objects (Short Page, Incomplete and Range Window Objects
+  are checked in their own functions), and the stated types; a non-object
+  where the rule checks read one ends validation there, so it never
+  throws. The verdicts match `schema.json` on every scheme in
+  `overlays/`, apart from `incrementalSync` (refused here, not
+  implemented). Tests: `unit/pagination/schema-parity.test.ts`, which also
+  checks the catalogs: no scheme an `x-pagination` names is invalid, and
+  the only invalid auto-detectable ones are Box's first overlay's.
 - `autodetect.ts`'s `resolveEffectiveScheme(document, operation)` picks the
   scheme that applies to an operation: an explicit `x-pagination` entry
   first, else auto-detection by matching the scheme's declared query

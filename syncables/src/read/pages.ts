@@ -335,7 +335,7 @@ function pageSizeLimits(
     if (field.role !== 'pageSize') continue;
     schemas.push(
       deref(
-        (operation.parameters ?? [])
+        (Array.isArray(operation.parameters) ? operation.parameters : [])
           .map((p) => deref(p))
           .find((p) => p?.in === 'query' && p.name === name)?.schema,
       ),

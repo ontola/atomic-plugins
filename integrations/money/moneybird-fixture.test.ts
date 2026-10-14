@@ -83,6 +83,37 @@ function paged(get: ReturnType<typeof api>['get'], path: string): Row[] {
 }
 
 describe('moneybird fixture: always-on checks', () => {
+  it('meets its deliberate contacts outage per connection, whatever read before', () => {
+    const fixture = moneybirdFixture();
+    const call = (path: string, connection?: string) =>
+      fixture.request(
+        'GET',
+        new URL(`http://mock/proxy/moneybird/api/v2${path}`),
+        {},
+        {},
+        connection ? { connection } : undefined,
+      ) as Answer;
+    const [administration] = call('/administrations.json').body as Row[];
+    const contacts = `/${administration.id}/contacts.json?per_page=100`;
+    /** One full read of the contacts: page 1, then page 2. */
+    const read = (connection?: string) => [
+      call(contacts, connection).status,
+      call(`${contacts}&page=2`, connection).status,
+    ];
+
+    // A good read, then one that fails on page 2: on each connection alike,
+    // whatever the other read in between (a shared count would fail b's
+    // first read).
+    expect(read('a')).toEqual([200, 200]);
+    expect(read('b')).toEqual([200, 200]);
+    expect(read('b')).toEqual([200, 503]);
+    expect(read('a')).toEqual([200, 503]);
+    expect(read('a')).toEqual([200, 200]);
+    // Without a connection (a direct call), one shared counter as before.
+    expect(read()).toEqual([200, 200]);
+    expect(read()).toEqual([200, 503]);
+  });
+
   it('is registered with the mock proxy', () => {
     expect(fixtures.moneybird).toBe(scenario);
   });
