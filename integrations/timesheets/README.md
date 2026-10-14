@@ -82,9 +82,24 @@ read, minute snapping and the range planner are unchanged.
   the views. A row whose Name nobody edited never sends a description
   change; the drawer sends typed text as typed. A range edit keeps each
   row's Name, and a filled gap is created with no description.
-  Until 0.7.1 the app trimmed descriptions and stored "Time entry" for
+  Until 0.7.2 the app trimmed descriptions and stored "Time entry" for
   none; a row from then is brought to the description at its next sync, as
-  a change taken over from Clockify, and nothing is sent for it.
+  a change taken over from Clockify, and nothing is sent for it. A filled
+  gap staged then and not yet sent holds "Time entry" too: from 0.8.1 a
+  create without the `exactName` mark in `clockify-create` (staged before
+  0.8.0) whose Name is "Time entry" or blank is created with no
+  description. A create 0.8.0 staged has no mark either, so a copy of an
+  entry whose description is exactly "Time entry", or only spaces, staged
+  by 0.8.0 and sent by 0.8.1 is created with none (not tested against a
+  0.8.0 drive).
+- **Times are sent in whole seconds** (0.8.1). The lens's `iso-seconds-to-ms`
+  refuses a time with milliseconds rather than lose them; `putBody` rounds
+  down to the second first, as the code lens did. Row times are snapped to
+  minutes, so only a time typed into the table can carry milliseconds.
+- **A refusal names its reason** (0.8.1). An entry Clockify returns that the lens
+  refuses outside a running timer, a break or another listed blocker (a
+  start or end that is not an ISO instant, say) is refused with the
+  lens's reason (`entryRefusal`).
 - **Still code in `app/catalogLens.ts`**, waiting on catalog features
   (LENSES.md, "What the format cannot express yet"): an entry that ends
   before it starts has no row (gap 1, a relation between two places); the
@@ -96,7 +111,7 @@ read, minute snapping and the range planner are unchanged.
 
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 193 KB for 0.8.0, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 194 KB for 0.8.1, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
@@ -349,7 +364,7 @@ into the view root.
     three-way check against it (a conflict sends nothing); the outbox
     marker; one full-replacement `PUT` that `app/catalogLens.ts` `putBody`
     builds from the fresh full record with the catalog lens (0.8.0; until
-    0.7.1 the code lens's `putBody` in `devonian/clockify/lens/writeBack.ts`),
+    0.7.2 the code lens's `putBody` in `devonian/clockify/lens/writeBack.ts`),
     replacing only changed fields and always sending `start`,
     `end`, `billable`, `description`, `tagIds` and `type` (a project change
     drops `taskId`), or a `DELETE`; a verification `GET`. The baseline and

@@ -61,7 +61,7 @@ import {
   type WriteContext,
 } from '../devonian/clockify/lens/index.js';
 // Name, start, end and billable both ways: the catalog lens (0.8.0).
-import { entryValues, putBody } from './catalogLens.js';
+import { entryRefusal, entryValues, putBody } from './catalogLens.js';
 import type { RawTimeEntry } from './clockifyApi.js';
 import {
   canonicalEntry,
@@ -123,6 +123,12 @@ export interface OutboxMarker {
  * and tags to carry over (the row holds the rest).
  */
 export interface CreateMarker {
+  /**
+   * Set from 0.8.1: the row's Name is the description exactly. A create
+   * staged before 0.8.0 lacks it, and its Name may be "Time entry" (a
+   * filled gap) or blank, both meaning none (`readCreateState`).
+   */
+  exactName?: true;
   copyOf?: string;
   taskId?: string;
   tagIds?: string[];
@@ -808,6 +814,9 @@ export async function discardChange(
 
 // ---- range edits: new rows (#123 M4) ---------------------------------------
 
+/** The Name a create staged before 0.8.0 holds for no description. */
+const LEGACY_NO_DESCRIPTION = 'Time entry';
+
 /** A new row's state, if it is one: no entry id, and `clockify-create`. */
 export async function readCreateState(
   row: PluginResource,
@@ -816,9 +825,16 @@ export async function readCreateState(
   if (text(row.get(schema.row.entryId))) return undefined;
   const create = parseJson<CreateMarker>(row.get(schema.sync.create));
   if (!create || typeof create !== 'object') return undefined;
-  const local = await localValues(row, schema);
-  if (!local) return undefined;
+  const stored = await localValues(row, schema);
+  if (!stored) return undefined;
   const outbox = parseJson<OutboxMarker>(row.get(schema.sync.outbox));
+  // Until 0.7.2 a filled gap was staged with "Time entry" as its Name, and
+  // 0.8.0 would send that as the description. An unmarked create's
+  // "Time entry" or blank Name means no description.
+  const legacy =
+    create.exactName !== true &&
+    (stored.name === LEGACY_NO_DESCRIPTION || !stored.name.trim());
+  const local = legacy ? { ...stored, name: '' } : stored;
 
   return {
     subject: row.subject,
@@ -965,6 +981,7 @@ export async function stageRangePlan(
     else {
       const source = step.copyOf ? mirrorEntry(mirror, step.copyOf) : undefined;
       const marker: CreateMarker = {
+        exactName: true,
         ...(step.copyOf ? { copyOf: step.copyOf } : {}),
         ...(typeof source?.taskId === 'string'
           ? { taskId: source.taskId }
@@ -973,12 +990,10 @@ export async function stageRangePlan(
           ? { tagIds: [...source.tagIds] }
           : {}),
       };
-      // A copy (the right part of a split) keeps its entry's description
-      // exactly; a filled gap has none ("Time entry" is display only).
-      const values = {
-        ...step.values,
-        name: source ? (entryValues(source)?.name ?? '') : '',
-      };
+      // The plan's values: a copy (the right part of a split) keeps its
+      // entry's description exactly; a filled gap has none ("Time entry" is
+      // display only).
+      const values = step.values;
       const created = await store.newResource({
         parent: schema.table,
         isA: [TIME_ENTRY_CLASS],
@@ -1354,11 +1369,18 @@ async function sendOne(
   }
 
   const remote = entryValues(fresh, names);
-  if (!remote)
+  if (!remote) {
+    // A running timer or a break says so; otherwise name the lens's reason
+    // (a start or end Clockify sent that is not an ISO instant, say).
+    const reasons = blockers(fresh, context.write);
+
     return {
       status: 'refused',
-      message: blockers(fresh, context.write).join(' '),
+      message: reasons.length
+        ? reasons.join(' ')
+        : `Clockify's entry cannot be read as a row. ${entryRefusal(fresh) ?? ''}`.trim(),
     };
+  }
 
   let desired = change.desired;
 

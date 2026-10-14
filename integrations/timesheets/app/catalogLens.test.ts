@@ -2,7 +2,12 @@
 import { describe, expect, it } from 'vitest';
 import * as code from '../devonian/clockify/lens/index.js';
 import type { ClockifyTimeEntry } from '../devonian/clockify/lens/index.js';
-import { CLOCKIFY_LENS, entryValues, putBody } from './catalogLens.js';
+import {
+  CLOCKIFY_LENS,
+  entryRefusal,
+  entryValues,
+  putBody,
+} from './catalogLens.js';
 import { desiredValues, reconcileRow } from './writeBack.js';
 
 const entry = (over: Partial<ClockifyTimeEntry> = {}): ClockifyTimeEntry => ({
@@ -120,20 +125,51 @@ describe('timesheets 0.8.0 maps entries through clockify-time-entry-v2', () => {
     expect(ours.start).toBe('2026-10-05T08:00:00Z');
   });
 
-  it('refuses a running timer as the code lens does', () => {
+  it('refuses a running timer as the code lens does, saying why', () => {
     const running = entry({
       timeInterval: { start: '2026-10-05T09:00:00Z', end: null },
     });
     expect(() => putBody(running, entryValues(entry())!)).toThrow(
-      /not a completed entry/,
+      /^Clockify entry e1 cannot be written\. The lens refused it: /,
     );
+  });
+
+  it('names the reason when a start is not an ISO instant', () => {
+    const odd = entry({
+      timeInterval: { start: '2026-10-05 09:00', end: '2026-10-05T10:30:00Z' },
+    });
+    expect(entryValues(odd)).toBeUndefined();
+    expect(entryRefusal(odd)).toBe(
+      'The lens refused it: "2026-10-05 09:00" is not an ISO instant.',
+    );
+    expect(entryRefusal(entry())).toBeUndefined();
+    expect(
+      entryRefusal(
+        entry({
+          timeInterval: {
+            start: '2026-10-05T11:00:00Z',
+            end: '2026-10-05T10:00:00Z',
+          },
+        }),
+      ),
+    ).toBe('It ends before it starts.');
+  });
+
+  it('rounds a time with milliseconds down to the second, as the code lens did', () => {
+    const fresh = entry();
+    const desired = {
+      ...entryValues(fresh)!,
+      end: Date.parse('2026-10-05T10:45:00Z') + 999,
+    };
+    expect(putBody(fresh, desired).end).toBe('2026-10-05T10:45:00Z');
+    expect(putBody(fresh, desired).end).toBe(code.putBody(fresh, desired).end);
   });
 
   it.each([
     ['an empty description', '', 'Time entry'],
     ['surrounding whitespace', '  Write docs  ', 'Write docs'],
   ])(
-    'a 0.7.1 row (%s) takes the description over at its next sync, sending nothing',
+    'a 0.7.2 row (%s) takes the description over at its next sync, sending nothing',
     (_, description, stored) => {
       const fresh = entry({ description });
       const remote = entryValues(fresh)!;
