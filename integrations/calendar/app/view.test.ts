@@ -274,6 +274,8 @@ describe('Calendar views: the same guidance in the agenda (usertest-findings#3)'
     vi.setSystemTime(new Date('2026-10-21T12:00:00Z'));
     await click(root.querySelector<HTMLElement>('[data-key="today"]')!);
     expect(root.querySelector('.agenda')).toBeNull();
+    // Still the agenda: its day strip is there over the empty state.
+    expect(one(root, 'group', 'Days of this week')).toBeTruthy();
     const empty = emptyCard(root)!;
     expect(empty.querySelector('h2')!.textContent).toBe('No events this week');
     expect(empty.querySelector('p')!.textContent).toBe(
@@ -281,6 +283,7 @@ describe('Calendar views: the same guidance in the agenda (usertest-findings#3)'
     );
     await click(one(root, 'button', 'Jump to latest event'));
     expect(emptyCard(root)).toBeNull();
+    expect(root.querySelector('.agenda')).toBeTruthy();
     const day = one(root, 'region', /^Thursday 24/);
     expect(day.textContent).toContain('Calendar timed fixture');
   });
@@ -291,6 +294,7 @@ describe('Calendar views: the same guidance in the agenda (usertest-findings#3)'
     vi.setSystemTime(new Date('2026-09-02T12:00:00Z'));
     key('t');
     await settle();
+    expect(one(root, 'group', 'Days of this week')).toBeTruthy();
     const empty = emptyCard(root)!;
     expect(empty.querySelector('h2')!.textContent).toBe('No events this week');
     expect(empty.querySelector('p')!.textContent).toBe(
@@ -298,6 +302,7 @@ describe('Calendar views: the same guidance in the agenda (usertest-findings#3)'
     );
     await click(one(root, 'button', 'Jump to next event'));
     expect(emptyCard(root)).toBeNull();
+    expect(root.querySelector('.agenda')).toBeTruthy();
     expect(one(root, 'region', /^Thursday 10/).textContent).toContain(
       'Calendar three-day fixture',
     );
