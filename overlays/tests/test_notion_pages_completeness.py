@@ -10,6 +10,7 @@ URL is downloaded.
 import argparse
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -90,7 +91,7 @@ class NotionPagesCompletenessTests(unittest.TestCase):
         # Not found, or not shared with the connection.
         self.assertEqual(classify(404, {"object": "error", "status": 404, "code": "object_not_found"}), "unavailable")
         self.assertEqual(classify(410), "unavailable")  # undocumented: read like a 404
-        # An archived or trashed page is still readable: present, not a deletion.
+        # A trashed page answered 2xx (inferred, not documented) is present, not a deletion.
         self.assertEqual(classify(200, {"object": "page", "id": page_id, "in_trash": True}), "present")
         self.assertEqual(classify(403, {"code": "restricted_resource"}), "unknown")
 
@@ -114,10 +115,24 @@ class NotionPagesCompletenessTests(unittest.TestCase):
             "collections"]["pages"]["x-completeness"]}}})
 
     def test_no_dated_catalog_selects_the_overlay(self):
-        # Whoever adds the overlay to a dated catalog changes this test.
+        # Whoever adds the overlay to a dated catalog changes this test, and
+        # keeps the next one passing.
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
                 self.assertNotIn(f"completeness-{PIN}", catalog.read_text(encoding="utf-8"))
+
+    def test_a_catalog_selects_it_only_with_pagination_v3(self):
+        # Under an earlier pagination revision a query over 10,000 results
+        # looks complete, so the pages past the cap would be taken as absent.
+        for catalog in sorted((ROOT / "catalog").glob("*.json")):
+            for platform in json.loads(catalog.read_text(encoding="utf-8"))["platforms"]:
+                names = [url.rsplit("/", 1)[1] for url in platform.get("overlays", [])]
+                if f"completeness-{PIN}-overlay.yaml" not in names:
+                    continue
+                with self.subTest(catalog=catalog.name, platform=platform["name"]):
+                    self.assertIn(f"pagination-v3-{PIN}-overlay.yaml", names)
+                    self.assertNotIn(f"pagination-{PIN}-overlay.yaml", names)
+                    self.assertNotIn(f"pagination-v2-{PIN}-overlay.yaml", names)
 
 
 if __name__ == "__main__":

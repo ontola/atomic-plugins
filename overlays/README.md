@@ -202,11 +202,13 @@ and `notFound: unavailable`. Notion's
 with owner of the bearer token", so without this overlay a consumer would take
 a page no longer shared with the connection as deleted (the `notFound`
 default). The [query](https://developers.notion.com/reference/query-a-data-source)
-"returns non-archived pages" by default, and archived and trashed pages stay
-readable, so absence alone settles nothing. The query is capped at 10,000
-results: `pagination-v3-0c8e2296…` marks a capped read incomplete; with the
-catalogs' first pagination revision a capped read looks complete, and each
-page past the cap is then read on its own and found present. Not declared:
+"returns non-archived pages" by default, so absence alone settles nothing.
+Inferred, not documented: that a trashed page leaves the query and that an
+archived or trashed page's own read still answers 2xx; neither changes an
+outcome. The query is capped at 10,000 results, so a catalog selects this
+overlay only together with `pagination-v3-0c8e2296…`, which marks a capped
+read incomplete; under an earlier pagination revision a query over 10,000
+results looks complete (the test asserts this pairing). Not declared:
 `gone` (no 410 documented), anything on `data_sources` (`POST /search`, not
 documented as returning every shared data source), and so `parentAbsent`,
 which needs a parent collection with a Completeness Object (§4.4). The pinned

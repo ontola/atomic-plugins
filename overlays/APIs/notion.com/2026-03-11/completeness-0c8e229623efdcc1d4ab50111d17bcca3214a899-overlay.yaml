@@ -1,4 +1,4 @@
-# Reviewed 2026-10-13 against the pinned OAD and official provider documentation; no live calls.
+# Reviewed 2026-10-14 against the pinned OAD and official provider documentation; no live calls.
 # Source: https://developers.notion.com/reference/status-codes: 404 object_not_found, "Given
 #   the bearer token used, the resource does not exist. This error can also indicate that the
 #   resource has not been shared with owner of the bearer token." No 410 is documented.
@@ -7,7 +7,11 @@
 #   that has not been shared will return an HTTP response with a 404 status code"; results
 #   capped at 10,000, with request_status marking the result incomplete).
 # Source: https://developers.notion.com/reference/retrieve-a-page ("A missing page or missing
-#   access returns `404`"; archived and trashed pages are still returned).
+#   access returns `404`").
+# Inferred, not quoted: that an archived or trashed page is still answered 2xx by its own
+#   read, and that a trashed page leaves the query. Neither page says so; the page object has
+#   in_trash (and is_archived) fields, which suggests such pages are returned. Neither changes
+#   an outcome below: absence is removed whatever the reason, and a 2xx read is present.
 # The pinned OAD is an authored subset without descriptions; the evidence is the reference.
 # Needs Collection Completeness 0.2.0-draft (notFound). Compose after
 # crud-causality-0c8e2296...-overlay.yaml, in either order: it deep-merges into its `page`
@@ -15,12 +19,13 @@
 #
 # Without a declaration a consumer takes a 404 from a page's own read as a deletion (the
 # notFound default). Notion answers 404 for a page not shared with the connection as well,
-# so this overlay says unavailable. A page leaves the query when it is archived or trashed
-# (both still readable), unshared or deleted, so absence is removed: it leads to the page's
-# own read, never to a deletion by itself. The query is capped at 10,000 results;
-# pagination-v3-0c8e2296... marks a capped read incomplete (Pagination Schemes 0.8.0). With
-# an earlier pagination revision a capped read looks complete, and the pages past the cap
-# are then each read on their own and found present.
+# so this overlay says unavailable. A page leaves the query when it is archived (quoted
+# above), unshared or deleted, and possibly when trashed (inferred), so absence is removed:
+# it leads to the page's own read, never to a deletion by itself.
+# Select it only together with pagination-v3-0c8e2296...: the query is capped at 10,000
+# results, and v3 (Pagination Schemes 0.8.0 `incomplete`) marks a capped read incomplete.
+# Under an earlier pagination revision a query over 10,000 results looks complete, and every
+# page past the cap would be taken as absent (and then read on its own).
 # Not declared: `gone` (no 410 documented); anything on `data_sources` (POST /search, which
 # the reference does not document as returning every shared data source), and so
 # `parentAbsent`, which needs a parent collection with a Completeness Object (§4.4).
@@ -41,10 +46,12 @@ actions:
                 notFound: unavailable
                 description: >-
                   A data source's pages, every page of the query. A page
-                  leaves the query when archived or trashed (both still
-                  readable), when no longer shared with the connection, or
-                  when deleted, so absence is removed. Notion answers 404
+                  leaves the query when archived (the query "returns
+                  non-archived pages" by default), when no longer shared with
+                  the connection, or when deleted, and possibly when trashed
+                  (not documented), so absence is removed. Notion answers 404
                   both when a page does not exist and when it "has not been
                   shared with owner of the bearer token", so a 404 from its
                   own read is unavailable. A read capped at 10,000 results is
-                  not complete.
+                  not complete; select this with pagination-v3, which marks
+                  such a read incomplete.
