@@ -73,7 +73,8 @@ Data flows through four stages, each its own directory under `src/`:
    the end, `wallClockQuery` rewrites the query and computes the
    `ReadCoverage` set on `CollectionSnapshot.coverage` (and the client's
    `SyncResult.coverage`, and `readPlatform`'s `ReadResult.coverage`,
-   `PlatformCoverage` with the snapshot's path parameters as `context`).
+   the same `CollectionCoverage`, `context` from `contextParams`, left
+   out when empty).
    For a `rangeWindow` read with a range whose
    window fields include such parameters, `wallClockWindows` gives
    `walkPages` the `windowValue` hook (wall-clock digits per zoned window

@@ -18,3 +18,18 @@ collection's `ReadCoverage` with `collection` and `context`, absent when
 none has any. Test in `unit/read/time-zone.test.ts`: the same entries as
 `SyncResult.coverage` for the same selection, none without values.
 README, CLAUDE.md, an Unreleased changelog bullet.
+
+## Turn 2
+
+**Human (via the coordinator session):** the #575 review: the context was
+`{...pathParams}`, every constant, where `sync()` gives the collection's
+own path parameters and leaves `context` out when empty; reuse
+`CollectionCoverage` instead of a new type; test an unused constant and a
+root collection; say that `readPlatform` reports coverage for a failed
+collection too, where `sync()` throws.
+
+**Assistant:** `context` is built from `collection.contextParams` and left
+out when empty; `ReadResult.coverage` is `CollectionCoverage[]` and
+`PlatformCoverage` is gone (it was never released). Test with an extra
+constant and with the entries at the root; it fails on the code before.
+JSDoc, README and CLAUDE.md updated.

@@ -21,7 +21,6 @@ export type {
   PaginateOptions,
   ReadOptions,
   ReadRecord,
-  PlatformCoverage,
   ReadResult,
 } from './read/read.js';
 export { mergeQuerySelections } from './read/model.js';

@@ -62,7 +62,6 @@ export type {
   PaginateOptions as PaginateOperationOptions,
   ReadOptions,
   ReadRecord,
-  PlatformCoverage,
   ReadResult,
 } from './read/read.js';
 export { mergeQuerySelections } from './read/model.js';

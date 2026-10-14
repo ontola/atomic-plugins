@@ -33,7 +33,7 @@ import { readCollections, type CollectionReadOptions } from './collections.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
 import { declaredThrottling } from '../throttling/throttling.js';
 import type { RuntimeDescriber, RuntimeMembers } from './runtime-schemas.js';
-import type { ReadCoverage } from './time-zone.js';
+import type { CollectionCoverage } from '../client/client.js';
 
 /**
  * Applies overlays in order, then resolves local `$ref`s. The other read
@@ -112,12 +112,6 @@ export interface ReadRecord {
   runtime?: RuntimeMembers;
 }
 
-/** A collection's `ReadCoverage`, with the path parameters it was read under. */
-export interface PlatformCoverage extends ReadCoverage {
-  collection: string;
-  context: Record<string, string>;
-}
-
 export interface ReadResult {
   platform: string;
   ontology: Ontology;
@@ -153,10 +147,13 @@ export interface ReadResult {
    * What each collection's query asked for (Filtering 0.2.0-draft
    * `x-time-zone`, with `selection` or `ranges`), as `SyncResult.coverage`
    * gives it: one entry per collection read with coverage, absent when
-   * none had any. It describes the query, not the records (see the
-   * README's `x-time-zone` section).
+   * none had any; `context` holds the collection's own path parameters,
+   * left out for a root collection. It describes the query, not the
+   * records (see the README's `x-time-zone` section). Unlike `sync()`,
+   * which throws when a collection fails, `readPlatform` reports coverage
+   * for a failed collection too (its `spans` then null).
    */
-  coverage?: PlatformCoverage[];
+  coverage?: CollectionCoverage[];
 }
 
 const TIMESTAMP =
@@ -245,17 +242,21 @@ export async function readPlatform(
       context: { ...s.pathParams },
       reason: s.notComplete as string,
     }));
-  const coverage = result.collections.flatMap((s): PlatformCoverage[] =>
-    s.coverage
-      ? [
-          {
-            collection: s.collection.name,
-            context: { ...s.pathParams },
-            ...s.coverage,
-          },
-        ]
-      : [],
-  );
+  // The context as sync() gives it: the collection's own path parameters,
+  // not every constant, and none for a root collection.
+  const coverage = result.collections.flatMap((s): CollectionCoverage[] => {
+    if (!s.coverage) return [];
+    const context = Object.fromEntries(
+      s.collection.contextParams.map((p) => [p, s.pathParams[p] as string]),
+    );
+    return [
+      {
+        collection: s.collection.name,
+        ...(Object.keys(context).length ? { context } : {}),
+        ...s.coverage,
+      },
+    ];
+  });
   return {
     platform: options.platform,
     ontology,
