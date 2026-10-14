@@ -6215,18 +6215,26 @@ export function createApiClient(
       }
       // An unchanged read rebuilds nothing, but unconfirmed records, then
       // unavailable ones (second pass), are still checked; not records with
-      // queued or held writes, which their writes' checks settle.
-      if (!differs)
-        for (const mark of keptMarks.values())
+      // queued or held writes, which their writes' checks settle. A kept
+      // mark this read lists as a tombstone is settled (deleted, no
+      // request) whether or not the collection makes checks, as on a
+      // changed read: its members can be unchanged while a tombstone is new.
+      if (!differs) {
+        const listed = listTombstoned.get(scope);
+        for (const mark of keptMarks.values()) {
           if (
-            mark.scope === scope &&
-            !records.has(mark.id) &&
-            !unsettled(scope, mark.id) &&
-            lookupPlanned(route, mark.id, scope)
-          ) {
-            if (mark.presence === 'unconfirmed') vanished.push(mark.id);
-            else if (mark.presence === 'unavailable') unavailable.push(mark.id);
-          }
+            mark.scope !== scope ||
+            records.has(mark.id) ||
+            unsettled(scope, mark.id)
+          )
+            continue;
+          if (listed?.has(mark.id) && mark.presence !== 'deleted')
+            vanished.push(mark.id);
+          else if (!lookupPlanned(route, mark.id, scope)) continue;
+          else if (mark.presence === 'unconfirmed') vanished.push(mark.id);
+          else if (mark.presence === 'unavailable') unavailable.push(mark.id);
+        }
+      }
       for (const id of unavailable) round.unavailable.push({ read, id });
       // isFresh: a write that settled on a record during the rebuild above
       // makes this read too old to judge that record.
