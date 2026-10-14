@@ -109,7 +109,10 @@ export interface ThrottlingVerdict {
    * The earliest time to send the request again (or any request counted
    * against the exhausted bucket), in milliseconds since the epoch. Absent
    * when no header or declared delay gives one: the consumer's own backoff
-   * applies.
+   * applies, except under `blocked` (Throttling 0.4.0), where absent means
+   * never send it again automatically. API semantic change: before 0.4.0
+   * support, a verdict always meant "retry, at `retryAt` or after a
+   * backoff"; a `blocked` verdict means "do not retry".
    */
   retryAt?: number;
   /** The Signal Object that matched; absent for a 429 no signal matched. */
@@ -309,6 +312,12 @@ function parseSignal(value: unknown): SignalObject | undefined {
     if (!parsed) return undefined;
     signal.body = parsed;
   }
+  if (typeof description === 'string') signal.description = description;
+  // 0.4.0: a blocked signal (or one read as blocked) takes no bucket and no
+  // delay. A document that gives them anyway is invalid, but the signal is
+  // kept as blocked with them ignored, never dropped: dropping it would
+  // leave the matching 429 to the throttled default, which is retried.
+  if (signal.meaning === 'blocked') return signal;
   if (bucket !== undefined) {
     if (typeof bucket !== 'string') return undefined;
     signal.bucket = bucket;
@@ -317,13 +326,6 @@ function parseSignal(value: unknown): SignalObject | undefined {
     if (!isPositiveInteger(minDelaySeconds)) return undefined;
     signal.minDelaySeconds = minDelaySeconds;
   }
-  if (typeof description === 'string') signal.description = description;
-  // blocked takes no bucket and no delay: it is not counted.
-  if (
-    signal.meaning === 'blocked' &&
-    (signal.bucket !== undefined || signal.minDelaySeconds !== undefined)
-  )
-    return undefined;
   return signal;
 }
 
@@ -642,6 +644,12 @@ const STANDARD_RETRY_AFTER: HeaderRoleObject = {
  * signal's `minDelaySeconds`; else, for `quotaExhausted` with a bucket
  * whose window is declared, plus that window; else absent (the consumer's
  * backoff). A declared header whose value does not parse is ignored.
+ *
+ * Throttling 0.4.0: a matching `blocked` signal (or one whose meaning this
+ * consumer does not recognise, with any `bucket` or `minDelaySeconds`
+ * ignored) gives `{ meaning: 'blocked' }` with no `retryAt`, which means
+ * never resend automatically, not the consumer's backoff. A caller that
+ * treated every verdict as "retry later" must check the meaning.
  */
 export function classifyThrottling(
   declaration: ThrottlingDeclaration | undefined,

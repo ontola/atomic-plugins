@@ -1925,6 +1925,18 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: Throttling 0.4.0-draft `blocked`. A signal with
+  `meaning: blocked` (Notion's `public_api_request_blocked`), or with a
+  meaning this version does not recognise, gives `classifyThrottling` the
+  verdict `{ meaning: 'blocked' }` with no `retryAt`: not throttling, never
+  resent automatically. Such a signal keeps a `bucket` or `minDelaySeconds`
+  ignored rather than being dropped. A write answered `blocked` (its own
+  answer, or a precondition read's) fails at once (`permanent` in
+  `defaultWriteFailureClass`), with no `notBefore` and no bucket pause; a
+  read returns the answer without sleeping and fails on it. API semantic
+  change: a `ThrottlingVerdict` no longer always means "retry later"; a
+  custom `classifyWriteFailure` that returns `retry` for any
+  `failure.throttling` now retries a blocked answer, so check its meaning.
 - **Unreleased** (for 0.23.0): Pagination Schemes 0.8.0 `response.incomplete`
   (§4.4.6): a response body value that marks a capped result (Notion's
   `request_status.type: incomplete` past 10,000 results). A read in which

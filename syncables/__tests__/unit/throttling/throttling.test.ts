@@ -531,15 +531,26 @@ describe('blocked (Throttling 0.4.0)', () => {
     });
   });
 
-  it('leaves the signals out when blocked has a bucket or a delay: a 429 is then throttled', () => {
-    for (const extra of [{ minDelaySeconds: 30 }, { bucket: 'b' }]) {
-      const d = {
-        'x-throttling': {
-          signals: [{ status: [429], meaning: 'blocked', ...extra }],
-        },
-      } as unknown as OpenApiDocument;
-      expect(declaredThrottling(d)?.signals).toBeUndefined();
-      expect(classify(429, {}, undefined, d)).toEqual({ meaning: 'throttled' });
+  it('keeps a blocked signal that has a bucket or a delay as blocked, ignoring them (fails safe)', () => {
+    for (const meaning of ['blocked', 'suspended']) {
+      for (const extra of [
+        { minDelaySeconds: 30 },
+        { bucket: 'b' },
+        { bucket: 7, minDelaySeconds: -1 },
+      ]) {
+        const d = {
+          'x-throttling': {
+            signals: [{ status: [429], meaning, ...extra }],
+          },
+        } as unknown as OpenApiDocument;
+        const [signal] = declaredThrottling(d)?.signals ?? [];
+        expect(signal).toMatchObject({ meaning: 'blocked' });
+        expect(signal?.bucket).toBeUndefined();
+        expect(signal?.minDelaySeconds).toBeUndefined();
+        expect(classify(429, { 'retry-after': '2' }, undefined, d)).toEqual({
+          meaning: 'blocked',
+        });
+      }
     }
   });
 });

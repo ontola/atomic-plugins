@@ -2809,8 +2809,10 @@ export function createApiClient(
    * A read a precondition needs (the object, or a source object) that was
    * refused as a request: a throttling answer holds the write until its
    * time (`notBefore`, and a `quotaExhausted` bucket pause), as for the
-   * write's own answer; refused credentials block the client. Undefined for
-   * any other answer, which the caller handles.
+   * write's own answer; a `blocked` answer (Throttling 0.4.0) ends the write
+   * (`gaveUp`), not resent and with no `notBefore`; refused credentials
+   * block the client. Undefined for any other answer, which the caller
+   * handles.
    */
   function readRefused(
     write: QueuedWrite,

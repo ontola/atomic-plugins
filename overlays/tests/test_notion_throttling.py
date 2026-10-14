@@ -75,17 +75,19 @@ class NotionThrottlingTests(unittest.TestCase):
         self.assertNotIn("limits", self.composed["x-throttling"])
 
     def test_composes_with_the_catalogued_overlays_in_either_order(self):
-        overlay = yaml.safe_load((ROOT / OVERLAY).read_text())
         siblings = [yaml.safe_load((ROOT / s).read_text()) for s in SIBLINGS]
-        first, second = copy.deepcopy(self.original), copy.deepcopy(self.original)
-        for s in siblings:
-            apply(first, s)
-        apply(first, overlay)
-        apply(second, overlay)
-        for s in siblings:
-            apply(second, s)
-        self.assertEqual(first, second)
-        throttling.validate(first)
+        for path in (OVERLAY, OVERLAY_V2):
+            with self.subTest(overlay=path):
+                overlay = yaml.safe_load((ROOT / path).read_text())
+                first, second = copy.deepcopy(self.original), copy.deepcopy(self.original)
+                for s in siblings:
+                    apply(first, s)
+                apply(first, overlay)
+                apply(second, overlay)
+                for s in siblings:
+                    apply(second, s)
+                self.assertEqual(first, second)
+                throttling.validate(first)
 
     def test_documented_429(self):
         for reason in (None, "public_api_request_rate_limit", "public_api_space_request_rate_limit"):
