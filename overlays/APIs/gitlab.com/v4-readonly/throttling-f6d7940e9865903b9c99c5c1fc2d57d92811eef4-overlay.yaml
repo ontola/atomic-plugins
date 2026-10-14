@@ -5,7 +5,8 @@
 #   "2,000 requests every 10 minutes"; "Single project requests (/api/v4/projects/:id)": "400
 #   requests each minute" (the limits in effect; the page also lists proposed tier-aware
 #   limits that are not yet in effect); "When a request is rate limited, GitLab responds with
-#   a 429 Too Many Requests status code."
+#   a 429 Too Many Requests status code."; "Rate limiting responses for the Projects, Groups,
+#   and Users APIs do not include informational headers."
 # Source: https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/
 #   (Response headers) on all responses: RateLimit-Limit "The request quota for the client
 #   each minute.", RateLimit-Observed "Number of requests associated with the client in the
@@ -21,9 +22,14 @@
 # per what they count, so those buckets name no partition. The IP is the one GitLab sees: a
 # proxy's address is shared by everyone connecting through it.
 # Not declared: RateLimit-ResetTime (the same moment as RateLimit-Reset, and a role appears
-# once); RateLimit-Name (a throttle name, no role); the unauthenticated limit (60 each hour
-# per IP: every operation here is called with a user's token); the proposed tier-aware
-# limits (not in effect). The page names no limit for the issue list or issue read.
+# once); RateLimit-Name (a throttle name, no role); the unauthenticated limit ("Unauthenticated
+# traffic from an IP address": "500 requests each minute", in effect; every operation here is
+# called with a user's token); the proposed tier-aware limits (not in effect). The page names
+# no limit for the issue list or issue read.
+# The headers are declared for the whole document, but a 429 from the project list's or the
+# single project read's own limit comes without them ("Rate limiting responses for the
+# Projects, Groups, and Users APIs do not include informational headers"): no Retry-After
+# there, so a consumer waits by its own backoff.
 overlay: 1.0.0
 info:
   title: GitLab.com REST API v4 throttling
@@ -57,12 +63,14 @@ actions:
             description: >-
               "Projects list requests (/api/v4/projects)": "2,000 requests
               every 10 minutes". The row does not say per what it counts.
+              Its 429 carries no RateLimit-* or Retry-After header.
           singleProject:
             requests: 400
             window: { seconds: 60, kind: unspecified }
             description: >-
               "Single project requests (/api/v4/projects/:id)": "400 requests
               each minute". The row does not say per what it counts.
+              Its 429 carries no RateLimit-* or Retry-After header.
         applies: [authenticatedApi, allTrafficPerIp]
         headers:
           RateLimit-Limit:

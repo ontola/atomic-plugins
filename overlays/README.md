@@ -283,8 +283,13 @@ tier-aware limits are proposed, not in effect. Also the documented
 for a throttle whose period is not a minute), `RateLimit-Observed`,
 `RateLimit-Remaining`, `RateLimit-Reset` (Unix time) and, on a 429,
 `Retry-After` (seconds), and a 429 as `throttled` with no bucket named.
+"Rate limiting responses for the Projects, Groups, and Users APIs do not
+include informational headers", so a 429 from the project list's or project
+read's own limit has no `RateLimit-*` or `Retry-After`.
 Not declared: `RateLimit-ResetTime`, `RateLimit-Name` and the
-unauthenticated limit; the page names no limit for the issue reads. No
+unauthenticated limit ("500 requests each minute" per IP, in effect; every
+operation here sends a user's token); the page names no limit for the issue
+reads. No
 dated catalog selects it yet. `tests/test_gitlab_throttling.py` composes it
 alone and after the catalog's GitLab overlays and classifies synthetic
 responses. No provider was called.
