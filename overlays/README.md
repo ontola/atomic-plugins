@@ -324,6 +324,30 @@ mention. No dated catalog selects it yet. `tests/test_airtable_throttling.py`
 composes it alone and after the catalog's Airtable overlays and classifies
 a synthetic 429. No provider was called.
 
+## Asana project tasks completeness
+
+[`completeness-b58c91d9…-overlay.yaml`](APIs/asana.com/1.0/completeness-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Asana `projectTasks` collection: `absent: removed` and
+`notFound: unavailable`, from the pinned OAD's own text (the same as Asana's
+[API reference](https://developers.asana.com/reference/rest-api-reference)).
+Its 404 says the object "does not exist", but deleted tasks go into the
+deleting user's trash and "can be recovered from the trash within a period of
+30 days", and what a trashed task's read answers is not documented, so a 404
+is not a final deletion. A task leaves a project's list when deleted or
+removed from that project ("Tasks can exist in more than one project at a
+time"), so absence leads to the task's own read. Not declared: `gone` (no 410
+documented), anything on projects, workspaces or users, and so
+`parentAbsent` (§4.4). Not verified: that the list without `completed_since`
+returns completed tasks (the parameter's text implies it), and whether
+subtasks not added to the project are listed. An expired offset token ("an
+offset token will expire after some time") fails the read, which is then not
+complete. No dated catalog selects it yet.
+`tests/test_asana_tasks_completeness.py` composes it with the catalog's auth,
+pagination and crud-causality overlays, in either order, runs both
+validators, checks the pinned wording and the outcomes `classify_read` gives.
+No provider was called.
+
 ## Asana throttling
 
 [Asana API throttling](APIs/asana.com/1.0/throttling-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml)
