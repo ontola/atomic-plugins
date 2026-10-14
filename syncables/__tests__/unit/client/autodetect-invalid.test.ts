@@ -3,6 +3,10 @@ import { describe, expect, it } from 'vitest';
 import {
   createApiClient,
   InMemoryStorageAdapter,
+  invalidAutoDetected,
+  paginate,
+  validatePaginationScheme,
+  type WalkOutcome,
   type OpenApiDocument,
   type PresenceChange,
   type Transport,
@@ -72,18 +76,25 @@ const invalid = {
   response: { ...valid.response, incomplete: { field: 'status' } },
 };
 
-function server(): { requests: string[]; transport: Transport } {
+/** Also answers an `ETag`, and notes each `If-None-Match` sent. */
+function server(): {
+  requests: string[];
+  conditional: (string | undefined)[];
+  transport: Transport;
+} {
   const fake = {
     requests: [] as string[],
+    conditional: [] as (string | undefined)[],
     transport: (async (request) => {
       fake.requests.push(request.url.pathname + request.url.search);
+      fake.conditional.push(request.headers['if-none-match']);
       const cursor = request.url.searchParams.get('cursor');
       const start = cursor ? Number(cursor) : 0;
       const page = rows.slice(start, start + 2);
       const more = start + 2 < rows.length;
       return {
         status: 200,
-        headers: {},
+        headers: { etag: `"v${start}"` },
         body: JSON.stringify({
           data: page,
           next_cursor: more ? String(start + 2) : null,
@@ -145,5 +156,87 @@ describe('an invalid pagination scheme that auto-detection would apply', () => {
     const result = await c.sync();
     expect(result.incomplete).toEqual([]);
     expect(fake.requests).toHaveLength(2);
+  });
+
+  it('leaves a read complete when an explicit x-pagination applies a valid scheme', async () => {
+    const doc = document(invalid);
+    doc.components!.paginationSchemes!['good'] = {
+      ...valid,
+      autoDetect: false,
+    } as never;
+    (doc.paths['/pets']!.get as Record<string, unknown>)['x-pagination'] = [
+      { scheme: 'good' },
+    ];
+    const fake = server();
+    const result = await createApiClient(doc, {
+      transport: fake.transport,
+    }).sync();
+    expect(result.incomplete).toEqual([]);
+    expect(fake.requests).toHaveLength(2);
+  });
+
+  it('is not opted out of by an empty x-pagination', async () => {
+    const doc = document(invalid);
+    (doc.paths['/pets']!.get as Record<string, unknown>)['x-pagination'] = [];
+    expect(invalidAutoDetected(doc, doc.paths['/pets']!.get!)).toMatchObject({
+      schemeName: 'cursor',
+    });
+    const result = await createApiClient(doc, {
+      transport: server().transport,
+    }).sync();
+    expect(result.incomplete).toHaveLength(1);
+  });
+
+  it('fills paginate’s outcome as not complete', async () => {
+    const outcome: WalkOutcome = { complete: true };
+    const items = await paginate(document(invalid), {
+      transport: server().transport,
+      path: '/pets',
+      method: 'GET',
+      outcome,
+    });
+    expect(items.map((r) => r['id'])).toEqual(['1', '2']);
+    expect(outcome.complete).toBe(false);
+    expect(outcome.reason).toMatch(
+      /"cursor" matches this operation by auto-detection but is invalid/,
+    );
+  });
+
+  it('ignores a scheme too broken to compare (autoDetect: null), without throwing', async () => {
+    const broken = { ...valid, autoDetect: null };
+    // Invalid (the spec's schema: a boolean or an object); before, the
+    // validator let it through and every read of the document threw.
+    expect(validatePaginationScheme('cursor', broken as never)).toContainEqual(
+      expect.stringMatching(/autoDetect must be a boolean/),
+    );
+    const doc = document(broken);
+    expect(invalidAutoDetected(doc, doc.paths['/pets']!.get!)).toBeUndefined();
+    const fake = server();
+    const result = await createApiClient(doc, {
+      transport: fake.transport,
+    }).sync();
+    // Read as unpaginated, as before: one request, complete.
+    expect(fake.requests).toEqual(['/api/pets']);
+    expect(result.incomplete).toEqual([]);
+  });
+
+  it('is not served from the conditional cache, unlike an unpaginated operation', async () => {
+    // Unpaginated (the only scheme is valid but not auto-detected): the
+    // second read is conditional.
+    const plain = server();
+    const unpaged = createApiClient(document({ ...valid, autoDetect: false }), {
+      transport: plain.transport,
+    });
+    await unpaged.sync();
+    await unpaged.sync();
+    expect(plain.conditional).toEqual([undefined, '"v0"']);
+    // An invalid scheme auto-detection would apply: never conditional.
+    const fake = server();
+    const c = createApiClient(document(invalid), {
+      transport: fake.transport,
+    });
+    await c.sync();
+    await c.sync();
+    expect(fake.conditional).toEqual([undefined, undefined]);
   });
 });
