@@ -16,7 +16,7 @@ METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 ROLES = {"limit", "remaining", "used", "reset", "retryAfter"}
 TIMED_ROLES = {"reset", "retryAfter"}
 UNITS = {"epochSeconds", "deltaSeconds", "httpDate", "deltaSecondsOrHttpDate"}
-MEANINGS = {"throttled", "quotaExhausted"}
+MEANINGS = {"throttled", "quotaExhausted", "blocked"}
 HEADER_OPERATORS = {"equals", "in", "present"}
 BODY_OPERATORS = {"equals", "in", "contains", "present", "item"}
 DIGITS = re.compile(r"[0-9]+")
@@ -124,7 +124,10 @@ def validate_signal(signal, limits, label):
     status = signal.get("status")
     require(isinstance(status, list) and status and all(type(s) is int and 100 <= s <= 599 for s in status), f"{label}.status: expected integer statuses 100-599")
     require(len(set(status)) == len(status), f"{label}.status: duplicate entries")
-    require(signal.get("meaning") in MEANINGS, f"{label}.meaning: expected throttled or quotaExhausted")
+    require(signal.get("meaning") in MEANINGS, f"{label}.meaning: expected throttled, quotaExhausted or blocked")
+    if signal.get("meaning") == "blocked":  # 0.4.0: not counted, so no bucket and no delay
+        require("bucket" not in signal and "minDelaySeconds" not in signal,
+                f"{label}: bucket and minDelaySeconds are not allowed with blocked")
     if "bucket" in signal:
         require(signal["bucket"] in limits, f"{label}.bucket: undefined bucket")
     if "minDelaySeconds" in signal:
@@ -310,6 +313,9 @@ def classify(document, status, headers, body, received_at):
     when the response is not throttling, else a dict with `meaning`, `bucket`
     (or None) and `retryAt` (epoch seconds, or None when the consumer's own
     backoff applies). A 429 is throttling with or without declared signals.
+    Since 0.4.0 the meaning can be `blocked` (also for a signal whose meaning
+    is not recognised, with any bucket or delay it carries ignored): then
+    `retryAt` None means never retry automatically, not the consumer's backoff.
     """
     root = document.get("x-throttling") or {}
     headers = {name.lower(): value for name, value in headers.items()}
@@ -327,6 +333,9 @@ def classify(document, status, headers, body, received_at):
         if status != 429:
             return None
         matched = {"meaning": "throttled"}
+    if matched.get("meaning") not in ("throttled", "quotaExhausted"):
+        # 0.4.0: blocked, and any meaning this consumer does not recognise, is never resent automatically.
+        return {"meaning": "blocked", "bucket": None, "retryAt": None}
     # role -> [(value, unit, source), ...]: headers first, then body fields (0.3.0).
     roles = {}
     for name, header in root.get("headers", {}).items():

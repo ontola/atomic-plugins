@@ -1,0 +1,49 @@
+openapi: 3.0.3
+info:
+  title: Illustrative refusal that is not worth retrying
+  version: 1.0.0
+  description: >-
+    Synthetic, shaped like Notion's request limits: every rate-limit answer is
+    a 429 with the code rate_limited and a Retry-After in seconds, and
+    additional_data.rate_limit_reason names the limit. For the reason
+    public_api_request_blocked the provider documents that retrying won't
+    help, so that signal is blocked and is listed before the broader one.
+servers:
+  - url: https://api.example.com
+x-throttling:
+  headers:
+    Retry-After:
+      role: retryAfter
+      unit: deltaSeconds
+  signals:
+    - status: [429]
+      body:
+        pointer: /additional_data/rate_limit_reason
+        equals: public_api_request_blocked
+      meaning: blocked
+    - status: [429]
+      body:
+        pointer: /code
+        equals: rate_limited
+      meaning: throttled
+paths:
+  /pages/{page_id}:
+    get:
+      parameters:
+        - { name: page_id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: The page }
+        '429':
+          description: Rate limited, or (public_api_request_blocked) access restricted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object: { type: string }
+                  status: { type: integer }
+                  code: { type: string }
+                  additional_data:
+                    type: object
+                    properties:
+                      rate_limit_reason: { type: string }
