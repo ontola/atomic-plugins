@@ -375,22 +375,31 @@ minified, one module). Screenshots, axe and the render budget:
 
 ## Verified
 
-At 0.4.5 (app module `apps/money/0.4.5/ui.js`, 121,339 bytes; `plugin.js`
-again 0.3.0's bundle with only the manifest's `version` changed) a failed
-import never writes a row twice (#539). The sheet drops the preview that
-listed the rows it was writing, disables Import ("Checking what was
-written…") while it reads the table again and compares the file with it,
-and then offers only the rest; a check of the same file started meanwhile
-waits for that read. Unit tests (`app/shared.test.ts`, the second row write
-failing) reproduce both duplicates of 0.4.4 (Import pressed again at once:
-3 rows; the file checked again at once: 2 proposed) and pass now;
-`app/view.test.ts` checks the disabled button. The installed-app e2e step
-of 0.4.3 (below) now checks, with no wait, that the failed sheet never
-offers "Import 2 transactions" again but "Import 1 transaction", that a
-check made at once proposes New 1, that the server ends with each
-transaction once, and that the file checked again finds nothing new.
+At 0.4.5 (app module `apps/money/0.4.5/ui.js`, 122,103 bytes; `plugin.js`
+again 0.3.0's bundle with only the manifest's `version` changed) no import
+writes a row twice (#539, #572). What changed, and what covers it:
+
+- A failed import drops the preview that listed the rows it was writing
+  and disables Import ("Checking what was written…") while it reads the
+  table again; it then offers only the rest. Unit: Import pressed again at
+  once after the failure (3 rows at 0.4.4); the view disables the button.
+- If that read fails, nothing is compared: Import stays off with "Couldn't
+  check what was written; close and check the file again." Unit: a read
+  failing after the failure (the old preview came back at 0.4.4).
+- Every check of a file waits for any import under way, whether or not its
+  sheet was closed, and reads the table first; a failed read stops the
+  check ("Couldn't check what is already in this table"). Unit: the file
+  checked again at once after a failure (2 proposed at 0.4.4), after closing
+  during an import that then fails (3 rows), and after closing during one
+  that succeeds (4 rows for 2).
+- The installed-app e2e step (0.4.3, below) checks that the failed sheet
+  never offers "Import 2 transactions" again, that a check made at once,
+  before anything waited for the app's copy of the table, proposes New 1,
+  that the server ends with each transaction once, and that the file checked
+  again finds nothing new.
+
 The five money e2e tests, this step included, passed on 2026-10-14 at
-0.4.5 against the pin `7dab1ce` (the build VPS's source build), in 4.7
+0.4.5 against the pin `7dab1ce` (the build VPS's source build), in 5.6
 minutes.
 
 At 0.4.3 (`plugin.js` sha256
