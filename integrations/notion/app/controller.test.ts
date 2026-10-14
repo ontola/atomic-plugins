@@ -1,7 +1,12 @@
 // @wc-ignore-file
 import { describe, expect, it } from 'vitest';
 import { createController, STALE_AFTER_MS } from './controller.js';
-import { classifyFailure, parseRetryAfter } from './errors.js';
+import {
+  BLOCKED_MESSAGE,
+  classifyFailure,
+  isBlockedByNotion,
+  parseRetryAfter,
+} from './errors.js';
 import { fakeStore, fixtureProxy } from './fakeStore.js';
 import { RECORD_SHORTNAME } from './record.js';
 import type { HostProxy } from './store.js';
@@ -74,6 +79,47 @@ describe('classifyFailure', () => {
       kind: 'rate-limited',
       retryAt: Date.parse('2026-09-24T12:32:00Z'),
     });
+  });
+
+  it('treats a 429 Notion marks public_api_request_blocked as permanent, with no retry', () => {
+    const blocked = { ...f(429, '30'), blocked: true as const };
+    const state = classifyFailure([blocked], failed, T0);
+    expect(state).toMatchObject({
+      kind: 'failed',
+      title: 'Notion has blocked this integration',
+      message: BLOCKED_MESSAGE,
+    });
+    expect(state).not.toHaveProperty('retryAt');
+    expect(BLOCKED_MESSAGE).toContain(
+      "Retrying won't help. Contact Notion support.",
+    );
+    // Blocked wins over an ordinary 429 in the same sync.
+    expect(classifyFailure([f(429, '30'), blocked], failed, T0)?.kind).toBe(
+      'failed',
+    );
+    // A finished sync is still not a failure.
+    expect(classifyFailure([blocked], undefined, T0)).toBeUndefined();
+  });
+
+  it('reads the block from the body, as an object or as JSON text', () => {
+    const body = {
+      object: 'error',
+      status: 429,
+      code: 'rate_limited',
+      message: 'This request was blocked.',
+      additional_data: { rate_limit_reason: 'public_api_request_blocked' },
+    };
+    expect(isBlockedByNotion(body)).toBe(true);
+    expect(isBlockedByNotion(JSON.stringify(body))).toBe(true);
+    expect(
+      isBlockedByNotion({
+        ...body,
+        additional_data: { rate_limit_reason: 'too_many_requests' },
+      }),
+    ).toBe(false);
+    expect(isBlockedByNotion({ code: 'rate_limited' })).toBe(false);
+    expect(isBlockedByNotion('not json')).toBe(false);
+    expect(isBlockedByNotion(null)).toBe(false);
   });
 
   it('puts status and path in the technical details, not the message', () => {
@@ -378,6 +424,21 @@ describe('controller (N2)', () => {
       kind: 'rate-limited',
       retryAt: T0 + 120_000,
     });
+  });
+
+  it('goes to failed, permanent and with no retry, on a 429 Notion marks blocked', async () => {
+    const { controller } = setup('blocked');
+    await controller.load();
+    const state = await controller.sync();
+    expect(state).toMatchObject({
+      kind: 'failed',
+      title: 'Notion has blocked this integration',
+      message: BLOCKED_MESSAGE,
+    });
+    expect(state).not.toHaveProperty('retryAt');
+    expect((state as { technical: string }).technical).toContain(
+      'public_api_request_blocked',
+    );
   });
 
   it('keeps the previous sync record when a sync fails, so it is not counted as fresh', async () => {
