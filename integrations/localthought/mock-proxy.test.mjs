@@ -916,6 +916,35 @@ test('notion: POST list bodies reach the fixture; the cursor travels in the body
   }
 });
 
+test('moneybird: a fixture learns the connection, so its deliberate outage is per connection', async () => {
+  const { base, close } = await start({ platforms: 'moneybird' });
+
+  try {
+    const [a, b] = [
+      frameClient(base, await connect(base, 'moneybird'), 'moneybird'),
+      frameClient(base, await connect(base, 'moneybird'), 'moneybird'),
+    ];
+    const administrations = await (
+      await a('GET', '/api/v2/administrations.json')
+    ).json();
+    const contacts = `/api/v2/${administrations[0].id}/contacts.json?per_page=100`;
+    /** One full read of the contacts through one connection. */
+    const read = async call => [
+      (await call('GET', contacts)).status,
+      (await call('GET', `${contacts}&page=2`)).status,
+    ];
+
+    // Each connection meets the outage at its own second read, whatever
+    // the other read in between (one shared count would fail b's first).
+    assert.deepEqual(await read(a), [200, 200]);
+    assert.deepEqual(await read(b), [200, 200]);
+    assert.deepEqual(await read(b), [200, 503]);
+    assert.deepEqual(await read(a), [200, 503]);
+  } finally {
+    await close();
+  }
+});
+
 test('google-calendar: If-Match reaches the fixture, ETag comes back, CORS allows both', async () => {
   const { base, server, close } = await start({
     platforms: 'google-calendar',
