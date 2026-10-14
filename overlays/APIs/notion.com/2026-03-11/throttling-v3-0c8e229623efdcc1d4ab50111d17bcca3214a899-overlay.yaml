@@ -9,7 +9,9 @@
 #   won't help. Contact Notion support."
 # v3: v2's header and signals (throttling-v2-0c8e2296..., #533: v1 plus public_api_request_blocked
 # as blocked), plus the per-connection limit as plan tiers (Throttling 0.5.0). A consumer that is
-# not told the workspace's plan paces at 180 per minute.
+# not told the workspace's plan keeps within both tiers at once, so in effect 180 per minute. The
+# second tier's plan is named as Notion's page names it ("All other plans"); a consumer told another
+# plan name matches no tier and also keeps within both.
 # Not declared: the per-workspace limit (no number), and 529 service_overload, since Throttling
 # does not treat a 5xx as a throttling signal.
 # Needs Throttling 0.5.0-draft (openapi-extensions/spec/throttling: blocked, tiers).
@@ -31,10 +33,10 @@ actions:
               partitioned by credential. Notion gives each rate as "an
               average" per second, so the window kind is unspecified.
             tiers:
-              - name: Business and Enterprise
+              - plans: [Business, Enterprise]
                 requests: 600
                 window: { seconds: 60, kind: unspecified }
-              - name: All other plans
+              - plans: [All other plans]
                 requests: 180
                 window: { seconds: 60, kind: unspecified }
         applies: [perConnection]

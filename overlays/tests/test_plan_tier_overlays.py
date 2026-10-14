@@ -3,8 +3,7 @@
 Asana throttling-v2, Notion throttling-v3 and Clockify's first throttling
 overlay are each composed with their pinned OAD and must pass the throttling
 validator and add only x-throttling; their tiers must be the documented
-numbers, a consumer without a configured plan must get the most restrictive
-tier, and each revision must keep what its earlier revision declared. No
+numbers, a consumer without a configured plan must keep within every tier, and each revision must keep what its earlier revision declared. No
 dated catalog selects them. No provider is called. Use --directory for a
 full-history openapi-directory checkout; otherwise the full-SHA source URLs
 are downloaded.
@@ -51,7 +50,11 @@ def root_of(path):
 
 
 def tiers(limit):
-    return {t["name"]: (t["requests"], t["window"]["seconds"]) for t in limit["tiers"]}
+    return {tuple(t["plans"]): (t["requests"], t["window"]["seconds"]) for t in limit["tiers"]}
+
+
+def pairs(entries):
+    return sorted((e["requests"], e["window"]["seconds"]) for e in entries)
 
 
 class PlanTierOverlayTests(unittest.TestCase):
@@ -86,18 +89,20 @@ class PlanTierOverlayTests(unittest.TestCase):
 
     def test_documented_tiers_and_the_default(self):
         limits = {name: composed["x-throttling"]["limits"] for name, (_, composed) in self.documents.items()}
-        self.assertEqual(tiers(limits["asana"]["perToken"]), {"Free": (150, 60), "Paid": (1500, 60)})
+        self.assertEqual(tiers(limits["asana"]["perToken"]), {("Free",): (150, 60), ("Paid",): (1500, 60)})
         self.assertEqual(tiers(limits["notion"]["perConnection"]),
-                         {"Business and Enterprise": (600, 60), "All other plans": (180, 60)})
+                         {("Business", "Enterprise"): (600, 60), ("All other plans",): (180, 60)})
         self.assertEqual(tiers(limits["clockify"]["perWorkspace"]), {
-            "FREE": (30, 3600), "TRIAL": (20, 1), "BASIC, STANDARD and PRO": (20, 1), "ENTERPRISE": (50, 1)})
-        default = {name: throttling.select_tier(limit)
-                   for name, limit in (("asana", limits["asana"]["perToken"]),
-                                       ("notion", limits["notion"]["perConnection"]),
-                                       ("clockify", limits["clockify"]["perWorkspace"]))}
-        self.assertEqual({k: (v["requests"], v["window"]["seconds"]) for k, v in default.items()},
-                         {"asana": (150, 60), "notion": (180, 60), "clockify": (30, 3600)})
-        self.assertEqual(throttling.select_tier(limits["clockify"]["perWorkspace"], "ENTERPRISE")["requests"], 50)
+            ("FREE",): (30, 3600), ("TRIAL", "BASIC", "STANDARD", "PRO"): (20, 1), ("ENTERPRISE",): (50, 1)})
+        # Without a plan, every tier at once.
+        in_force = throttling.limits_in_force
+        self.assertEqual(pairs(in_force(limits["asana"]["perToken"])), [(150, 60), (1500, 60)])
+        self.assertEqual(pairs(in_force(limits["notion"]["perConnection"], "Plus")), [(180, 60), (600, 60)])
+        self.assertEqual(pairs(in_force(limits["clockify"]["perWorkspace"])), [(20, 1), (30, 3600), (50, 1)])
+        # With one, its tier.
+        self.assertEqual(pairs(in_force(limits["clockify"]["perWorkspace"], "PRO")), [(20, 1)])
+        self.assertEqual(pairs(in_force(limits["notion"]["perConnection"], "Enterprise")), [(600, 60)])
+        self.assertEqual(pairs(in_force(limits["asana"]["perToken"], "Paid")), [(1500, 60)])
 
     def test_asana_v2_is_v1_with_tiers(self):
         v1, v2 = root_of(EARLIER["asana"]), root_of(OVERLAYS["asana"])

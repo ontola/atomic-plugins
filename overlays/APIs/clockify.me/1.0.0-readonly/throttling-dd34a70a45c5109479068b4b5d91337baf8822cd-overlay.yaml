@@ -5,8 +5,8 @@
 #   requests per second"; BASIC, STANDARD and PRO "20 requests per second"; ENTERPRISE "50
 #   requests per second".
 # The catalog authenticates with X-Api-Key (auth-dd34a70a...: clockifyApiKey), so the limit
-# applies to every operation. A consumer that is not told the workspace's plan paces at the
-# FREE tier, 30 requests per hour.
+# applies to every operation. A consumer that is not told the workspace's plan keeps within every
+# tier at once: 30 per hour, 20 per second and 50 per second.
 # Not declared: the add-on limit ("50 requests per second (by addon on one workspace) when
 # accessed using X-Addon-Token"), which the catalog's credential does not use; and any signal
 # or header: the page names no status code, no Retry-After and no rate-limit headers, only the
@@ -29,16 +29,13 @@ actions:
               here is the Clockify workspace the request addresses), by the
               workspace's plan. The counting algorithm is not documented.
             tiers:
-              - name: FREE
+              - plans: [FREE]
                 requests: 30
                 window: { seconds: 3600, kind: unspecified }
-              - name: TRIAL
+              - plans: [TRIAL, BASIC, STANDARD, PRO]
                 requests: 20
                 window: { seconds: 1, kind: unspecified }
-              - name: BASIC, STANDARD and PRO
-                requests: 20
-                window: { seconds: 1, kind: unspecified }
-              - name: ENTERPRISE
+              - plans: [ENTERPRISE]
                 requests: 50
                 window: { seconds: 1, kind: unspecified }
         applies: [perWorkspace]

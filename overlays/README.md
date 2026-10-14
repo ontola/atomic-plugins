@@ -281,16 +281,16 @@ called.
 
 Three overlays declare [Throttling 0.5.0-draft](../openapi-extensions/spec/throttling/README.md#plan-tiers)
 `tiers`: limits whose amount (or window) depends on the account's plan. A
-consumer that is not told the plan paces at the most restrictive tier. No
+consumer that is not told the plan keeps within every tier at once. No
 dated catalog selects them. `tests/test_plan_tier_overlays.py` composes each
-with its pinned OAD, checks the documented numbers and the default tier, and
+with its pinned OAD, checks the documented numbers and the limits without a plan, and
 checks that each revision keeps its earlier one. No provider was called.
 
 | Overlay | Tiers | Evidence |
 | --- | --- | --- |
-| [Asana throttling v2](APIs/asana.com/1.0/throttling-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml) | v1 with the standard per-token limit as Free 150 and Paid 1,500 per minute (default: 150). | [Rate limits](https://developers.asana.com/docs/rate-limits), re-read 2026-10-13 |
-| [Notion throttling v3](APIs/notion.com/2026-03-11/throttling-v3-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | v2's header and signals (`public_api_request_blocked` as `blocked`), plus the per-connection limit: Business and Enterprise 600, all other plans 180 per minute (default: 180). The per-workspace limit has no number. | [Request limits](https://developers.notion.com/reference/request-limits) |
-| [Clockify throttling](APIs/clockify.me/1.0.0-readonly/throttling-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) | The first for Clockify: per workspace with `X-Api-Key`, FREE 30 per hour, TRIAL and BASIC, STANDARD and PRO 20 per second, ENTERPRISE 50 per second (default: 30 per hour). No signal or header: the page names none. The add-on limit is left out (the catalog uses an API key). | [Clockify API, Rate Limiting](https://docs.clockify.me/) |
+| [Asana throttling v2](APIs/asana.com/1.0/throttling-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml) | v1 with the standard per-token limit as Free 150 and Paid 1,500 per minute (without a plan: both, so 150). | [Rate limits](https://developers.asana.com/docs/rate-limits), re-read 2026-10-13 |
+| [Notion throttling v3](APIs/notion.com/2026-03-11/throttling-v3-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | v2's header and signals (`public_api_request_blocked` as `blocked`), plus the per-connection limit: Business and Enterprise 600, all other plans 180 per minute (without a plan: both, so 180). The per-workspace limit has no number. | [Request limits](https://developers.notion.com/reference/request-limits) |
+| [Clockify throttling](APIs/clockify.me/1.0.0-readonly/throttling-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) | The first for Clockify: per workspace with `X-Api-Key`, FREE 30 per hour, TRIAL, BASIC, STANDARD and PRO 20 per second, ENTERPRISE 50 per second (without a plan: all three at once). No signal or header: the page names none. The add-on limit is left out (the catalog uses an API key). | [Clockify API, Rate Limiting](https://docs.clockify.me/) |
 
 ## Directory layout and OAD revisions
 

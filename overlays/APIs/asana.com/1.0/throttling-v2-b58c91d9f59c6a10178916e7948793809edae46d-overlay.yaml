@@ -8,7 +8,7 @@
 #   quota".
 # v2 of throttling-b58c91d9...: the same buckets, selections, header and signal, with the
 # standard limit's two numbers declared as plan tiers (Throttling 0.5.0). A consumer that is not
-# told the domain's plan paces at the free tier, 150 per minute per token.
+# told the domain's plan keeps within both tiers at once, so in effect 150 per minute per token.
 # Not declared, as in v1: the concurrency and cost-based limits and the 5 concurrent jobs per user.
 # Needs Throttling 0.5.0-draft (openapi-extensions/spec/throttling: tiers).
 overlay: 1.0.0
@@ -28,11 +28,11 @@ actions:
               "minute-long windows" that are "evaluated more frequently than
               once per minute"; the algorithm is not documented.
             tiers:
-              - name: Free
+              - plans: [Free]
                 requests: 150
                 window: { seconds: 60, kind: unspecified }
                 description: A free domain.
-              - name: Paid
+              - plans: [Paid]
                 requests: 1500
                 window: { seconds: 60, kind: unspecified }
                 description: A paid domain.
