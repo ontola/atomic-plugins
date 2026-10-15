@@ -46,6 +46,7 @@ const RESPONSE_ROLES: Set<ResponseRole> = new Set([
   'pageSize',
   'currentPage',
   'offset',
+  'hasMore',
 ]);
 const LINK_BASES = new Set(['request', 'server', 'declared']);
 
@@ -441,6 +442,7 @@ const REQUEST_FIELD_KEYS = new Set([
   'start',
   'advance',
   'template',
+  'fromLastItem',
 ]);
 const RESPONSE_KEYS = new Set([
   'envelope',
@@ -643,6 +645,76 @@ function checkStructure(
 }
 
 /**
+ * Spec 0.9.0 §9 rules 27–29 (`_item_cursor_problems` in the spec's
+ * validate.py): `fromLastItem` only on a `pageToken` or `cursor` field, a
+ * dot-path of non-empty names; a scheme with one is a `pageToken` scheme
+ * with exactly one such field and no `nextPageToken`, `nextCursor` or
+ * `nextLink` response field; a `hasMore` response field only in
+ * `bodyFields`, and only in a scheme with a `fromLastItem` field.
+ */
+function checkItemCursor(
+  path: string,
+  scheme: PaginationSchemeObject,
+  errors: string[],
+): void {
+  const fields = REQUEST_LOCATIONS.flatMap((location) =>
+    Object.entries(scheme.request?.[location] ?? {})
+      .filter(([, field]) => field.fromLastItem !== undefined)
+      .map(([name, field]) => ({
+        at: `${path}.request.${location}.${name}`,
+        field,
+      })),
+  );
+  for (const { at, field } of fields) {
+    if (field.role !== 'pageToken' && field.role !== 'cursor')
+      errors.push(
+        `${at}.fromLastItem is allowed only on a pageToken or cursor field (rule 27)`,
+      );
+    if (
+      typeof field.fromLastItem !== 'string' ||
+      field.fromLastItem.split('.').some((name) => name === '')
+    )
+      errors.push(
+        `${at}.fromLastItem must be a dot-path of non-empty names (rule 27)`,
+      );
+  }
+  const roles = (['bodyFields', 'headers'] as const).flatMap((kind) =>
+    Object.values(scheme.response?.[kind] ?? {}).map((field) => field.role),
+  );
+  if (fields.length) {
+    if (scheme.type !== 'pageToken')
+      errors.push(
+        `${path}.request: fromLastItem only in a pageToken scheme (rule 28)`,
+      );
+    if (fields.length !== 1)
+      errors.push(`${path}.request: exactly one fromLastItem field (rule 28)`);
+    if (
+      roles.some(
+        (role) =>
+          role === 'nextPageToken' ||
+          role === 'nextCursor' ||
+          role === 'nextLink',
+      )
+    )
+      errors.push(
+        `${path}.response: no nextPageToken, nextCursor or nextLink beside a fromLastItem field (rule 28)`,
+      );
+  }
+  if (
+    Object.values(scheme.response?.headers ?? {}).some(
+      (field) => field.role === 'hasMore',
+    )
+  )
+    errors.push(
+      `${path}.response.headers: role hasMore only in bodyFields (rule 29)`,
+    );
+  if (roles.includes('hasMore') && !fields.length)
+    errors.push(
+      `${path}.response: role hasMore only in a scheme with a fromLastItem field (rule 29)`,
+    );
+}
+
+/**
  * Validates a single scheme against spec section 9. Returns a list of
  * human-readable errors (each naming the offending location), empty if
  * the scheme is valid. Schemes with errors are excluded from
@@ -679,6 +751,7 @@ export function validatePaginationScheme(
   checkWindow(path, scheme, errors);
   checkShortPage(path, scheme, errors);
   checkIncomplete(path, scheme, errors);
+  checkItemCursor(path, scheme, errors);
 
   if (!scheme.request && !scheme.response) {
     errors.push(`${path} must define at least one of "request" or "response"`);

@@ -51,6 +51,8 @@ jobs:
     needs: changes
     if: needs.changes.outputs.devonian == 'true'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: devonian
@@ -73,6 +75,11 @@ jobs:
       - run: pnpm run prettier:check
       - run: pnpm test
       - run: pnpm build
-      # Re-runs __tests__/browser/bundle.test.ts against the compiled build/
-      # that npm consumers get (`pnpm test` above bundles src/).
+      # Re-runs the browser tests against the compiled build/ that npm
+      # consumers get (`pnpm test` above bundles src/); which files, is the
+      # `test:browser-build` script in devonian/package.json.
       - run: pnpm run test:browser-build
+      # The real-browser specs need the full Chromium (`channel: 'chromium'`):
+      # the headless shell refuses Background Sync registration.
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm run test:real-browser
