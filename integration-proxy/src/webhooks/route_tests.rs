@@ -901,6 +901,59 @@ async fn a_long_poll_wakes_when_a_delivery_is_stored() {
     env.drop_schema().await;
 }
 
+/// `maxBytes` on the route (Webhook Subscriptions 0.2.0-draft §7): an event
+/// over it alone comes back alone, marked `omitted` and without `body`; a
+/// value below 1, or not an integer, is refused with `400`.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn events_take_max_bytes() {
+    let env = env(small()).await;
+    let alice = Agent::new(94);
+    let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
+    let sub = id(&env.subscribe_project(&alice, &connection, "p-100").await);
+    let endpoint = env.endpoint("tracker").await;
+    for n in 0..2 {
+        env.deliver(&endpoint, &format!("d-{n}"), "p-100").await;
+    }
+    for bad in ["0", "-1", "lots"] {
+        assert_eq!(
+            env.get(
+                &alice,
+                &format!("/subscriptions/{sub}/events?maxBytes={bad}")
+            )
+            .await
+            .status(),
+            StatusCode::BAD_REQUEST,
+            "maxBytes={bad}"
+        );
+    }
+    let page = body_json(
+        env.get(&alice, &format!("/subscriptions/{sub}/events?maxBytes=1"))
+            .await,
+    )
+    .await;
+    let events = page["events"].as_array().unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0]["payload"]["omitted"], true);
+    assert!(events[0]["payload"].get("body").is_none());
+    assert!(events[0]["payload"]["sha256"].is_string());
+    assert_eq!(page["more"], true);
+    let page = body_json(
+        env.get(
+            &alice,
+            &format!("/subscriptions/{sub}/events?maxBytes=1000000"),
+        )
+        .await,
+    )
+    .await;
+    let events = page["events"].as_array().unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(events
+        .iter()
+        .all(|e| e["payload"]["body"].is_string() && e["payload"].get("omitted").is_none()));
+    env.drop_schema().await;
+}
+
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
 async fn forged_future_and_obsolete_cursors_are_refused_on_the_routes() {

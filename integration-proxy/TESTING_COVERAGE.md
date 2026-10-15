@@ -57,6 +57,7 @@
 | Declarations parsed generically; unsupported ones refused; keys, wildcards, escapes; one-segment path values; JSON depth | `webhooks::metadata::tests::*` |
 | HMAC over the raw bytes, constant time; re-serialized bodies, missing, repeated or malformed signatures, prefixes, timestamps | `webhooks::verify::tests::*` (the spec's signed fixtures) |
 | Subscribe, deliver, fetch, acknowledge, reconcile, renew, delete, resubscribe result | `webhooks::route_tests::subscribe_receive_fetch_acknowledge_reconcile` |
+| `maxBytes` on fetch: a page never carries more base64 payload than asked and holds at least one event; an event over it alone comes back alone without its body (`omitted`), with its size and digest, and is released on acknowledgement; exactly at the limit both events fit; `400` below 1 or not an integer | `webhooks::tests::fetch_within_max_bytes_omits_only_an_event_over_it_alone`, `webhooks::route_tests::events_take_max_bytes` |
 | The synthetic GitHub fixtures through the generic path: key from the provider's answer, `X-Hub-Signature-256`, `X-GitHub-Delivery`, revocation of a removed repository | `webhooks::route_tests::the_synthetic_github_fixtures_pass_through_the_generic_path` |
 | Isolation between connections; access parameters as single segments; declared events only | `webhooks::route_tests::deliveries_reach_only_subscriptions_with_access_to_their_source` |
 | Revocation suspends; failing re-check closes, passing one resumes with a gap | `webhooks::route_tests::a_revocation_suspends_until_the_access_check_decides` |

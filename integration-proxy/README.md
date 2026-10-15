@@ -88,8 +88,10 @@ Subscriptions, `openapi-extensions/spec/`):
   by nobody); `401` unverified, `413` over the cap, `503` not stored.
 - `POST /connections/{id}/subscriptions` `{source, parameters, events}`,
   `GET` and `DELETE /subscriptions/{id}`, `POST /subscriptions/{id}/renew`,
-  `GET /subscriptions/{id}/events?after=&limit=&wait=` (long poll up to 25
-  seconds), `POST /subscriptions/{id}/ack` `{generation, cursor}`,
+  `GET /subscriptions/{id}/events?after=&limit=&maxBytes=&wait=` (long
+  poll up to 25 seconds; at most `maxBytes` of base64 payload per page, an
+  event over it alone coming back alone with `payload.omitted: true` and no
+  `body`), `POST /subscriptions/{id}/ack` `{generation, cursor}`,
   `POST /subscriptions/{id}/reconciled` `{generation, barrier}`: signed by
   the subscription's consumer (the connection's owner, a delegate or a
   runtime), checked on every request. Subscribing runs the source's access
