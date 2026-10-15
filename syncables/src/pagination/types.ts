@@ -109,6 +109,12 @@ export interface RequestFieldObject {
    * page's last item.
    */
   fromLastItem?: string;
+  /**
+   * Beside `fromLastItem` only (spec 0.10.0 §4.3.3, rule 30): the order of
+   * the `fromLastItem` values across the items a read returns, which the
+   * client checks.
+   */
+  order?: 'ascending' | 'descending';
   [key: `x-${string}`]: unknown;
 }
 
