@@ -1,6 +1,7 @@
 import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
 import type { ListMethod } from './transport.js';
 import { discoverResources } from '../resources/discover.js';
+import { parseListTombstone, type ListTombstone } from './list-tombstones.js';
 import { parseProduces, type ProducedClass } from './produced-classes.js';
 
 /**
@@ -60,6 +61,13 @@ export interface ReadCollection {
   itemUrl?: string;
   /** Path variable bound to this item's own identity. */
   itemParam?: string;
+  /**
+   * Deletion Feeds 0.3.0-draft §4.5: the marker of deleted objects this
+   * collection's reads return among the members (`x-list-tombstone`, on the
+   * Collection Object, else, or when that one does not parse, on its list
+   * operation). Absent when neither is declared or parses.
+   */
+  listTombstone?: ListTombstone;
   /**
    * Produced Classes 0.1.0-draft: the shared classes the resource's objects
    * can be represented as (`x-produces` on its CRUD Resource Object, the
@@ -229,6 +237,16 @@ export function discoverReadModel(
         }
       }
       const body = listField(col, 'listBody').value;
+      const method = listMethodOf(col);
+      // The Collection Object's, else (absent, or not parsing) the list
+      // operation's, as for read tombstones (§4.4, §4.5).
+      const listTombstone =
+        parseListTombstone(col['x-list-tombstone']) ??
+        parseListTombstone(
+          document.paths[col['urlTemplate']]?.[
+            method === 'POST' ? 'post' : 'get'
+          ]?.['x-list-tombstone'],
+        );
       const itemsField = isRecord(col['envelope'])
         ? col['envelope']['itemsField']
         : undefined;
@@ -244,7 +262,7 @@ export function discoverReadModel(
         idField,
         contextParams: pathVariables(col['urlTemplate']),
         listQuery,
-        method: listMethodOf(col),
+        method,
         listBody: isRecord(body) ? structuredClone(body) : {},
         // A string is the dot-path; null or "" is the body root (Pagination
         // Schemes §4.4.2); omitted or another type leaves the array to be
@@ -255,6 +273,7 @@ export function discoverReadModel(
         ...(emptyWhenAbsent ? { emptyWhenAbsent } : {}),
         ...(itemUrl ? { itemUrl } : {}),
         ...(itemParam ? { itemParam } : {}),
+        ...(listTombstone ? { listTombstone } : {}),
         ...(produces ? { produces: structuredClone(produces) } : {}),
       });
     }
@@ -314,10 +333,13 @@ export function listOperation(
 export function declaredQueryParameters(
   operation: OperationObject,
 ): Set<string> {
+  // A malformed `parameters` (not an array) reads as none, as auto-detection does.
+  const parameters: unknown = operation.parameters;
+  if (!Array.isArray(parameters)) return new Set();
   return new Set(
-    (operation.parameters ?? [])
-      .filter((parameter) => isRecord(parameter) && parameter.in === 'query')
-      .map((parameter) => parameter.name),
+    parameters
+      .filter((parameter) => isRecord(parameter) && parameter['in'] === 'query')
+      .map((parameter) => parameter['name'] as string),
   );
 }
 

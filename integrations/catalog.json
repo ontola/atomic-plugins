@@ -218,11 +218,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Upload an MT940 or camt.053 statement when you need it, on the importer's Import tab or from the Money app. No bank token and no live bank connection; nothing runs in the background.",
     "https://atomicdata.dev/integrations/properties/limitation": "MT940 (up to 512 KB) and camt.053 XML (up to 5 MB) files only, up to 500 transactions per file. No CSV or PDF, no payment initiation or live bank sync; bank-specific formats may need additional support. Installed from Drive apps, the Money app imports statements into its own table of the shared Bank transaction class; on another table of that class, or to save a category or note on the importer's table, it first needs you to allow it to edit the table. Waits for the stable ontology domain. Declared, and tested with synthetic statement files only at this version.",
     "https://atomicdata.dev/integrations/properties/keywords": "bank bunq banking finance accounting statement mt940 camt camt.053 iso20022 xml sepa import swift",
-    "https://atomicdata.dev/integrations/properties/version": "0.4.3",
+    "https://atomicdata.dev/integrations/properties/version": "0.4.4",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Bank transaction",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Bank transactions",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/money/0.4.3/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-+XU47SA+Fok8XlkaqKdLCjjg73Im/iZ6G9MrSZa/r2P/8IWOWJCk15hj9Upjv7Ch"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/money/0.4.4/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-wp6JuWXBkXHuiljnWSmNWrpoerWCqGaY0O6/MP+Yy89Nqjh9LCAYxu/lewvw5ObC"
   },
   {
     "https://atomicdata.dev/properties/localId": "moneybird",
@@ -260,11 +260,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Clockify through the host's consent bar (the API key is entered at the integration proxy, never in the drive), then choose a workspace and a look-back. It syncs when opened and on Sync now; nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Write-back is declared, not verified: it is tested against the mock proxy only, and no write has been made to a live Clockify account through the app. Changes are found only while the app is open; a row deleted in the table is not noticed. Running timers, locked entries, breaks and entries with custom field values cannot be edited. Coordination between two open copies is advisory (the drive has no compare-and-swap), so two copies starting to send in the same moment can still both send, at worst creating a duplicate that the app then offers to remove; it has been tested with simulated devices only, not with two real browsers. The same field edited directly on two devices keeps the later edit. No tags, tasks, rates or custom fields. Tested against a mock proxy modelled on Clockify behaviour checked against a live account (2026-09-24); the app itself has not run against a live account or the real integration proxy. On a table that isn't the app's own, rows are never deleted (Allow editing doesn't cover it): a row whose entry is deleted in Clockify is kept, unsynced, for you to delete, and the table's existing rows are not uploaded. Waits for the stable ontology domain.",
     "https://atomicdata.dev/integrations/properties/keywords": "clockify time tracking timesheet week hours projects conflicts drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.7.2",
+    "https://atomicdata.dev/integrations/properties/version": "0.8.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Time entry",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Time entries",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.7.2/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-YqCGBOy7N/P8gPg1OV6UVxvTUZDcYtzkYaj/xbuxRGorgw3W/eT8CCJ/pBIcKIdP"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.8.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-xC5MeRRrcacIVGFM16VWgdMRqFY5qBZpKR5JURh5D00dbzj6XE4yXNrkuTAZsb32"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/notion",
@@ -279,13 +279,13 @@
     "https://atomicdata.dev/properties/description": "A drive app that brings the Notion databases you share with it into a table, where you browse and edit the rows, and sends your edits back to Notion after you review them.",
     "https://atomicdata.dev/integrations/properties/capabilities": "Reads every Notion data source shared with the connection into one table in the drive, through Devonian lenses: plain title and text, number, checkbox, URL, email, phone, and select, status and multi-select options as the table's own select columns (one tag per Notion option, with its name and colour; a rename in Notion renames the tag and leaves the rows as they are). You browse and edit the rows with the table's own views. Edits to those fields, made anywhere in Atomic, are found when the app opens by comparing each row with the baseline kept on it, listed under Review changes, and sent to Notion only after you press Send, one page update each. A field changed both here and in Notion waits for Keep mine or Use Notion's. The app itself is a small sync-status view: which databases the table syncs with and how many rows each has, the last sync, Sync now, Open table, sync details listing what could not be read, and Disconnect, which removes only this app's access; the rows stay.",
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, then connect Notion through the host's consent bar. It syncs when opened if the last sync is older than 15 minutes, and on Sync now; unsent edits are listed whenever it opens. Nothing is sent without a review, and nothing runs while the app is closed.",
-    "https://atomicdata.dev/integrations/properties/limitation": "Only existing pages are updated: rows added here are not created in Notion, and nothing is deleted on either side; a page removed or archived in Notion is left in place here. Formatted text is not imported, is listed as a warning, and is never overwritten. Other property types (dates, people, relations, formulas and more) are not imported. A status or select cell given more than one option in the table is held back in the review, since Notion's take one. Notion has no conditional page updates, so an edit made in Notion in the moment between the check and the send is overwritten. All shared databases go into one table. Mock-tested only: not yet verified against live Notion or the real integration proxy.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Only existing pages are updated: rows added here are not created in Notion, and nothing is deleted on either side; a page removed or archived in Notion is left in place here. Formatted text is imported as plain text, without the formatting, is listed as a warning, and is never overwritten. Other property types (dates, people, relations, formulas and more) are not imported. A status or select cell given more than one option in the table is held back in the review, since Notion's take one. Notion has no conditional page updates, so an edit made in Notion in the moment between the check and the send is overwritten. All shared databases go into one table. Mock-tested only: not yet verified against live Notion or the real integration proxy.",
     "https://atomicdata.dev/integrations/properties/keywords": "notion database table rows pages two-way review sync status drive app devonian",
-    "https://atomicdata.dev/integrations/properties/version": "0.5.2",
+    "https://atomicdata.dev/integrations/properties/version": "0.5.6",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Page",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Pages",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.5.2/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-hQJP7BpQw/WE4R7O+t0YjonYPh8swsgVl71EGsNEQ0bysREJOgjW6GlpftFuGB12"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.5.6/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-V6bF3044M8UBxiX6zSdfyDoKSCUP2OO7UPKwD/5OhyYBZxAKhtSFpPIRtOqaNKYZ"
   },
   {
     "@id": "https://atomicdata.dev/integrations/properties/pluginUrl",
@@ -372,9 +372,9 @@
     "https://atomicdata.dev/integrations/properties/events": "Connect once, then Sync now whenever you want the latest pets. Nothing runs in the background.",
     "https://atomicdata.dev/integrations/properties/limitation": "Demo provider only, not a real account. Import only: nothing is written back. Keep the browser open while syncing.",
     "https://atomicdata.dev/integrations/properties/keywords": "pets demo example sample drive app ontology test touch points integration proxy",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.5",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/pets/0.1.5/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-JmWH2/t4HGh55Og4ENqjkX5Q3mN9tjANOAfopJgHUTqaXHJjqMwfgiEemoBtKIHz",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.6",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/pets/0.1.6/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-e/5WWgkiT8NhNEqenqqVQED18CWs4IpWH4sCQtBnKfaHJrMZfCs340nsJyRCRMew",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Pet",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Pets"
   },

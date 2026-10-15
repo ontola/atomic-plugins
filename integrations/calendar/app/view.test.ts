@@ -261,6 +261,54 @@ describe('Calendar views: an imported calendar with nothing this week (usertest-
   });
 });
 
+describe('Calendar views: the same guidance in the agenda (usertest-findings#3)', () => {
+  // The agenda draws the same empty state as the week (main.ts `content`:
+  // the Monday week around the anchor). The Month button opens the host's
+  // own table view, which the app does not draw.
+  const emptyCard = (root: HTMLElement) =>
+    root.querySelector<HTMLElement>('main .center .card');
+
+  it('agenda, weeks after the events: names the latest one and jumps back to its day', async () => {
+    const { root } = await chosen(1120);
+    await click(one(root, 'button', 'Agenda'));
+    vi.setSystemTime(new Date('2026-10-21T12:00:00Z'));
+    await click(root.querySelector<HTMLElement>('[data-key="today"]')!);
+    expect(root.querySelector('.agenda')).toBeNull();
+    // Still the agenda: its day strip is there over the empty state.
+    expect(one(root, 'group', 'Days of this week')).toBeTruthy();
+    const empty = emptyCard(root)!;
+    expect(empty.querySelector('h2')!.textContent).toBe('No events this week');
+    expect(empty.querySelector('p')!.textContent).toBe(
+      'Your latest event is Calendar timed fixture on Thursday 24 September.',
+    );
+    await click(one(root, 'button', 'Jump to latest event'));
+    expect(emptyCard(root)).toBeNull();
+    expect(root.querySelector('.agenda')).toBeTruthy();
+    const day = one(root, 'region', /^Thursday 24/);
+    expect(day.textContent).toContain('Calendar timed fixture');
+  });
+
+  it('agenda on a phone (no Today button; the t key), weeks before the events: names the next one', async () => {
+    const { root } = await chosen(360);
+    expect(root.querySelector('[data-key="today"]')).toBeNull();
+    vi.setSystemTime(new Date('2026-09-02T12:00:00Z'));
+    key('t');
+    await settle();
+    expect(one(root, 'group', 'Days of this week')).toBeTruthy();
+    const empty = emptyCard(root)!;
+    expect(empty.querySelector('h2')!.textContent).toBe('No events this week');
+    expect(empty.querySelector('p')!.textContent).toBe(
+      'Your next event is Calendar three-day fixture on Thursday 10 September.',
+    );
+    await click(one(root, 'button', 'Jump to next event'));
+    expect(emptyCard(root)).toBeNull();
+    expect(root.querySelector('.agenda')).toBeTruthy();
+    expect(one(root, 'region', /^Thursday 10/).textContent).toContain(
+      'Calendar three-day fixture',
+    );
+  });
+});
+
 describe('Calendar views: edit, review, send', () => {
   it('5.9: edits five fields locally, validates like the adapter, sends nothing', async () => {
     const { root, store } = await chosen(1120);

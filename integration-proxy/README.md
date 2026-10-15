@@ -4,12 +4,17 @@ A Rust web server that holds OAuth grants and pasted API keys and tokens for thi
 platforms, and forwards catalog-allowlisted requests to them on behalf of
 [Atomic](https://github.com/ontola/atomic-server) agents.
 
-There are no proxy accounts, logins or tenants (issue
-[#54](https://github.com/ontola/atomic-plugins/issues/54)). The account is
-the caller's Atomic agent, `atomic:agent:<public key>`: every request that
-matters is signed with that key, and the proxy verifies it against the key
-inside the id, so it looks nothing up. A **connection** (one provider grant)
-is owned by the agent that redeemed it; the owner **delegates** it to app
+Connections retain Atomic agent ownership (issue
+[#54](https://github.com/ontola/atomic-plugins/issues/54)); the proxy has no
+standalone owner-account login. The owner is
+the caller's Atomic agent, `atomic:agent:<public key>`. Signed clients use
+that key and the proxy verifies it against the key inside the id. Opt-in
+device clients obtain a scoped bearer session approved by that same owner;
+see [DEVICE_AUTH.md](DEVICE_AUTH.md) for the contract, browser integration
+and runnable examples. This source change does not claim deployment to
+localthought.io.
+
+A **connection** (one provider grant) is owned by the agent that redeemed it; the owner **delegates** it to app
 agents, and may register **runtimes** (a node's app agent) for them. A plugin
 frame, which cannot keep a key, uses a short-lived **capability** signed by
 the owner and bound to a key the frame holds in memory.
@@ -153,12 +158,15 @@ Subscriptions, `openapi-extensions/spec/`):
   A wrong verifier does not burn the handoff.
 - `ANY /proxy/{connection_id}/{platform}/{path}` — **signed** by the owner, a
   delegated app agent, or a registered runtime of a delegated app; or carrying
-  a frame capability (below). The proxy attaches the provider credential,
+  a frame capability (below), or an opt-in Local Thought device access token
+  for approved GET/HEAD reads (DEVICE_AUTH.md). The proxy attaches the provider
+  credential,
   refreshing an expiring OAuth token (one refresh in flight per connection),
   and forwards only catalog-allowlisted methods and paths. The caller's
   `Authorization` and `x-atomic-*` headers are never forwarded: an
-  `Authorization` other than `Capability …` is refused with
-  `401 unsupported_authorization`, and a capability is consumed by the proxy.
+  `Authorization` must be a capability or a namespaced Local Thought device
+  access token; retired bearer connection codes remain refused. Both
+  presentations are consumed by the proxy.
   Of the caller's headers only `Content-Type`, `If-Match`, `If-None-Match` and
   `If-Modified-Since` go upstream, plus `Idempotency-Key` where the operation
   declares an `Idempotency-Key` header parameter (and the catalog sets no
@@ -178,7 +186,8 @@ Subscriptions, `openapi-extensions/spec/`):
   signer's runtimes. Never credentials. Shape:
   `{"owner", "connections": [{"connection_id", "platform", "owner", "label"?, "created_at", "last_used_at", "delegations": [...]}], "runtimes": [{"agent", "app", "label", "created_at", "last_used_at"}]}`.
   A connection's `label` is the key check's label (see `/connect/authorize`),
-  absent otherwise.
+  absent otherwise. A device bearer session instead returns only its approved
+  connections and canonical owner/client/session identity (DEVICE_AUTH.md).
 - `DELETE /connections/{id}` — **signed by the owner**; deletes the connection
   and its delegations. `204`.
 - `POST /connections/{id}/agents` — **signed by the owner**; body
@@ -188,6 +197,22 @@ Subscriptions, `openapi-extensions/spec/`):
   `agent` (a node's app agent) as a runtime of installation `app` for the
   signer. `DELETE /runtimes/{agent}` removes it. A runtime can use every
   connection its app is delegated.
+- `POST /agents/transfer` — **signed by the old agent**; body `{"to",
+  "proof"}` moves the signer's connections and runtimes to the agent `to`
+  and retires the signer (key rotation, #410). `proof` is `to`'s Ed25519
+  signature (base64, either alphabet) over
+  `integration-proxy-agent-transfer-v1\n{old id}\n{new id}\n{proxy origin}\n{this request's x-atomic-timestamp}`,
+  ids canonical. The proxy origin is `BASE_URL`'s scheme, host and port only
+  (no path, no trailing `/`), the same `aud` a frame capability carries;
+  `BASE_URL` itself, path included, is what the request signature covers. `to` must pass the access policy and must not be retired.
+  Delegations stay as they are. Afterwards the old id is refused
+  (`403 agent_retired`) as the signer of management calls, of
+  `/connect/redeem` and of another transfer, and capabilities it signed no
+  longer verify. `409 transfer_blocked` while the old agent has open
+  webhook subscriptions; `409 transfer_conflict`, with nothing moved, when
+  the new agent already has a runtime with the same agent. `200`
+  `{"from", "to", "connections", "runtimes"}` (the counts moved). Only for a
+  key the user still holds: see SECURITY.md, "Key rotation".
 - `GET /healthz` — `200 ok` when the database answers.
 
 Delegations and runtimes are read on every proxied request, so removing one
@@ -222,8 +247,9 @@ Signed endpoints answer errors as JSON, `{"error": "<code>", "message": "<text>"
 
 | Status | `error` |
 | --- | --- |
-| 401 | `missing_signature`, `unsupported_signature_version`, `invalid_agent`, `agent_key_mismatch`, `stale_timestamp`, `bad_signature`, `replayed`, `unsupported_authorization` (e.g. a retired `Bearer` connection code), `invalid_capability`, `capability_expired`, `capability_too_long`, `wrong_audience`, `capability_key_mismatch`, `credential_refresh_failed` (connect again) |
-| 403 | `not_owner`, `not_delegated`, `capability_scope`, `platform_mismatch`, `access_denied` |
+| 401 | `missing_signature`, `unsupported_signature_version`, `invalid_agent`, `agent_key_mismatch`, `stale_timestamp`, `bad_signature`, `replayed`, `unsupported_authorization` (e.g. a retired `Bearer` connection code), `invalid_capability`, `capability_expired`, `capability_too_long`, `wrong_audience`, `capability_key_mismatch`, `credential_refresh_failed` (connect again), `invalid_transfer_proof` |
+| 403 | `not_owner`, `not_delegated`, `capability_scope`, `platform_mismatch`, `access_denied`, `agent_retired` |
+| 409 | `transfer_blocked`, `transfer_conflict` |
 | 404 | `unknown_connection` (deleted, idle-expired, or never existed: connect again) |
 | 400 | `bad_request`, `invalid_handoff` |
 | 429 | `provider_quota`, from `/proxy/…` only, with `Retry-After` in seconds: the proxy's own requests to the platform are at a quota the provider counts on the proxy's address (`x-throttling`; see "Pacing under provider quotas") |

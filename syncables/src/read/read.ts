@@ -25,6 +25,7 @@ import {
   BudgetExhausted,
   walkPages,
   type ReadLimits,
+  type WalkOutcome,
   type WindowRange,
 } from './pages.js';
 import type { ListMethod, Transport } from './transport.js';
@@ -85,6 +86,8 @@ export interface ReadOptions {
   probe?: boolean;
   /** The range for collections read by range windows; see `CollectionReadOptions.ranges`. */
   ranges?: NonNullable<CollectionReadOptions['ranges']>;
+  /** See `CollectionReadOptions.throttlingPlan`. */
+  throttlingPlan?: string;
 }
 
 export interface ReadRecord {
@@ -129,6 +132,18 @@ export interface ReadResult {
    * last ones); present with `describers`.
    */
   describerErrors?: string[];
+  /**
+   * The collections read without an error but not completely, with why:
+   * read by range windows, ended by a short page whose end is not
+   * documented, or marked incomplete by the server (Pagination Schemes
+   * 0.8.0 §4.4.6). Their records are in `records`, but an absent record
+   * says nothing. Absent when every collection read completely.
+   */
+  incomplete?: {
+    collection: string;
+    context: Record<string, string>;
+    reason: string;
+  }[];
 }
 
 const TIMESTAMP =
@@ -210,11 +225,19 @@ export async function readPlatform(
       const runtime = snapshot.runtimeMembers?.[i];
       if (record && runtime) record.runtime = runtime;
     });
+  const incomplete = result.collections
+    .filter((s) => s.notComplete !== undefined && s.error === undefined)
+    .map((s) => ({
+      collection: s.collection.name,
+      context: { ...s.pathParams },
+      reason: s.notComplete as string,
+    }));
   return {
     platform: options.platform,
     ontology,
     records,
     errors: result.errors,
+    ...(incomplete.length ? { incomplete } : {}),
     ...(result.describers ? { describers: result.describers } : {}),
     ...(result.describerErrors
       ? { describerErrors: result.describerErrors }
@@ -254,13 +277,27 @@ export interface PaginateOptions {
    */
   range?: WindowRange;
   /**
-   * The item field that identifies an item, for a windowed read: an item
-   * two windows return is kept once. Default `id`; an item without it is
-   * kept as is.
+   * The item field that identifies an item. Default `id`. A windowed read
+   * keeps an item two windows return once. An offset read (Pagination
+   * Schemes 0.7.0 §4.3.2) and a page-number read with `shortPage` (0.6.0
+   * §4.4.5) end with `PageReadError` at a page holding an id an earlier
+   * page returned, so the field must be unique across the list's pages;
+   * two items sharing an id on one page are not checked. An item without
+   * the field is kept as is (a page of items without it is compared with
+   * the page before instead).
    */
   idField?: string;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
+  /** See `CollectionReadOptions.throttlingPlan`. */
+  throttlingPlan?: string;
+  /**
+   * Filled in when the walk ends: `complete` is false for a read that
+   * returned every page but is not complete (range windows, an
+   * undocumented short-page end, a response the scheme's
+   * `response.incomplete` marks), with `reason`.
+   */
+  outcome?: WalkOutcome;
 }
 
 /**
@@ -283,7 +320,7 @@ export async function paginate(
     captureReadResponses(options.transport, options.storeResponse),
     options.limits,
     options.sleep,
-    declaredThrottling(doc),
+    declaredThrottling(doc, options.throttlingPlan),
   );
   const items: Record<string, unknown>[] = [];
   for await (const page of walkPages({
@@ -303,6 +340,7 @@ export async function paginate(
       ? { emptyWhenAbsent: true }
       : {}),
     ...(options.range ? { range: options.range } : {}),
+    ...(options.outcome ? { outcome: options.outcome } : {}),
     identity: (item) => asText(item[options.idField ?? 'id']),
   })) {
     items.push(...page.items);

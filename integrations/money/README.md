@@ -206,15 +206,20 @@ table it is decides how an import gets in (`controller.ts` `Source`):
   allow editing first.", or after a refusal, "Editing the rows was refused,
   so a category or note cannot be saved until you allow it."); the "sync" it
   dates is the last import: the latest rows that arrived while the view is
-  open ("Synced just now", and the rows line ends "; 2 arrived at the last
-  sync"), else the newest `imported` stamp among the stored statements
-  ("Synced 3 days ago"); the rows line counts the complete rows and the
-  statements they came from ("6 transactions from 2 statements"). The
-  arrivals are every new row the table subscription brought in, from this
-  view's import or any other writer (the importer's review, another tab),
-  so they are "arrived", not "added", and the card's counts line ("Last
-  sync: N added, N updated, N unchanged") is not used: nothing here counts
-  updated or unchanged rows. A table whose statements are only derived
+  open ("Synced just now", and the rows line ends "; 2 imported here at
+  the last sync" or "; 2 arrived at the last sync"), else the newest
+  `imported` stamp among the stored statements ("Synced 3 days ago"); the
+  rows line counts the complete rows and the statements they came from ("6
+  transactions from 2 statements"). The arrivals are every new row the
+  table subscription brought in. From 0.4.4 those of the refreshes in the
+  15 s after an import this view applied (its own writes, or the host
+  importer it ran) are "imported here", and the header pill says "Imported
+  2 · just now"; any other writer's (the importer's review in another tab,
+  another device) "arrived", with the pill "2 arrived · 3 min ago". The pill
+  is dated like the card (`ago`), so it ages on each render; before 0.4.4 it
+  read "Imported N · just now" for every arrival and never aged. The card's
+  counts line ("Last sync: N added, N updated, N unchanged") is not used:
+  nothing here counts updated or unchanged rows. A table whose statements are only derived
   from its rows (an older importer table, a hand-made shared-class table)
   records no import date, so the card reads "Not synced yet" over the rows
   and the rows line says "when they were imported is not recorded" rather
@@ -378,7 +383,24 @@ stopped-import message's punctuation, unit-tested in `app/status.test.ts`)
 the money lane's e2e (`e2e/money.spec.ts` and `moneybird.spec.ts`)
 exited 0 on 2026-10-12 against the pin `7dab1ce` (the build VPS's source build);
 its log was lost, so there are no per-test counts for that run.
-The stopped-import state is still not reached end to end.
+Since 2026-10-13 the card after an import that stopped midway is verified
+end to end too: the installed-app test has the host fail the app's second
+`/app-write` (Playwright `page.route`) while it imports two new
+transactions, and checks the sheet's "The import didn't go through" and the
+card's "The import stopped before every row was written." with "The rows
+written so far are kept; …"; then, after the app's copy of the table caught
+up (its Transactions count), the same file checked again proposes the one
+left (New 1), and the import ends with 2 rows. The five money e2e tests, this step included, passed on 2026-10-13 at
+0.4.3 against the pin `7dab1ce` (the build VPS's source build), in 5.5
+minutes. Known limit, found
+that way (#539): the app writes exactly what its preview said was new, so
+checking the file again before the app's copy of the table caught up, or
+pressing Import again in the failed sheet (it keeps the old preview),
+writes the transaction written before the failure a second time; the first
+run of this step ended with that transaction twice. The sheet's
+"transactions saved before the failure are recognised and not written
+twice" holds only for a check made after the app's copy of the table caught
+up.
 
 At 0.4.2 (`plugin.js` sha256
 `2c4005acaaad5ce1fe730009c452fb59c8213f4852711f915b8e12868e39b963`, again
@@ -389,9 +411,14 @@ pin `0fa9c07` (the build VPS's source build of it), in 6.1 minutes. What the
 run adds over 0.4.1: after the MT940 import into the app's own table, the
 sync-status card reads "Synced just now", "2 transactions from 1
 statement; 2 arrived at the last sync", no "Last sync:" counts line, and
-"Read-only: edits here stay in Atomic. There is no bank connection". Not
-verified end to end: the card on a table without import dates and after a
-stopped import (`app/status.test.ts` and `app/view.test.ts` only). With
+"Read-only: edits here stay in Atomic. There is no bank connection". On a
+table without import dates it is too, since 2026-10-14: a fourth test makes
+a `bank-transaction-v1` table with two rows by hand, adds Money as a
+read-only view, and checks the card's "Not synced yet" headline, "2
+transactions in this table; when they were imported is not recorded", the
+read-only line and "Saving a category or note asks you to allow editing
+first." (the six money e2e tests passed at pin `7dab1ce` in 6.1 minutes).
+After a stopped import it is since 0.4.3 (above). With
 incomplete rows it is: the installed-app test checks the card's ignored
 group for the hand-typed row ("1 transaction is incomplete (missing
 Amount): …", the row under Which, Open row). On the importer's table too:

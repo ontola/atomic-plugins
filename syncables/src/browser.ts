@@ -69,10 +69,28 @@ export type {
   SyncResult,
   CollectionCoverage,
   IncompleteRead,
+  MatchedCreate,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';
 export { mergePatch } from './client/merge-patch.js';
+export { fingerprint } from './client/fingerprint.js';
+export { replaceOf, replaceBlock } from './client/replace.js';
+export type { BlockObject, ReplaceDeclaration } from './client/replace.js';
+export {
+  unkeyedListsOf,
+  flattenList,
+  nestList,
+  pairItems,
+  mergeUnkeyedList,
+} from './client/unkeyed-lists.js';
+export type {
+  UnkeyedList,
+  FlatListItem,
+  LocalListItem,
+  MergedListItem,
+  UnkeyedListMerge,
+} from './client/unkeyed-lists.js';
 export {
   apiKeyAuth,
   bearerAuth,
@@ -121,6 +139,7 @@ export type {
 
 export {
   PaginationSchemeError,
+  invalidAutoDetected,
   resolveEffectiveScheme,
 } from './pagination/autodetect.js';
 export type { EffectiveScheme } from './pagination/autodetect.js';
@@ -134,8 +153,11 @@ export type { LinkResolutionObject } from './pagination/types.js';
 export {
   classifyThrottling,
   declaredThrottling,
+  fallbackWindow,
   headerTime,
+  limitsInForce,
   operationBuckets,
+  parseTiers,
 } from './throttling/throttling.js';
 export type {
   BodyPredicate,
@@ -144,11 +166,14 @@ export type {
   HeaderRoleObject,
   SignalObject,
   ThrottlingDeclaration,
+  Tier,
   ThrottlingMeaning,
   ThrottlingResponse,
   ThrottlingVerdict,
   TimeUnit,
 } from './throttling/throttling.js';
+export { resolveReference } from './read/references.js';
+export type { ResolvedReference } from './read/references.js';
 export { Pacer } from './throttling/pacing.js';
 export type { Quota } from './throttling/pacing.js';
 export { halves, WindowReadError } from './pagination/window.js';
@@ -158,9 +183,13 @@ export type {
   WindowFormat,
   WindowUnit,
 } from './pagination/types.js';
-export { PageReadError } from './read/pages.js';
+export { PageReadError, responseIncomplete } from './read/pages.js';
 export type { WalkOutcome, WindowRange } from './read/pages.js';
-export type { ShortPageObject } from './pagination/types.js';
+export type {
+  IncompleteObject,
+  JsonScalar,
+  ShortPageObject,
+} from './pagination/types.js';
 export type {
   AutoDetectObject,
   PaginationApplicationObject,

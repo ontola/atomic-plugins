@@ -81,7 +81,17 @@ Data flows through four stages, each its own directory under `src/`:
    a finished windowed read keeps its spans with reason `incomplete`,
    while any other read that is not complete (failed, or an undocumented
    short-page end) gets `spans: null`.
-   `read/read.ts` adds ontology/type projection.
+   `read/read.ts` adds ontology/type projection. `read/references.ts`
+   (`resolveReference`) resolves a CRUD Causality §4.1.3 Reference Object
+   to the target's identity path (bound fields from the object, unbound
+   variables from the request context; `required: false` and an absent or
+   null field give undefined, checked in a first pass so the template's
+   variable order does not matter; `''` is a value and throws; anything
+   else unfillable throws, as do a `.`, `..`, whitespace-padded, NUL or
+   lone-surrogate value, an unsafe integer, and a target template that
+   is not a `/` path or holds a backslash, control character, space or
+   DEL); nothing is fetched
+   (`unit/read/references.test.ts`, the spec's §7.6 example).
    `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
@@ -170,9 +180,21 @@ Data flows through four stages, each its own directory under `src/`:
    `route.absentRemoved`, else `removed`; `lookupPlanned` is the check gate
    (not `'none'`, an item GET or a declaration, and `absent: removed`,
    `'all'`, a parent of a `parentAbsent` collection, or nested writes). The
-   lookups (previously unconfirmed first, also when `!differs`) run in
-   `releaseRefreshed`'s vanished loop, counted against
-   `maxMissingRecordChecks` (`SyncRound.lookups`); `reportMissing` turns
+   lookups (per collection, previously unconfirmed first, then the read's
+   new candidates; also when `!differs`) run in `releaseRefreshed`'s
+   vanished loop (`checkVanished`), counted against
+   `maxMissingRecordChecks` per sync across collections
+   (`SyncRound.lookups`). Kept `unavailable` marks without queued or failed
+   writes (`unsettled`; the `!differs` path skips unconfirmed marks with
+   failed writes too, and routes a list-tombstoned kept mark to
+   `vanished` whatever `lookupPlanned` says, as the `differs` path does)
+   are re-read where `lookupPlanned` in a second pass,
+   `recheckUnavailable` (from `SyncRound.unavailable`, before
+   `finishFeeds`), oldest `checked` first across collections (`checkTime`,
+   strictly increasing, stored with the mark; set by `checkVanished`'s
+   `onChecked` only when `findEvidence` returned evidence, so a record the
+   budget or a 429 left unread keeps its place), so they never take checks
+   from unconfirmed or newly missing records; `reportMissing` turns
    the evidence into marks (`setMark`: changes go to the client-level
    `untoldMarks`, the latest per record, kept across syncs until told).
    `tell()` sends removals at once (dropping a held change of the same
@@ -210,13 +232,29 @@ Data flows through four stages, each its own directory under `src/`:
    Metadata collection names and bound context identify storage namespaces;
    identical IDs in sibling parents stay separate. Legacy names remain paths.
    Writes are serialized per scoped record and retry with exponential backoff
-   (`retry.maxAttempts` is optional). Creates reconcile server-assigned IDs;
-   a declared `x-crud` create (`ClientRoute.create`, `created-identity.ts`)
+   (`retry.maxAttempts` is optional). A POST on a collection's URL is its
+   create (`createPath`) unless the resource has no identity in a CRUD
+   Causality document (list-only, read-only: `list-only.test.ts`); an
+   `x-crud` create of such a resource sets `createRefused` (rule 25), and
+   `restore` parks a create queued for a route without one (`failed`; one
+   in flight at the stop or already uncertain stays `uncertain` with its
+   error and a note; `resolveWrite` `retry` throws). Creates reconcile
+   server-assigned IDs; a declared `x-crud` create (`ClientRoute.create`, `created-identity.ts`)
    leaves `generated` `addedFields` out of the body (`createBody`) and reads
    the identity from its `url` source through the identity template in
    reverse (`createdIdentity`, after CRUD Causality 0.5.0's
    `created_identity()`); without one the 2xx create is `uncertain` with
    `unbound` (stored), never resent, and `resolveWrite` `retry` throws;
+   with `matchUnboundCreates` (`uniqueFieldsOf`, resolved at construction)
+   a create that sent a declared unique value is remembered in memory
+   (`unboundKnown`: the scope's confirmed ids, the body, `readsStarted`)
+   if `completeScopes` has its scope (added only where a complete read is
+   applied: `confirmed.set`, or an unchanged read), and `matchUnbound` in
+   `performSync` (before the snapshot is applied) binds it on the first
+   complete read of the scope that started later: exactly one new,
+   write-less candidate (not an id another write holds as `confirmedId`)
+   equal on every sent field and claimed by no other create; then
+   `confirmedId` as `resolveWrite(confirm)`, `SyncResult.matched`;
    a create's `followUps` (CRUD Causality 0.5.0 §4.7, `compound-create.ts`
    after the reference `missing_value`/`follow_up_request`, parsed into
    `CreateDeclaration.followUps`; one it cannot use sets
@@ -278,7 +316,7 @@ Data flows through four stages, each its own directory under `src/`:
    `auth` blocks, unless the read was sent before the latest renewal
    (then it is sent again). A source read's refusal is kept in
    `sourceErrors` by URL, with its epoch, and is not cached. The restore
-   check `missingSources` includes `write`.
+   check `missingSources` includes `write` and `list`.
 
    `read/responses.ts` supplies an optional awaited `storeResponse` hook,
    available on client reads, `readCollections`, `readPlatform` and standalone
@@ -319,6 +357,19 @@ Data flows through four stages, each its own directory under `src/`:
    `pauseForOperation`, `operationBuckets`; the read transport waits within
    `limits.timeoutMs`), until the answer's time or else the write's backoff;
    `mayHaveApplied` ignores the verdict, so a 5xx create stays uncertain.
+   Plan tiers (Throttling 0.5.0): `declaredThrottling(document, plan)`
+   reads a Limit Object with `tiers` through `parseTiers` (the spec
+   validator's checks that decide which tier binds: nonempty `plans` of
+   nonempty strings, no plan twice, positive integer `requests` and
+   `window.seconds`; lenient elsewhere, as a plain limit; any failure leaves the limit
+   out) and `limitsInForce` (the tier naming `plan`, else every tier, after
+   the reference `limits_in_force`): one in force goes into `quotas`,
+   several into `tieredQuotas`; `windows` gets `fallbackWindow` (the
+   plan's tier's, else the longest). `Pacer`'s third argument takes
+   `tieredQuotas`: one request log per bucket, checked against every
+   quota, pruned at the longest window. The `throttlingPlan` option
+   reaches it from the client, `readCollections`/`readPlatform` and
+   `paginate` (`unit/throttling/plan-tiers.test.ts`).
    Pacing (K2, `throttling/pacing.ts`): `declaredThrottling`'s `quotas`
    (Limit Objects with `requests`) feed a `Pacer` (`pace`, `paceFraction`,
    default 0.8). The `baseTransport` wrapper counts every request when it
@@ -491,8 +542,19 @@ Data flows through four stages, each its own directory under `src/`:
 
 `fake-data/generate.ts` (`generateFromSchema`) is shared by both the mock
 server (seeding + example responses) and is the only place schema-to-value
-synthesis logic lives — it prefers a schema's own `example`, then `enum`,
-then handles `allOf`/`oneOf`/`anyOf`/type-based generation recursively. A
+synthesis logic lives — it prefers a schema's own `example`, then
+`examples[0]`, `const`, `enum`, then handles `allOf`/`oneOf`/`anyOf`/
+type-based generation recursively. It keeps to the schema's numeric bounds
+(3.0 boolean and 3.1 numeric exclusive bounds, kept strictly past 2^53
+by stepping to the next float; `multipleOf`, on an integer through its
+smallest integer multiple), `minLength`/`maxLength` on unformatted
+strings, `minItems`/`maxItems` (minimums capped at 10,000 per value, and
+100,000 array items and padding characters per call, `LENGTH_CAP` and
+`SIZE_BUDGET`, both internal), never `-0`, never an infinity at
+`±Number.MAX_VALUE`, and reads a 3.1 type list
+(`['string', 'null']`: the first non-null type). Not followed: `pattern`,
+`uniqueItems`, `maxLength` on a formatted string, and string formats
+beyond the listed ones. A
 schema's own fixed `example` is reused verbatim on every call, so callers
 generating more than one item from the same schema (resource seeding,
 paginated list generation) must inject their own unique `id` afterward
@@ -504,23 +566,56 @@ Implements the [OpenAPI Pagination Schemes Extension](../openapi-extensions/spec
 (`components.paginationSchemes`), applied to third-party documents via
 [OpenAPI Overlays](https://spec.openapis.org/overlay/v1.0.0.html)
 (`src/openapi/overlay.ts`, `applyOverlay`/`loadOverlay` — an intentionally
-minimal Overlay implementation: `update`/`remove` actions with plain
-dot-path targets like `$.components`, not the full JSONPath grammar).
+minimal Overlay implementation: `update`/`remove` actions with the target
+grammar of integration-proxy's `catalog.rs` `parse_target`, `$` then
+`.name` or `['name']` segments (`parseOverlayTarget`), not the full
+JSONPath grammar; a non-object `update`, or one onto a non-object target,
+replaces it, as the proxy does; `overlay-targets.test.ts` applies every
+overlay under `overlays/APIs/`).
 
 - `types.ts` mirrors the extension's spec objects verbatim.
 - `validate.ts` checks a scheme against the spec's own rules (§9); an
   invalid scheme (e.g. a `type` outside `pageNumber`/`pageToken`/`nextLink`)
   is excluded from auto-detection rather than throwing — one broken scheme
-  in a document shouldn't disable the rest.
+  in a document shouldn't disable the rest. But when no valid scheme
+  matches an operation and an invalid one would (`invalidAutoDetected` in
+  `autodetect.ts`), `walkAllPages` reads the one response and sets the
+  walk's outcome not complete (naming the scheme), so a page is never
+  taken for the whole collection; the client's `paginated()` counts such
+  an operation as paginated (no conditional cache). It is always not
+  complete until the document changes (fix the scheme, or
+  `autoDetect: false`); an explicit `x-pagination` with a valid scheme
+  wins, and `x-pagination: []` does not opt out. `validatePaginationScheme`
+  also refuses an `autoDetect` that is neither a boolean nor an object
+  (the spec's `schema.json`); `autoDetectMatches` reads any `autoDetect`
+  that is not an Auto-Detect Object as the default options, so such an
+  invalid scheme still counts as a match. Tests:
+  `unit/client/autodetect-invalid.test.ts`.
+  `checkStructure` runs first and ports the rest of `schema.json`'s
+  structure: no fields but the spec's (and `x-`) on the scheme, `request`,
+  `response`, request and response fields, the Auto-Detect, Envelope and
+  Link Resolution Objects (Short Page, Incomplete and Range Window Objects
+  are checked in their own functions), and the stated types; a non-object
+  where the rule checks read one ends validation there, so it never
+  throws. The verdicts match `schema.json` on every scheme in
+  `overlays/`, apart from `incrementalSync` (refused here, not
+  implemented). Tests: `unit/pagination/schema-parity.test.ts`, which also
+  checks the catalogs: no scheme an `x-pagination` names is invalid, and
+  the only invalid auto-detectable ones are Box's first overlay's.
 - `autodetect.ts`'s `resolveEffectiveScheme(document, operation)` picks the
   scheme that applies to an operation: an explicit `x-pagination` entry
   first, else auto-detection by matching the scheme's declared query
   parameter/body field names against the operation's own (§6.2 default
   rules — a dimension with zero declared fields never vacuously matches).
-  An explicit entry that cannot be applied (not an array of application
-  objects, an undeclared or invalid scheme, or one its overrides make
-  invalid) throws `PaginationSchemeError` instead of being dropped: a read
-  that ignored it would return one page as the whole collection (#384). The
+  An explicit entry that cannot be applied throws `PaginationSchemeError`
+  instead of being dropped, because a read that ignored it would return
+  one page as the whole collection (#384). It cannot be applied when
+  `x-pagination` is not an array; when `applicationProblem` refuses an
+  entry (every entry is checked against the spec's `schema.json` for a
+  Pagination Application Object: a nonempty `scheme`, an object
+  `overrides`, a string `description`, no other field but `x-` ones);
+  when it names an undeclared or invalid scheme; or when its overrides
+  make the scheme invalid. The
   client's conditional-cache check treats such an operation as paginated,
   and the mock server answers 500.
   Only the query-parameter and body-field dimensions are actually
@@ -602,6 +697,18 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   else the previous page's fingerprint when no item has an id) runs on
   every offset walk as well as on short-page walks. The validator checks rule 24,
   `resolveEffectiveScheme` rule 25. Tests: `unit/read/offset-advance.test.ts`.
+- Pagination Schemes 0.8.0: a scheme's `response.incomplete`
+  (`IncompleteObject`; `responseIncomplete(marker, body)` in
+  `read/pages.ts`, after the spec's `response_incomplete`: own properties
+  along the field's names split on `.`, no bracket escapes, JSON equality)
+  marks a response; `walkAllPages` records the
+  first mark in `WalkOutcome.marked` and `walkPages` then ends the outcome
+  not complete with that reason, paging unchanged. `readCollections` gives
+  `notComplete`, `readPlatform` `ReadResult.incomplete`, `paginate` its
+  `outcome` option, and `sync()` the `upsertIncomplete` path. The
+  validator checks rule 26 (`checkIncomplete`, with the type restriction
+  to pageNumber/pageToken/nextLink). Tests:
+  `unit/read/incomplete-marker.test.ts`.
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control
@@ -751,6 +858,28 @@ Tests under `__tests__/unit/` mirror this `src/` layout one-to-one (e.g.
   read, a restart, an unresolved bind, a refused declaration, a confirmed
   uncertain create, and no `followUps`; `compound-create-core.test.ts`
   the pure parts.
+- `unit/client/list-tombstones.test.ts` covers Deletion Feeds 0.3.0-draft
+  `x-list-tombstone` (`read/list-tombstones.ts`, after the reference
+  `list_tombstone`; parsed into `ReadCollection.listTombstone`, filtered in
+  `readCollections` into `CollectionSnapshot.tombstones`, and in `sync()`
+  the `listTombstoned` ids of the sync's reads are `findEvidence`'s first
+  evidence, `source: 'list'`) on the spec's §7.5 example
+  (`__tests__/fixtures/list-tombstones.ts`); the client's `Tombstone`
+  (feeds, read tombstones) is the same parsed object, so `except` applies
+  everywhere, tested with read tombstones there too. A list tombstone's
+  identity joins `readCollections`' repeated-identity check (a repeat fails
+  the read), and a read that ends with an error keeps `tombstones` empty.
+  In `performSync`'s pruning loop a write-less record in `listTombstoned` is
+  `deleted` with `source: 'list'` like `absent: deleted` (removed, or
+  `setMark` under `retainDeleted`; a kept mark goes to `recheck`), and the
+  vanished loop does not count it against `maxMissingRecordChecks`;
+  `upsertIncomplete` fails held heads of an incomplete read's list
+  tombstones (`listEvidence`, `failMissing`, `rebuild`).
+  `unit/client/list-tombstones-presence.test.ts` covers those paths
+  (presence, `retainDeleted`, marks, the check limit, incomplete reads,
+  repeated items, a restart), `completeness-outcomes.test.ts` a
+  `parentAbsent` parent concluded by a list tombstone, and
+  `deletion-declarations.test.ts` `except` on a deletion feed.
 - `unit/client/runtime-classes.test.ts` covers the classes in
   `readPlatform` (`runtime`, `describers`) and `sync()` (`describers`,
   `runtimeMembers()`, `warnings` and `noClass` for an unreadable describer,

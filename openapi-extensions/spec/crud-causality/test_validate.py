@@ -1,4 +1,4 @@
-"""CRUD Causality 0.5.0: collection reads (listMethod, listQuery, listBody) and compound creates."""
+"""CRUD Causality 0.7.0: every rule of §8, collection reads (listMethod, listQuery, listBody), compound creates, replacements and lists without item identity."""
 import copy
 import pathlib
 import unittest
@@ -6,7 +6,8 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import compound_create, continue_compound_create, created_identity, read_request, validate
+from validate import (committed_identity, compound_create, continue_compound_create, created_identity, pair_items,
+                      path_template_problem, read_request, replace_block, validate)
 
 ROOT = pathlib.Path(__file__).parent
 
@@ -72,6 +73,16 @@ class ValidationTests(unittest.TestCase):
         self.invalid(lambda d: collections(d)[0].update(listMethod="POST"), "no operation at paths['/lists/{listId}/tasks'].post")
         self.invalid(lambda d: collections(d)[0].update(urlTemplate="/tasks"), "no operation")
         self.invalid(lambda d: collections(d)[0].pop("urlTemplate"), "needs a urlTemplate")
+
+    def test_a_ref_collection_path_item_is_resolved(self):
+        def via_ref(d):
+            d["components"]["pathItems"] = {"tasks": d["paths"]["/lists/{listId}/tasks"]}
+            d["paths"]["/lists/{listId}/tasks"] = {"$ref": "#/components/pathItems/tasks"}
+        document = example()
+        via_ref(document)
+        validate(document)
+        self.invalid(lambda d: (via_ref(d), collections(d)[0]["listQuery"].update(nope="x")),
+                     "listQuery.nope: not a query parameter of GET /lists/{listId}/tasks")
 
     def test_list_body_needs_post_and_a_request_body(self):
         self.invalid(lambda d: collections(d)[0].update(listBody={"a": 1}), "only with listMethod POST")
@@ -456,5 +467,369 @@ class CompoundCreateSecondReviewTests(unittest.TestCase):
         self.assertIn("field 'labels' has more than one follow-up", str(raised.exception))
 
 
+def lifecycle():
+    return yaml.safe_load((ROOT / "examples" / "widget-lifecycle.yaml").read_text(encoding="utf-8"))
+
+
+class StructureRuleTests(unittest.TestCase):
+    """Rules 1, 3, 5-8, 10-13 and 25, and the value sets of §4.3.2 and §4.6, on examples/widget-lifecycle.yaml."""
+
+    def outcome(self, mutate):
+        document = lifecycle()
+        mutate(document)
+        warnings = []
+        try:
+            validate(document, warnings)
+        except ValueError as raised:
+            return str(raised), warnings
+        return "", warnings
+
+    def invalid(self, mutate, fragment):
+        errors, _ = self.outcome(mutate)
+        self.assertIn(fragment, errors)
+
+    def warns(self, mutate, fragment):
+        errors, warnings = self.outcome(mutate)
+        self.assertEqual(errors, "")
+        self.assertTrue(any(fragment in w for w in warnings), warnings)
+
+    @staticmethod
+    def crud(document, path, method):
+        return document["paths"][path][method]["x-crud"]
+
+    @staticmethod
+    def resource(document, name):
+        return document["components"]["crudResources"][name]
+
+    def test_example_is_valid_without_warnings(self):
+        warnings = []
+        validate(lifecycle(), warnings)
+        self.assertEqual(warnings, [])
+
+    def test_example_is_valid_openapi_without_the_extension_members(self):
+        document = lifecycle()
+        document["components"].pop("crudResources")
+        for item in document["paths"].values():
+            for operation in item.values():
+                if isinstance(operation, dict):
+                    operation.pop("x-crud", None)
+        validate_openapi(document)
+
+    def test_rule_1_action(self):
+        self.invalid(lambda d: self.crud(d, "/widgets", "get").update(action="search"),
+                     "paths./widgets.get.x-crud.action: 'search' is not one of create, list, read, update, delete (rule 1)")
+        self.invalid(lambda d: self.crud(d, "/widgets", "get").pop("action"), "None is not one of")
+
+    def test_rule_2_resource(self):
+        self.invalid(lambda d: self.crud(d, "/widgets/{widgetId}", "get").update(resource="gadget"),
+                     "paths./widgets/{widgetId}.get.x-crud.resource: 'gadget' is not a crudResources key (rule 2)")
+
+    def test_rule_3_create_url(self):
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").pop("url"),
+                     "paths./widgets.post.x-crud.url: required for action create (rule 3)")
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").update(url={"source": "location"}),
+                     "url.source: expected one of header, bodyField, template (§4.3.2)")
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").update(url={"source": "bodyField"}),
+                     "url.name: source bodyField needs a dot-path name (rule 26)")
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").update(url={"source": "header"}),
+                     "url.name: source header needs a header name (rule 26)")
+        for url in ({"source": "template"}, {"source": "header", "name": "Location"},
+                    {"source": "bodyField", "name": "self.href"}):
+            with self.subTest(url=url):
+                self.assertEqual(self.outcome(lambda d: self.crud(d, "/widgets", "post").update(url=url))[0], "")
+
+    def test_rule_4_list_collection(self):
+        self.invalid(lambda d: self.crud(d, "/widgets", "get").update(collection="gadgets"),
+                     "x-crud.collection: 'gadgets' is not a collection of widget (rule 4)")
+
+    def test_rule_5_update_mode(self):
+        self.invalid(lambda d: self.crud(d, "/widgets/{widgetId}", "patch").pop("mode"),
+                     "paths./widgets/{widgetId}.patch.x-crud.mode: required for action update (rule 5)")
+        self.invalid(lambda d: self.crud(d, "/widgets/{widgetId}", "put").update(mode="merge"),
+                     "x-crud.mode: 'merge' is not replace or patch (rule 5)")
+
+    def test_rule_6_patch_format_is_a_should(self):
+        self.warns(lambda d: self.crud(d, "/widgets/{widgetId}", "patch").pop("patchFormat"),
+                   "mode patch without patchFormat (rule 6, SHOULD)")
+
+    def test_patch_format_values(self):
+        self.invalid(lambda d: self.crud(d, "/widgets/{widgetId}", "patch").update(patchFormat="merge"),
+                     "x-crud.patchFormat: 'merge' is not one of jsonPatch, jsonMergePatch, custom (§4.6)")
+
+    def test_rule_7_member_of_and_removes_from(self):
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").update(memberOf=["widgets", "favourites"]),
+                     "x-crud.memberOf: 'favourites' is not a collection of widget (rule 7)")
+        self.invalid(lambda d: self.crud(d, "/widgets/{widgetId}/recent", "delete").update(removesFrom=["gone"]),
+                     "x-crud.removesFrom: 'gone' is not a collection of widget (rule 7)")
+        self.invalid(lambda d: self.crud(d, "/widgets", "post").update(memberOf="widgets"),
+                     "x-crud.memberOf: expected an array of collection names (rule 7)")
+        self.assertEqual(self.outcome(lambda d: self.crud(d, "/widgets/{widgetId}/recent", "delete")
+                                      .update(removesFrom=["*"]))[0], "")
+
+    def test_rule_8_path_templates(self):
+        self.invalid(lambda d: self.resource(d, "widget")["identity"].update(urlTemplate="widgets/{widgetId}"),
+                     "crudResources.widget.identity.urlTemplate: 'widgets/{widgetId}' must begin with / (rule 8)")
+        self.invalid(lambda d: self.resource(d, "widget")["collections"]["widgets"].update(urlTemplate="/widgets?all=1"),
+                     "crudResources.widget.collections.widgets.urlTemplate: '/widgets?all=1' has a query or fragment (rule 8)")
+        for template, problem in [("/w/{a", "has an unclosed {"), ("/w/a}", "has a } without {"),
+                                  ("/w/{{a}}", "has a nested {"), ("/w/{}", "has an empty {}"),
+                                  ("/w/{a}/{a}", "names 'a' twice"), (7, "expected a string")]:
+            with self.subTest(template=template):
+                self.assertEqual(path_template_problem(template), problem)
+        for template in ["/widgets", "/reports/{id}.json", "/a/{b}/c/{d}"]:
+            self.assertIsNone(path_template_problem(template))
+
+    def test_rule_25_identity_when_an_object_is_addressed(self):
+        self.invalid(lambda d: self.resource(d, "widget").pop("identity"),
+                     "crudResources.widget.identity: required, since POST /widgets (create) addresses one object of it (rule 25)")
+        # project is only listed, but timeEntry's reference targets it.
+        self.invalid(lambda d: self.resource(d, "project").pop("identity"),
+                     "crudResources.project.identity: required, since the reference timeEntry.references.project "
+                     "addresses one object of it (rule 25)")
+        self.invalid(lambda d: self.resource(d, "project")["identity"].pop("urlTemplate"),
+                     "crudResources.project.identity: an Identity Object needs a urlTemplate (rule 25, §4.1.1)")
+
+    def test_rule_25_reports_a_reference_target_without_identity_once(self):
+        errors, _ = self.outcome(lambda d: self.resource(d, "project").pop("identity"))
+        self.assertIn("(rule 25)", errors)
+        self.assertNotIn("(rule 12)", errors)
+
+    def test_a_ref_path_item_is_checked_too(self):
+        def via_ref(d):
+            d["components"]["pathItems"] = {"widget": d["paths"]["/widgets/{widgetId}"]}
+            d["paths"]["/widgets/{widgetId}"] = {"$ref": "#/components/pathItems/widget"}
+            d["components"]["pathItems"]["widget"]["patch"]["x-crud"].pop("mode")
+        self.invalid(via_ref, "paths./widgets/{widgetId}.patch.x-crud.mode: required for action update (rule 5)")
+
+    def test_rule_25_a_list_only_resource_may_omit_identity(self):
+        def list_only(d):
+            self.resource(d, "timeEntry").pop("references")
+            self.resource(d, "project").pop("identity")
+        errors, warnings = self.outcome(list_only)
+        self.assertEqual(errors, "")
+        self.assertEqual(warnings, [])
+        # A read of one object needs it again.
+        def read_one(d):
+            list_only(d)
+            d["paths"]["/workspaces/{workspaceId}/projects/{projectId}"] = {
+                "get": {"x-crud": {"action": "read", "resource": "project"}, "responses": {"200": {"description": "One"}}}
+            }
+        self.assertIn("GET /workspaces/{workspaceId}/projects/{projectId} (read) addresses one object of it (rule 25)",
+                      self.outcome(read_one)[0])
+
+    def test_rule_9_identity_bindings(self):
+        self.invalid(lambda d: self.resource(d, "widget")["identity"]["bindings"].update(gadgetId={"field": "id"}),
+                     "crudResources.widget.identity.bindings.gadgetId: not a variable of urlTemplate")
+
+    def test_rule_10_unbound_identity_variables_come_from_a_collection(self):
+        self.warns(lambda d: self.resource(d, "project")["collections"]["projects"].update(urlTemplate="/projects"),
+                   "crudResources.project.identity.urlTemplate: {workspaceId} is neither bound nor in a collection's urlTemplate (rule 10, SHOULD)")
+
+    def test_rule_11_reference_resource(self):
+        self.invalid(lambda d: self.resource(d, "timeEntry")["references"]["project"].update(resource="client"),
+                     "crudResources.timeEntry.references.project.resource: 'client' is not a crudResources key (rule 11)")
+
+    def test_rule_12_reference_bindings_name_target_variables(self):
+        self.invalid(lambda d: self.resource(d, "timeEntry")["references"]["project"]["bindings"]
+                     .update(timeEntryId={"field": "id"}),
+                     "crudResources.timeEntry.references.project.bindings.timeEntryId: not a variable of project's urlTemplate")
+        self.invalid(lambda d: self.resource(d, "timeEntry")["references"]["project"].pop("bindings"),
+                     "references.project.bindings: required, an object (§4.1.3)")
+
+    def test_rule_13_unbound_target_variables_come_from_the_referring_collections(self):
+        def move(d):
+            self.resource(d, "timeEntry")["collections"]["timeEntries"]["urlTemplate"] = "/time-entries"
+            self.resource(d, "timeEntry")["identity"]["urlTemplate"] = "/time-entries/{timeEntryId}"
+        self.warns(move, "references.project: {workspaceId} of project's urlTemplate is neither bound nor in a "
+                         "collection's urlTemplate of timeEntry (rule 13, SHOULD)")
+
+    def test_every_violation_is_reported(self):
+        def break_three(d):
+            self.crud(d, "/widgets/{widgetId}", "patch").pop("mode")
+            self.crud(d, "/widgets", "get").update(action="search")
+            self.resource(d, "widget")["identity"]["urlTemplate"] = "/widgets/{widgetId"
+        errors, _ = self.outcome(break_three)
+        self.assertIn("(rule 1)", errors)
+        self.assertIn("(rule 5)", errors)
+        self.assertIn("(rule 8)", errors)
+
+
+class CommittedErrorTests(unittest.TestCase):
+    """0.8.0: an error response that says the create was applied (§4.3.3, rules 30-32)."""
+
+    def document(self):
+        return yaml.safe_load((ROOT / "examples" / "committed-error.yaml").read_text(encoding="utf-8"))
+
+    def crud(self, document):
+        return document["paths"]["/pages"]["post"]["x-crud"]
+
+    def test_example_is_valid(self):
+        validate(self.document())
+
+    def test_rules_30_to_32(self):
+        cases = (
+            (lambda c: c.update(committedErrors=[]), "rule 30"),
+            (lambda c: c.update(followUps=[{"field": "labels", "create": "omit", "operation": "x", "bind": {}}]),
+             "rule 32"),
+            (lambda c: c["committedErrors"][0].update(status=[200]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(status=[409]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(status=[503, 503]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(status=[]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(identity={}), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(identity={"other": "a.b"}), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(identity={"page_id": "a..b"}), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(extra=1), "rule 31"),
+        )
+        for mutate, fragment in cases:
+            document = self.document()
+            mutate(self.crud(document))
+            with self.subTest(fragment=fragment), self.assertRaises(ValueError) as raised:
+                validate(document)
+            self.assertIn(fragment, str(raised.exception))
+        document = self.document()
+        document["paths"]["/pages/{page_id}"]["get"]["x-crud"]["committedErrors"] = self.crud(document)["committedErrors"]
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("allowed only on action create (rule 30)", str(raised.exception))
+
+    def test_committed_identity(self):
+        document = self.document()
+        crud = self.crud(document)
+        body = {"object": "error", "status": 503, "code": "service_unavailable",
+                "additional_data": {"retry_guidance": ["Read the object again to confirm the saved change."],
+                                    "committed_resource_id": "59833787-2cf9-4fdf-8782-e53db20768a5"}}
+        self.assertEqual(committed_identity(document, crud, 503, body),
+                         {"page_id": "59833787-2cf9-4fdf-8782-e53db20768a5"})
+        # Another status, no id, an empty or unusable id, or no JSON: unknown, as before.
+        self.assertIsNone(committed_identity(document, crud, 502, body))
+        for value in (None, "", "  ", " a", "a ", ".", "..", True, {"id": "x"}, "a/b", "a?b", "a#b", -1, 1.5,
+                      "a\nb", "a\x00b", "a\x7fb", "a\x85b"):
+            changed = copy.deepcopy(body)
+            changed["additional_data"]["committed_resource_id"] = value
+            with self.subTest(value=value):
+                self.assertIsNone(committed_identity(document, crud, 503, changed))
+        # A `%` or a space inside is usable; a client percent-encodes it when substituting.
+        for value in ("50%", "a b"):
+            changed = copy.deepcopy(body)
+            changed["additional_data"]["committed_resource_id"] = value
+            with self.subTest(value=value):
+                self.assertEqual(committed_identity(document, crud, 503, changed), {"page_id": value})
+        # A listed status whose body holds only retry_guidance stays unknown.
+        del body["additional_data"]["committed_resource_id"]
+        self.assertEqual(set(body["additional_data"]), {"retry_guidance"})
+        self.assertIsNone(committed_identity(document, crud, 503, body))
+        self.assertIsNone(committed_identity(document, crud, 503, None))
+        # An integer id is given in decimal form.
+        self.assertEqual(committed_identity(document, crud, 503, {"additional_data": {"committed_resource_id": 42}}),
+                         {"page_id": "42"})
+        # Only for a create.
+        self.assertIsNone(committed_identity(document, {"action": "update"}, 503,
+                                             {"additional_data": {"committed_resource_id": "x"}}))
+
+    def test_0_7_documents_stay_valid(self):
+        validate(example())
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+def notes():
+    return yaml.safe_load((ROOT / "examples" / "replaced-notes.yaml").read_text(encoding="utf-8"))
+
+
+def note(document):
+    return document["components"]["crudResources"]["note"]
+
+
+def item(text, checked=False, children=None):
+    out = {"text": {"text": text}, "checked": checked}
+    if children:
+        out["childListItems"] = children
+    return out
+
+
+class ReplaceTests(unittest.TestCase):
+    """§4.8, §4.9 and rules 27-29, on §7.8's example."""
+
+    def invalid(self, mutate, fragment):
+        document = notes()
+        mutate(document)
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_example_is_valid(self):
+        validate(notes())
+
+    def test_example_is_valid_openapi_without_the_extension_members(self):
+        document = notes()
+        document["components"].pop("crudResources")
+        for item_ in document["paths"].values():
+            for operation in item_.values():
+                if isinstance(operation, dict):
+                    operation.pop("x-crud", None)
+        validate_openapi(document)
+
+    def test_rule_27_needs_create_and_delete_and_no_update(self):
+        self.invalid(lambda d: d["paths"]["/v1/{name}"].pop("delete"), "needs an x-crud create and delete of note (rule 27)")
+        self.invalid(lambda d: d["paths"]["/v1/notes"].pop("post"), "(rule 27)")
+        self.invalid(lambda d: d["paths"]["/v1/{name}"].update(patch={
+            "x-crud": {"action": "update", "resource": "note", "mode": "replace"},
+            "responses": {"200": {"description": "ok"}}}), "note has an x-crud update (rule 27)")
+
+    def test_rule_28_block_objects(self):
+        blocks = lambda d: note(d)["replace"]["blockedBy"]
+        self.invalid(lambda d: blocks(d)[0].pop("field"), "field: expected a dot-path (rule 28)")
+        self.invalid(lambda d: blocks(d)[0].update(when="many"), "when: expected present or nonEmpty")
+        self.invalid(lambda d: blocks(d)[1].update(moreThan=-1), "moreThan: expected an integer >= 0")
+        self.invalid(lambda d: blocks(d)[1].update(moreThan=True), "moreThan: expected an integer >= 0")
+        self.invalid(lambda d: blocks(d)[1].update(when="present"), "moreThan is not given with when")
+        self.invalid(lambda d: blocks(d)[0].update(**{"except": {"a": 1}}), "except: only with moreThan")
+        self.invalid(lambda d: note(d)["replace"].update(blockedBy={}), "blockedBy: expected an array")
+
+    def test_rule_29_unkeyed_lists(self):
+        spec = lambda d: note(d)["unkeyedLists"]["body.list.listItems"]
+        self.invalid(lambda d: spec(d).pop("match"), "match: expected a nonempty array of distinct dot-paths")
+        self.invalid(lambda d: spec(d).update(match=[]), "(rule 29)")
+        self.invalid(lambda d: spec(d).update(match=["checked", "checked"]), "(rule 29)")
+        self.invalid(lambda d: spec(d).update(children="checked"), "children: is also a match field")
+        self.invalid(lambda d: note(d)["unkeyedLists"].update({"a..b": {"match": ["x"]}}), "the key is not a dot-path")
+
+    def test_0_6_documents_stay_valid(self):
+        document = notes()
+        del note(document)["replace"], note(document)["unkeyedLists"]
+        validate(document)
+
+    def test_replace_block(self):
+        replace = note(notes())["replace"]
+        self.assertIsNone(replace_block(replace, {"name": "notes/1"}))
+        self.assertIsNone(replace_block(replace, {"attachments": []}))
+        self.assertEqual(replace_block(replace, {"attachments": [{}]})["field"], "attachments")
+        owner = {"role": "OWNER", "email": "a@example.com"}
+        self.assertIsNone(replace_block(replace, {"permissions": [owner]}))
+        self.assertIsNone(replace_block(replace, {"permissions": [owner, {"role": "WRITER", "deleted": True}]}))
+        self.assertEqual(replace_block(replace, {"permissions": [owner, {"role": "WRITER"}]})["field"], "permissions")
+        self.assertEqual(replace_block({"blockedBy": [{"field": "a.b"}]}, {"a": {"b": 0}})["field"], "a.b")
+        self.assertIsNone(replace_block({"blockedBy": [{"field": "a.b"}]}, {"a": {"b": None}}))
+        self.assertIsNone(replace_block(None, {}))
+
+    def test_pairing_a_moved_item(self):
+        unkeyed = note(notes())["unkeyedLists"]["body.list.listItems"]
+        self.assertEqual(pair_items(unkeyed, [item("Milk"), item("Eggs", True)], [item("Eggs", True), item("Milk")]), [1, 0])
+
+    def test_pairing_passes(self):
+        unkeyed = note(notes())["unkeyedLists"]["body.list.listItems"]
+        base = [item("Milk"), item("Eggs"), item("Bread")]
+        # Eggs ticked: paired on text in the second pass; Bread edited: by position.
+        self.assertEqual(pair_items(unkeyed, base, [item("Milk"), item("Eggs", True), item("Rye bread")]), [0, 1, 2])
+        # The nearest of two equal candidates.
+        self.assertEqual(pair_items(unkeyed, [item("A"), item("B"), item("A")], [item("B"), item("A")]), [1, 0])
+        # An item added at the end has no baseline item left between its neighbours.
+        self.assertEqual(pair_items(unkeyed, [item("A")], [item("A"), item("New")]), [0, None])
+
+    def test_children_are_flattened_after_their_parent(self):
+        unkeyed = note(notes())["unkeyedLists"]["body.list.listItems"]
+        base = [item("Trip", children=[item("Charger"), item("Adapter")])]
+        now = [item("Adapter"), item("Trip", children=[item("Charger", True)])]
+        self.assertEqual(pair_items(unkeyed, base, now), [2, 0, 1])

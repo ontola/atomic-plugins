@@ -2,8 +2,9 @@
 ## Work in Progress
 
 [API docs](https://ontola.github.io/atomic-plugins/devonian/docs/): TypeDoc
-output committed in [`docs/`](docs/index.html), generated when the package was
-imported here (2026-09-22). It covers only the legacy row API
+output committed in [`docs/`](docs/index.html), last generated 2025-10-14 in
+localthought/devonian and imported unchanged on 2026-09-22. It covers only the
+legacy row API
 (`DevonianClient`, `DevonianIndex`, `DevonianLens`, `DevonianTable`), not
 `AtomicStore`, `AtomicIdentityMap`, `AtomicLens`, `BackgroundSync`, the
 reflection engine or `devonian/lenses`; for those, read this README and the
