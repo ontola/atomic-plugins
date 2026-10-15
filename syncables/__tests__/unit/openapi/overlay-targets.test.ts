@@ -154,6 +154,27 @@ describe('applyOverlay with bracket targets', () => {
     expect(update).toEqual([{ notionOAuthClient: [] }]);
   });
 
+  it('copies a root update, so a later action leaves the overlay alone', () => {
+    const root = overlay([
+      { target: '$', update: { x: { a: 1 } } },
+      { target: '$.x.y', update: { b: 2 } },
+      { target: '$.x.z.w', update: { c: 3 } },
+    ]);
+    const result = applyOverlay({}, root);
+    expect(result).toEqual({ x: { a: 1, y: { b: 2 }, z: { w: { c: 3 } } } });
+    expect(root.actions[0]!.update).toEqual({ x: { a: 1 } });
+    // A second application starts from the same overlay.
+    expect(applyOverlay({}, root)).toEqual(result);
+  });
+
+  it('takes a root update with an undefined member, as JSON would drop it', () => {
+    const result = applyOverlay(
+      { x: 'kept' },
+      overlay([{ target: '$', update: { x: undefined, y: { a: 1 } } }]),
+    );
+    expect(result).toEqual({ x: 'kept', y: { a: 1 } });
+  });
+
   it('refuses a root update that is not an object', () => {
     expect(() =>
       applyOverlay(document, overlay([{ target: '$', update: [] }])),

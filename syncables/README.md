@@ -2078,6 +2078,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: `applyOverlay` copies a root (`$`) `update` as it
+  already copied every other one. Before, the result shared the
+  overlay's objects, so a later action such as `$.x.y` changed the
+  caller's overlay, and applying it again gave a different document.
 - **Unreleased**: `applyOverlay` refuses a `__proto__` target segment,
   and sets every member it merges or creates as an own property, so a
   document or `update` key named `__proto__` (an own key after
