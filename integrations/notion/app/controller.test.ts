@@ -491,6 +491,43 @@ describe('controller (N2)', () => {
     expect(requested.some(r => r.includes(THIRD))).toBe(false);
   });
 
+  it('a sync after a blocked one sends its requests again and ends ready (#619 review)', async () => {
+    const base = fixtureProxy('conn-1');
+    const requested: string[] = [];
+    let block = true;
+    const { controller } = setup('default', {
+      request: async request => {
+        requested.push(`${request.method} ${request.path}`);
+        if (block && request.path.includes('/query'))
+          return {
+            status: 429,
+            headers: { 'retry-after': '120' },
+            body: {
+              object: 'error',
+              status: 429,
+              code: 'rate_limited',
+              message: 'This request was blocked.',
+              additional_data: {
+                rate_limit_reason: 'public_api_request_blocked',
+              },
+            },
+          };
+
+        return base.request(request);
+      },
+    });
+    await controller.load();
+    expect(await controller.sync()).toMatchObject({ kind: 'failed' });
+    // Notion lifts the block: the next sync uses a fresh transport.
+    block = false;
+    const before = requested.length;
+    const state = await controller.sync();
+    expect(state).toMatchObject({ kind: 'ready' });
+    expect(
+      requested.slice(before).filter(r => r.includes('/query')).length,
+    ).toBeGreaterThan(0);
+  });
+
   it('does not re-send a blocked 429, even with a short Retry-After (0.5.5)', async () => {
     const base = fixtureProxy('conn-1');
     const queries: string[] = [];

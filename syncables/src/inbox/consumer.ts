@@ -94,8 +94,17 @@ export interface InboxConsumerOptions {
   /**
    * A complete read of the source through the API, after a gap. It must
    * keep pending local edits and conflicts rather than overwrite them.
+   *
+   * Resolving `'pending'` says the read is not complete yet (a host that
+   * runs it as separate work, later): the gap is recorded and nothing is
+   * reported to the receiver, which keeps asking for the reconciliation, so
+   * `reconcile` is called again on later steps until it resolves without
+   * `'pending'`. It must therefore be idempotent for the same gap.
    */
-  reconcile: (reason: string) => Promise<void>;
+  reconcile: (
+    reason: string,
+    required: ReconciliationRequired,
+  ) => Promise<void | 'pending'>;
   /**
    * Seconds a fetch may wait for an event (default 25, the receiver's cap).
    * `0` answers at once; a loop then has to pace itself.
@@ -130,6 +139,8 @@ export interface InboxConsumerOptions {
 export type StepResult =
   | { kind: 'subscribed'; subscription: string }
   | { kind: 'reconciled'; reason: string }
+  /** `reconcile` answered `'pending'`: nothing was reported yet. */
+  | { kind: 'reconciling'; reason: string }
   | { kind: 'events'; stored: number; duplicates: number }
   | { kind: 'idle' }
   | { kind: 'ended'; reason: string }
@@ -347,7 +358,12 @@ export class InboxConsumer {
       await journal.setSubscription(undefined);
       return { kind: 'ended', reason: required.gap.reason };
     }
-    await this.options.reconcile(required.gap.reason);
+    if (
+      (await this.options.reconcile(required.gap.reason, required)) ===
+      'pending'
+    ) {
+      return { kind: 'reconciling', reason: required.gap.reason };
+    }
     // Events captured since the barrier stay pending: they are journaled on
     // the next steps, after this full read.
     if (this.deferred) {
