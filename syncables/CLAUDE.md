@@ -548,8 +548,10 @@ type-based generation recursively. It keeps to the schema's numeric bounds
 (3.0 boolean and 3.1 numeric exclusive bounds, kept strictly past 2^53
 by stepping to the next float; `multipleOf`, on an integer through its
 smallest integer multiple), `minLength`/`maxLength` on unformatted
-strings, `minItems`/`maxItems` (minimums capped at
-`GENERATED_LENGTH_CAP`, 10,000), never `-0`, and reads a 3.1 type list
+strings, `minItems`/`maxItems` (minimums capped at 10,000 per value, and
+100,000 array items and padding characters per call, `LENGTH_CAP` and
+`SIZE_BUDGET`, both internal), never `-0`, never an infinity at
+`±Number.MAX_VALUE`, and reads a 3.1 type list
 (`['string', 'null']`: the first non-null type). Not followed: `pattern`,
 `uniqueItems`, `maxLength` on a formatted string, and string formats
 beyond the listed ones. A
