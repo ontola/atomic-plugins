@@ -36,10 +36,10 @@ Markdown, listed in `/llms.txt`; the HTML site renders client-side).
 | Paging | `pagination-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` (new) | The 19 lists v1 pages follow the `Link` header's `rel="next"`; no `rel="next"` is the last page. No `per_page` is sent (default 50). | This PR; no catalog selects it |
 | Paging | `pagination-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` (v1) | `page`/`per_page` on the same lists, with no response field: a reader cannot tell the last page. | On `main`, in the catalogs |
 | Unpaged lists | none needed | Twelve lists have no page parameter: one answer is the list. | Evidence in #578 |
-| Financial mutations | `pagination-range-window-85a61052…` | "Limited to 100", no page parameter: read by period windows. | Branch `claude/moneybird-range-window-overlay`, no PR yet |
+| Financial mutations | `pagination-range-window-85a61052…` | "Limited to 100", no page parameter: read by period windows. | #614 |
 | Completeness | `completeness-85a61052…` | `absent: removed`, `notFound: unavailable` on 20 collections. | #585 |
 | Rate limits | `throttling-85a61052…` (v1) | 150 requests per 300 s per source IP. | On `main` |
-| Rate limits | `throttling-v2-85a61052…` | v1 plus `Retry-After` and a 429 as `quotaExhausted`. | Branch `claude/github-issues-throttling`, no PR yet |
+| Rate limits | `throttling-v2-85a61052…` | v1 plus `Retry-After` and a 429 as `quotaExhausted`. | #615 |
 
 Why the paging revision sends no `per_page`: the introduction gives
 `per_page` "default: 50, maximum: 100" and says "Each paginated response
@@ -57,7 +57,10 @@ Stays unverified until a live run against a real administration:
 - that every paginated answer carries a `Link` header (the pinned OAD
   attaches one to `downloads.json` only), that the last page's has no
   `rel="next"`, and that its links stay on `https://moneybird.com/api/v2` and
-  the same list;
+  the same list (the documented example link,
+  `https://moneybird.com/api/v2/contacts.json?page=3`, has no administration
+  id segment; taken literally it leaves the list's path, which §4.4.4's
+  same-origin rule would still follow);
 - whether a next link keeps `per_page`;
 - the caching Moneybird warns of: "our API requests are cached for
   performance optimization. As a result, we strongly advise against using
