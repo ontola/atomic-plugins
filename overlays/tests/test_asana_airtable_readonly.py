@@ -5,9 +5,7 @@ metadata composition, not provider credentials or live API behavior.
 """
 from copy import deepcopy
 from pathlib import Path
-import subprocess
 import sys
-import urllib.request
 import unittest
 
 import yaml
@@ -16,6 +14,7 @@ from openapi_spec_validator import validate
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from validate_oad_pins import apply_overlay
+from pinned_oad import read_pinned_oad
 
 
 def load_yaml(path):
@@ -24,12 +23,12 @@ def load_yaml(path):
 
 def composed(provider, pin, version):
     source_path = f"APIs/{version}/openapi.yaml"
-    directory_repo = ROOT.parent.parent / "openapi-directory"
-    try:
-        raw = subprocess.check_output(["git", "-C", str(directory_repo), "show", f"{pin}:{source_path}"])
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        source = f"https://raw.githubusercontent.com/{provider}/{pin}/{source_path}"
-        raw = urllib.request.urlopen(source, timeout=30).read()
+    raw = read_pinned_oad(
+        pin,
+        source_path,
+        f"https://raw.githubusercontent.com/{provider}/{pin}/{source_path}",
+        [ROOT.parent.parent / "openapi-directory"],
+    )
     document = yaml.safe_load(raw)
     directory = ROOT / "APIs" / version
     overlays = sorted(directory.glob(f"*-{pin}-overlay.yaml"))

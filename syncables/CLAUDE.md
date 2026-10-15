@@ -72,7 +72,10 @@ Data flows through four stages, each its own directory under `src/`:
    source once per `readCollections` through its budget and re-checks it at
    the end, `wallClockQuery` rewrites the query and computes the
    `ReadCoverage` set on `CollectionSnapshot.coverage` (and the client's
-   `SyncResult.coverage`). For a `rangeWindow` read with a range whose
+   `SyncResult.coverage`, and `readPlatform`'s `ReadResult.coverage`,
+   the same `CollectionCoverage`, `context` from `contextParams`, left
+   out when empty).
+   For a `rangeWindow` read with a range whose
    window fields include such parameters, `wallClockWindows` gives
    `walkPages` the `windowValue` hook (wall-clock digits per zoned window
    parameter, from the same cached zone reads) and the outer range's
@@ -89,7 +92,9 @@ Data flows through four stages, each its own directory under `src/`:
    variable order does not matter; `''` is a value and throws; anything
    else unfillable throws, as do a `.`, `..`, whitespace-padded, NUL or
    lone-surrogate value, an unsafe integer, and a target template that
-   is not a `/` path); nothing is fetched (`unit/read/references.test.ts`, the spec's §7.6 example).
+   is not a `/` path or holds a backslash, control character, space or
+   DEL); nothing is fetched
+   (`unit/read/references.test.ts`, the spec's §7.6 example).
    `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
@@ -540,8 +545,19 @@ Data flows through four stages, each its own directory under `src/`:
 
 `fake-data/generate.ts` (`generateFromSchema`) is shared by both the mock
 server (seeding + example responses) and is the only place schema-to-value
-synthesis logic lives — it prefers a schema's own `example`, then `enum`,
-then handles `allOf`/`oneOf`/`anyOf`/type-based generation recursively. A
+synthesis logic lives — it prefers a schema's own `example`, then
+`examples[0]`, `const`, `enum`, then handles `allOf`/`oneOf`/`anyOf`/
+type-based generation recursively. It keeps to the schema's numeric bounds
+(3.0 boolean and 3.1 numeric exclusive bounds, kept strictly past 2^53
+by stepping to the next float; `multipleOf`, on an integer through its
+smallest integer multiple), `minLength`/`maxLength` on unformatted
+strings, `minItems`/`maxItems` (minimums capped at 10,000 per value, and
+100,000 array items and padding characters per call, `LENGTH_CAP` and
+`SIZE_BUDGET`, both internal), never `-0`, never an infinity at
+`±Number.MAX_VALUE`, and reads a 3.1 type list
+(`['string', 'null']`: the first non-null type). Not followed: `pattern`,
+`uniqueItems`, `maxLength` on a formatted string, and string formats
+beyond the listed ones. A
 schema's own fixed `example` is reused verbatim on every call, so callers
 generating more than one item from the same schema (resource seeding,
 paginated list generation) must inject their own unique `id` afterward
@@ -553,8 +569,15 @@ Implements the [OpenAPI Pagination Schemes Extension](../openapi-extensions/spec
 (`components.paginationSchemes`), applied to third-party documents via
 [OpenAPI Overlays](https://spec.openapis.org/overlay/v1.0.0.html)
 (`src/openapi/overlay.ts`, `applyOverlay`/`loadOverlay` — an intentionally
-minimal Overlay implementation: `update`/`remove` actions with plain
-dot-path targets like `$.components`, not the full JSONPath grammar).
+minimal Overlay implementation: `update`/`remove` actions with the target
+grammar of integration-proxy's `catalog.rs` `parse_target`, `$` then
+`.name` or `['name']` segments (`parseOverlayTarget`), not the full
+JSONPath grammar; a non-object `update`, or one onto a non-object target,
+replaces it, as the proxy does; a `__proto__` segment is refused and
+every merged or created member is defined as an own property (`define`),
+so a `__proto__` key never sets a prototype; nothing in a target is
+unescaped; `overlay-targets.test.ts` applies every overlay under
+`overlays/APIs/`).
 
 - `types.ts` mirrors the extension's spec objects verbatim.
 - `validate.ts` checks a scheme against the spec's own rules (§9); an
