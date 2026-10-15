@@ -514,6 +514,24 @@ dated catalog selects it; the catalogs read neither operation.
 after the catalog's Discord overlays, and reads synthetic pages with the
 reference `read_item_cursor`. No provider was called.
 
+The overlay file's comment is published and cannot change; checked again
+on 2026-10-15, it needs these corrections and additions. Get Channel
+Messages does state its order, "from newest to oldest" (it takes
+`before`, `after` and `around`; newest to oldest is not ascending, so its
+`after` is no rule (b) bound either). Newest-first, too, are the `before`-only
+lists the comment does not name: List Public Archived Threads and List
+Private Archived Threads ("ordered by `archive_timestamp`, in descending
+order", `before` a timestamp), List Joined Private Archived Threads
+("ordered by their `id`, in descending order", `before` an id) and Get
+Channel Pins (`before` a pin timestamp, order not stated). Rule (b) covers
+an ascending order with a lower bound only, so none of them qualifies in
+Pagination Schemes 0.9.0. Get Guild Join Requests takes `before` and
+`after` but is undocumented (it is in the pinned OAD only). Checked word for word against the raw
+pages with curl on 2026-10-15, every quote in the overlay matches except
+one: the scheduled-event users' `after` row reads "consider only users
+after given user id" (lowercase), not "Consider ...", and its `limit` row
+reads "number of users to return (up to maximum 100)".
+
 ## Discord throttling
 
 [Discord API v10 throttling](APIs/discord.com/10/throttling-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
@@ -1131,12 +1149,17 @@ fields, page-size bounds, and opaque cursor types.
 [`pagination-v2-dec74da7…`](APIs/stripe.com/2022-11-15/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
 declares [Pagination Schemes 0.9.0](../openapi-extensions/spec/pagination-schemes/README.md)
 `fromLastItem` under rule (a) of §4.3.3: Stripe's
-[pagination reference](https://docs.stripe.com/api/pagination) says every v1
+[pagination reference](https://docs.stripe.com/api/pagination), read on
+2026-10-14, says every v1
 list method takes `starting_after`, "an object ID that defines your place in
 the list" (receive objects "ending with `obj_foo`" and send
 `starting_after=obj_foo`), and that `has_more` false means "this set
-comprises the end of the list". Objects come newest first; rule (a) needs no
-ascending order. v1 declared the `cursor` scheme but applied it to no
+comprises the end of the list". That live page documents a newer Stripe API
+version than the pinned 2022-11-15 document, so it is evidence only where the
+pinned document agrees: its own `starting_after` descriptions carry the same
+"defines your place in the list" text, and its list responses have `data`
+and `has_more`. Objects come newest first; rule (a) needs no ascending
+order. v1 declared the `cursor` scheme but applied it to no
 operation and had no way to find the next cursor; v2 redefines it
 (`starting_after` from the last item's `id`, items in `data`, `has_more` as
 `hasMore`) and applies it to all 99 list operations of the pinned document
@@ -1147,7 +1170,7 @@ only "An object ID cursor for use in pagination", covered by the reference
 page's statement about all list methods. Not declared: `ending_before` (it
 pages backwards) and the `/v2` APIs. It needs a 0.9.0 reader. Of the
 catalog and overlay platforms, Stripe is the only one whose docs describe a
-rule (a) cursor; Discord's two lists use rule (b) (#586). No dated catalog
+rule (a) cursor; Discord's two lists use rule (b) (#590). No dated catalog
 selects it. `tests/test_stripe_pagination_v2.py` validates it, checks the
 operation set and the pinned wording, and reads synthetic pages with the
 reference `read_item_cursor`. No provider was called.
