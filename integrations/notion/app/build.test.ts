@@ -42,6 +42,8 @@ describe('Notion drive-plugin bundle', async () => {
     // and list tombstones) and the blocked-429 handling (637).
     // 0.5.5 179 723 on 2026-10-14: a blocked 429 is also caught on the
     // pre-PATCH GET and in the read transport (+205).
+    // 0.5.6 179 742 on 2026-10-15: the read stops at the first blocked
+    // answer instead of requesting every remaining data source (+19).
     // A change that needs more should say why and re-measure.
     expect(bytes).toBeLessThan(197_800);
   });
