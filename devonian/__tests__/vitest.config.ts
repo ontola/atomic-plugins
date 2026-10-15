@@ -9,6 +9,8 @@ export default defineConfig({
     exclude: [
       ...configDefaults.exclude,
       'build/**/*',
+      // Playwright specs: `pnpm run test:real-browser`.
+      '__tests__/real-browser/**',
     ],
     coverage: {
       provider: 'v8',
