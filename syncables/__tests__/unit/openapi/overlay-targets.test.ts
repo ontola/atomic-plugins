@@ -113,6 +113,14 @@ describe('applyOverlay with bracket targets', () => {
     expect(applyOverlay({}, root)).toEqual(result);
   });
 
+  it('takes a root update with an undefined member, as JSON would drop it', () => {
+    const result = applyOverlay(
+      { x: 'kept' },
+      overlay([{ target: '$', update: { x: undefined, y: { a: 1 } } }]),
+    );
+    expect(result).toEqual({ x: 'kept', y: { a: 1 } });
+  });
+
   it('refuses a root update that is not an object', () => {
     expect(() =>
       applyOverlay(document, overlay([{ target: '$', update: [] }])),

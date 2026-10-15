@@ -1,5 +1,5 @@
 // @wc-ignore-file
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createApiClient,
   prepareDocument,
@@ -101,6 +101,12 @@ async function withFrozenDate(body: () => Promise<void>): Promise<void> {
 }
 
 describe('pacing reads', () => {
+  // withFrozenDate restores the clock itself; this also covers a test
+  // that fails or times out inside it.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('waits through the injected sleep once the window holds the fraction of requests', async () =>
     withFrozenDate(async () => {
       const slept: number[] = [];
