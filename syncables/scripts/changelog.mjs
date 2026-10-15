@@ -16,7 +16,14 @@
  * (lowercase letters, digits and hyphens), <kind> one of KINDS. Its text is
  * one Markdown paragraph, wrapped as the README is, without a leading `- `.
  */
-import { readdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -29,6 +36,15 @@ export const KINDS = {
 };
 
 const NAME = /^([a-z0-9][a-z0-9-]*)\.([a-z]+)\.md$/;
+
+/**
+ * A line that would not stay inside one sub-bullet: a list item or a
+ * heading. A line starting `#630` (a wrapped PR reference) is not a
+ * heading; `# ` is.
+ */
+const MARKUP = /^\s*(?:[-*+] |\d+[.)] |#{1,6}(?:\s|$))/;
+
+const escape = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
  * Reads `dir`: the fragments, sorted by kind and then name, and what is
@@ -45,6 +61,10 @@ export function readFragments(dir) {
       continue;
     }
     const [, name, kind] = match;
+    if (!statSync(join(dir, file)).isFile()) {
+      problems.push(`${file}: not a file`);
+      continue;
+    }
     if (!Object.hasOwn(KINDS, kind)) {
       problems.push(
         `${file}: kind ${kind} is not one of ${Object.keys(KINDS).join(', ')}`,
@@ -55,8 +75,10 @@ export function readFragments(dir) {
     if (text === '') problems.push(`${file}: empty`);
     else if (/\n\s*\n/.test(text))
       problems.push(`${file}: more than one paragraph`);
-    else if (text.startsWith('- ') || text.startsWith('* '))
-      problems.push(`${file}: starts with a list marker; write the text only`);
+    else if (text.split('\n').some((line) => MARKUP.test(line)))
+      problems.push(
+        `${file}: a line starts with a list marker or heading; write one paragraph of text`,
+      );
     else fragments.push({ file, name, kind, text });
   }
   const order = Object.keys(KINDS);
@@ -90,22 +112,70 @@ export function renderEntry(version, fragments, summary) {
  * README still holds `**Unreleased**` bullets written before fragments:
  * those are folded by hand (or moved into fragments) first.
  */
-export function insertEntry(readme, entry) {
-  const heading = '## Changelog\n\n';
-  const at = readme.indexOf(heading);
-  if (at === -1) throw new Error('README.md has no "## Changelog" section');
-  if (/^- \*\*Unreleased\*\*/m.test(readme.slice(at)))
+export function insertEntry(readme, entry, version) {
+  const heading = /^## Changelog\n\n/m.exec(readme);
+  if (!heading) throw new Error('README.md has no "## Changelog" section');
+  const changelog = readme.slice(heading.index);
+  if (/^- \*\*Unreleased\*\*/m.test(changelog))
     throw new Error(
       'README.md still has **Unreleased** bullets; fold them into fragments or the entry first',
     );
-  const start = at + heading.length;
+  if (
+    version !== undefined &&
+    new RegExp(`^- \\*\\*${escape(version)}\\*\\*`, 'm').test(changelog)
+  )
+    throw new Error(`README.md already has a ${version} entry`);
+  const start = heading.index + heading[0].length;
   return readme.slice(0, start) + entry + readme.slice(start);
+}
+
+/**
+ * Writes the `version` entry the fragments in `changesDir` make into
+ * `readmePath`, then deletes them. Every check runs before anything is
+ * written; the README is replaced in one rename, and the fragments are
+ * deleted only after it. Returns how many fragments were released.
+ */
+export function release({ changesDir, readmePath, version, summary }) {
+  if (!/^\d+\.\d+\.\d+$/.test(version ?? ''))
+    throw new Error('--release takes a version such as 0.25.0');
+  const { fragments, problems } = readFragments(changesDir);
+  if (problems.length) throw new Error(problems.join('\n'));
+  if (!fragments.length) throw new Error('no changelog fragments to release');
+  const readme = insertEntry(
+    readFileSync(readmePath, 'utf8'),
+    renderEntry(version, fragments, summary),
+    version,
+  );
+  const temporary = `${readmePath}.changelog-${process.pid}.tmp`;
+  writeFileSync(temporary, readme);
+  renameSync(temporary, readmePath);
+  for (const fragment of fragments) unlinkSync(join(changesDir, fragment.file));
+  return fragments.length;
 }
 
 function main(args) {
   const root = fileURLToPath(new URL('..', import.meta.url));
-  const dir = join(root, 'changes');
-  const { fragments, problems } = readFragments(dir);
+  const changesDir = join(root, 'changes');
+  const at = args.indexOf('--release');
+  if (at !== -1) {
+    const summaryAt = args.indexOf('--summary');
+    try {
+      const count = release({
+        changesDir,
+        readmePath: join(root, 'README.md'),
+        version: args[at + 1],
+        summary: summaryAt === -1 ? undefined : args[summaryAt + 1],
+      });
+      console.log(
+        `README.md: ${args[at + 1]} entry from ${count} fragment(s); fragments deleted`,
+      );
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    }
+    return;
+  }
+  const { fragments, problems } = readFragments(changesDir);
   if (problems.length) {
     for (const problem of problems) console.error(`changes/${problem}`);
     process.exit(1);
@@ -114,36 +184,7 @@ function main(args) {
     console.log(`${fragments.length} changelog fragment(s), all valid`);
     return;
   }
-  const at = args.indexOf('--release');
-  const version = at === -1 ? undefined : args[at + 1];
-  const summaryAt = args.indexOf('--summary');
-  const summary = summaryAt === -1 ? undefined : args[summaryAt + 1];
-  if (at !== -1 && !/^\d+\.\d+\.\d+$/.test(version ?? '')) {
-    console.error('--release takes a version such as 0.25.0');
-    process.exit(1);
-  }
-  const entry = renderEntry(version ?? 'Unreleased', fragments, summary);
-  if (version === undefined) {
-    process.stdout.write(entry);
-    return;
-  }
-  if (!fragments.length) {
-    console.error('no changelog fragments to release');
-    process.exit(1);
-  }
-  const readmePath = join(root, 'README.md');
-  let readme;
-  try {
-    readme = insertEntry(readFileSync(readmePath, 'utf8'), entry);
-  } catch (error) {
-    console.error(String(error instanceof Error ? error.message : error));
-    process.exit(1);
-  }
-  writeFileSync(readmePath, readme);
-  for (const fragment of fragments) unlinkSync(join(dir, fragment.file));
-  console.log(
-    `README.md: ${version} entry from ${fragments.length} fragment(s); fragments deleted`,
-  );
+  process.stdout.write(renderEntry('Unreleased', fragments));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url))

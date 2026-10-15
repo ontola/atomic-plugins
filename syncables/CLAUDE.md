@@ -1032,7 +1032,8 @@ never conflict. (Like towncrier's news fragments.)
   has two kinds. `<kind>`: `behaviour` (a change a user must check before
   upgrading), `added`, `fixed` or `other`.
 - The text is one Markdown paragraph, wrapped at about 76 columns like
-  the README, with no leading `- `: what changed for a user of the
+  the README, with no line starting as a list item (`- `, `* `, `1. `) or
+  a heading (`# `): what changed for a user of the
   package, and for `behaviour` what to check. A review fix to the same
   change edits the same file.
 - `npm run changelog -- --check` validates the directory (the unit test
@@ -1041,7 +1042,10 @@ never conflict. (Like towncrier's news fragments.)
 - Release: `npm run changelog -- --release <version> [--summary "…"]`
   writes `- **<version>**: <summary>` first under `## Changelog`, with one
   sub-bullet per fragment, behaviour changes first, then `added`, `fixed`
-  and `other`, each sorted by name, and deletes the fragments. Edit the
+  and `other`, each sorted by name, and deletes the fragments. Every
+  check runs first; the README is replaced in one rename, and the
+  fragments are deleted only after it. It refuses a version the README
+  already has. Edit the
   entry by hand afterwards if it needs a lead or reordering, then bump
   `package.json` and `package-lock.json` as before. It refuses while the
   README still holds `**Unreleased**` bullets written before this

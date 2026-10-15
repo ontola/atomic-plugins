@@ -25,3 +25,20 @@ first) and deletes the fragments. It refuses while old-style
 convention folds those by hand. `changes/README.md` and CLAUDE.md
 describe it; `changelog.test.ts` covers rendering, refusals, insertion
 and the package's own directory. Not published (`files` is `build/src`).
+
+## Turn 2
+
+**Human (via the coordinator session):** #636's review, since this is
+release tooling: refuse a version the README already has, write the
+README atomically and delete fragments only after; a directory named
+like a fragment crashed `--check` with `EISDIR`; check every line for a
+list marker or heading; anchor the heading match; `fileURLToPath` in
+the test.
+
+**Assistant:** `release()` (exported, used by `--release`) runs every
+check first, writes a temporary file and renames it over the README,
+then deletes the fragments; `insertEntry` refuses an existing
+`- **<version>**` entry and matches `^## Changelog\n\n` at a line
+start. A non-file is reported as a problem beside the others. Every
+line is checked for `- `, `* `, `+ `, `1. ` and a heading (`# `, not a
+wrapped `#630`). Ten new or changed tests fail on the code before.
