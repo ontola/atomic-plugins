@@ -7,8 +7,8 @@ info:
     Pagination Schemes 0.5.0 rangeWindow for the financial mutations list,
     which has no page parameter and answers at most 100 mutations. Compose
     after the pagination overlay; it adds one scheme and does not change the
-    pageNumber scheme. Selected by no dated catalog until syncables reads
-    rangeWindow schemes.
+    pageNumber scheme. syncables reads rangeWindow schemes, and its sync()
+    applies a windowed read from 0.22.0. No dated catalog selects it yet.
 actions:
 - target: "$.components"
   update:
