@@ -1,0 +1,74 @@
+# Reviewed 2026-10-15 against the pinned OAD and official provider documentation; no live calls.
+# Source: the pinned OAD ("Generated from the official Moneybird OpenAPI v2 specification").
+# Source: developer.moneybird.com's server-rendered /api/<resource> pages, read with curl:
+#   /api/ledger-accounts lists "Returns 404 when requesting unexisting ledger account" with
+#   the ledger account read, and /api/identities "Returns 404 when identity does not exist"
+#   with the identity read.
+# Needs Collection Completeness 0.2.0-draft (notFound). Compose after
+# crud-causality-85a61052...-overlay.yaml, in either order: it deep-merges into its
+# resources.
+#
+# Declared only on the five lists whose read sends no filter and whose documented defaults
+# leave nothing out: identities, ledger_accounts, task_list_templates, task_lists and
+# workflows (no filter parameter in the pinned OAD; task_lists takes only page and
+# per_page; ledger_accounts "Returns a list of all the ledger accounts", workflows "a list of
+# all the workflows", task_list_templates "all task list templates"; identities "does not
+# include the default identity", which is then never a member). absent: removed:
+# Collection Completeness §4.2 says it "still tells a consumer that the list does not
+# filter by default", which holds for these five, and an absent record may still exist and
+# is settled by its own read.
+# notFound: unavailable. The pages give a 404 for a record that does not exist; they do not
+# say what a deleted record's read answers, nor tell a deleted record from one that never
+# existed or that the caller cannot read, so a 404 is not taken as a deletion.
+# Not declared:
+#   - lists that leave out existing records by default: the documents, estimates, external
+#     and sales invoices and time entries (`filter` default "period:this_year"), purchase
+#     transactions ("unbatched:true") and recurring sales invoices ("state:active"); and
+#     assets, products, projects and contacts (`active` default true, "state:active", archived
+#     contacts only with include_archived). With `removed`, every record outside the default
+#     would go unconfirmed and need its own read. A crud-causality revision that fixes the
+#     widening query (listQuery, as all-records-selection.json does) could declare the last
+#     four later;
+#   - financial_mutations (capped at 100, read by period windows), subscriptions (listed per
+#     contact) and the resources without an item read;
+#   - `gone` (no 410 documented) and `parentAbsent` (no administration resource).
+# Not verified: what any read answers for a deleted record.
+overlay: 1.0.0
+info:
+  title: Moneybird collection completeness
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/85a6105220036a98ef0d7cd6f228d4aae0036508/APIs/moneybird.com/v2-readonly/openapi.yaml
+actions:
+- target: $.components
+  update:
+    crudResources:
+      identity:
+        collections:
+          identities:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      ledger_account:
+        collections:
+          ledger_accounts:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      task_list_template:
+        collections:
+          task_list_templates:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      task_list:
+        collections:
+          task_lists:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      workflow:
+        collections:
+          workflows:
+            x-completeness:
+              absent: removed
+              notFound: unavailable

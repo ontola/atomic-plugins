@@ -457,6 +457,205 @@ describe('a cursor in a POST body', () => {
   });
 });
 
+// Pagination Schemes 0.10.0 §4.3.3: `order` beside `fromLastItem`. Ports
+// the spec's ItemOrderTests (test_validate.py) on its example
+// (examples/item-order.yaml, shaped like Discord's List Joined Private
+// Archived Threads: items in descending id order, snowflake ids as
+// strings, `before` the last id).
+describe('order beside fromLastItem (0.10.0)', () => {
+  const orderExample = (): OpenApiDocument =>
+    yaml.load(
+      readFileSync(
+        new URL(
+          'openapi-extensions/spec/pagination-schemes/examples/item-order.yaml',
+          repository,
+        ),
+        'utf8',
+      ),
+    ) as OpenApiDocument;
+  const orderScheme = (doc: OpenApiDocument): Json =>
+    doc.components!.paginationSchemes!['beforeLastMessage'] as unknown as Json;
+  const field = (doc: OpenApiDocument, name = 'before'): Json =>
+    ((orderScheme(doc)['request'] as Json)['queryParameters'] as Json)[
+      name
+    ] as Json;
+
+  let made = 0;
+  /** Answers `pages` of ids in turn, then an empty page; `n` tells items apart. */
+  const pagesOf = (
+    ...pages: unknown[][]
+  ): { calls: URL[]; transport: Transport } =>
+    answering(
+      [...pages, []].map((ids) =>
+        ids.map((id) => ({ id, n: `item-${(made += 1)}` })),
+      ) as never,
+    );
+
+  const readOrdered = async (
+    transport: Transport,
+    doc = orderExample(),
+  ): Promise<{ items: Json[]; outcome: WalkOutcome }> => {
+    const outcome: WalkOutcome = { complete: true };
+    const items = await paginate(doc, {
+      transport,
+      path: '/channels/{channel_id}/messages',
+      pathParams: { channel_id: 'c1' },
+      outcome,
+    });
+    return { items, outcome };
+  };
+
+  describe('the shape (rule 30)', () => {
+    const problems = (change: (doc: OpenApiDocument) => unknown): string[] => {
+      const doc = orderExample();
+      change(doc);
+      return validatePaginationScheme(
+        'beforeLastMessage',
+        orderScheme(doc) as unknown as PaginationSchemeObject,
+      );
+    };
+
+    it('accepts the example, and the 0.9 example stays valid', () => {
+      expect(problems(() => {})).toEqual([]);
+      expect(
+        validatePaginationScheme(
+          'afterLastObject',
+          scheme(example()) as unknown as PaginationSchemeObject,
+        ),
+      ).toEqual([]);
+    });
+
+    it.each([
+      [
+        'an order that is neither ascending nor descending',
+        (doc: OpenApiDocument): unknown => (field(doc)['order'] = 'newest'),
+      ],
+      [
+        'an order without fromLastItem',
+        (doc: OpenApiDocument): unknown => delete field(doc)['fromLastItem'],
+      ],
+      [
+        'an order on the page size field',
+        (doc: OpenApiDocument): unknown =>
+          (field(doc, 'limit')['order'] = 'ascending'),
+      ],
+    ])('refuses %s', (_label, change) => {
+      expect(problems(change).join('\n')).toMatch(/rule 30/);
+    });
+  });
+
+  it('reads 19-digit snowflakes in descending order, comparing them exactly', async () => {
+    const fake = pagesOf(
+      ['1300000000000000010', '1300000000000000009'],
+      // fewer digits, still smaller as a number
+      ['999999999999999999'],
+    );
+    const { items, outcome } = await readOrdered(fake.transport);
+    expect(items).toHaveLength(3);
+    expect(outcome.complete).toBe(true);
+    expect(fake.calls.map((url) => url.searchParams.get('before'))).toEqual([
+      null,
+      '1300000000000000009',
+      '999999999999999999',
+    ]);
+  });
+
+  it('tells apart snowflakes a float64 would round to the same number', async () => {
+    // 2^53 + 1 and 2^53 are one apart; as Numbers they are equal.
+    expect(Number('9007199254740993')).toBe(Number('9007199254740992'));
+    const { outcome } = await readOrdered(
+      pagesOf(['9007199254740993', '9007199254740992']).transport,
+    );
+    expect(outcome.complete).toBe(true);
+  });
+
+  it('ignores leading zeros and compares a JSON integer with a digit string', async () => {
+    const { outcome } = await readOrdered(
+      pagesOf(['0010', 9], ['008']).transport,
+    );
+    expect(outcome.complete).toBe(true);
+  });
+
+  it.each([
+    ['within a page', [['10', '11']]],
+    ['equal across pages (not strict)', [['10', '9'], ['9']]],
+    ['equal with a leading zero', [['10', '09'], ['9']]],
+    ['across pages', [['10'], ['12']]],
+  ])('ends the read out of order: %s', async (_label, pages) => {
+    const fake = pagesOf(...pages);
+    const outcome: WalkOutcome = { complete: true };
+    await expect(
+      paginate(orderExample(), {
+        transport: fake.transport,
+        path: '/channels/{channel_id}/messages',
+        pathParams: { channel_id: 'c1' },
+        outcome,
+        // every item distinct, as the spec's test does, so only the order decides
+        idField: 'n',
+      }),
+    ).rejects.toThrow(/out of descending order; the read is not complete/);
+  });
+
+  it.each([
+    ['a number beside text', [['10', 'abc']]],
+    ['a signed digit string beside a number', [['10', '-1']]],
+    ['a negative integer', [[-1]]],
+    ['a fraction', [[1.5]]],
+    ['a boolean', [[true]]],
+    ['null', [[null]]],
+    ['an absent id', [[undefined]]],
+  ])(
+    'ends the read on a value that cannot be ordered: %s',
+    async (_label, pages) => {
+      await expect(readOrdered(pagesOf(...pages).transport)).rejects.toThrow(
+        PageReadError,
+      );
+    },
+  );
+
+  it('compares text by code point, ascending', async () => {
+    const doc = orderExample();
+    field(doc)['order'] = 'ascending';
+    const { items, outcome } = await readOrdered(
+      pagesOf(['a1', 'a2'], ['b']).transport,
+      doc,
+    );
+    expect(items).toHaveLength(3);
+    expect(outcome.complete).toBe(true);
+    // U+FF5E sorts before U+1F600 by code point, after it by UTF-16 unit.
+    const astral = orderExample();
+    field(astral)['order'] = 'ascending';
+    expect(
+      (await readOrdered(pagesOf(['～', '\u{1f600}']).transport, astral))
+        .outcome.complete,
+    ).toBe(true);
+  });
+
+  it('accepts a JSON 2.0, which JSON.parse gives as the integer 2', async () => {
+    // The Python reference refuses a float; the client cannot see one.
+    let call = 0;
+    const raw: Transport = async () => {
+      call += 1;
+      return {
+        status: 200,
+        headers: {},
+        body:
+          call === 1 ? '[{"id": 3.0, "n": "x"}, {"id": 2.0, "n": "y"}]' : '[]',
+      };
+    };
+    const { items, outcome } = await readOrdered(raw);
+    expect(items.map((item) => item['id'])).toEqual([3, 2]);
+    expect(outcome.complete).toBe(true);
+  });
+
+  it('checks nothing without order', async () => {
+    const doc = orderExample();
+    delete field(doc)['order'];
+    const { outcome } = await readOrdered(pagesOf(['b', 'a']).transport, doc);
+    expect(outcome.complete).toBe(true);
+  });
+});
+
 // Rule 28 allows another pageToken- or cursor-role field beside the
 // fromLastItem one (Stripe's ending_before beside starting_after). Only the
 // fromLastItem field carries the cursor, as in the spec's read_item_cursor:

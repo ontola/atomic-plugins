@@ -443,6 +443,7 @@ const REQUEST_FIELD_KEYS = new Set([
   'advance',
   'template',
   'fromLastItem',
+  'order',
 ]);
 const RESPONSE_KEYS = new Set([
   'envelope',
@@ -645,7 +646,7 @@ function checkStructure(
 }
 
 /**
- * Spec 0.9.0 §9 rules 27–29 (`_item_cursor_problems` in the spec's
+ * Spec 0.9.0 §9 rules 27–29 and 0.10.0's rule 30 (`order`) (`_item_cursor_problems` in the spec's
  * validate.py): `fromLastItem` only on a `pageToken` or `cursor` field, a
  * dot-path of non-empty names; a scheme with one is a `pageToken` scheme
  * with exactly one such field and no `nextPageToken`, `nextCursor` or
@@ -657,6 +658,22 @@ function checkItemCursor(
   scheme: PaginationSchemeObject,
   errors: string[],
 ): void {
+  // Spec 0.10.0 rule 30: `order` only beside `fromLastItem`, ascending or
+  // descending.
+  for (const location of REQUEST_LOCATIONS)
+    for (const [name, field] of Object.entries(
+      scheme.request?.[location] ?? {},
+    )) {
+      const order: unknown = field.order;
+      if (order === undefined) continue;
+      const at = `${path}.request.${location}.${name}`;
+      if (field.fromLastItem === undefined)
+        errors.push(
+          `${at}.order is allowed only beside fromLastItem (rule 30)`,
+        );
+      if (order !== 'ascending' && order !== 'descending')
+        errors.push(`${at}.order must be ascending or descending (rule 30)`);
+    }
   const fields = REQUEST_LOCATIONS.flatMap((location) =>
     Object.entries(scheme.request?.[location] ?? {})
       .filter(([, field]) => field.fromLastItem !== undefined)
