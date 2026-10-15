@@ -524,6 +524,26 @@ yet. `tests/test_asana_throttling.py` composes it alone and after the
 catalog's Asana overlays and classifies a synthetic 429. No provider was
 called.
 
+## Notion throttling
+
+[Notion API throttling](APIs/notion.com/2026-03-11/throttling-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Notion's [request-limits page](https://developers.notion.com/reference/request-limits):
+`Retry-After` in seconds ("an integer number of seconds") and a 429 with the
+code `rate_limited` as `throttled`. Its
+[v2](APIs/notion.com/2026-03-11/throttling-v2-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml)
+(Throttling 0.4.0-draft) adds a first signal: a 429 whose
+`additional_data.rate_limit_reason` is `public_api_request_blocked`, for which
+Notion says "This connection's API access has been restricted. Retrying won't
+help. Contact Notion support.", is `blocked`, so a consumer does not retry it.
+Not declared: the per-connection limits (600 or 180 requests per minute,
+depending on the workspace's plan, which a document cannot select), the
+per-workspace limit, which has no number, and the 529 `service_overload`,
+since a 5xx is not a throttling signal. No dated catalog selects either
+revision yet. `tests/test_notion_throttling.py` composes v1 and v2 with
+the catalog's Notion overlays in either order, and
+classifies synthetic errors in Notion's format. No provider was called.
+
 ## GitLab throttling
 
 [GitLab.com REST API v4 throttling](APIs/gitlab.com/v4-readonly/throttling-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml)
@@ -659,6 +679,26 @@ list by completion, which would tell completion from deletion.
 overlays it needs, run the Collection Completeness and CRUD Causality
 validators, and classify synthetic reads with the spec's `classify_read`.
 No provider was called.
+
+## Lists without pagination
+
+Fourteen catalog collections have no pagination scheme, so syncables reads
+each once and takes the answer as the whole list. Checked on 2026-10-14 from
+the providers' documentation only, so the next person need not re-check:
+
+| Collection | Pages? | Evidence |
+| --- | --- | --- |
+| Moneybird `financial_accounts`, `identities`, `ledger_accounts`, `subscriptions` (one contact's), `users`, `webhooks`, `workflows`, `custom_fields`, `document_styles`, `task_list_templates`, and the contact's and subscription's `additional_charges` | No | The pinned OAD (`85a61052`, "Generated from the official Moneybird OpenAPI v2 specification") gives none of them a `page` or `per_page` parameter; its paginated lists all have both ("The list is paginated. Use the `per_page` and `page` parameters"). `ledger_accounts`: "Pagination is not supported for this endpoint." Several say they return all: `ledger_accounts` ("a list of all the ledger accounts"), `workflows`, `document_styles`, `task_list_templates`, `webhooks`; `financial_accounts` returns "Only active financial accounts". Moneybird's server-rendered reference pages carry the same text: [`/api/ledger-accounts`](https://developer.moneybird.com/api/ledger-accounts) "Returns a list of all the ledger accounts in the administration. Pagination is not supported for this endpoint." Not verified: that a large administration's answer is never cut short (no limit is documented for these). |
+| Moneybird `financial_mutations` | No, but capped | "Limited to 100 financial mutations" and no page parameter (the pinned OAD and [`/api/financial-mutations`](https://developer.moneybird.com/api/financial-mutations): "Returns a list of financial mutations in the administration. Limited to 100 financial mutations."). Read by period windows: `pagination-range-window-85a61052…` (Pagination Schemes 0.5.0 `rangeWindow`, #397, #614), on `main` and selected by no dated catalog. |
+| Discord `/users/@me/guilds` | Yes (`before`, `after`, `limit` 1–200) | Discord's [Get Current User Guilds](https://docs.discord.com/developers/resources/user): "This endpoint returns 200 guilds by default, which is the maximum number of guilds a non-bot user can join. Therefore, pagination is not needed". The catalog's crud-causality overlay sends `limit=200` (`x-list-query`), and its credential is a user's OAuth token. A bot token can see more guilds; following `after` (the last guild's id) would need a last-item cursor, which `pagination-v2-9d0d73c6…` deliberately does not declare here: Discord does not document the order of the guilds it returns. |
+
+The Moneybird drive app (`integrations/money/moneybird/read.ts`) reads with
+its own client, not syncables: `financial_accounts` in one answer, financial
+mutations by its own period windows, and none of the other eleven lists in
+the table's first row, so it is not affected. `tests/test_unpaged_lists.py` fails if a pinned document gains
+a page parameter on one of these operations, if a catalogued Moneybird
+pagination overlay starts to declare one, or if the catalogs' Discord list
+stops asking for 200 guilds. No provider was called.
 
 ## Throttling with plan tiers
 

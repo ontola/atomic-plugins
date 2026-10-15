@@ -144,6 +144,8 @@ export class Budget {
         body: response.body,
         receivedAt,
       });
+      // A blocked answer (Throttling 0.4.0) has no retry time either: it is
+      // returned, and the read fails on it.
       if (!throttled || throttled.retryAt === undefined) {
         return response;
       }
