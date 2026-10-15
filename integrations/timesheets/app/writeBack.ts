@@ -125,8 +125,8 @@ export interface OutboxMarker {
 export interface CreateMarker {
   /**
    * Set from 0.8.1: the row's Name is the description exactly. A create
-   * staged before 0.8.0 lacks it, and its Name may be "Time entry" (a
-   * filled gap) or blank, both meaning none (`readCreateState`).
+   * staged before 0.8.1 lacks it; until 0.7.2 its Name may be "Time entry"
+   * (a filled gap) or blank, both read as none (`readCreateState`).
    */
   exactName?: true;
   copyOf?: string;
@@ -829,8 +829,8 @@ export async function readCreateState(
   if (!stored) return undefined;
   const outbox = parseJson<OutboxMarker>(row.get(schema.sync.outbox));
   // Until 0.7.2 a filled gap was staged with "Time entry" as its Name, and
-  // 0.8.0 would send that as the description. An unmarked create's
-  // "Time entry" or blank Name means no description.
+  // 0.8.0 would send that as the description. An unmarked create (staged
+  // before 0.8.1) whose Name is "Time entry" or blank gets no description.
   const legacy =
     create.exactName !== true &&
     (stored.name === LEGACY_NO_DESCRIPTION || !stored.name.trim());

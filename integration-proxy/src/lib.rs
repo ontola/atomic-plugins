@@ -59,6 +59,7 @@ mod signature;
 mod templates;
 #[cfg(test)]
 mod test_support;
+mod transfer;
 mod webhooks;
 
 use std::sync::Arc;
@@ -135,11 +136,22 @@ pub(crate) fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// Asks the access policy about `owner`.
+/// Asks whether `owner` may own and use connections: refused when a key
+/// transfer retired it (#410), then the access policy. Every signed route
+/// asks this about the connection owner (or the signer that will become
+/// one), so a retired owner is refused everywhere: management, redeem,
+/// transfers, proxied requests by any caller, and the webhook routes.
 pub(crate) async fn check_access(
     state: &AppState,
     owner: &AgentId,
 ) -> Result<(), api_error::ApiError> {
+    if let Some(security) = &state.security {
+        match security.is_retired(owner.as_str()).await {
+            Ok(false) => {}
+            Ok(true) => return Err(api_error::ApiError::AgentRetired),
+            Err(_) => return Err(api_error::ApiError::Unavailable),
+        }
+    }
     match state.access.check(owner).await {
         Access::Allowed => Ok(()),
         Access::Denied(reason) => Err(api_error::ApiError::AccessDenied(reason)),
@@ -398,6 +410,7 @@ fn router(state: AppState) -> Router {
             delete(connections::remove_agent),
         )
         .route("/runtimes", post(connections::add_runtime))
+        .route("/agents/transfer", post(transfer::transfer))
         .route("/runtimes/:agent", delete(connections::remove_runtime))
         .route(
             "/proxy/:connection_id/:platform/*path",

@@ -239,6 +239,64 @@ describe('a list tombstone of a record without writes', () => {
     expect(await ids(c1)).toEqual(['a', 'b', 'c']);
   });
 
+  it.each([
+    [
+      'an unchanged read',
+      [
+        [a, b],
+        [c, gone(d)],
+      ] as Task[][],
+    ],
+    [
+      'a changed read',
+      [
+        [a, b],
+        [{ ...c, title: 'C2' }, gone(d)],
+      ] as Task[][],
+    ],
+  ])(
+    'settles a mark the collection cannot check, on %s',
+    async (_label, pages) => {
+      const fake = server();
+      const doc = tasks();
+      (
+        doc.components!.crudResources as Record<
+          string,
+          { collections: Record<string, Record<string, unknown>> }
+        >
+      )['task']!.collections['tasks']!['x-completeness'] = {
+        absent: 'removed',
+      };
+      const told: PresenceChange[] = [];
+      const c1 = createApiClient(doc, {
+        transport: fake.transport,
+        missingRecordChecks: 'none',
+        onPresence: (changes) => {
+          told.push(...changes);
+        },
+      });
+      fake.set(...complete([a, b, c, d]));
+      await c1.sync();
+      // d vanishes; with no checks it is kept unconfirmed.
+      fake.set([[a, b], [c]], 3);
+      await c1.sync();
+      expect(c1.presence()).toMatchObject([
+        { id: 'd', presence: 'unconfirmed' },
+      ]);
+      // The members are unchanged (or not); d is now a list tombstone.
+      fake.set(pages, 4);
+      fake.requests.length = 0;
+      told.length = 0;
+      await c1.sync();
+      expect(itemReads(fake.requests)).toEqual([]);
+      expect(c1.presence()).toEqual([]);
+      expect(told).toMatchObject([
+        { id: 'd', presence: 'deleted', source: 'list' },
+      ]);
+      expect(await ids(c1)).toEqual(['a', 'b', 'c']);
+    },
+  );
+
   it('does not count against maxMissingRecordChecks', async () => {
     const fake = server();
     const { client: c1 } = client(fake, {

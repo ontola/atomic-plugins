@@ -131,9 +131,9 @@ export function putBody(
   const wanted: Record<string, unknown> = {};
   if (changed.has('name')) wanted[NAME] = desired.name;
   // Clockify keeps whole seconds, and the lens's `iso-seconds-to-ms` refuses
-  // a put with milliseconds rather than lose them. Row times are snapped to
-  // minutes, but a time typed into the table may carry milliseconds: round
-  // down, as the code lens's `clockifyInstant` did before 0.8.0.
+  // a put with milliseconds rather than lose them. Defensive: changed times
+  // are already snapped to minutes before they get here. Round down, as the
+  // code lens's `clockifyInstant` did before 0.8.0.
   if (changed.has('start')) wanted[START] = wholeSeconds(desired.start);
   if (changed.has('end')) wanted[END] = wholeSeconds(desired.end);
   if (changed.has('billable')) wanted[BILLABLE] = desired.billable;
