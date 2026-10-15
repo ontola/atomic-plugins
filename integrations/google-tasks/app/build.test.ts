@@ -16,14 +16,16 @@ describe('Google Tasks drive-app bundle', async () => {
     );
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
-    // Measured 41,471 bytes minified on 2026-10-06 for 0.1.0, at the
+    // Measured 42,893 bytes minified on 2026-10-15 for 0.1.1 (+1,422: the
+    // daily-quota and API-disabled refusals, read.ts googleRefusal, and
+    // their card wording). 0.1.0 measured 41,471 bytes on 2026-10-06, at the
     // a12b74a6783b pin: ontology-kit's terms and resolver, the issue-v1
     // provisioning, the reader with its rate-limit handling, the task list
     // picker and the plain-DOM view, plus the shared sync-status card with
     // its minified CSS and the status mapping (incl. the last-pass time and
     // the partial-pass problem). The limit is that plus about 10%, rounded
     // up.
-    expect(bytes).toBeLessThan(45_700);
+    expect(bytes).toBeLessThan(47_200);
   });
 
   it('bundles the shared sync-status card and its minified stylesheet', () => {
