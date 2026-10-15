@@ -288,6 +288,14 @@ describe('resolveReference', () => {
     '{host}/projects/{projectId}',
     'projects/{projectId}',
     '//evil.example/projects/{projectId}',
+    '/\\evil.example/projects/{projectId}',
+    '/workspaces\\{workspaceId}/projects/{projectId}',
+    '/\t/evil.example/{projectId}',
+    '/\n/evil.example/{projectId}',
+    '/\r/evil.example/{projectId}',
+    '/projects/{projectId}\u0000',
+    '/projects /{projectId}',
+    '/projects/\u007f{projectId}',
   ])('refuses the identity.urlTemplate %j', (urlTemplate) => {
     const doc = document();
     const crud = (
@@ -301,7 +309,70 @@ describe('resolveReference', () => {
         workspaceId: '42',
         host: 'h',
       }),
-    ).toThrow(/is not a path starting with one \//);
+    ).toThrow(/is not a path starting with one \/, without a backslash/);
+  });
+
+  it('reads /\\host as that host, which is why a backslash is refused', () => {
+    expect(new URL('/\\evil.example/p', 'https://api.example.com').host).toBe(
+      'evil.example',
+    );
+  });
+
+  it.each([
+    [10n, /projectId is 10n, not a string or an integer/],
+    [{ id: 1n }, /projectId is an object, not a string or an integer/],
+    [Symbol('p'), /projectId is a symbol, not a string or an integer/],
+  ])(
+    'names the value %s in its error without throwing a TypeError',
+    (projectId, message) => {
+      expect(() =>
+        resolveReference(
+          document(),
+          'timeEntry',
+          'project',
+          { projectId },
+          { workspaceId: '42' },
+        ),
+      ).toThrow(message);
+    },
+  );
+
+  it('reads /<tab>/host as that host, which is why control characters are refused', () => {
+    expect(new URL('/\t/evil.example/p', 'https://api.example.com').host).toBe(
+      'evil.example',
+    );
+  });
+
+  it('names a cyclic value by its type', () => {
+    const projectId: Record<string, unknown> = {};
+    projectId['self'] = projectId;
+    expect(() =>
+      resolveReference(
+        document(),
+        'timeEntry',
+        'project',
+        { projectId },
+        { workspaceId: '42' },
+      ),
+    ).toThrow(/projectId is an object, not a string or an integer/);
+  });
+
+  it('cuts a long value at 200 characters', () => {
+    const projectId = ['x'.repeat(500)];
+    let message = '';
+    try {
+      resolveReference(
+        document(),
+        'timeEntry',
+        'project',
+        { projectId },
+        { workspaceId: '42' },
+      );
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain(`projectId is ["${'x'.repeat(198)}…, not`);
+    expect(message.length).toBeLessThan(300);
   });
 
   it('throws for an unknown resource or reference', () => {

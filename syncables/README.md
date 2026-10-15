@@ -1777,6 +1777,16 @@ and fails on any Node built-in import. It does not include the mock
 server, environment loader or file-path loaders, so pass documents and
 overlays as parsed objects.
 
+`prepareDocument` applies overlays with `applyOverlay`, which reads the
+target grammar integration-proxy reads: `$`, then `.name` or `['name']`
+segments, as in `$.paths['/users.list'].get.responses['200']`. Wildcards,
+filters and array indexes are refused. An `update` object is deep-merged
+onto an object target; any other `update`, or one onto an array or a
+scalar, replaces the target, as the proxy does (Overlay 1.0 would append
+to an array). Objects missing along a target's path are created, where
+the proxy refuses the action. Every overlay under
+[`overlays/APIs/`](../overlays/APIs/) applies.
+
 ```ts
 import {
   prepareDocument,
@@ -1918,13 +1928,17 @@ const { records, ontology, errors } = await readPlatform(document, {
   not be the id the API sent), a variable missing from `context`, or a
   declaration it cannot read. A declaration it cannot read includes an
   `identity.urlTemplate` that is not a path starting with one `/` (an
-  absolute URL, a variable in the host): `path` is always relative to
-  the API's server. A value, bound or from `context`, also throws when it
-  is `.` or `..` (it survives percent-encoding, and `/projects/..`
-  normalises to `/`, another resource), has leading or trailing
-  whitespace, contains NUL, or holds a lone surrogate. Other characters
-  are percent-encoded (`/` as `%2F`, `%` as `%25`). It asserts identity
-  only: nothing is fetched, and the path need not exist or be readable.
+  absolute URL, a variable in the host), or that holds a backslash, a
+  control character, a space or DEL (a URL parser reads
+  `/\evil.example/` as that host, and strips a tab, LF or CR anywhere, so
+  `/<tab>/evil.example/` too): `path` is always relative to the API's
+  server. A value, bound or from `context`, also
+  throws when it is `.` or `..` (it survives percent-encoding, and
+  `/projects/..` normalises to `/`, another resource), has leading or
+  trailing whitespace, contains NUL, or holds a lone surrogate. Other
+  characters are percent-encoded (`/` as `%2F`, `%` as `%25`). It
+  asserts identity only: nothing is fetched, and the path need not exist
+  or be readable.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -2079,6 +2093,20 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   change: a `ThrottlingVerdict` no longer always means "retry later"; a
   custom `classifyWriteFailure` that returns `retry` for any
   `failure.throttling` now retries a blocked answer, so check its meaning.
+- **Unreleased**: `applyOverlay` (and so `prepareDocument`) reads
+  `['name']` target segments, as integration-proxy does, and replaces an
+  array or scalar target with the `update` instead of throwing. Before,
+  174 of the 524 overlays under `overlays/APIs/` threw "Unsupported
+  overlay target" (1,803 of their 2,336 actions address a path such as
+  `$.paths['/users.list'].get`, or carry an array `update`), and an array
+  `update` (Notion's auth overlay) was merged index by index into an
+  object. An `update` is now copied, so a later change to the result no
+  longer changes the overlay. `OverlayAction.update` is typed
+  `Record<string, unknown> | unknown[]`. A target that applied before
+  gives the same result, with two exceptions no overlay in this
+  repository uses: a falsy `update` (`null`, `0`, `false`, `''`) now
+  replaces the target instead of being skipped, and an object `update`
+  onto an existing scalar replaces it instead of throwing.
 - **Unreleased**: `resolveReference` (and the `ResolvedReference` type)
   resolves a CRUD Causality §4.1.3 Reference Object for an object: the
   referenced resource's identity path, filled from the object's fields and
@@ -2086,6 +2114,13 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   whitespace-padded one, one with NUL or a lone surrogate, an integer
   beyond `Number.MAX_SAFE_INTEGER`, or a target template that is not a
   path, throws instead of naming another object. Additive.
+- **Unreleased**: `resolveReference` also refuses an `identity.urlTemplate`
+  holding a backslash (`/\evil.example/` resolves to that host), a C0
+  control character (a URL parser strips tab, LF and CR, so
+  `/<tab>/evil.example/` does too), a space or DEL. Its error messages
+  name a bigint, symbol, cyclic or other value `JSON.stringify` cannot
+  write instead of throwing a `TypeError`, and cut a value at 200
+  characters (#611's re-review).
 - **Unreleased**: An explicit `x-pagination` entry must be a Pagination
   Application Object as the spec's `schema.json` gives it: a nonempty
   `scheme`, an object `overrides`, a string `description`, and no other
