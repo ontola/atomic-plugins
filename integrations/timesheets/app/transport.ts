@@ -79,9 +79,8 @@ const RECONNECT_CODES = [
   'capability_scope',
   'platform_mismatch',
   'credential_refresh_failed',
-  // Someone else's connection, or one whose owner id was transferred (#410).
+  // Someone else's connection (0.8.2).
   'not_owner',
-  'agent_retired',
 ];
 const REFUSAL_CODES = [
   ...RECONNECT_CODES,
@@ -98,6 +97,9 @@ const REFUSAL_CODES = [
   'wrong_audience',
   'capability_key_mismatch',
   'access_denied',
+  // This agent's id was retired by a key transfer (#410): not a reconnect,
+  // since the proxy refuses the retired id at /connect/redeem too (0.8.2).
+  'agent_retired',
 ];
 
 /** A proxy refusal as an error, or `undefined` for a provider answer. */

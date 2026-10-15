@@ -17,6 +17,14 @@ export type ProblemKind =
    * workspace nor a reconnect changes that (0.8.2).
    */
   | 'proxy-access'
+  /**
+   * The proxy refuses this agent because its key was replaced: a key
+   * transfer (#410) moved its connections to the new agent and retired
+   * this id (`agent_retired`). Reconnecting cannot help, since the proxy
+   * refuses the retired id at `/connect/redeem` too; Atomic opened with the
+   * new key has the connections already (0.8.2).
+   */
+  | 'agent-retired'
   /** 429. */
   | 'rate-limited'
   /** The relay or the proxy could not be reached (no HTTP status). */
@@ -42,12 +50,10 @@ const REAUTH = new Set([
   'capability_scope',
   'platform_mismatch',
   'credential_refresh_failed',
-  // The connection belongs to another owner, or its owner's id was
-  // transferred to a new key (#410): connecting again gives this person a
-  // connection of their own (0.8.2; before, both read as "choose another
-  // workspace").
+  // The connection belongs to another owner: connecting again gives this
+  // person a connection of their own (0.8.2; before, it read as "choose
+  // another workspace").
   'not_owner',
-  'agent_retired',
   // Only after the frame client's own single retry. (The retired
   // Bearer-code refusal is left out, as in transport.ts: only a host from
   // before #54 sends it, and build.test.ts keeps that word out of the bundle.)
@@ -55,8 +61,10 @@ const REAUTH = new Set([
 ]);
 /**
  * Proxy refusal codes that mean: the proxy's access check refuses this
- * person or app (`integration-proxy/src/api_error.rs` `AccessDenied`; the
- * other two are older spellings). Only whoever runs the proxy can change it.
+ * person or app (`integration-proxy/src/api_error.rs` `AccessDenied`).
+ * `api_error.rs` has no `unauthorized` or `forbidden` code; they are kept
+ * defensively, for a proxy or host that answers with those generic words.
+ * Only whoever runs the proxy can change it.
  */
 const ACCESS = new Set(['unauthorized', 'forbidden', 'access_denied']);
 
@@ -111,6 +119,8 @@ export function classify(error: unknown, now = Date.now()): Problem {
     typeof (error as { code?: unknown } | null)?.code === 'string'
       ? (error as { code: string }).code
       : /refused (?:this connection|the request) \((\w+)/.exec(detail)?.[1];
+  // Before the reconnect check: reconnecting loops on a retired id.
+  if (code === 'agent_retired') return { kind: 'agent-retired', detail };
   if (/refused this connection/.test(detail) || (code && REAUTH.has(code)))
     return { kind: 'reauth', detail };
   if (code && ACCESS.has(code)) return { kind: 'proxy-access', detail };

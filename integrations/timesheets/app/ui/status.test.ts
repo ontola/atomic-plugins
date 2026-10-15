@@ -142,6 +142,7 @@ describe('syncStatusFor', () => {
     });
     expect(Object.keys(NEXT_STEP).sort()).toEqual(
       [
+        'agent-retired',
         'forbidden',
         'network',
         'other',
@@ -151,6 +152,23 @@ describe('syncStatusFor', () => {
         'too-many',
       ].sort(),
     );
+  });
+
+  it('a replaced agent key says to open Atomic with the new key, not to reconnect (0.8.2)', () => {
+    const status = syncStatusFor({
+      state: ready({
+        ok: false,
+        at: NOW,
+        error: 'agent_retired',
+        problem: { kind: 'agent-retired', detail: 'agent_retired' },
+      }),
+      sheet: sheet(),
+      changes: NO_CHANGES,
+    });
+    expect(status.last).toMatchObject({
+      nextStep:
+        "This Atomic agent's key was replaced; open Atomic with your new key, where your connections already are.",
+    });
   });
 
   it('a proxy access refusal says to ask whoever runs the proxy, not to reconnect (0.8.2)', () => {

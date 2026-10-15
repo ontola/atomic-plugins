@@ -20,6 +20,7 @@ import { view } from '../main.js';
 import { ensureSchema } from '../schema.js';
 import type { ColorScheme, PluginStore } from '../store.js';
 import { FRAMES, renderFrame, type FrameId } from './preview.js';
+import { NEXT_STEP } from './status.js';
 import type { Shell } from './shell.js';
 import { css } from './theme.js';
 import { renderUnknown, unknownIn } from './coverage.js';
@@ -403,6 +404,23 @@ describe('frames', () => {
       expect(root.querySelector('table.week')).not.toBeNull();
     },
   );
+
+  it('J (j8): a replaced agent key says what to do, with no retry or reconnect, and the card says the same', () => {
+    const { root } = frame('j8');
+    const alert = root.querySelector('[role="alert"]')!;
+    expect(text(alert.querySelector('strong'))).toBe(
+      "This Atomic agent's key was replaced.",
+    );
+    expect(alert.textContent).toContain(NEXT_STEP['agent-retired']);
+    expect(alert.querySelectorAll('button')).toHaveLength(0);
+    expect(text(root.querySelector('.pill'))).toBe('Sync failed');
+    expect(root.querySelector('table.week')).not.toBeNull();
+  });
+
+  it('J (j7): the proxy-access banner says the card next step word for word', () => {
+    const alert = frame('j7').root.querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain(NEXT_STEP['proxy-access']);
+  });
 
   it('J: a 429 disables both retries until retry-after has passed', () => {
     const { root } = frame('j2');
