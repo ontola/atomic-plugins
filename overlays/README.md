@@ -483,6 +483,26 @@ yet. `tests/test_asana_throttling.py` composes it alone and after the
 catalog's Asana overlays and classifies a synthetic 429. No provider was
 called.
 
+## Notion throttling
+
+[Notion API throttling](APIs/notion.com/2026-03-11/throttling-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Notion's [request-limits page](https://developers.notion.com/reference/request-limits):
+`Retry-After` in seconds ("an integer number of seconds") and a 429 with the
+code `rate_limited` as `throttled`. Its
+[v2](APIs/notion.com/2026-03-11/throttling-v2-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml)
+(Throttling 0.4.0-draft) adds a first signal: a 429 whose
+`additional_data.rate_limit_reason` is `public_api_request_blocked`, for which
+Notion says "This connection's API access has been restricted. Retrying won't
+help. Contact Notion support.", is `blocked`, so a consumer does not retry it.
+Not declared: the per-connection limits (600 or 180 requests per minute,
+depending on the workspace's plan, which a document cannot select), the
+per-workspace limit, which has no number, and the 529 `service_overload`,
+since a 5xx is not a throttling signal. No dated catalog selects either
+revision yet. `tests/test_notion_throttling.py` composes v1 and v2 with
+the catalog's Notion overlays in either order, and
+classifies synthetic errors in Notion's format. No provider was called.
+
 ## GitLab throttling
 
 [GitLab.com REST API v4 throttling](APIs/gitlab.com/v4-readonly/throttling-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml)

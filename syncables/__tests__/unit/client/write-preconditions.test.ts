@@ -734,6 +734,52 @@ describe('write preconditions: source objects (§4.4.1)', () => {
     expect(blocked.authBlocked()).toMatchObject({ status: 401 });
     expect(refused.posts).toEqual([]);
   });
+
+  it('ends a create whose source read is answered blocked (Throttling 0.4.0): not retried, not held (readRefused)', async () => {
+    const fake = workspaceProvider();
+    fake.workspace.status = 429;
+    // The 429 carries retry-after: 120, which a blocked answer does not wait out.
+    const doc = workspaceDocument() as OpenApiDocument &
+      Record<string, unknown>;
+    doc['x-throttling'] = {
+      signals: [
+        {
+          status: [429],
+          body: { pointer: '/error', equals: 'x' },
+          meaning: 'blocked',
+        },
+      ],
+    };
+    let sourceReads = 0;
+    const transport: Transport = async (r) => {
+      if (r.url.pathname === '/workspaces/W1') sourceReads += 1;
+      return fake.transport(r);
+    };
+    const storage = new InMemoryStorageAdapter();
+    const client = createApiClient(doc, {
+      storage,
+      transport,
+      retry: { baseDelayMs: 10 },
+    });
+    await client.create('entries', { hours: '1.5' }, { workspaceId: 'W1' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        {
+          state: 'failed',
+          lastStatus: 429,
+          lastError: expect.stringMatching(/retrying won't help/),
+        },
+      ]),
+    );
+    const reads = sourceReads;
+    await settle();
+    expect(sourceReads).toBe(reads);
+    expect(fake.posts).toEqual([]);
+    // No earliest retry time is stored from the blocked answer's retry-after.
+    expect(
+      storedNotBefore(await storage.get('syncables:outbox', 'outbox')),
+    ).toBeUndefined();
+  });
 });
 
 describe('write preconditions: declarations', () => {

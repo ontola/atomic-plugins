@@ -30,7 +30,7 @@ The extension versions this source reads, against the specifications in
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.9.1 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore`) ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), and Reference Objects resolved to a path (`resolveReference`, §4.1.3). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft, plan tiers from 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. Not yet 0.4.0's `blocked` meaning (#533): a signal that declares it is not read, so such a refusal is retried. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -346,6 +346,7 @@ A write the server answers with a non-2xx status is classified. The defaults
 | --- | --- | --- |
 | 404 or 410 to a delete | `satisfied` | The record is already gone, so the delete settles as if it had succeeded |
 | A response that is throttling under the document's `x-throttling` ([below](#throttling)): a matching signal, or any 429 | `retry` | Sent again no earlier than the earliest retry time the response gives, else after the backoff |
+| A response a `blocked` signal matches (Throttling 0.4.0), whatever its status | `permanent` | Not sent again: the API documents that retrying won't help |
 | 401 | `auth` | The write becomes `blocked` and the client stops sending writes (below); no attempt is counted |
 | 403 with `Retry-After` or `x-ratelimit-remaining: 0`, when the document declares no `x-throttling.signals` | `retry` | A rate limit, as GitHub sends it; with signals declared, a 403 is throttling only when a signal matches |
 | Other 403 | `auth` | As 401, except for a request sent after `authRenewed()` before any response showed the renewed credentials accepted (below): then `permanent` |
@@ -397,14 +398,22 @@ create or update counts as `permanent`.
 #### Throttling
 
 The draft [Throttling extension](../openapi-extensions/spec/throttling/README.md)
-(0.3.0-draft) lets a document say, at the root `x-throttling`, which
+(0.4.0-draft) lets a document say, at the root `x-throttling`, which
 response headers report the rate limit (`headers`: roles `limit`,
 `remaining`, `used`, `reset` and `retryAfter`, the last two with a time
 unit), which JSON body fields report the same roles (`bodyFields`, since
 0.3.0, keyed by a dot-path such as Todoist's `error_extra.retry_after`) and
 which responses are rate-limit refusals (`signals`: a status
 list plus a header or JSON-body predicate, with the meaning `throttled` or
-`quotaExhausted`, an optional `bucket` of `limits` and `minDelaySeconds`).
+`quotaExhausted`, an optional `bucket` of `limits` and `minDelaySeconds`;
+since 0.4.0 also `blocked`, a refusal the API documents as not worth
+retrying, such as Notion's `public_api_request_blocked`).
+A `blocked` verdict is not throttling: it has no retry time, a read
+returns the response (and fails on it) without sleeping, and a write is
+`permanent` by default and is not sent again. A signal with a meaning this
+version does not recognise (or none, or one that is not a string) is read
+as `blocked`; a `blocked` signal with a `bucket` or `minDelaySeconds` is
+kept as `blocked`, with those fields ignored.
 `declaredThrottling` reads it and `classifyThrottling` (both exported)
 applies it to a response, after the spec's `classify()`: the first signal
 that matches decides; without one, a 429 is `throttled` (with or without a
@@ -2099,6 +2108,18 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: Throttling 0.4.0-draft `blocked`. A signal with
+  `meaning: blocked` (Notion's `public_api_request_blocked`), or with a
+  meaning this version does not recognise (or none, or a non-string one), gives `classifyThrottling` the
+  verdict `{ meaning: 'blocked' }` with no `retryAt`: not throttling, never
+  resent automatically. Such a signal keeps a `bucket` or `minDelaySeconds`
+  ignored rather than being dropped. A write answered `blocked` (its own
+  answer, or a precondition read's) fails at once (`permanent` in
+  `defaultWriteFailureClass`), with no `notBefore` and no bucket pause; a
+  read returns the answer without sleeping and fails on it. API semantic
+  change: a `ThrottlingVerdict` no longer always means "retry later"; a
+  custom `classifyWriteFailure` that returns `retry` for any
+  `failure.throttling` now retries a blocked answer, so check its meaning.
 - **Unreleased**: Pagination Schemes 0.9.1: a cursor read from the last
   item (`fromLastItem`, Stripe's `starting_after`) with the `hasMore`
   response role, after the spec's `read_item_cursor`. The cursor goes in
