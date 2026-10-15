@@ -28,7 +28,7 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.9.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore`) ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.9.1 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore`) ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), and Reference Objects resolved to a path (`resolveReference`, §4.1.3). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft, plan tiers from 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. Not yet 0.4.0's `blocked` meaning (#533): a signal that declares it is not read, so such a refusal is retried. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
@@ -222,7 +222,9 @@ is `observed` or `assumed`). Only a finished read by range windows over
 `x-time-zone` window fields keeps its `spans`, with `reason:
 'incomplete'`. An open end is left out. A `probe` read reads no zone and
 converts nothing.
-`readPlatform` does not report coverage. Only query parameters are read;
+`readPlatform` reports the same entries, in `ReadResult.coverage`
+(`CollectionCoverage`, as `sync()` gives them), also for a collection
+whose read failed, where `sync()` throws. Only query parameters are read;
 an `x-time-zone` in a request body or path is ignored.
 `wallClockParam`, `instantsOf` and `coveredSpan` are exported (the spec's
 `wall_clock_param`, `instants_of` and `covered_span`); `instantsOf` takes
@@ -1776,7 +1778,11 @@ onto an object target; any other `update`, or one onto an array or a
 scalar, replaces the target, as the proxy does (Overlay 1.0 would append
 to an array). Objects missing along a target's path are created, where
 the proxy refuses the action. Every overlay under
-[`overlays/APIs/`](../overlays/APIs/) applies.
+[`overlays/APIs/`](../overlays/APIs/) applies. Nothing in a target is
+unescaped, as in the proxy: `$.paths['a\'b']` names `a\'b`, and a
+segment ends at the first `']`. Unlike the proxy, a `__proto__` segment
+is refused, and a document or `update` key named `__proto__` stays an
+ordinary own member: it never sets an object's prototype.
 
 ```ts
 import {
@@ -1901,7 +1907,7 @@ const { records, ontology, errors } = await readPlatform(document, {
   spec allows, because this client does not implement it.
   An `outcome` passed to `paginate` again starts clean: an earlier walk's
   mark does not carry over.
-- **A cursor read from the last item** (Pagination Schemes 0.9.0
+- **A cursor read from the last item** (Pagination Schemes 0.9.1
   §4.3.3): a `pageToken` scheme whose one `pageToken` or `cursor` field
   declares `fromLastItem` (a dot-path into an item, as Stripe's
   `starting_after` takes the last object's `id`) is read by sending that
@@ -2099,17 +2105,27 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 - **Unreleased**: The mock server serves a Pagination Schemes 0.9.0
   item-cursor scheme on a GET (the page after the named item, `hasMore`);
   before, it read the cursor as an offset and answered an empty page.
-- **Unreleased**: Pagination Schemes 0.9.0: a cursor read from the last
+- **Unreleased**: Pagination Schemes 0.9.1: a cursor read from the last
   item (`fromLastItem`, Stripe's `starting_after`) with the `hasMore`
-  response role. The validator accepts them under rules 27 to 29 (no
-  scheme in this repository's overlays changes verdict: those that
-  declare a `hasMore` role beside a next token were refused before, for
-  the unknown role, and still are, by rule 29). The read follows the
-  spec's `read_item_cursor`, and, as 0.9.1 says, refuses a `hasMore`
-  that is present but not a boolean, `null` included. The cursor goes in
-  the `fromLastItem` field only, never in another cursor-role field beside
-  it, and an integer cursor value must be a safe integer. Additive for
-  documents without these fields.
+  response role, after the spec's `read_item_cursor`. The cursor goes in
+  the `fromLastItem` field only, never in another cursor-role field
+  beside it, and an integer cursor value must be a safe integer; a
+  `hasMore` that is present but not a boolean, `null` included, ends the
+  read with an error (0.9.1). The validator accepts these fields under
+  rules 27 to 29; no scheme in this repository's overlays changes
+  verdict (those that declare a `hasMore` role beside a next token were
+  refused before, for the unknown role, and still are, by rule 29).
+  Additive for documents without these fields.
+- **Unreleased**: `applyOverlay` copies a root (`$`) `update` as it
+  already copied every other one. Before, the result shared the
+  overlay's objects, so a later action such as `$.x.y` changed the
+  caller's overlay, and applying it again gave a different document.
+- **Unreleased**: `applyOverlay` refuses a `__proto__` target segment,
+  and sets every member it merges or creates as an own property, so a
+  document or `update` key named `__proto__` (an own key after
+  `JSON.parse`) no longer sets the prototype of the result or of an
+  object in it. Tests pin that target segments are not unescaped, as in
+  integration-proxy (#618's review).
 - **Unreleased**: `generateFromSchema`, which the mock server seeds
   records and answers responses with, keeps to the schema it generates
   from: an OpenAPI 3.1 type list (`['string', 'null']` gave `null`, now a
@@ -2119,11 +2135,15 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   and `minItems` and `maxItems`. An inclusive `minimum` is still the value
   generated. A fractional `multipleOf` on an integer gives its smallest
   integer multiple (5 for 2.5), `multipleOf` on a number is followed
-  where the bounds allow, a bound past 2^53 or 1e17 is kept strictly by
-  stepping to the next float, `-0` is generated as `0`, and `minItems`
-  and `minLength` are capped at `GENERATED_LENGTH_CAP` (10,000) instead of
-  throwing a `RangeError`. Not followed: `pattern`, `uniqueItems`, and
-  `maxLength` on a formatted string.
+  where the bounds allow (a value that already divides evenly is kept),
+  a bound past 2^53 or 1e17 is kept strictly by stepping to the next
+  float (at `±Number.MAX_VALUE` the bound itself, not an infinity), and
+  `-0` is generated as `0`. `minItems` and `minLength` are capped at
+  10,000 per array or string, and one call makes at most 100,000 array
+  items and padding characters in all, so nested minimums cannot
+  multiply; past those limits a value is short of its minimum instead of
+  throwing a `RangeError` or exhausting memory. Not followed: `pattern`,
+  `uniqueItems`, and `maxLength` on a formatted string.
 - **Unreleased**: `applyOverlay` (and so `prepareDocument`) reads
   `['name']` target segments, as integration-proxy does, and replaces an
   array or scalar target with the `update` instead of throwing. Before,
@@ -2194,6 +2214,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   Auto-detection also skips a malformed operation `parameters` (not an
   array) or parameter entry (not an object) instead of throwing, so such
   an operation no longer makes the read of that collection fail.
+- **Unreleased**: `readPlatform` reports coverage: `ReadResult.coverage`
+  (`CollectionCoverage`) lists each collection's `ReadCoverage` with
+  `collection` and `context`, as `SyncResult.coverage` does. Before,
+  only `sync()` reported it. Additive.
 - **0.23.0**: a data-loss fix for pagination schemes that auto-detection
   would apply but that are invalid; Pagination Schemes 0.8.0
   `response.incomplete`; Deletion Feeds 0.3.0-draft list tombstones and
