@@ -22,6 +22,9 @@ overlay: 1.0.0
 info:
   title: Moneybird collection completeness (revision 2)
   version: 2.0.0
+  x-requires:
+    - anyOf:
+        - crud-causality-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml
 extends: https://raw.githubusercontent.com/ontola/openapi-directory/85a6105220036a98ef0d7cd6f228d4aae0036508/APIs/moneybird.com/v2-readonly/openapi.yaml
 actions:
 - target: $.components
