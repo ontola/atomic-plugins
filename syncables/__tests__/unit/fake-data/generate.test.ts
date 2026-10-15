@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import {
-  GENERATED_LENGTH_CAP,
-  generateFromSchema,
-} from '../../../src/fake-data/generate.js';
+import { generateFromSchema } from '../../../src/fake-data/generate.js';
+
+/** The per-array and per-string cap in generate.ts (not exported). */
+const LENGTH_CAP = 10_000;
 
 describe('generateFromSchema', () => {
   it('returns the schema example when present', () => {
@@ -246,7 +246,7 @@ describe('generateFromSchema at the edges', () => {
     ).toBe(true);
   });
 
-  it('caps a huge minItems or minLength at GENERATED_LENGTH_CAP', () => {
+  it('caps a huge minItems or minLength at LENGTH_CAP', () => {
     expect(
       (
         generateFromSchema({
@@ -255,10 +255,85 @@ describe('generateFromSchema at the edges', () => {
           minItems: 2 ** 30,
         }) as unknown[]
       ).length,
-    ).toBe(GENERATED_LENGTH_CAP);
+    ).toBe(LENGTH_CAP);
     expect(
       (generateFromSchema({ type: 'string', minLength: 2 ** 30 }) as string)
         .length,
-    ).toBe(GENERATED_LENGTH_CAP);
+    ).toBe(LENGTH_CAP);
+  });
+});
+
+// #623's second review: a total budget per call, finite bounds at
+// Number.MAX_VALUE, and a value that is already a multiple.
+describe('generateFromSchema within one budget per call', () => {
+  const total = (value: unknown): { items: number; characters: number } => {
+    if (Array.isArray(value))
+      return value.map(total).reduce(
+        (sum, part) => ({
+          items: sum.items + part.items,
+          characters: sum.characters + part.characters,
+        }),
+        { items: value.length, characters: 0 },
+      );
+    return {
+      items: 0,
+      characters: typeof value === 'string' ? value.length : 0,
+    };
+  };
+
+  it('stops nested minItems from multiplying', () => {
+    const value = generateFromSchema({
+      type: 'array',
+      minItems: 1000,
+      items: { type: 'array', minItems: 1000, items: { type: 'boolean' } },
+    });
+    expect(total(value).items).toBeLessThanOrEqual(100_000);
+  });
+
+  it('stops padded strings from multiplying', () => {
+    const value = generateFromSchema({
+      type: 'array',
+      minItems: 100,
+      items: { type: 'string', minLength: 10_000 },
+    });
+    // 100 items, then at most 100,000 items and padding characters in all,
+    // plus each string's own `string-<n>`.
+    expect(total(value).characters).toBeLessThan(100_000 + 100 * 20);
+  });
+
+  it('starts every call with a full budget', () => {
+    const schema = {
+      type: 'array',
+      minItems: 10_000,
+      items: { type: 'boolean' },
+    };
+    for (let call = 0; call < 12; call += 1)
+      expect((generateFromSchema(schema as never) as unknown[]).length).toBe(
+        LENGTH_CAP,
+      );
+  });
+});
+
+describe('generateFromSchema at the float limits', () => {
+  it.each([
+    [{ type: 'number', exclusiveMinimum: Number.MAX_VALUE }, Number.MAX_VALUE],
+    [
+      { type: 'number', exclusiveMaximum: -Number.MAX_VALUE },
+      -Number.MAX_VALUE,
+    ],
+    [{ type: 'integer', exclusiveMinimum: Number.MAX_VALUE }, Number.MAX_VALUE],
+    [
+      { type: 'integer', exclusiveMaximum: -Number.MAX_VALUE },
+      -Number.MAX_VALUE,
+    ],
+  ])('gives the bound, not an infinity, past %j', (schema, bound) => {
+    expect(generateFromSchema(schema as never)).toBe(bound);
+  });
+
+  it.each([
+    [{ type: 'number', multipleOf: 1e-300 }, 1],
+    [{ type: 'number', minimum: 3, multipleOf: 1e-300 }, 3],
+  ])('keeps a value that is already a multiple: %j', (schema, value) => {
+    expect(generateFromSchema(schema as never)).toBe(value);
   });
 });
