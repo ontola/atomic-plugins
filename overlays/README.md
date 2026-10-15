@@ -495,14 +495,14 @@ Three standalone overlays declare [Collection Completeness](../openapi-extension
 | --- | --- | --- |
 | [Google Tasks v1 completeness](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks `absent: removed`, `notFound: unavailable`; tasks `parentAbsent: unavailable`; the task read tombstone `deleted: true`. Needs crud-causality v2 (the fixed read that returns hidden tasks). | The pinned OAD (tasklists.list "Returns all the authenticated user's task lists"; Task.deleted "Flag indicating whether the task has been deleted"); what a 404 means is not documented |
 | [GitHub Issues completeness](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | Issues `absent: removed`, `notFound: unavailable`, no `gone`; comments the same plus `parentAbsent: unavailable`. Page-number paging can skip an issue deleted or transferred during a read; it stays unconfirmed until its GET settles it. | [Get an issue](https://docs.github.com/en/rest/issues/issues#get-an-issue): 301 when transferred, 404 when transferred or deleted out of the caller's reach, 410 when deleted where the caller can read, and 410 for every issue when issues are turned off, so neither a 404 nor a 410 is declared a deletion |
-| [Google Calendar v3 events completeness](APIs/googleapis.com/calendar/v3/completeness-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Events `absent: removed`, `notFound: unavailable`, no `gone`, no `parentAbsent`. Composes with app-crud-causality, its v2 and crud-causality; a deletion is the read tombstone (a 2xx `cancelled` answer), never a 404. | [Errors guide](https://developers.google.com/workspace/calendar/api/guides/errors): a 404 when the resource "has never existed" or for "a calendar that the user can not access"; the 410s are about sync tokens and repeated deletes. The pinned OAD: cancelled events, "The get method always returns them". An event can leave the list without being deleted (`events.move`, changed access). Not verified: whether cancelled events are ever purged |
+| [Google Calendar v3 events completeness](APIs/googleapis.com/calendar/v3/completeness-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Events `absent: removed`, `notFound: unavailable`, no `gone`, no `parentAbsent`. Composes with app-crud-causality, its v2 and crud-causality; a deletion is the read tombstone (a 2xx `cancelled` answer), never a 404. | [Errors guide](https://developers.google.com/workspace/calendar/api/guides/errors): a 404 when the resource "has never existed" or for "a calendar that the user can not access"; the 410s are about sync tokens and repeated deletes. The pinned OAD: cancelled events, "The get method always returns them", and they "will eventually disappear". An event can leave the list without being deleted (changed access). A move can "leave behind a cancelled event where only the id field is guaranteed to be populated": with read-tombstone-v2 or list-tombstone selected, that remnant reads as a deletion from the source calendar; under the catalogs' read without them, a deletion or a move is an absence. `removed` stays safe either way. Not verified: what a deleted event's read answers once it has disappeared |
 
-A Todoist overlay drafted with these is left out: Todoist's API reference
-could not be read for the task fields and single-task read it relies on,
-and its pinned OAD is an authored subset without descriptions. Checked
-again on 2026-10-14: developer.todoist.com/api/v1 does not say which tasks or
-projects the lists return, what a read answers for a deleted, completed or
-archived item, or what a 404 or 410 means, so it is still left out. Discord
+A Todoist overlay drafted with these is left out, and its pinned OAD is an
+authored subset without descriptions. Checked again on 2026-10-14:
+developer.todoist.com/api/v1 says what the lists return ("Get all active
+tasks", with completed tasks behind separate endpoints), but not what a
+read answers for a deleted, completed or archived item, nor what a 404 or
+410 means, so it is still left out. Discord
 gets none either: its one catalog collection (`/users/@me/guilds`) has no item
 read in the crud overlay, so an absent guild could never be settled.
 `tests/test_completeness_overlays.py`,
