@@ -65,6 +65,12 @@ describe('the mock server with a cursor read from the last item', () => {
     expect(last['has_more']).toBe(false);
   });
 
+  it('answers an empty page for an empty value, which names no item', async () => {
+    const empty = await page('?limit=3&starting_after=');
+    expect(empty['data']).toEqual([]);
+    expect(empty['has_more']).toBe(false);
+  });
+
   it('answers an empty last page for a value no item has', async () => {
     const unknown = await page('?limit=3&starting_after=nobody');
     expect(unknown['data']).toEqual([]);
@@ -117,4 +123,70 @@ describe('the mock server with a cursor read from the last item', () => {
       await second.close();
     }
   });
+
+  // generateFromSchema returned a schema's `example` by reference and the
+  // server copied items shallowly, so with an object example on the item
+  // or on a nested property every item shared one object, setting the
+  // cursor field on one set it on all, and the read failed (#603's review).
+  it.each([
+    [
+      'on the item',
+      (item: Json): void => {
+        item['example'] = { id: 'cus_fixed', meta: { key: 'fixed' } };
+      },
+    ],
+    [
+      'on a nested property',
+      (item: Json): void => {
+        (item['properties'] as Json)['meta'] = {
+          type: 'object',
+          properties: { key: { type: 'string' } },
+          example: { key: 'fixed' },
+        };
+      },
+    ],
+  ])(
+    'gives each item its own cursor value with an object example %s',
+    async (_label, change) => {
+      const other = example();
+      const scheme = other.components!.paginationSchemes![
+        'afterLastObject'
+      ] as unknown as Json;
+      ((scheme['request'] as Json)['queryParameters'] as Record<string, Json>)[
+        'starting_after'
+      ]!['fromLastItem'] = 'meta.key';
+      const items = (
+        (
+          (
+            (other.paths['/v1/customers']!.get!.responses as Json)[
+              '200'
+            ] as Json
+          )['content'] as Json
+        )['application/json'] as Json
+      )['schema'] as Json;
+      change(((items['properties'] as Json)['data'] as Json)['items'] as Json);
+      const loaded = await loadOpenApiDocument(other);
+      const second = createMockServer(loaded);
+      const url = (await second.listen()).url;
+      try {
+        const outcome: WalkOutcome = { complete: true };
+        const read = await paginate(
+          { ...loaded, servers: [{ url }] },
+          {
+            transport: fetchTransport(fetch),
+            path: '/v1/customers',
+            pageSize: 3,
+            outcome,
+          },
+        );
+        expect(read).toHaveLength(7);
+        expect(new Set(read.map((i) => (i['meta'] as Json)['key'])).size).toBe(
+          7,
+        );
+        expect(outcome.complete).toBe(true);
+      } finally {
+        await second.close();
+      }
+    },
+  );
 });

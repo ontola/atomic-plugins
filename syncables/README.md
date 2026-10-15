@@ -1929,8 +1929,9 @@ const { records, ontology, errors } = await readPlatform(document, {
   field ends the read with an error. The validator checks rules 27 to 29.
   The mock server serves such a scheme on a GET: the page after the item
   whose value the request names (the first page without one, an empty
-  last page for a value no item has), with `hasMore` set; each generated
-  item gets its own value at the `fromLastItem` path.
+  last page for a value no item has or an empty value), with `hasMore`
+  set; each generated item gets its own value at the `fromLastItem`
+  path.
 - **A field that identifies another resource** (CRUD Causality §4.1.3,
   Reference Objects): `resolveReference(document, resource, reference,
   object, context)` fills the referenced resource's
@@ -2105,6 +2106,9 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 - **Unreleased**: The mock server serves a Pagination Schemes 0.9.0
   item-cursor scheme on a GET (the page after the named item, `hasMore`);
   before, it read the cursor as an offset and answered an empty page.
+  `generateFromSchema` returns a copy of a schema's own `example`,
+  `examples`, `const` or `enum` value, so generated items no longer share
+  an object example.
 - **Unreleased**: Pagination Schemes 0.9.1: a cursor read from the last
   item (`fromLastItem`, Stripe's `starting_after`) with the `hasMore`
   response role, after the spec's `read_item_cursor`. The cursor goes in

@@ -264,6 +264,12 @@ function itemValue(item: unknown, path: string): unknown {
   return current;
 }
 
+/**
+ * The first query parameter with `role`. For a page token the caller asks
+ * for `pageToken`, then `cursor`: both are the request roles a `pageToken`
+ * scheme sends its next token in (a `cursor` field takes `nextCursor`),
+ * and this server answers either with an offset as its token.
+ */
 function fieldNameForRole(
   scheme: EffectiveScheme['scheme'],
   role: string,
@@ -365,7 +371,9 @@ function handlePaginatedListRequest(
   let offset = 0;
   if (itemCursor && itemPath) {
     // After the item whose value the request names; the first page
-    // without one. A value no item has answers an empty page.
+    // without one. A value no item has answers an empty page, and so does
+    // an empty one (`?starting_after=`), which names no item: the client
+    // sends no cursor at all on its first request.
     const after = url.searchParams.get(itemCursor[0]);
     if (after !== null) {
       const at = items.findIndex(

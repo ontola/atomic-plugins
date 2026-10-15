@@ -20,3 +20,20 @@ Tests in `unit/mock-server/item-cursor.test.ts` on the spec's example: the
 pages by hand, an unknown value, and the client's walker reading all 7
 items complete, also by a nested path; all four fail on the code before.
 README, CLAUDE.md, changelog.
+
+## Review fix: shared example objects
+
+**Human (via the coordinator session):** #603's review: `generateFromSchema`
+returns `schema.example` by reference and the server copies items
+shallowly, so with an object `example` on the item or a nested property
+all 7 items share one object, `setNestedField` gives them all the last
+cursor value, and the read fails. Nits: a comment on
+`fieldNameForRole('cursor')`, and document an empty `starting_after`.
+
+**Assistant:** `generateFromSchema` now returns a `structuredClone` of a
+schema's own `example`, `examples[0]`, `const` or `enum[0]` object, which
+fixes every caller (the mock server's items, seeded records and response
+bodies). Tests: an object example on the item and on a nested property
+(both fail before with a shared cursor value), a copy from each of the
+four sources, and an empty `starting_after` answering an empty page.
+`fieldNameForRole` says why `cursor` is asked for after `pageToken`.
