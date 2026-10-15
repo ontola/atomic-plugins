@@ -28,7 +28,7 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.8.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) and its `response.incomplete` ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.9.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore`) ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft, plan tiers from 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. Not yet 0.4.0's `blocked` meaning (#533): a signal that declares it is not read, so such a refusal is retried. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
@@ -1888,6 +1888,24 @@ const { records, ontology, errors } = await readPlatform(document, {
   spec allows, because this client does not implement it.
   An `outcome` passed to `paginate` again starts clean: an earlier walk's
   mark does not carry over.
+- **A cursor read from the last item** (Pagination Schemes 0.9.0
+  §4.3.3): a `pageToken` scheme whose one `pageToken` or `cursor` field
+  declares `fromLastItem` (a dot-path into an item, as Stripe's
+  `starting_after` takes the last object's `id`) is read by sending that
+  value of each page's last item: a string as it is, an integer in
+  decimal. The first request goes without it. The read ends at an empty
+  page or at a `hasMore` body field of `false`, complete unless a response
+  was marked (§4.4.6; the mark is kept across pages); a short page does not
+  end it. It ends with a `PageReadError`, not complete, when the last item
+  has no such value (or a boolean, `null`, a fraction, an array or an
+  object), when the value equals the one sent for that page, when a page
+  holds an item an earlier page returned (by identity, else the whole
+  item), when an empty page says `hasMore: true`, and when `hasMore` is
+  present but not a boolean, `null` included (Pagination Schemes 0.9.1;
+  only an absent `hasMore` decides nothing). The cursor
+  field must be a query parameter or, on a POST, a body field; a header
+  field ends the read with an error. The validator checks rules 27 to 29.
+  Not served by the mock server.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -2030,6 +2048,14 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: Pagination Schemes 0.9.0: a cursor read from the last
+  item (`fromLastItem`, Stripe's `starting_after`) with the `hasMore`
+  response role. The validator accepts them under rules 27 to 29 (no
+  scheme in this repository's overlays changes verdict: those that
+  declare a `hasMore` role beside a next token were refused before, for
+  the unknown role, and still are, by rule 29). The read follows the
+  spec's `read_item_cursor`, and, as 0.9.1 says, refuses a `hasMore`
+  that is present but not a boolean, `null` included. Additive for documents without these fields.
 - **0.24.0**: CRUD Causality 0.7.0's `replace` and `unkeyedLists` for
   APIs that cannot update an object or give list items no id (see "APIs
   that cannot update"): `replaceOf`, `replaceBlock`, `unkeyedListsOf`,
@@ -2051,18 +2077,6 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   from Throttling 0.5.0-draft but not yet 0.4.0's `blocked` meaning
   (#533).
   Also: `validatePaginationScheme` follows the spec's
-  `schema.json`: a field the spec does not define (other than `x-`) on a
-  scheme or an object in it, or a value of the wrong type, makes the
-  scheme invalid, and a scheme that is not an object no longer makes it
-  throw. Stricter validation can turn a read that used to page into one
-  that is not complete (an auto-detected scheme that is now invalid), or
-  one that fails (an explicit `x-pagination` naming it). In this
-  repository's overlays the one scheme affected is Shutterstock's
-  `pageNumber` (`response.properties` where `bodyFields` was meant), in
-  no catalog; every scheme a catalog applies explicitly is still valid.
-  Auto-detection also skips a malformed operation `parameters` (not an
-  array) or parameter entry (not an object) instead of throwing, so such
-  an operation no longer makes the read of that collection fail.
 - **0.23.0**: a data-loss fix for pagination schemes that auto-detection
   would apply but that are invalid; Pagination Schemes 0.8.0
   `response.incomplete`; Deletion Feeds 0.3.0-draft list tombstones and
