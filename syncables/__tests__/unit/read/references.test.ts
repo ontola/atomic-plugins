@@ -288,6 +288,8 @@ describe('resolveReference', () => {
     '{host}/projects/{projectId}',
     'projects/{projectId}',
     '//evil.example/projects/{projectId}',
+    '/\\evil.example/projects/{projectId}',
+    '/workspaces\\{workspaceId}/projects/{projectId}',
   ])('refuses the identity.urlTemplate %j', (urlTemplate) => {
     const doc = document();
     const crud = (
@@ -303,6 +305,31 @@ describe('resolveReference', () => {
       }),
     ).toThrow(/is not a path starting with one \//);
   });
+
+  it('reads /\\host as that host, which is why a backslash is refused', () => {
+    expect(new URL('/\\evil.example/p', 'https://api.example.com').host).toBe(
+      'evil.example',
+    );
+  });
+
+  it.each([
+    [10n, /projectId is 10n, not a string or an integer/],
+    [{ id: 1n }, /projectId is an object, not a string or an integer/],
+    [Symbol('p'), /projectId is a symbol, not a string or an integer/],
+  ])(
+    'names the value %s in its error without throwing a TypeError',
+    (projectId, message) => {
+      expect(() =>
+        resolveReference(
+          document(),
+          'timeEntry',
+          'project',
+          { projectId },
+          { workspaceId: '42' },
+        ),
+      ).toThrow(message);
+    },
+  );
 
   it('throws for an unknown resource or reference', () => {
     expect(() =>

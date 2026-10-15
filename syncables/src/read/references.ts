@@ -29,6 +29,23 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const own = (value: Record<string, unknown>, key: string): unknown =>
   Object.hasOwn(value, key) ? value[key] : undefined;
 
+/**
+ * A value for an error message. `JSON.stringify` throws on a bigint (and
+ * on a cycle), which would replace the message with a bare `TypeError`.
+ */
+function show(value: unknown): string {
+  if (typeof value === 'bigint') return `${String(value)}n`;
+  if (typeof value === 'number') return String(value);
+  try {
+    const text = JSON.stringify(value);
+    if (text !== undefined) return text;
+  } catch {
+    // fall through
+  }
+  const type = typeof value;
+  return `${type === 'object' || type === 'undefined' ? 'an' : 'a'} ${type}`;
+}
+
 /** A dot-path's value in an object: own properties, names split on `.`. */
 function fieldValue(object: unknown, path: string): unknown {
   let current: unknown = object;
@@ -105,10 +122,16 @@ export function resolveReference(
       `${where}.resource names no resource with an identity.urlTemplate`,
     );
   // A path only: an absolute URL, or a variable in the host, could send
-  // the caller anywhere, and `//` would start a host.
-  if (!template.startsWith('/') || template.startsWith('//'))
+  // the caller anywhere, and `//` would start a host. So would `/\`: the
+  // WHATWG URL parser reads a backslash as a slash in a special scheme's
+  // URL, so `/\evil.example/` resolves to that host. No backslash at all.
+  if (
+    !template.startsWith('/') ||
+    template.startsWith('//') ||
+    template.includes('\\')
+  )
     throw new Error(
-      `${where}: ${targetName}'s identity.urlTemplate ${JSON.stringify(template)} is not a path starting with one /`,
+      `${where}: ${targetName}'s identity.urlTemplate ${show(template)} is not a path starting with one / and without a backslash`,
     );
   const bindings = own(declared, 'bindings');
   if (!isRecord(bindings)) throw new Error(`${where}.bindings is required`);
@@ -147,7 +170,7 @@ export function resolveReference(
       const problem = segmentProblem(carried);
       if (problem !== undefined)
         throw new Error(
-          `${where}: {${name}} from the request context is ${JSON.stringify(carried)}, ${problem}`,
+          `${where}: {${name}} from the request context is ${show(carried)}, ${problem}`,
         );
       values[name] = carried;
       continue;
@@ -156,9 +179,7 @@ export function resolveReference(
     if (typeof value === 'string') {
       const problem = segmentProblem(value);
       if (problem !== undefined)
-        throw new Error(
-          `${where}: ${field} is ${JSON.stringify(value)}, ${problem}`,
-        );
+        throw new Error(`${where}: ${field} is ${show(value)}, ${problem}`);
       values[name] = value;
     } else if (typeof value === 'number' && Number.isSafeInteger(value))
       values[name] = String(value);
@@ -168,7 +189,7 @@ export function resolveReference(
       );
     else
       throw new Error(
-        `${where}: ${field} is ${typeof value === 'number' ? String(value) : JSON.stringify(value)}, not a string or an integer`,
+        `${where}: ${field} is ${show(value)}, not a string or an integer`,
       );
   }
   return { resource: targetName, path: bindPath(template, values), values };

@@ -52,3 +52,17 @@ absence: it throws as "empty", required or not, because the spec names
 only absent and `null`. `segmentProblem` also refuses NUL, and a lone
 surrogate gets a message naming the field or variable. 14 new tests,
 13 of them failing on the code before. README, CLAUDE.md, changelog.
+
+## Turn 4
+
+**Human (via the coordinator session):** a follow-up from #611's
+re-review: a bigint field value makes the error message's
+`JSON.stringify` throw a `TypeError`; and a template starting `/\` passes
+the one-slash check, while the WHATWG URL parser resolves
+`/\evil.example/` to that host.
+
+**Assistant:** Error messages format values with `show`, which writes a
+bigint as `10n` and falls back to the value's type when `JSON.stringify`
+throws or gives nothing. A template with any backslash is refused. Six
+new tests, five failing on the code before (the sixth pins the URL
+parser's reading of `/\host`). README, changelog, CLAUDE.md.
