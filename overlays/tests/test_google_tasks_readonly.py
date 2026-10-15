@@ -7,9 +7,7 @@ requests.
 """
 from copy import deepcopy
 from pathlib import Path
-import subprocess
 import sys
-import urllib.request
 import unittest
 
 import yaml
@@ -22,16 +20,13 @@ OAD = f"https://raw.githubusercontent.com/ontola/openapi-directory/{PIN}/{SOURCE
 TASKS = ROOT / "APIs/googleapis.com/tasks/v1"
 sys.path.insert(0, str(ROOT / "scripts"))
 from validate_oad_pins import apply_overlay
+from pinned_oad import read_pinned_oad
 
 
 def load_source():
-    directory_repo = ROOT.parents[1] / "more-openapi-directory"
-    try:
-        raw = subprocess.check_output(
-            ["git", "-C", str(directory_repo), "show", f"{PIN}:{SOURCE_PATH}"]
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        raw = urllib.request.urlopen(OAD, timeout=30).read()
+    raw = read_pinned_oad(
+        PIN, SOURCE_PATH, OAD, [ROOT.parents[1] / "more-openapi-directory"]
+    )
     return yaml.safe_load(raw)
 
 

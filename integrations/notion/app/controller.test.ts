@@ -7,6 +7,7 @@ import {
   isBlockedByNotion,
   parseRetryAfter,
 } from './errors.js';
+import { DATA_SOURCE, DATA_SOURCE_2 } from '../fixtures/notion/scenario.mjs';
 import { fakeStore, fixtureProxy } from './fakeStore.js';
 import { RECORD_SHORTNAME } from './record.js';
 import type { HostProxy } from './store.js';
@@ -439,6 +440,92 @@ describe('controller (N2)', () => {
     expect((state as { technical: string }).technical).toContain(
       'public_api_request_blocked',
     );
+  });
+
+  it('stops the read at the first block: data sources 2 and 3 are never requested (0.5.6)', async () => {
+    const base = fixtureProxy('conn-1', { scenario: 'two-sources' });
+    const THIRD = '3a91e0c2-5d10-4c3e-9f00-00000000d503';
+    const requested: string[] = [];
+    const blockedAnswer = {
+      status: 429,
+      headers: { 'retry-after': '120' },
+      body: {
+        object: 'error',
+        status: 429,
+        code: 'rate_limited',
+        message: 'This request was blocked.',
+        additional_data: { rate_limit_reason: 'public_api_request_blocked' },
+      },
+    };
+    const { controller } = setup('two-sources', {
+      request: async request => {
+        requested.push(`${request.method} ${request.path}`);
+        const answer = await base.request(request);
+
+        // The search shares a third data source: a copy of the second.
+        if (request.path === '/v1/search') {
+          const body = answer.body as { results: Record<string, unknown>[] };
+          const copy = { ...body.results[1]!, id: THIRD };
+
+          return {
+            ...answer,
+            body: { ...body, results: [...body.results, copy] },
+          };
+        }
+
+        if (request.path.includes(`/v1/data_sources/${DATA_SOURCE}/`))
+          return blockedAnswer;
+
+        return answer;
+      },
+    });
+    await controller.load();
+    const state = await controller.sync();
+    expect(state).toMatchObject({
+      kind: 'failed',
+      title: 'Notion has blocked this integration',
+    });
+    const queries = requested.filter(r => r.includes('/query'));
+    expect(queries).toEqual([`POST /v1/data_sources/${DATA_SOURCE}/query`]);
+    expect(requested.some(r => r.includes(DATA_SOURCE_2))).toBe(false);
+    expect(requested.some(r => r.includes(THIRD))).toBe(false);
+  });
+
+  it('a sync after a blocked one sends its requests again and ends ready (#619 review)', async () => {
+    const base = fixtureProxy('conn-1');
+    const requested: string[] = [];
+    let block = true;
+    const { controller } = setup('default', {
+      request: async request => {
+        requested.push(`${request.method} ${request.path}`);
+        if (block && request.path.includes('/query'))
+          return {
+            status: 429,
+            headers: { 'retry-after': '120' },
+            body: {
+              object: 'error',
+              status: 429,
+              code: 'rate_limited',
+              message: 'This request was blocked.',
+              additional_data: {
+                rate_limit_reason: 'public_api_request_blocked',
+              },
+            },
+          };
+
+        return base.request(request);
+      },
+    });
+    await controller.load();
+    expect(await controller.sync()).toMatchObject({ kind: 'failed' });
+    // Notion lifts the block: the next sync uses a fresh transport.
+    block = false;
+    const before = requested.length;
+    const state = await controller.sync();
+    expect(state).toMatchObject({ kind: 'ready' });
+    expect(
+      requested.slice(before).filter(r => r.includes('/query')).length,
+    ).toBeGreaterThan(0);
   });
 
   it('does not re-send a blocked 429, even with a short Retry-After (0.5.5)', async () => {
