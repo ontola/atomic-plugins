@@ -30,7 +30,7 @@ The extension versions this source reads, against the specifications in
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.8.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) and its `response.incomplete` ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft, plan tiers from 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. Not yet 0.4.0's `blocked` meaning (#533): a signal that declares it is not read, so such a refusal is retried. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -506,6 +506,35 @@ const client = createApiClient(doc, {
     failure.status === 409 ? 'retry' : defaultWriteFailureClass(failure),
 });
 ```
+
+##### Plan tiers
+
+A Limit Object may declare `tiers` instead of `requests` and `window`
+(Throttling 0.5.0): one bucket whose amount and window depend on the
+account's plan, as Clockify documents (30 requests per hour on FREE, 20
+per second on TRIAL, BASIC, STANDARD and PRO, 50 per second on
+ENTERPRISE), each tier naming its `plans`. With `throttlingPlan` set to
+the account's plan, as the provider names it (`'PRO'`), the client paces
+by the tier whose `plans` include it, as by a plain limit. Without one, or
+with a plan no tier names, it keeps within every tier at once, each
+counted separately over the same requests (the spec's `limits_in_force`):
+no single tier is safe on its own, since a lower average rate over a
+longer window (30 per hour) still allows a burst a shorter tier forbids
+(20 per second). The window a time-less `quotaExhausted` answer waits out
+is the plan's tier's, else the longest (`fallback_window`). A limit whose
+tiers fail the checks that decide which tier binds (no `plans`, an empty
+or repeated plan, a `requests` or `window.seconds` that is not a positive
+integer) is left out, as other entries that do not parse are. The client
+is more lenient than the spec's validator elsewhere: a window `kind` it
+does not know is read as `sliding`, an `anchor` that does not parse is
+left out, and unknown fields, or `requests` and `window` beside `tiers`,
+are ignored (the tiers are read). `throttlingPlan` is an option
+of `createApiClient`, `readCollections`, `readPlatform` and `paginate`;
+`declaredThrottling(document, plan)` gives the tiers in force in
+`tieredQuotas` (a plan's tier goes into `quotas`), and `parseTiers`,
+`limitsInForce` and `fallbackWindow` are exported. How a client learns
+its plan is up to the caller. Pacing counts only this client's requests
+(above).
 
 #### Refused credentials
 
@@ -1579,6 +1608,38 @@ writes held as unavailable before downgrading. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
+### APIs that cannot update (`replace`, `unkeyedLists`)
+
+Some APIs can create and delete an object but not change it, and give the
+items of a list no id: Google Keep API v1 is one. CRUD Causality 0.7.0
+declares both on the CRUD Resource Object (§4.8 `replace`, §4.9
+`unkeyedLists`), and `syncables/browser` exports the pure parts a consumer
+needs to write to such an API through its own requests:
+
+- `replaceOf(document, resource)` reads `replace` (or `{ refused }` for a
+  declaration rule 28 refuses), and `replaceBlock(replace, object)` names
+  the Block Object that forbids replacing an object (an attachment the API
+  cannot copy, collaborators a new object would lose), or `undefined`.
+  Replace by creating the new object, then deleting the old one; keep the
+  old one's identity as retiring until its delete succeeds.
+- `unkeyedListsOf(document, resource)` reads `unkeyedLists`;
+  `flattenList`/`nestList` turn a list into its items (a child right after
+  its parent) and back; `pairItems` pairs the items of a remote list with
+  the baseline's on the declared `match` fields and by position (§4.9.2).
+- `mergeUnkeyedList({ spec, base, local, remote })` merges three versions
+  of such a list: the baseline, the local items (with their own ids and the
+  baseline index each was at), and the remote list. A field changed on one
+  side takes that side's value (both sides: the local one, counted in
+  `conflicts`); an item deleted on one side and edited on the other stays;
+  the order is the local one with the remote moves applied. So an item
+  moved remotely and ticked locally comes out moved and ticked. `send` says
+  the merged list differs from the remote one.
+- `fingerprint(value)` is a 14-character digest of a JSON value, for a
+  record's baseline when the fields themselves need not be kept.
+
+`createApiClient` does not use them yet: `update()` on a resource with no
+update operation still throws, rather than replacing.
+
 ## One engine in Node and browsers
 
 The Node `syncables` and browser `syncables/browser` entries both export
@@ -1969,7 +2030,27 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **Unreleased**: `validatePaginationScheme` follows the spec's
+- **0.24.0**: CRUD Causality 0.7.0's `replace` and `unkeyedLists` for
+  APIs that cannot update an object or give list items no id (see "APIs
+  that cannot update"): `replaceOf`, `replaceBlock`, `unkeyedListsOf`,
+  `flattenList`, `nestList`, `pairItems`, `mergeUnkeyedList` and
+  `fingerprint`, in both entries. Moved from the Google Keep drive app
+  (ontola/atomic-plugins#593). `createApiClient` does not use them yet.
+  Also in this release: Throttling 0.5.0 plan tiers: a Limit Object's `tiers`
+  is paced by the tier whose `plans` name `throttlingPlan`, else by every
+  tier at once, each counted separately; a time-less `quotaExhausted`
+  waits out the plan's tier's window, else the longest. `throttlingPlan`
+  is a new option of `createApiClient`, `readCollections`, `readPlatform`
+  and `paginate`; `ThrottlingDeclaration.tieredQuotas`, `Pacer`'s optional
+  third argument, `parseTiers`, `limitsInForce`, `fallbackWindow` and the
+  `Tier` type are new (`tieredQuotas` is optional on the type, so a
+  declaration built by hand still type-checks). A limit whose tiers fail
+  the checks that decide which tier binds is left out. Behaviour change
+  only for documents whose `x-throttling` declares `tiers` (before, such
+  a limit had no window and was not paced). This client reads plan tiers
+  from Throttling 0.5.0-draft but not yet 0.4.0's `blocked` meaning
+  (#533).
+  Also: `validatePaginationScheme` follows the spec's
   `schema.json`: a field the spec does not define (other than `x-`) on a
   scheme or an object in it, or a value of the wrong type, makes the
   scheme invalid, and a scheme that is not an object no longer makes it
