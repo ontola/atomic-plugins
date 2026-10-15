@@ -89,7 +89,9 @@ Data flows through four stages, each its own directory under `src/`:
    variable order does not matter; `''` is a value and throws; anything
    else unfillable throws, as do a `.`, `..`, whitespace-padded, NUL or
    lone-surrogate value, an unsafe integer, and a target template that
-   is not a `/` path); nothing is fetched (`unit/read/references.test.ts`, the spec's §7.6 example).
+   is not a `/` path or holds a backslash, control character, space or
+   DEL); nothing is fetched
+   (`unit/read/references.test.ts`, the spec's §7.6 example).
    `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
@@ -562,8 +564,12 @@ Implements the [OpenAPI Pagination Schemes Extension](../openapi-extensions/spec
 (`components.paginationSchemes`), applied to third-party documents via
 [OpenAPI Overlays](https://spec.openapis.org/overlay/v1.0.0.html)
 (`src/openapi/overlay.ts`, `applyOverlay`/`loadOverlay` — an intentionally
-minimal Overlay implementation: `update`/`remove` actions with plain
-dot-path targets like `$.components`, not the full JSONPath grammar).
+minimal Overlay implementation: `update`/`remove` actions with the target
+grammar of integration-proxy's `catalog.rs` `parse_target`, `$` then
+`.name` or `['name']` segments (`parseOverlayTarget`), not the full
+JSONPath grammar; a non-object `update`, or one onto a non-object target,
+replaces it, as the proxy does; `overlay-targets.test.ts` applies every
+overlay under `overlays/APIs/`).
 
 - `types.ts` mirrors the extension's spec objects verbatim.
 - `validate.ts` checks a scheme against the spec's own rules (§9); an

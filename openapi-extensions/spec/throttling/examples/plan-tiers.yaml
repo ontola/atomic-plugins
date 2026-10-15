@@ -3,37 +3,37 @@ info:
   title: Illustrative per-plan rate limit
   version: 1.0.0
   description: >-
-    Synthetic, shaped like Clockify's documented API-key limits: counted per
-    workspace, 30 requests per hour on the free plan and 20 or 50 per second
-    on trial and paid plans. A consumer without a configured plan keeps
-    within every tier at once.
+    Synthetic. One bucket per account whose amount and window depend on the
+    account's plan: 30 requests per hour on the basic plan, 20 per second on
+    the standard and plus plans, 50 per second on the premium plan. A consumer
+    without a configured plan keeps within every tier at once.
 servers:
   - url: https://api.example.com
 x-throttling:
   limits:
-    workspace:
+    perAccount:
       partitionBy: [account]
-      description: Counted per workspace for requests with an API key.
+      description: Counted per account.
       tiers:
-        - plans: [FREE]
+        - plans: [basic]
           requests: 30
           window: { seconds: 3600, kind: unspecified }
-        - plans: [TRIAL, BASIC, STANDARD, PRO]
+        - plans: [standard, plus]
           requests: 20
           window: { seconds: 1, kind: unspecified }
-        - plans: [ENTERPRISE]
+        - plans: [premium]
           requests: 50
           window: { seconds: 1, kind: unspecified }
-  applies: [workspace]
+  applies: [perAccount]
   signals:
     - status: [429]
-      bucket: workspace
+      bucket: perAccount
       meaning: quotaExhausted
 paths:
-  /workspaces/{workspaceId}/projects:
+  /accounts/{accountId}/records:
     get:
       parameters:
-        - { name: workspaceId, in: path, required: true, schema: { type: string } }
+        - { name: accountId, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: Projects }
+        '200': { description: Records }
         '429': { description: Too many requests }
