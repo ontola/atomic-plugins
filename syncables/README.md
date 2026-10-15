@@ -29,7 +29,7 @@ The extension versions this source reads, against the specifications in
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.8.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) and its `response.incomplete` ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
-| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
+| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), and Reference Objects resolved to a path (`resolveReference`, §4.1.3). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft, plan tiers from 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. Not yet 0.4.0's `blocked` meaning (#533): a signal that declares it is not read, so such a refusal is retried. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
@@ -222,7 +222,9 @@ is `observed` or `assumed`). Only a finished read by range windows over
 `x-time-zone` window fields keeps its `spans`, with `reason:
 'incomplete'`. An open end is left out. A `probe` read reads no zone and
 converts nothing.
-`readPlatform` does not report coverage. Only query parameters are read;
+`readPlatform` reports the same entries, in `ReadResult.coverage`
+(`CollectionCoverage`, as `sync()` gives them), also for a collection
+whose read failed, where `sync()` throws. Only query parameters are read;
 an `x-time-zone` in a request body or path is ignored.
 `wallClockParam`, `instantsOf` and `coveredSpan` are exported (the spec's
 `wall_clock_param`, `instants_of` and `covered_span`); `instantsOf` takes
@@ -1768,6 +1770,20 @@ and fails on any Node built-in import. It does not include the mock
 server, environment loader or file-path loaders, so pass documents and
 overlays as parsed objects.
 
+`prepareDocument` applies overlays with `applyOverlay`, which reads the
+target grammar integration-proxy reads: `$`, then `.name` or `['name']`
+segments, as in `$.paths['/users.list'].get.responses['200']`. Wildcards,
+filters and array indexes are refused. An `update` object is deep-merged
+onto an object target; any other `update`, or one onto an array or a
+scalar, replaces the target, as the proxy does (Overlay 1.0 would append
+to an array). Objects missing along a target's path are created, where
+the proxy refuses the action. Every overlay under
+[`overlays/APIs/`](../overlays/APIs/) applies. Nothing in a target is
+unescaped, as in the proxy: `$.paths['a\'b']` names `a\'b`, and a
+segment ends at the first `']`. Unlike the proxy, a `__proto__` segment
+is refused, and a document or `update` key named `__proto__` stays an
+ordinary own member: it never sets an object's prototype.
+
 ```ts
 import {
   prepareDocument,
@@ -1876,7 +1892,10 @@ const { records, ontology, errors } = await readPlatform(document, {
   read unpaginated, one request taken as the whole list, so only where
   that is true), or apply a valid scheme with an explicit `x-pagination`
   entry. An explicit entry naming the invalid scheme makes the read fail
-  instead. `x-pagination: []` applies nothing and does not opt out: the
+  instead, as does one that is not a Pagination Application Object (an
+  empty `scheme`, `overrides` that are not an object, a `description`
+  that is not a string, or a field other than those and `x-` ones).
+  `x-pagination: []` applies nothing and does not opt out: the
   operation is still matched by auto-detection. A scheme whose
   `autoDetect` is neither a boolean nor an object (`null`) is invalid
   too, and auto-detection reads it as the default options. The validator
@@ -1888,6 +1907,35 @@ const { records, ontology, errors } = await readPlatform(document, {
   spec allows, because this client does not implement it.
   An `outcome` passed to `paginate` again starts clean: an earlier walk's
   mark does not carry over.
+- **A field that identifies another resource** (CRUD Causality §4.1.3,
+  Reference Objects): `resolveReference(document, resource, reference,
+  object, context)` fills the referenced resource's
+  `identity.urlTemplate` from the referring object's fields, and a
+  variable the reference does not bind from `context` (the path variables
+  of the request the object was read through, such as a shared
+  `{workspaceId}`), giving `{ resource, path, values }`. A time entry with
+  `projectId: "p-9"`, read under workspace 42, resolves to
+  `/workspaces/42/projects/p-9`. A reference with `required: false` whose
+  field is absent or `null` resolves to nothing, even when a context
+  variable is missing too: bound fields are read first. An empty string
+  is a value, not an absence, and throws whether the reference is
+  required or not. Anything else that cannot be filled throws: a
+  required field absent, a value that is neither a string nor a safe
+  integer (`Number.isSafeInteger`: beyond 2^53 - 1 a parsed number may
+  not be the id the API sent), a variable missing from `context`, or a
+  declaration it cannot read. A declaration it cannot read includes an
+  `identity.urlTemplate` that is not a path starting with one `/` (an
+  absolute URL, a variable in the host), or that holds a backslash, a
+  control character, a space or DEL (a URL parser reads
+  `/\evil.example/` as that host, and strips a tab, LF or CR anywhere, so
+  `/<tab>/evil.example/` too): `path` is always relative to the API's
+  server. A value, bound or from `context`, also
+  throws when it is `.` or `..` (it survives percent-encoding, and
+  `/projects/..` normalises to `/`, another resource), has leading or
+  trailing whitespace, contains NUL, or holds a lone surrogate. Other
+  characters are percent-encoded (`/` as `%2F`, `%` as `%25`). It
+  asserts identity only: nothing is fetched, and the path need not exist
+  or be readable.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -2030,6 +2078,67 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: `applyOverlay` refuses a `__proto__` target segment,
+  and sets every member it merges or creates as an own property, so a
+  document or `update` key named `__proto__` (an own key after
+  `JSON.parse`) no longer sets the prototype of the result or of an
+  object in it. Tests pin that target segments are not unescaped, as in
+  integration-proxy (#618's review).
+- **Unreleased**: `generateFromSchema`, which the mock server seeds
+  records and answers responses with, keeps to the schema it generates
+  from: an OpenAPI 3.1 type list (`['string', 'null']` gave `null`, now a
+  string), `examples` and `const`, numeric bounds (`maximum`, 3.0 and 3.1
+  exclusive bounds, a fractional `minimum` on an integer, an integer
+  `multipleOf`), `minLength` and `maxLength` on an unformatted string,
+  and `minItems` and `maxItems`. An inclusive `minimum` is still the value
+  generated. A fractional `multipleOf` on an integer gives its smallest
+  integer multiple (5 for 2.5), `multipleOf` on a number is followed
+  where the bounds allow (a value that already divides evenly is kept),
+  a bound past 2^53 or 1e17 is kept strictly by stepping to the next
+  float (at `±Number.MAX_VALUE` the bound itself, not an infinity), and
+  `-0` is generated as `0`. `minItems` and `minLength` are capped at
+  10,000 per array or string, and one call makes at most 100,000 array
+  items and padding characters in all, so nested minimums cannot
+  multiply; past those limits a value is short of its minimum instead of
+  throwing a `RangeError` or exhausting memory. Not followed: `pattern`,
+  `uniqueItems`, and `maxLength` on a formatted string.
+- **Unreleased**: `applyOverlay` (and so `prepareDocument`) reads
+  `['name']` target segments, as integration-proxy does, and replaces an
+  array or scalar target with the `update` instead of throwing. Before,
+  174 of the 524 overlays under `overlays/APIs/` threw "Unsupported
+  overlay target" (1,803 of their 2,336 actions address a path such as
+  `$.paths['/users.list'].get`, or carry an array `update`), and an array
+  `update` (Notion's auth overlay) was merged index by index into an
+  object. An `update` is now copied, so a later change to the result no
+  longer changes the overlay. `OverlayAction.update` is typed
+  `Record<string, unknown> | unknown[]`. A target that applied before
+  gives the same result, with two exceptions no overlay in this
+  repository uses: a falsy `update` (`null`, `0`, `false`, `''`) now
+  replaces the target instead of being skipped, and an object `update`
+  onto an existing scalar replaces it instead of throwing.
+- **Unreleased**: `resolveReference` (and the `ResolvedReference` type)
+  resolves a CRUD Causality §4.1.3 Reference Object for an object: the
+  referenced resource's identity path, filled from the object's fields and
+  the request context. A value of `.` or `..`, an empty or
+  whitespace-padded one, one with NUL or a lone surrogate, an integer
+  beyond `Number.MAX_SAFE_INTEGER`, or a target template that is not a
+  path, throws instead of naming another object. Additive.
+- **Unreleased**: `resolveReference` also refuses an `identity.urlTemplate`
+  holding a backslash (`/\evil.example/` resolves to that host), a C0
+  control character (a URL parser strips tab, LF and CR, so
+  `/<tab>/evil.example/` does too), a space or DEL. Its error messages
+  name a bigint, symbol, cyclic or other value `JSON.stringify` cannot
+  write instead of throwing a `TypeError`, and cut a value at 200
+  characters (#611's re-review).
+- **Unreleased**: An explicit `x-pagination` entry must be a Pagination
+  Application Object as the spec's `schema.json` gives it: a nonempty
+  `scheme`, an object `overrides`, a string `description`, and no other
+  field but `x-` ones, on every entry. One that is not fails the read
+  with a `PaginationSchemeError`, as an undeclared scheme does; before, a
+  typo such as `overide:` dropped the overrides without a word. Every
+  `x-pagination` entry in this repository's YAML and JSON files passes
+  (1,275 entries, counted on 2026-10-15 by walking every file for
+  `x-pagination` arrays).
 - **0.24.0**: CRUD Causality 0.7.0's `replace` and `unkeyedLists` for
   APIs that cannot update an object or give list items no id (see "APIs
   that cannot update"): `replaceOf`, `replaceBlock`, `unkeyedListsOf`,
@@ -2063,6 +2172,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   Auto-detection also skips a malformed operation `parameters` (not an
   array) or parameter entry (not an object) instead of throwing, so such
   an operation no longer makes the read of that collection fail.
+- **Unreleased**: `readPlatform` reports coverage: `ReadResult.coverage`
+  (`CollectionCoverage`) lists each collection's `ReadCoverage` with
+  `collection` and `context`, as `SyncResult.coverage` does. Before,
+  only `sync()` reported it. Additive.
 - **0.23.0**: a data-loss fix for pagination schemes that auto-detection
   would apply but that are invalid; Pagination Schemes 0.8.0
   `response.incomplete`; Deletion Feeds 0.3.0-draft list tombstones and

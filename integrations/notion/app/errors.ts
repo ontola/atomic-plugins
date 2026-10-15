@@ -27,36 +27,7 @@ export interface ProviderFailure {
   at: number;
 }
 
-/**
- * Whether a Notion error body says its public API blocked this integration's
- * requests (`additional_data.rate_limit_reason` is
- * `public_api_request_blocked`). Notion sends that with a 429, but it is
- * permanent: retrying won't help, only Notion support can lift it. Read from
- * the body itself (an object, or JSON text), so it holds whatever the
- * transport or syncables make of the status.
- */
-export function isBlockedByNotion(body: unknown): boolean {
-  let value = body;
-
-  if (typeof value === 'string')
-    try {
-      value = JSON.parse(value);
-    } catch {
-      return false;
-    }
-
-  const data =
-    typeof value === 'object' && value !== null
-      ? (value as { additional_data?: unknown }).additional_data
-      : undefined;
-
-  return (
-    typeof data === 'object' &&
-    data !== null &&
-    (data as { rate_limit_reason?: unknown }).rate_limit_reason ===
-      'public_api_request_blocked'
-  );
-}
+export { isBlockedByNotion } from './transport.js';
 
 /** What the view says for a request Notion blocked (`isBlockedByNotion`). */
 export const BLOCKED_TITLE = 'Notion has blocked this integration';
