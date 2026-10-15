@@ -42,6 +42,7 @@ import {
   type TransportResponse,
 } from 'syncables/browser';
 import {
+  BudgetReached,
   lastError,
   readState,
   SandboxInboxJournal,
@@ -51,7 +52,12 @@ import {
   type Intent,
   type JournalHost,
 } from './journal.js';
-import { inboxSchema } from './schema.js';
+import {
+  DELIVERY_FIELDS,
+  GAP_FIELDS,
+  inboxSchema,
+  WORK_FIELDS,
+} from './schema.js';
 
 /**
  * The integration proxy this build talks to. `build.mjs --proxy-origin`
@@ -75,19 +81,25 @@ export const PLATFORM = 'github-issues';
  * Two host caps bound a run's payloads: a fetched response is at most 8 MiB
  * (`egress::FETCH_MAX_RESPONSE_BYTES`), and a saved session, which holds
  * the pending `atomic` effect with every delivery's base64 payload, at most
- * 8 MiB (`sync_session::save`). Budgeting 6 MiB of base64 for payloads
- * (2 MiB for the envelopes, the intents and the rest of the session) gives
- * 6 MiB × 3/4 = 4.5 MiB of raw payload per run. Four deliveries fit when
- * each is at most about 1.1 MiB; GitHub issue and comment deliveries are
- * usually a few tens of KiB.
+ * 8 MiB (`sync_session::save`).
+ *
+ * - The session: the journal stops collecting at `RUN_PAYLOAD_BUDGET`
+ *   (6 MiB of base64, 4.5 MiB raw; the first new event is always taken)
+ *   and refuses one event over `MAX_EVENT_PAYLOAD` (7.5 MiB of base64,
+ *   about 5.6 MiB raw).
+ * - The fetch: a page fits when its events together are under about 6 MiB
+ *   raw (8 MiB of base64, less the envelopes). GitHub issue and comment
+ *   deliveries are usually a few tens of KiB. A page over the cap fails the
+ *   fetch, and the run records `lastError`. A run after a failed one asks
+ *   for one event only, so a page over the cap only because of its
+ *   neighbours gets through one event at a time.
  *
  * Not every delivery fits. The proxy retains bodies up to 8 MiB
- * (`delivery.maxBodyBytes`, pilot value): one such body is about 10.7 MiB
- * in base64, over both caps whatever the limit, so the `events` fetch fails
- * and the run fails with it, every run, until the proxy closes the
- * subscription at its progress deadline and the inbox subscribes again
- * after a gap. A `maxBytes` parameter on `events`, returning an oversized
- * event without its body, is the planned fix (#369 step 4b plan).
+ * (`delivery.maxBodyBytes`, pilot value). One event over about 5.6 MiB raw
+ * is refused, and one over about 6 MiB raw cannot be fetched at all, so
+ * every run fails at it until the proxy drops it (7 days). A `maxBytes`
+ * parameter on `events`, returning an oversized event without its body, is
+ * the planned fix (#369 step 4b plan, Unit B).
  */
 export const DEFAULT_LIMIT = 4;
 
@@ -292,6 +304,13 @@ export function sandboxTransport(ctx: Pick<Ctx, 'http'>) {
   };
 }
 
+/** Every property shortname a run writes or queries. */
+const SHORTNAMES = [
+  ...new Set(
+    [...DELIVERY_FIELDS, ...WORK_FIELDS, ...GAP_FIELDS].map(([name]) => name),
+  ),
+];
+
 function readConfig(config: Config | undefined): Config {
   const missing = (
     ['repository', 'table', 'rowClass', 'properties', 'tables'] as const
@@ -308,6 +327,15 @@ function readConfig(config: Config | undefined): Config {
   }
   if (!/^[^/\s]+\/[^/\s]+$/.test(config.repository)) {
     throw new Error('repository must be owner/name');
+  }
+  // A missing property would drop that field silently; the work item's
+  // would leave a delivery row without its work item, and that row would
+  // then be found by its id and kept that way.
+  const unset = SHORTNAMES.filter((name) => !config.properties[name]);
+  if (unset.length) {
+    throw new Error(
+      `Configure this plugin before running it: no property for ${unset.join(', ')}`,
+    );
   }
   return config;
 }
@@ -407,7 +435,11 @@ export async function run(ctx: Ctx): Promise<Output> {
     reconcile: (reason, required) => journal.reconcile(reason, required),
     acknowledge: 'next-step',
     wait: 0,
-    limit: Math.min(config.limit ?? DEFAULT_LIMIT, DEFAULT_LIMIT),
+    // After a failed run, one event: a page over the host's fetch cap may
+    // be over it only because of its neighbours.
+    limit: lastError(ctx.connection)
+      ? 1
+      : Math.min(config.limit ?? DEFAULT_LIMIT, DEFAULT_LIMIT),
     now: () => ctx.trigger?.at ?? Date.now(),
   });
   // One consumer step per run: a second would acknowledge this run's events
@@ -425,10 +457,13 @@ export async function run(ctx: Ctx): Promise<Output> {
   try {
     await consumer.step();
   } catch (thrown) {
-    error = {
-      message: thrown instanceof Error ? thrown.message : String(thrown),
-      at: new Date(ctx.trigger?.at ?? Date.now()).toISOString(),
-    };
+    // A spent payload budget ends the step early, and is not a failure.
+    if (!(thrown instanceof BudgetReached)) {
+      error = {
+        message: thrown instanceof Error ? thrown.message : String(thrown),
+        at: new Date(ctx.trigger?.at ?? Date.now()).toISOString(),
+      };
+    }
   }
   const next = journal.current();
   if (journal.intents.length === 0) return checkpoint(next, error);

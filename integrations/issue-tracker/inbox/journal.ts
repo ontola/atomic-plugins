@@ -60,6 +60,34 @@ export interface Intent {
 }
 
 
+/**
+ * Base64 payload bytes one run collects at most. Its rows travel in the
+ * saved sync session, which the host caps at 8 MiB (`sync_session::save`);
+ * the rest of the session (the envelopes, the intents, the receipt) gets
+ * the other 2 MiB. An event past the budget ends the step without error:
+ * the rows collected so far are written and nothing is acknowledged, so
+ * the next run fetches the same page, finds those rows by delivery id and
+ * goes on from there. The first new event of a run is always taken.
+ */
+export const RUN_PAYLOAD_BUDGET = 6 * 1024 * 1024;
+
+/**
+ * The largest base64 payload one event may have: the session cap less
+ * 512 KiB for the rest of the session. A larger event is refused, and the
+ * run records `lastError`: its effect could not be saved, and the host
+ * retries a session it cannot save every 2 s without recording an error
+ * (an atomic-server bug, reported separately).
+ */
+export const MAX_EVENT_PAYLOAD = 8 * 1024 * 1024 - 512 * 1024;
+
+/** The run's payload budget is spent. Not a failure. */
+export class BudgetReached extends Error {
+  constructor(bytes: number) {
+    super(`webhook inbox: run payload budget reached at ${bytes} bytes`);
+    this.name = 'BudgetReached';
+  }
+}
+
 /** The connection record that holds the inbox state. */
 export const INBOX_RECORD = 'webhook-inbox:subscription';
 
@@ -153,6 +181,7 @@ export class SandboxInboxJournal implements InboxJournal {
   private readonly gapsWritten = new Set<string>();
   private readonly reconcilesWritten = new Set<string>();
   private next = 0;
+  private payloadBytes = 0;
 
   constructor(
     private readonly host: JournalHost,
@@ -221,6 +250,19 @@ export class SandboxInboxJournal implements InboxJournal {
     ) {
       return false;
     }
+    const size = event.payload.body.length;
+    if (size > MAX_EVENT_PAYLOAD) {
+      throw new Error(
+        `webhook inbox: delivery ${id} is ${size} bytes in base64, over the ${MAX_EVENT_PAYLOAD} one run can save`,
+      );
+    }
+    if (
+      this.payloadBytes > 0 &&
+      this.payloadBytes + size > RUN_PAYLOAD_BUDGET
+    ) {
+      throw new BudgetReached(this.payloadBytes);
+    }
+    this.payloadBytes += size;
     this.appended.add(id);
     const delivery = this.create(this.config.deliveries, {
       'webhook-delivery-id': id,

@@ -2,7 +2,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { config, FakeHost, FakeInbox } from './fake-host.js';
-import { INBOX_RECORD, readState } from './journal.js';
+import {
+  INBOX_RECORD,
+  MAX_EVENT_PAYLOAD,
+  readState,
+  RUN_PAYLOAD_BUDGET,
+} from './journal.js';
 import {
   DEFAULT_LIMIT,
   manifest,
@@ -174,6 +179,54 @@ describe('the webhook inbox plugin, run as a sync session', () => {
     expect(payload.length).toBeGreaterThan(1_390_000);
   });
 
+  it(`stops collecting past ${RUN_PAYLOAD_BUDGET} bytes of base64 payload, without error, and the next run goes on`, async () => {
+    const inbox = new FakeInbox();
+    const host = new FakeHost(inbox);
+    await host.run();
+    // Each about 4.7 MiB in base64: together over the budget, so a run that
+    // took both could not save its session.
+    const big = (n: number) => ({ text: String(n).repeat(3_500_000) });
+    inbox.deliver('d-1', big(1));
+    inbox.deliver('d-2', big(2));
+    inbox.deliver('d-3');
+    await host.run();
+    expect(deliveries(host)).toEqual(['d-1']);
+    expect(host.connection.records[INBOX_RECORD]!.baseline).not.toHaveProperty(
+      'lastError',
+    );
+    // Nothing is acknowledged: the page was not stored whole.
+    expect(state(host)?.unacknowledged).toBeUndefined();
+    // The next run fetches the same page, finds d-1 by its id, and takes
+    // d-2 (the first new event of a run always fits) and d-3.
+    await host.run();
+    expect(deliveries(host)).toEqual(['d-1', 'd-2', 'd-3']);
+    expect(state(host)?.unacknowledged).toBeDefined();
+    await host.run();
+    expect(inbox.subs.get('sub-1')!.refs).toHaveLength(0);
+    // One work item per delivery, none twice.
+    expect(
+      host
+        .table(config().tables.work.table)
+        .filter((row) => row['webhook-work-kind'] === 'delivery'),
+    ).toHaveLength(3);
+  });
+
+  it(`refuses one event over ${MAX_EVENT_PAYLOAD} bytes of base64, recording why`, async () => {
+    const inbox = new FakeInbox();
+    const host = new FakeHost(inbox);
+    await host.run();
+    inbox.deliver('d-huge', { text: 'x'.repeat(6 * 1024 * 1024) });
+    const refused = await host.run();
+    expect(refused.status).toBe('complete');
+    expect(deliveries(host)).toEqual([]);
+    expect(host.connection.records[INBOX_RECORD]!.baseline).toMatchObject({
+      lastError: {
+        message: expect.stringContaining('d-huge'),
+      },
+    });
+    expect(inbox.subs.get('sub-1')!.refs).toHaveLength(1);
+  });
+
   it('reports a reconciliation only after its work item is done', async () => {
     const inbox = new FakeInbox();
     const host = new FakeHost(inbox);
@@ -210,8 +263,12 @@ describe('the webhook inbox plugin, run as a sync session', () => {
     });
     expect(deliveries(host)).toEqual([]);
     expect((await host.preview()).proposal.lastError).not.toBeNull();
-    // The next run fetches again, and clears the error.
+    // The next run fetches again, one event only (a page over the host's
+    // fetch cap may be so only because of its neighbours), and clears the
+    // error.
+    since(host);
     await host.run();
+    expect(host.sent.at(-1)?.url).toMatch(/[?&]limit=1(&|$)/);
     expect(deliveries(host)).toEqual(['d-1']);
     expect(host.connection.records[INBOX_RECORD]!.baseline).not.toHaveProperty(
       'lastError',
@@ -253,6 +310,13 @@ describe('the webhook inbox plugin, run as a sync session', () => {
     await expect(
       run(new FakeHost(inbox, config(), {}).ctx('preview')),
     ).rejects.toThrow('Delegate a github-issues connection');
+    // Without the work item's property, a delivery row would be written
+    // without its work item, and then found by its id and kept that way.
+    const partial = config();
+    delete partial.properties['webhook-delivery'];
+    await expect(
+      run(new FakeHost(inbox, partial).ctx('preview')),
+    ).rejects.toThrow('no property for webhook-delivery');
     await expect(run(host.ctx('step'))).rejects.toThrow(
       'An approved proposal for this repository is required',
     );

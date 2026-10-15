@@ -14,7 +14,7 @@
  * cursors `<generation>:<seq>`.
  * What it does not have: Postgres, leases that expire, quotas, retention
  * limits, provider hooks or verification. Events come from the test driver
- * `POST /__fixture/inbox/deliver`, and `GET /__mock/inbox` shows the state.
+ * `POST /__mock/inbox/deliver`, and `GET /__mock/inbox` shows the state.
  */
 import { createHash } from 'node:crypto';
 import { ProxyRefusal } from './mock-proxy-auth.mjs';

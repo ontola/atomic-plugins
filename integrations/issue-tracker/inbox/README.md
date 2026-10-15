@@ -14,9 +14,11 @@ minute. Each run:
    installation's connection state, which the previous run wrote in its
    final checkpoint.
 2. Renews the subscription's lease when due.
-3. Fetches up to 4 events, writes a **Webhook delivery** row (the raw
-   payload, base64) and a **Webhook work item** row for each new one, and a
-   **Webhook gap** row for each gap.
+3. Fetches up to 4 events (1 after a failed run), writes a **Webhook
+   delivery** row (the raw payload, base64) and a **Webhook work item** row
+   for each new one, and a **Webhook gap** row for each gap. It stops
+   collecting at 6 MiB of base64 payload (the first new event always fits);
+   the next run picks up where it stopped.
 4. Checkpoints the new state.
 
 An event is acknowledged only by a later run, after that run has read the
@@ -49,21 +51,35 @@ runner exists (docs/design/pieces.md D2/D5).
     because of it. But the gap row and its `pending` work item stay, and
     no run reports the gap closed.
   - Every later gap adds another row and another pending item.
-- **A delivery whose payload does not fit stalls the inbox for up to 7
-  days.** The proxy retains bodies up to 8 MiB (`delivery.maxBodyBytes`,
-  pilot policy). One such body is about 10.7 MiB in base64, over the
-  host's 8 MiB fetch and session caps.
-  - Every run's `events` fetch then fails. The run still completes: the
-    plugin records the failure as `lastError` in its state (shown in the
-    next preview) and writes nothing. No later event is fetched past the
-    stuck one.
+- **One delivery over about 5.6 MiB raw stalls the inbox for up to 7
+  days.** The host caps a fetched response and a saved sync session at
+  8 MiB each, and a payload travels as base64 (4/3 of its size). The proxy
+  retains bodies up to 8 MiB (`delivery.maxBodyBytes`, pilot policy), so
+  such deliveries can exist:
+  - Over 7.5 MiB of base64 (about 5.6 MiB raw), the plugin refuses the
+    event: the session that would store it could not be saved. Over about
+    6 MiB raw, the `events` page cannot be fetched at all.
+  - Either way the run still completes: the plugin records the failure as
+    `lastError` in its state (shown in the next preview) and writes
+    nothing. No later event is fetched past the stuck one.
   - The stall ends when the proxy drops the event. That happens at the
     pending-age limit (`subscription.maxPendingAge`, 7 days), which records
     a gap, or at the progress deadline (7 days without an ack), which
     closes the subscription so the inbox subscribes again with a gap.
-  - The per-run limit of 4 assumes deliveries of at most about 1.1 MiB
-    each (arithmetic at `DEFAULT_LIMIT` in `plugin.ts`). A `maxBytes`
-    parameter on `events` is the planned fix.
+  - Smaller events that only together exceed a cap do not stall it. Past
+    6 MiB of base64 in one run the plugin stops collecting, without error,
+    and the next run goes on. A page over the fetch cap fails once, and
+    the runs after it fetch one event at a time until one succeeds.
+  - A `maxBytes` parameter on `events`, returning an oversized event
+    without its body, is the planned fix (step-4b plan, Unit B).
+- **An abandoned first run leaves an orphan gap row and reconcile item.**
+  If the very first run stops after its rows are written and the host
+  never resumes it, no checkpoint names the subscription it created. The
+  next run subscribes again and writes a new gap row and reconcile item for
+  the new subscription. The first ones stay `pending` and nothing will
+  report them, and the first subscription stays at the proxy until it
+  expires. A later run abandoned the same way loses nothing: its state
+  still names the subscription, and its rows are found by id.
 - **A failed step does not stop the schedule.** A transport failure, or a
   refusal a retry would not fix, ends the run with `lastError` recorded
   instead of an error. An errored sync session would stop the schedule

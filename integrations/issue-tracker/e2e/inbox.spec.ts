@@ -189,7 +189,14 @@ test.describe('GitHub issues webhook inbox', () => {
         c.delegations.some((d) => d.agent === app),
     )!.connection_id;
 
-    // 3. The destination, as the host would set up an importer's.
+    // 3. The destination, as the host would set up an importer's. Host gap
+    // 2: through a Node-side Store, provisionDestination timed out, so it
+    // runs in the page.
+    test.info().annotations.push({
+      type: 'host-gap',
+      description:
+        'provisionDestination ran in the page, bundled with a stand-in for Loro: through a Node-side Store it timed out',
+    });
     const destination = await provision(
       page,
       drive,
@@ -349,6 +356,10 @@ type Destination = Awaited<ReturnType<typeof provisionDestination>>;
 /**
  * `provisionDestination` from `@tomic/lib`'s source, bundled for the page and
  * run with the page's own store, which is connected and signed in.
+ *
+ * Host gap 2 (see the header): this works around a Node-side Store timing
+ * out against the lane server. Loro's WASM is replaced by a stand-in,
+ * because provisioning never edits a document.
  */
 async function provision(
   page: Page,
