@@ -471,8 +471,14 @@ a synthetic 429. No provider was called.
 
 [`completeness-b58c91d9…-overlay.yaml`](APIs/asana.com/1.0/completeness-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml)
 declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
-on the Asana `projectTasks` collection: `absent: removed` and
-`notFound: unavailable`, from the pinned OAD's own text (the same as Asana's
+on Asana's four lists, `workspaces`, `workspaceProjects`, `users` and
+`projectTasks`: `absent: removed` and `notFound: unavailable`, plus
+`parentAbsent: unavailable` on projects (parent: workspace) and tasks (parent:
+project). Each list sends no narrowing filter ("all workspaces visible to the
+authorized user", "all projects in the workspace" without the optional
+`archived` filter, "all users in all workspaces and organizations accessible
+to the authenticated user", every task of the project). From the pinned OAD's
+own text (the same as Asana's
 [API reference](https://developers.asana.com/reference/rest-api-reference)).
 Its 404 says the object "does not exist", but deleted tasks go into the
 deleting user's trash and "can be recovered from the trash within a period of
@@ -480,8 +486,7 @@ deleting user's trash and "can be recovered from the trash within a period of
 is not a final deletion. A task leaves a project's list when deleted or
 removed from that project ("Tasks can exist in more than one project at a
 time"), so absence leads to the task's own read. Not declared: `gone` (no 410
-documented), anything on projects, workspaces or users, and so
-`parentAbsent` (§4.4). Not verified: that the list without `completed_since`
+documented). Not verified: that the list without `completed_since`
 returns completed tasks (the parameter's text implies it), and whether
 subtasks not added to the project are listed. An expired offset token ("an
 offset token will expire after some time") fails the read, which is then not

@@ -76,7 +76,11 @@ class AsanaTasksCompletenessTests(unittest.TestCase):
                       "Tasks can be recovered from the trash within a",
                       "or the object specified by the request does not exist.",
                       "Only return tasks that are either incomplete or that have been completed since this time.",
-                      "Note that an offset token will expire after some time, as data may have changed."):
+                      "Note that an offset token will expire after some time, as data may have changed.",
+                      "Returns the compact records for all workspaces visible to the authorized user.",
+                      "Returns the compact project records for all projects in the workspace.",
+                      "Returns the user records for all users in all workspaces and organizations accessible to "
+                      "the authenticated user."):
             with self.subTest(words=words):
                 self.assertIn(words, " ".join(text.split()))
 
@@ -130,24 +134,45 @@ class AsanaTasksCompletenessTests(unittest.TestCase):
         self.assertEqual(classify(200, {id_field: "1204", "completed": True}), "present")  # moved to another project
         self.assertEqual(classify(403), "unknown")
 
-    def test_tasks_are_not_concluded_from_their_project(self):
+    def test_members_of_a_gone_parent_are_unavailable(self):
+        # §4.4: projects of a workspace, and tasks of a project, concluded gone.
         resources = self.composed["components"]["crudResources"]
         tasks = resources["task"]["collections"]["projectTasks"]
+        projects = resources["project"]["collections"]["workspaceProjects"]
         self.assertEqual(completeness.parents(self.composed, "task", tasks), {"project_gid": ["project"]})
-        # §4.4 needs a parent collection with a Completeness Object; projects have none.
-        self.assertNotIn("x-completeness", resources["project"]["collections"]["workspaceProjects"])
-        self.assertNotIn("parentAbsent", tasks["x-completeness"])
-        for parent in ("deleted", "unavailable"):
-            self.assertIsNone(completeness.members_of_gone_parent(tasks["x-completeness"], parent))
+        self.assertEqual(completeness.parents(self.composed, "project", projects),
+                         {"workspace_gid": ["workspace"]})
+        for collection in (tasks, projects):
+            for parent in ("deleted", "unavailable"):
+                self.assertEqual(completeness.members_of_gone_parent(collection["x-completeness"], parent),
+                                 "unavailable")
+
+    def test_every_list_sends_no_narrowing_filter(self):
+        # Each declared list's read sends only what the crud-causality v2 read fixes
+        # (limit) and its paging; the optional filters stay unsent.
+        optional = {"/workspaces": set(), "/users": {"workspace", "team"},
+                    "/workspaces/{workspace_gid}/projects": {"archived"},
+                    "/projects/{project_gid}/tasks": {"completed_since"}}
+        for resource in self.composed["components"]["crudResources"].values():
+            for collection in (resource.get("collections") or {}).values():
+                if "x-completeness" not in collection:
+                    continue
+                path = collection["urlTemplate"]
+                with self.subTest(path=path):
+                    self.assertEqual(collection["listQuery"], {"limit": "100"})
+                    self.assertTrue(optional[path].isdisjoint(collection["listQuery"]))
 
     def test_only_completeness_is_added(self):
         actions = self.overlays[-1]["actions"]
         self.assertEqual([action["target"] for action in actions], ["$.components"])
         resources = actions[0]["update"]["crudResources"]
-        self.assertEqual(set(resources), {"task"})
-        self.assertEqual(set(resources["task"]), {"collections"})
-        self.assertEqual(set(resources["task"]["collections"]), {"projectTasks"})
-        self.assertEqual(set(resources["task"]["collections"]["projectTasks"]), {"x-completeness"})
+        self.assertEqual({name: set(r["collections"]) for name, r in resources.items()},
+                         {"workspace": {"workspaces"}, "project": {"workspaceProjects"}, "user": {"users"},
+                          "task": {"projectTasks"}})
+        for resource in resources.values():
+            self.assertEqual(set(resource), {"collections"})
+            for collection in resource["collections"].values():
+                self.assertEqual(set(collection), {"x-completeness"})
 
     def test_no_dated_catalog_selects_the_overlay(self):
         # Whoever adds the overlay to a dated catalog changes this test.
