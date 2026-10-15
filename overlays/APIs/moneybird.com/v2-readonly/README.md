@@ -47,7 +47,10 @@ verified against a live administration: that the period bounds are
 inclusive (inferred from the documented example `20130101..20130131`), that
 a one-day period is accepted, which mutation field the period compares
 (`date` is likely, so the overlay names no `field`), and whose time zone the
-days are in (so it names no `timeZone`). The overlay goes after the
+days are in (so it names no `timeZone`), and that a `period:` filter
+alone still selects every state and mutation type (Moneybird says a passed
+filter "replaces the defaults below entirely", and those defaults are
+`state:all` and `mutation_type:all`). The overlay goes after the
 `pagination` overlay in a catalog. syncables reads `rangeWindow` schemes,
 and its `sync()` applies a windowed read from 0.22.0; no dated catalog
 selects it yet. Check it with

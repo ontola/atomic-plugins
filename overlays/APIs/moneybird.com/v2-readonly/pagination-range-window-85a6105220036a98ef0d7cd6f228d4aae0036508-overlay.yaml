@@ -25,10 +25,12 @@ actions:
           live administration: that the bounds are inclusive, that a
           one-day range is accepted, which mutation field the period
           compares (date is likely), and whose time zone the days are in
-          (the administration's, by assumption). A passed filter replaces
-          every default, but the other defaults (state:all,
-          mutation_type:all) already select every mutation, so the template
-          sends the period alone, as the Money app does.
+          (the administration's, by assumption). Moneybird says a passed
+          filter "replaces the defaults below entirely"; the defaults are
+          state:all and mutation_type:all, and the template sends the
+          period alone, as the Money app does. That a filter without state
+          and mutation_type still selects every mutation, and that
+          state:all includes auto_booked ones, is inferred, not documented.
         window:
           unit: day
           format: basicDate
