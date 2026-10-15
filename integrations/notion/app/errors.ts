@@ -18,8 +18,50 @@ export interface ProviderFailure {
   retryAfter?: string;
   /** The integration proxy's refusal code (`transport.ts`), if it refused. */
   code?: string;
+  /**
+   * A 429 whose body says Notion blocked the integration
+   * (`additional_data.rate_limit_reason: public_api_request_blocked`):
+   * permanent, not a rate limit to wait out (`isBlockedByNotion`).
+   */
+  blocked?: true;
   at: number;
 }
+
+/**
+ * Whether a Notion error body says its public API blocked this integration's
+ * requests (`additional_data.rate_limit_reason` is
+ * `public_api_request_blocked`). Notion sends that with a 429, but it is
+ * permanent: retrying won't help, only Notion support can lift it. Read from
+ * the body itself (an object, or JSON text), so it holds whatever the
+ * transport or syncables make of the status.
+ */
+export function isBlockedByNotion(body: unknown): boolean {
+  let value = body;
+
+  if (typeof value === 'string')
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return false;
+    }
+
+  const data =
+    typeof value === 'object' && value !== null
+      ? (value as { additional_data?: unknown }).additional_data
+      : undefined;
+
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    (data as { rate_limit_reason?: unknown }).rate_limit_reason ===
+      'public_api_request_blocked'
+  );
+}
+
+/** What the view says for a request Notion blocked (`isBlockedByNotion`). */
+export const BLOCKED_TITLE = 'Notion has blocked this integration';
+export const BLOCKED_MESSAGE =
+  "Notion answered that this integration's requests are blocked, not just limited for a while. Retrying won't help. Contact Notion support.";
 
 export type FailureState =
   | { kind: 'reauth'; technical: string }
@@ -55,6 +97,7 @@ const technical = (
       f =>
         `${new Date(f.at).toISOString()} ${f.method} ${f.path} → ${f.status}` +
         (f.code ? ` ${f.code}` : '') +
+        (f.blocked ? ' public_api_request_blocked' : '') +
         (f.retryAfter ? ` (retry-after: ${f.retryAfter})` : ''),
     ),
     ...(error === undefined
@@ -74,7 +117,9 @@ const technical = (
  * - Any other proxy refusal on a failed sync: `failed`.
  * - Any 401 from Notion: its grant to the integration is gone: reauth.
  * - A failed sync with a 403: Notion refuses the integration: reauth.
- * - A failed sync with a 429: rate-limited until `retry-after`.
+ * - A failed sync with a 429 Notion marks as blocked (`blocked`): `failed`,
+ *   permanent, with no retry scheduled.
+ * - A failed sync with any other 429: rate-limited until `retry-after`.
  * - Anything else that failed: `failed`, with the cause in plain words.
  *
  * A sync that finished despite a 403 or 429 on one request is not a failure:
@@ -116,6 +161,15 @@ export function classifyFailure(
   if (failures.some(f => f.status === 403))
     return { kind: 'reauth', technical: details };
   const limited = failures.filter(f => f.status === 429);
+
+  // Not a rate limit to wait out: a `failed` state schedules no retry.
+  if (limited.some(f => f.blocked))
+    return {
+      kind: 'failed',
+      title: BLOCKED_TITLE,
+      message: BLOCKED_MESSAGE,
+      technical: details,
+    };
 
   if (limited.length) {
     const last = limited[limited.length - 1]!;

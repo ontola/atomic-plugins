@@ -302,11 +302,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, then connect Notion through the host's consent bar. It syncs when opened if the last sync is older than 15 minutes, and on Sync now; unsent edits are listed whenever it opens. Nothing is sent without a review, and nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Only existing pages are updated: rows added here are not created in Notion, and nothing is deleted on either side; a page removed or archived in Notion is left in place here. Formatted text is imported as plain text, without the formatting, is listed as a warning, and is never overwritten. Other property types (dates, people, relations, formulas and more) are not imported. A status or select cell given more than one option in the table is held back in the review, since Notion's take one. Notion has no conditional page updates, so an edit made in Notion in the moment between the check and the send is overwritten. All shared databases go into one table. Mock-tested only: not yet verified against live Notion or the real integration proxy.",
     "https://atomicdata.dev/integrations/properties/keywords": "notion database table rows pages two-way review sync status drive app devonian",
-    "https://atomicdata.dev/integrations/properties/version": "0.5.3",
+    "https://atomicdata.dev/integrations/properties/version": "0.5.4",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Page",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Pages",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.5.3/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-ctfSdE/KS3aViDU0kmWvL6Ij5DcgolzZ64jrmsu309tDKoRo2PPdm17TuWp37ddj"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/notion/0.5.4/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-OBpwm2T/vSdWcRzmI284vmfiXNq1WbaQyqAslLQWpHInR8D8CfQWc4pGs94x3PGE"
   },
   {
     "@id": "https://atomicdata.dev/integrations/properties/pluginUrl",
@@ -393,9 +393,9 @@
     "https://atomicdata.dev/integrations/properties/events": "Connect once, then Sync now whenever you want the latest pets. Nothing runs in the background.",
     "https://atomicdata.dev/integrations/properties/limitation": "Demo provider only, not a real account. Import only: nothing is written back. Keep the browser open while syncing.",
     "https://atomicdata.dev/integrations/properties/keywords": "pets demo example sample drive app ontology test touch points integration proxy",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.5",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/pets/0.1.5/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-JmWH2/t4HGh55Og4ENqjkX5Q3mN9tjANOAfopJgHUTqaXHJjqMwfgiEemoBtKIHz",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.6",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/pets/0.1.6/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-e/5WWgkiT8NhNEqenqqVQED18CWs4IpWH4sCQtBnKfaHJrMZfCs340nsJyRCRMew",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Pet",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Pets"
   },
