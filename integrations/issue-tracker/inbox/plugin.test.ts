@@ -188,10 +188,13 @@ describe('the webhook inbox plugin, run as a sync session', () => {
   it(`stops collecting past ${RUN_PAYLOAD_BUDGET} bytes of base64 payload, without error, and the next run goes on`, async () => {
     const inbox = new FakeInbox();
     const host = new FakeHost(inbox);
+    // The host's fetch cap on, so the page stays one it lets through.
+    host.fetchCap = FETCH_CAP;
     await host.run();
-    // Each about 4.7 MiB in base64: together over the budget, so a run that
-    // took both could not save its session.
-    const big = (n: number) => ({ text: String(n).repeat(3_500_000) });
+    // Each about 3.4 MiB in base64: together over the budget, so a run that
+    // took both could not save its session, but the page of all three
+    // (about 6.9 MiB) is under the 8 MiB fetch cap.
+    const big = (n: number) => ({ text: String(n).repeat(2_700_000) });
     inbox.deliver('d-1', big(1));
     inbox.deliver('d-2', big(2));
     inbox.deliver('d-3');
