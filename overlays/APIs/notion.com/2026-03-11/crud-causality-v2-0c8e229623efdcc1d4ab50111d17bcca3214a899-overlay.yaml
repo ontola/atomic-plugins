@@ -1,14 +1,14 @@
 # v2 of crud-causality-0c8e2296...: v1's schemas and resources unchanged, plus the page create
-# (POST /pages) with CRUD Causality 0.7.0 committedErrors. Source:
+# (POST /pages) with CRUD Causality 0.8.0 committedErrors. Source:
 # https://developers.notion.com/reference/request-limits ("Retry a write that returns 503"):
 # "A write can save its change and still return 503 when Notion runs out of time building the
 # response. Repeating that write applies the change twice"; "When the request created a page
 # or a database, additional_data.committed_resource_id holds the ID of the new object."
 # The create's own response is the page object, whose id fills the identity template.
 # Only the page create is declared: for an append of block children, committed_resource_id
-# holds the parent block's id, which CRUD Causality 0.7.0 §4.3.3 says does not qualify.
+# holds the parent block's id, which CRUD Causality 0.8.0 §4.3.3 says does not qualify.
 # This is the first write v1 does not declare: v1 is read-only. Unpublished; no dated catalog
-# selects it. Needs CRUD Causality 0.7.0 (openapi-extensions/spec/crud-causality, §4.3.3).
+# selects it. Needs CRUD Causality 0.8.0 (openapi-extensions/spec/crud-causality, §4.3.3).
 overlay: 1.0.0
 extends: https://raw.githubusercontent.com/ontola/openapi-directory/0c8e229623efdcc1d4ab50111d17bcca3214a899/APIs/notion.com/2026-03-11/openapi.yaml
 info:

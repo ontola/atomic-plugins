@@ -1,4 +1,4 @@
-"""Check the Notion crud-causality v2 overlay (CRUD Causality 0.7.0 committedErrors).
+"""Check the Notion crud-causality v2 overlay (CRUD Causality 0.8.0 committedErrors).
 
 v2 is composed with its pinned OAD, alone and in either order with the
 catalog's other Notion overlays (auth, pagination). It must pass the CRUD
