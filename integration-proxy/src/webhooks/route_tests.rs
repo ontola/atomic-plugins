@@ -637,14 +637,14 @@ async fn standing_and_connection_deletion_end_subscriptions() {
         .connection("tracker", &owner, "key-o", &["p-100", "p-200"])
         .await;
     env.security
-        .put_delegation(&connection, &app.id(), None)
+        .put_delegation(&connection, &owner.id(), &app.id(), None)
         .await
         .unwrap();
     let delegated = id(&env.subscribe_project(&app, &connection, "p-100").await);
     let own = id(&env.subscribe_project(&owner, &connection, "p-200").await);
     assert!(env
         .security
-        .delete_delegation(&connection, &app.id())
+        .delete_delegation(&connection, &owner.id(), &app.id())
         .await
         .unwrap());
     let refused = env
@@ -1389,7 +1389,7 @@ async fn a_former_consumer_cannot_read_a_closed_subscription() {
     let app = Agent::new(103);
     let connection = env.connection("tracker", &owner, "key-o", &["p-1"]).await;
     env.security
-        .put_delegation(&connection, &app.id(), None)
+        .put_delegation(&connection, &owner.id(), &app.id(), None)
         .await
         .unwrap();
     let sub = id(&env.subscribe_project(&app, &connection, "p-1").await);
@@ -1405,7 +1405,7 @@ async fn a_former_consumer_cannot_read_a_closed_subscription() {
     assert_eq!(deleted.status(), StatusCode::OK);
     assert!(env
         .security
-        .delete_delegation(&connection, &app.id())
+        .delete_delegation(&connection, &owner.id(), &app.id())
         .await
         .unwrap());
     let response = env.get(&app, &format!("/subscriptions/{sub}")).await;
