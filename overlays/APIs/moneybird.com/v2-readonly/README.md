@@ -115,3 +115,11 @@ filter "replaces the defaults below entirely", and those defaults are
 and its `sync()` applies a windowed read from 0.22.0; no dated catalog
 selects it yet. Check it with
 `python3 overlays/tests/test_moneybird_range_window.py --directory <openapi-directory clone>`.
+
+`throttling-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` (#615) keeps
+v1's limits exactly and adds what the introduction's Throttling section
+documents for a 429: `Retry-After` ("the time after which a new request can
+be made") and a 429 as `quotaExhausted` on the `apiRequests` bucket.
+`RateLimit-Remaining`, `RateLimit-Limit` and `RateLimit-Reset` are not
+declared: the introduction gives them no units. No dated catalog selects it
+yet. `../../../tests/test_throttling_overlays.py` checks it.
