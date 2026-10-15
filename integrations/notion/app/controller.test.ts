@@ -441,6 +441,42 @@ describe('controller (N2)', () => {
     );
   });
 
+  it('does not re-send a blocked 429, even with a short Retry-After (0.5.5)', async () => {
+    const base = fixtureProxy('conn-1');
+    const queries: string[] = [];
+    const { controller } = setup('default', {
+      request: async request => {
+        if (request.method === 'POST' && request.path.includes('/query')) {
+          queries.push(request.path);
+
+          return {
+            status: 429,
+            // Short enough that syncables would otherwise retry it inline.
+            headers: { 'retry-after': '1' },
+            body: {
+              object: 'error',
+              status: 429,
+              code: 'rate_limited',
+              message: 'This request was blocked.',
+              additional_data: {
+                rate_limit_reason: 'public_api_request_blocked',
+              },
+            },
+          };
+        }
+
+        return base.request(request);
+      },
+    });
+    await controller.load();
+    const state = await controller.sync();
+    expect(state).toMatchObject({
+      kind: 'failed',
+      title: 'Notion has blocked this integration',
+    });
+    expect(queries).toHaveLength(1);
+  });
+
   it('keeps the previous sync record when a sync fails, so it is not counted as fresh', async () => {
     const { controller, proxy, advance } = setup();
     await controller.load();
