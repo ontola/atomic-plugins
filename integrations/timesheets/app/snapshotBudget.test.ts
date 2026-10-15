@@ -42,6 +42,7 @@ describe('observation log size at 2,000 entries (#123 M5)', () => {
     // 2,000 of them span about 29 days, inside the 30-day window.
     proxy.fixture.state.entries = Array.from({ length: ENTRIES }, (_, i) => {
       const end = NOW - 60 * MINUTE - i * 21 * MINUTE;
+
       return clockifyEntry(
         `entry-${String(i).padStart(5, '0')}`,
         `Task ${String(i).padStart(4, '0')}: write and review the docs`,
@@ -81,7 +82,7 @@ describe('observation log size at 2,000 entries (#123 M5)', () => {
           .map(field => r[field])
           .filter((v): v is string => typeof v === 'string')
           .map(v => ({
-            field: field(schema, v, r),
+            field: logField(schema, v, r),
             bytes: Buffer.byteLength(JSON.stringify(v)),
           })),
       );
@@ -96,6 +97,7 @@ describe('observation log size at 2,000 entries (#123 M5)', () => {
         `largest log resource ${largest} bytes escaped, snapshot ${snapshot}, ` +
         `budget ${BUDGET_BYTES}`,
     );
+    expect(result.created).toBe(ENTRIES);
     expect(result.log.snapshotWritten).toBe(true);
     expect(snapshot).toBeGreaterThan(0);
     expect(largest).toBeLessThan(BUDGET_BYTES);
@@ -103,12 +105,13 @@ describe('observation log size at 2,000 entries (#123 M5)', () => {
 });
 
 /** Which log field a value came from, for the printed figures. */
-function field(
+function logField(
   schema: Awaited<ReturnType<typeof ensureSchema>>,
   value: string,
   resource: Record<string, unknown>,
 ): 'snapshot' | 'observation' | 'head' {
   if (resource[schema.log.snapshot] === value) return 'snapshot';
   if (resource[schema.log.observation] === value) return 'observation';
+
   return 'head';
 }
