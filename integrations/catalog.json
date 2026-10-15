@@ -197,11 +197,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Google Tasks through the host's consent bar and tick the task lists to import. Tasks refresh whenever the app is opened, on Sync now and after you tick or untick a list. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read-only: the proxy's Google Tasks access is the tasks.readonly scope, so closing, editing or creating a task here is not sent to Google, and a local edit to an imported column is overwritten at the next sync. Subtasks are imported flat, with the parent task's id as a column. A task gone from its list is never assumed completed: when Google's by-id check answers 404 or fails, the row keeps its last known values and says so; at most 50 such checks run per sync. Added as a view of another Issue table, the app imports nothing. One account per app. Waits for the stable ontology domain. Declared, and tested against a synthetic fixture only: not verified against a live Google account (Decision Inbox Q-098), including what Google answers by id for a deleted task.",
     "https://atomicdata.dev/integrations/properties/keywords": "google tasks todo task lists issues read-only drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.1",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-tasks/0.1.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-E5Asr2u/0Y5u1cJALrkP9XuMZCTnwxyF+DCfx4rAZ1JiX5bZC8T4OAL5P/lhxB6P"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-tasks/0.1.1/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-hSUbnUwhdFQuB5F7Xbh3MHkl0bfupa1R1A2btYKX2FQmIFBsSC3J5i8btnNs6/tq"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/money",

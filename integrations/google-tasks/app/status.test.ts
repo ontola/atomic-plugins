@@ -362,6 +362,33 @@ describe('syncStatusFor', () => {
     });
   });
 
+  it('a refusal no reconnect fixes says what would help instead (0.1.1)', () => {
+    const base = {
+      kind: 'error' as const,
+      connection: CONNECTION,
+      at: NOW - MINUTE,
+      status: 403,
+      ...listed,
+    };
+    const daily = syncStatusFor({
+      state: { ...base, message: 'daily', refusal: 'daily-quota' },
+    })!;
+    expect(daily.last).toMatchObject({
+      ok: false,
+      nextStep:
+        "Try again after midnight Pacific time, when Google resets daily quotas. The quota belongs to the integration proxy's Google project, so whoever runs the proxy can ask Google to raise it.",
+    });
+    const off = syncStatusFor({
+      state: { ...base, message: 'off', refusal: 'api-disabled' },
+    })!;
+    expect(off.last).toMatchObject({
+      nextStep:
+        'Ask whoever runs the integration proxy to turn on the Google Tasks API for its Google project.',
+    });
+    // Without a refusal a 403 still asks for a reconnect.
+    expect(nextStep(403)).toBe('Reconnect Google Tasks.');
+  });
+
   it('says a rate limit is retried by itself, or that the sync stopped and when to try again', () => {
     const retryAt = NOW + 90_000;
     expect(clockTime(retryAt, WORDS)).toBe('12:01');
