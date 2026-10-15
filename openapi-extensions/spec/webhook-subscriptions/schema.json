@@ -547,7 +547,7 @@
         "payload": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["mediaType", "bytes", "sha256", "body"],
+          "required": ["mediaType", "bytes", "sha256"],
           "properties": {
             "mediaType": {
               "const": "application/json"
@@ -563,8 +563,26 @@
             "body": {
               "type": "string",
               "contentEncoding": "base64"
+            },
+            "omitted": {
+              "const": true,
+              "description": "The body is left out: alone it is over the maxBytes of the request (0.2.0-draft)."
             }
-          }
+          },
+          "oneOf": [
+            {
+              "required": ["body"],
+              "not": {
+                "required": ["omitted"]
+              }
+            },
+            {
+              "required": ["omitted"],
+              "not": {
+                "required": ["body"]
+              }
+            }
+          ]
         }
       }
     },
