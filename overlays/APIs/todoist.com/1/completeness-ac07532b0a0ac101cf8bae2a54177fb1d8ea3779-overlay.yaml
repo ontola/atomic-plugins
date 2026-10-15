@@ -9,6 +9,12 @@
 #   Delete Task: "Delete a task and all of its subtasks."
 #   Archive Project: "For workspace projects, this will archive it for all workspace users,
 #   removing it from view."
+#   Pagination: "next_cursor: A string token for fetching the next page, or null if there are
+#   no more results"; "When next_cursor is null, you've reached the end of the results."
+#   (Quotes re-audited against the raw page with curl on 2026-10-15.)
+# A complete read therefore follows next_cursor until it is null (the catalog's pagination
+# overlay declares that cursor); a read that stops earlier, or fails on a page, is not
+# complete, and nothing is concluded from what it did not return.
 # So a task leaves GET /tasks when it is completed (a non-recurring one), deleted, or (not
 # stated, see below) when its project is archived or the user loses access; absence is
 # `removed`, never `deleted`. GET /tasks/{task_id} returns active tasks only, so a completed

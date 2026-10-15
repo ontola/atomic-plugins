@@ -34,6 +34,7 @@ DIRECTORY = None
 TODOIST = "APIs/todoist.com/1/"
 OVERLAY = TODOIST + "completeness-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml"
 CRUD = TODOIST + "crud-causality-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml"
+PAGINATION = TODOIST + "pagination-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml"
 
 
 def load(path):
@@ -96,6 +97,30 @@ class TodoistCompletenessTests(unittest.TestCase):
                              "present")
         # Another answer says nothing.
         self.assertEqual(completeness.classify_read(declaration, None, "id", "t1", 500, None, not_found), "unknown")
+
+    def test_no_read_answer_is_ever_taken_as_a_deletion(self):
+        # #99: absence or a failed read is never proof of completion or
+        # deletion. Whatever a task's own read answers, the declaration
+        # yields present, unavailable or unknown, never deleted.
+        declaration = self.declaration()
+        not_found = completeness.resource_not_found(self.composed, "task")
+        bodies = (None, {}, {"id": "t1"}, {"id": "t1", "checked": True}, {"id": "t1", "is_deleted": True},
+                  {"id": "t2"})
+        outcomes = {completeness.classify_read(declaration, None, "id", "t1", status, body, not_found)
+                    for status in range(200, 600) for body in bodies}
+        self.assertNotIn("deleted", outcomes)
+        self.assertEqual(outcomes, {"present", "unavailable", "unknown"})
+
+    def test_a_complete_read_follows_the_cursor_to_its_documented_end(self):
+        # "When next_cursor is null, you've reached the end of the results."
+        # The catalog's pagination overlay pages GET /tasks by that cursor, so
+        # a read that stops before a null next_cursor is not complete (§3).
+        document = copy.deepcopy(self.original)
+        apply(document, load(PAGINATION))
+        self.assertEqual(document["paths"]["/tasks"]["get"]["x-pagination"], [{"scheme": "cursor"}])
+        scheme = document["components"]["paginationSchemes"]["cursor"]
+        self.assertEqual(scheme["response"]["bodyFields"]["next_cursor"]["role"], "nextCursor")
+        self.assertEqual(scheme["request"]["queryParameters"]["cursor"]["role"], "cursor")
 
     def test_no_dated_catalog_selects_it(self):
         name = OVERLAY.rsplit("/", 1)[1]
