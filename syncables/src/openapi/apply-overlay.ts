@@ -7,7 +7,11 @@
 
 export interface OverlayAction {
   target: string;
-  update?: Record<string, unknown>;
+  /**
+   * Merged onto the target when both are objects; otherwise it replaces the
+   * target (an array included, as integration-proxy does).
+   */
+  update?: Record<string, unknown> | unknown[];
   remove?: boolean;
   [key: string]: unknown;
 }
@@ -39,22 +43,39 @@ function deepClone<T>(value: T): T {
 }
 
 /**
- * Parses the intentionally-small subset of Overlay JSONPath targets this
- * library supports: `$` (the document root) or a plain dot-path like
- * `$.components.schemas.Foo`. No wildcards, filters, or bracket/array
- * indexing — every overlay this library has needed to apply so far only
- * targets `$.components`.
+ * Splits an action target into member names, with the grammar
+ * integration-proxy's `catalog.rs` `parse_target` accepts (and the
+ * overlays' own Python check mirrors): `$`, then any number of `.name`
+ * segments (up to the next `.` or `[`) or `['name']` segments (up to the
+ * next `']`, so a name may hold `/`, `.`, `{` or `[`). Anything else,
+ * wildcards, filters, array indexes, `["name"]` and `..` included, is
+ * refused rather than read as something else.
  */
-function parseTarget(target: string): string[] {
-  if (target === '$') {
-    return [];
-  }
-  if (!target.startsWith('$.') || /[[\]*]/.test(target)) {
-    throw new Error(
-      `Unsupported overlay target "${target}": only "$" or simple dot-paths like "$.components..." are supported`,
+export function parseOverlayTarget(target: string): string[] {
+  const refuse = (): Error =>
+    new Error(
+      `Unsupported overlay target ${JSON.stringify(target)}: only "$" followed by .name or ['name'] segments is supported`,
     );
+  if (typeof target !== 'string' || !target.startsWith('$')) throw refuse();
+  let rest = target.slice(1);
+  const keys: string[] = [];
+  while (rest !== '') {
+    if (rest.startsWith('.')) {
+      const after = rest.slice(1);
+      const found = after.search(/[.[]/);
+      const end = found === -1 ? after.length : found;
+      if (end === 0) throw refuse();
+      keys.push(after.slice(0, end));
+      rest = after.slice(end);
+    } else if (rest.startsWith("['")) {
+      const after = rest.slice(2);
+      const end = after.indexOf("']");
+      if (end === -1) throw refuse();
+      keys.push(after.slice(0, end));
+      rest = after.slice(end + 2);
+    } else throw refuse();
   }
-  return target.slice(2).split('.');
+  return keys;
 }
 
 function navigate(
@@ -64,7 +85,7 @@ function navigate(
 ): Record<string, unknown> | undefined {
   let node = root;
   for (const segment of segments) {
-    let child = node[segment];
+    let child = Object.hasOwn(node, segment) ? node[segment] : undefined;
     if (child === undefined) {
       if (!createMissing) {
         return undefined;
@@ -84,8 +105,13 @@ function navigate(
 
 /**
  * Applies an OpenAPI Overlay (https://spec.openapis.org/overlay/v1.0.0.html)
- * to a document, returning a new document. Supports `update` (deep-merged
- * onto the target) and `remove` actions.
+ * to a document, returning a new document. Supports `update` and `remove`
+ * actions, with the targets `parseOverlayTarget` accepts. An `update`
+ * object is deep-merged onto an object target; any other `update`, or any
+ * `update` onto a target that is not an object (an array, a scalar),
+ * replaces the target, as integration-proxy does. Overlay 1.0 would
+ * instead append to an array target. Missing objects along the target path
+ * are created.
  */
 export function applyOverlay<T extends Record<string, unknown>>(
   document: T,
@@ -94,7 +120,7 @@ export function applyOverlay<T extends Record<string, unknown>>(
   const result = deepClone(document) as Record<string, unknown>;
 
   for (const action of overlay.actions) {
-    const segments = parseTarget(action.target);
+    const segments = parseOverlayTarget(action.target);
     if (action.remove) {
       if (segments.length === 0) {
         throw new Error('Overlay cannot remove the document root');
@@ -104,14 +130,25 @@ export function applyOverlay<T extends Record<string, unknown>>(
       if (parent) {
         delete parent[key];
       }
-    } else if (action.update) {
-      const target = navigate(result, segments, true) as Record<
+    } else if (action.update !== undefined) {
+      const update: unknown = action.update;
+      if (segments.length === 0) {
+        if (!isPlainObject(update))
+          throw new Error('Overlay cannot replace the document root');
+        for (const [key, value] of Object.entries(update))
+          result[key] = deepMergeValue(result[key], value);
+        continue;
+      }
+      const key = segments[segments.length - 1] as string;
+      const parent = navigate(result, segments.slice(0, -1), true) as Record<
         string,
         unknown
       >;
-      for (const [key, value] of Object.entries(action.update)) {
-        target[key] = deepMergeValue(target[key], value);
-      }
+      const current = Object.hasOwn(parent, key) ? parent[key] : undefined;
+      parent[key] = deepMergeValue(
+        current === undefined ? {} : current,
+        deepClone(update),
+      );
     }
   }
 

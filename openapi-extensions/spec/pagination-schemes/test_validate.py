@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.9.0: schema, document validator, examples, link resolution and range windows."""
+"""Pagination Schemes 0.9.1: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -988,6 +988,17 @@ class ItemCursorTests(unittest.TestCase):
             read_item_cursor(scheme, lambda values: next(pages))
         self.assertIn("hasMore true", str(raised.exception))
         # Without has_more, an empty page ends it complete.
+        pages = iter([{"data": [{"id": "a"}]}, {"data": []}])
+        self.assertTrue(read_item_cursor(scheme, lambda values: next(pages))["complete"])
+
+    def test_a_has_more_that_is_not_a_boolean_is_an_error(self):
+        scheme = self.scheme(self.document())
+        for value in ("false", "true", 0, 1, None, []):
+            pages = iter([{"data": [{"id": "a"}], "has_more": value}, {"data": []}])
+            with self.subTest(value=value), self.assertRaises(PageReadError) as raised:
+                read_item_cursor(scheme, lambda values: next(pages))
+            self.assertIn("not a boolean", str(raised.exception))
+        # Absent is still fine.
         pages = iter([{"data": [{"id": "a"}]}, {"data": []}])
         self.assertTrue(read_item_cursor(scheme, lambda values: next(pages))["complete"])
 
