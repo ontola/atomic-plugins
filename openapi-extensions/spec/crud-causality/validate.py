@@ -19,6 +19,7 @@ import copy
 import json
 import re
 import sys
+import unicodedata
 from urllib.parse import quote, unquote
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
@@ -473,6 +474,7 @@ def validate(document, warnings=None):
                 errors.append(f"{where}.resource: {crud.get('resource')!r} is not a crudResources key (rule 2)")
                 continue
             errors += _follow_up_errors(document, crud, where, item, operation)
+            errors += _committed_error_errors(crud, where, resource)
             if crud.get("action") != "list":
                 continue
             collection = (resource.get("collections") or {}).get(crud.get("collection"))
@@ -708,6 +710,46 @@ def _bind_key(key):
     return kind, name.lower() if kind == "header" else name
 
 
+def _committed_error_errors(crud, where, resource):
+    """Rules 30-32 (0.8.0)."""
+    if "committedErrors" not in crud:
+        return []
+    if crud.get("action") != "create":
+        return [f"{where}.committedErrors: allowed only on action create (rule 30)"]
+    if "followUps" in crud:
+        return [f"{where}.committedErrors: not allowed with followUps (rule 32)"]
+    entries = crud["committedErrors"]
+    if not isinstance(entries, list) or not entries:
+        return [f"{where}.committedErrors: expected a nonempty array (rule 30)"]
+    template = (resource.get("identity") or {}).get("urlTemplate")
+    variables = set(VARIABLE.findall(template)) if isinstance(template, str) else set()
+    errors = []
+    for index, entry in enumerate(entries):
+        at = f"{where}.committedErrors[{index}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{at}: expected an object (rule 31)")
+            continue
+        unknown = {k for k in entry if k not in ("status", "identity", "description") and not str(k).startswith("x-")}
+        if unknown:
+            errors.append(f"{at}: unknown fields {sorted(unknown)} (rule 31)")
+        status = entry.get("status")
+        if not (isinstance(status, list) and status and len(set(map(repr, status))) == len(status)
+                and all(type(s) is int and 500 <= s <= 599 for s in status)):
+            errors.append(f"{at}.status: expected unique integer statuses 500-599 (rule 31)")
+        identity = entry.get("identity")
+        if not isinstance(identity, dict) or not identity:
+            errors.append(f"{at}.identity: expected a nonempty object (rule 31)")
+            continue
+        for variable, path in identity.items():
+            if variable not in variables:
+                errors.append(f"{at}.identity.{variable}: not a variable of identity.urlTemplate (rule 31)")
+            if not _well_formed_path(path):
+                errors.append(f"{at}.identity.{variable}: expected a dot-path (rule 31)")
+        if "description" in entry and not isinstance(entry["description"], str):
+            errors.append(f"{at}.description: expected a string (rule 31)")
+    return errors
+
+
 def _follow_up_errors(document, crud, where, create_item, create_operation):
     """Rules 20-24 for one x-crud."""
     if "followUps" not in crud:
@@ -871,6 +913,39 @@ def created_identity(document, crud, created, headers=None, sent=None):
             return None
         values[binding.get("field")] = value
     return values
+
+
+def committed_identity(document, crud, status, body):
+    """§4.3.3 (0.8.0): {identity variable: value} from an error response that says the create was applied, else None.
+
+    `status` is the response status and `body` its parsed JSON body (None when
+    it is not JSON). Unlike `created_identity`, which returns {object field:
+    value}, this returns {identity template variable: value}, the identity
+    map's keys. Values are strings: a non-empty string without surrounding
+    whitespace, `/`, `?`, `#` or a control character, and not `.` or `..`, or
+    a non-negative integer in decimal form; anything else leaves the
+    entry unmatched. None means the response matches no Committed Error
+    Object: the outcome stays unknown.
+    """
+    if crud.get("action") != "create" or not isinstance(body, (dict, list)):
+        return None
+    for entry in crud.get("committedErrors") or []:
+        if not isinstance(entry, dict) or status not in (entry.get("status") or []):
+            continue
+        values = {}
+        for variable, path in (entry.get("identity") or {}).items():
+            value = get_path(body, path)
+            usable = (isinstance(value, int) and not isinstance(value, bool) and value >= 0) or (
+                isinstance(value, str) and value != "" and value == value.strip()
+                and value not in (".", "..") and not set(value) & set("/?#")
+                and not any(unicodedata.category(c) == "Cc" for c in value))
+            if not usable:
+                values = None
+                break
+            values[variable] = str(value) if isinstance(value, int) else value
+        if values:
+            return values
+    return None
 
 
 def missing_value(follow_up, planned, created):

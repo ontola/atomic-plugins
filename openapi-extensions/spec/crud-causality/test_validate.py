@@ -6,8 +6,8 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import (compound_create, continue_compound_create, created_identity, pair_items, path_template_problem,
-                      read_request, replace_block, validate)
+from validate import (committed_identity, compound_create, continue_compound_create, created_identity, pair_items,
+                      path_template_problem, read_request, replace_block, validate)
 
 ROOT = pathlib.Path(__file__).parent
 
@@ -652,6 +652,82 @@ class StructureRuleTests(unittest.TestCase):
         self.assertIn("(rule 1)", errors)
         self.assertIn("(rule 5)", errors)
         self.assertIn("(rule 8)", errors)
+
+
+class CommittedErrorTests(unittest.TestCase):
+    """0.8.0: an error response that says the create was applied (§4.3.3, rules 30-32)."""
+
+    def document(self):
+        return yaml.safe_load((ROOT / "examples" / "committed-error.yaml").read_text(encoding="utf-8"))
+
+    def crud(self, document):
+        return document["paths"]["/pages"]["post"]["x-crud"]
+
+    def test_example_is_valid(self):
+        validate(self.document())
+
+    def test_rules_30_to_32(self):
+        cases = (
+            (lambda c: c.update(committedErrors=[]), "rule 30"),
+            (lambda c: c.update(followUps=[{"field": "labels", "create": "omit", "operation": "x", "bind": {}}]),
+             "rule 32"),
+            (lambda c: c["committedErrors"][0].update(status=[200]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(status=[409]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(status=[503, 503]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(status=[]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(identity={}), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(identity={"other": "a.b"}), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(identity={"page_id": "a..b"}), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(extra=1), "rule 31"),
+        )
+        for mutate, fragment in cases:
+            document = self.document()
+            mutate(self.crud(document))
+            with self.subTest(fragment=fragment), self.assertRaises(ValueError) as raised:
+                validate(document)
+            self.assertIn(fragment, str(raised.exception))
+        document = self.document()
+        document["paths"]["/pages/{page_id}"]["get"]["x-crud"]["committedErrors"] = self.crud(document)["committedErrors"]
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("allowed only on action create (rule 30)", str(raised.exception))
+
+    def test_committed_identity(self):
+        document = self.document()
+        crud = self.crud(document)
+        body = {"object": "error", "status": 503, "code": "service_unavailable",
+                "additional_data": {"retry_guidance": ["Read the object again to confirm the saved change."],
+                                    "committed_resource_id": "59833787-2cf9-4fdf-8782-e53db20768a5"}}
+        self.assertEqual(committed_identity(document, crud, 503, body),
+                         {"page_id": "59833787-2cf9-4fdf-8782-e53db20768a5"})
+        # Another status, no id, an empty or unusable id, or no JSON: unknown, as before.
+        self.assertIsNone(committed_identity(document, crud, 502, body))
+        for value in (None, "", "  ", " a", "a ", ".", "..", True, {"id": "x"}, "a/b", "a?b", "a#b", -1, 1.5,
+                      "a\nb", "a\x00b", "a\x7fb", "a\x85b"):
+            changed = copy.deepcopy(body)
+            changed["additional_data"]["committed_resource_id"] = value
+            with self.subTest(value=value):
+                self.assertIsNone(committed_identity(document, crud, 503, changed))
+        # A `%` or a space inside is usable; a client percent-encodes it when substituting.
+        for value in ("50%", "a b"):
+            changed = copy.deepcopy(body)
+            changed["additional_data"]["committed_resource_id"] = value
+            with self.subTest(value=value):
+                self.assertEqual(committed_identity(document, crud, 503, changed), {"page_id": value})
+        # A listed status whose body holds only retry_guidance stays unknown.
+        del body["additional_data"]["committed_resource_id"]
+        self.assertEqual(set(body["additional_data"]), {"retry_guidance"})
+        self.assertIsNone(committed_identity(document, crud, 503, body))
+        self.assertIsNone(committed_identity(document, crud, 503, None))
+        # An integer id is given in decimal form.
+        self.assertEqual(committed_identity(document, crud, 503, {"additional_data": {"committed_resource_id": 42}}),
+                         {"page_id": "42"})
+        # Only for a create.
+        self.assertIsNone(committed_identity(document, {"action": "update"}, 503,
+                                             {"additional_data": {"committed_resource_id": "x"}}))
+
+    def test_0_7_documents_stay_valid(self):
+        validate(example())
 
 
 if __name__ == "__main__":
