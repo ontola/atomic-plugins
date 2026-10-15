@@ -28,7 +28,7 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.9.1 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore`) ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), and Reference Objects resolved to a path (`resolveReference`, §4.1.3). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
@@ -1938,6 +1938,18 @@ const { records, ontology, errors } = await readPlatform(document, {
   must be a query parameter or, on a POST, a body field; a header
   field ends the read with an error. The validator checks rules 27 to 29.
   Not served by the mock server.
+  With `order: ascending` or `descending` beside `fromLastItem`
+  (Pagination Schemes 0.10.0, rule 30), the read checks that the
+  `fromLastItem` values of all its items, within and between pages, are
+  strictly in that order, and ends with a `PageReadError`, not complete,
+  before yielding a page with a pair out of order, two equal values, a
+  value that cannot be ordered, or a number beside text. A non-negative
+  integer or a string of ASCII digits compares as an exact number
+  (`BigInt`, so 19-digit Discord snowflakes beyond 2^53 compare
+  correctly; leading zeros do not count). Any other string compares by
+  code point. A negative or fractional number, a signed digit string
+  beside a number, a boolean, `null` or a missing value cannot be
+  ordered. Without `order` nothing is checked.
 - **A field that identifies another resource** (CRUD Causality §4.1.3,
   Reference Objects): `resolveReference(document, resource, reference,
   object, context)` fills the referenced resource's
@@ -2109,6 +2121,14 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: Pagination Schemes 0.10.0 `order` beside
+  `fromLastItem`: the read checks that the cursor values of all its items
+  are strictly ascending or descending, comparing digit strings and
+  non-negative integers exactly (`BigInt`) and other strings by code
+  point, and fails with a `PageReadError` at a pair out of order, an
+  equal pair or a value that cannot be ordered. The validator accepts
+  `order` only beside `fromLastItem` (rule 30). Additive: a document
+  without `order` reads as before.
 - **Unreleased**: Throttling 0.4.0-draft `blocked`. A signal with
   `meaning: blocked` (Notion's `public_api_request_blocked`), or with a
   meaning this version does not recognise (or none, or a non-string one), gives `classifyThrottling` the
@@ -2230,6 +2250,20 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   Auto-detection also skips a malformed operation `parameters` (not an
   array) or parameter entry (not an object) instead of throwing, so such
   an operation no longer makes the read of that collection fail.
+- **Unreleased**: the webhook inbox consumer's `reconcile` may answer
+  `'pending'` (the full read runs as separate work): the consumer then
+  records the gap, reports nothing, returns a `reconciling` step and asks
+  again on later steps (ontola/atomic-plugins#369 step 4b). `InboxClient`
+  also refuses a base URL whose host is an IP literal other than a
+  dotted-decimal IPv4 address without leading zeros or shorthand (no
+  `127.1`, `0x7f.0.0.1`, `010.0.0.1`, no IPv6 literal), and, where `URL`
+  exists, one that `URL` would rewrite. Two of these are breaking:
+  - `StepResult` has a new kind, `reconciling`, which code that handles
+    every kind of `InboxConsumer.step()` result must now handle. It is
+    returned only when `reconcile` answers `'pending'`.
+  - A base URL with an IPv6 literal host (`http://[::1]:8080`), accepted
+    before, is now refused when the `InboxClient` is created. Use a host
+    name.
 - **Unreleased**: `readPlatform` reports coverage: `ReadResult.coverage`
   (`CollectionCoverage`) lists each collection's `ReadCoverage` with
   `collection` and `context`, as `SyncResult.coverage` does. Before,

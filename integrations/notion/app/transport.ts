@@ -85,8 +85,8 @@ export function isBlockedByNotion(body: unknown): boolean {
  * (`isBlockedByNotion`), after the observer has seen it: syncables retries a
  * 429 whose `Retry-After` is short, and a blocked request must not be sent
  * again (0.5.5). From 0.5.6 the same transport then refuses every later
- * request without sending it, so the read stops at the first block. The controller classifies the sync as blocked from the
- * observed failure.
+ * request without sending it, so the read stops at the first block. The
+ * controller classifies the sync as blocked from the observed failure.
  */
 export class NotionBlocked extends Error {
   constructor(readonly path: string) {
