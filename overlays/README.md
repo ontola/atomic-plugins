@@ -110,6 +110,21 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
+## Throttling response signals
+
+Four standalone overlays declare [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md#throttling-signals)
+`headers` and `signals`; no dated catalog selects them.
+`tests/test_throttling_overlays.py` composes each with its pinned OAD and
+classifies synthetic responses shaped as the provider documents them. No
+provider was called.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [GitHub REST 2022-11-28](APIs/github.com/api.github.com.2022-11-28/1.1.4/throttling-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml) | `x-ratelimit-limit`, `-remaining`, `-used`, `-reset` (epoch seconds), `retry-after` (seconds); 403/429 with remaining `0` as `quotaExhausted`, with `retry-after` or a secondary-limit message as `throttled` (60 s minimum). | [Rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api). The secondary-limit message text is assumed from GitHub's description: not documented as an exact string and not recorded here (the issue-tracker app also matches "abuse detection", not declared). |
+| [GitHub Issues 1.1.4](APIs/github.com/github-issues/1.1.4/throttling-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | The same declarations as the GitHub REST 2022-11-28 row: the github-issues subset (the issue-tracker app's catalog platform) is served by the same API and limits. | As above |
+| [Google Tasks v1](APIs/googleapis.com/tasks/v1/throttling-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | 403/429 with `rateLimitExceeded` or `userRateLimitExceeded` in `error.errors[].reason` as `throttled`. No `Retry-After`: Google does not document sending it. | Inferred from the [Calendar error guide](https://developers.google.com/workspace/calendar/api/guides/errors); the [Tasks limits page](https://developers.google.com/workspace/tasks/limits) documents no error responses. |
+| [Moneybird v2-readonly v2](APIs/moneybird.com/v2-readonly/throttling-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml) | v1's 150-per-300-s source-IP bucket, standard `Retry-After`, and 429 as `quotaExhausted` on that bucket. `RateLimit-*` are not declared: no documented units. | [Introduction, Throttling](https://developer.moneybird.com/introduction) |
+
 ## Pagination Schemes 0.7.0 catalog: Google Tasks empty lists and Box offsets
 
 `catalog/2026-10-12-tasks-box-pages.json` is `catalog/2026-10-12-box-pagination-v2.json`
