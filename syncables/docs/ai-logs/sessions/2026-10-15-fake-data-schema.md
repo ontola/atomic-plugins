@@ -22,3 +22,19 @@ exclusive bounds or `multipleOf`; string lengths and array sizes were
 ignored. All of these are now kept; an inclusive `minimum` is still the
 value generated, as before. 21 new tests, 17 of them failing on the code
 before. Changelog, CLAUDE.md.
+
+## Turn 2
+
+**Human (via the coordinator session):** #623's review nits: a
+fractional `multipleOf` on an integer, `multipleOf` on a number, bounds
+past 2^53 or 1e17 where `+ 1` rounds back, `-0`, huge `minItems` or
+`minLength` throwing a `RangeError`, and documenting `uniqueItems`,
+`maxLength` on formatted strings and `pattern` as not followed.
+
+**Assistant:** `integerStep` finds the smallest integer multiple by a
+short search (`step * k`, k up to 1,000): 5 for 2.5, 1 for 1/3. A number
+takes the nearest multiple of `multipleOf` the bounds allow. `above` and
+`below` step to the next float where `± 1` rounds back (`nextFloat`,
+through the IEEE 754 bits). Results go through `plain`, so `-0` is `0`.
+`GENERATED_LENGTH_CAP` (10,000) caps `minItems` and `minLength`.
+14 new tests; 12 fail on the code before, and the cap test crashes it.

@@ -2065,7 +2065,13 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   exclusive bounds, a fractional `minimum` on an integer, an integer
   `multipleOf`), `minLength` and `maxLength` on an unformatted string,
   and `minItems` and `maxItems`. An inclusive `minimum` is still the value
-  generated. `pattern` is not followed.
+  generated. A fractional `multipleOf` on an integer gives its smallest
+  integer multiple (5 for 2.5), `multipleOf` on a number is followed
+  where the bounds allow, a bound past 2^53 or 1e17 is kept strictly by
+  stepping to the next float, `-0` is generated as `0`, and `minItems`
+  and `minLength` are capped at `GENERATED_LENGTH_CAP` (10,000) instead of
+  throwing a `RangeError`. Not followed: `pattern`, `uniqueItems`, and
+  `maxLength` on a formatted string.
 - **Unreleased**: `resolveReference` (and the `ResolvedReference` type)
   resolves a CRUD Causality §4.1.3 Reference Object for an object: the
   referenced resource's identity path, filled from the object's fields and

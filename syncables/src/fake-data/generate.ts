@@ -5,6 +5,48 @@ let stringCounter = 0;
 const finite = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
+/**
+ * The most items or characters generated, whatever `minItems` or
+ * `minLength` asks: past this a value is short of its minimum rather than
+ * exhausting memory (`2 ** 30` would throw a `RangeError`).
+ */
+export const GENERATED_LENGTH_CAP = 10_000;
+
+/** `-0` as `0`, so a generated number serializes and compares plainly. */
+const plain = (value: number): number => (value === 0 ? 0 : value);
+
+/** The next float above (`up`) or below `value`, for bounds past 2^53. */
+function nextFloat(value: number, up: boolean): number {
+  if (value === 0) return up ? Number.MIN_VALUE : -Number.MIN_VALUE;
+  const view = new DataView(new ArrayBuffer(8));
+  view.setFloat64(0, value);
+  const bits = view.getBigUint64(0);
+  view.setBigUint64(0, value > 0 === up ? bits + 1n : bits - 1n);
+  return view.getFloat64(0);
+}
+
+/** `value + 1`, or the next float above it where `+ 1` rounds back. */
+const above = (value: number): number =>
+  value + 1 > value ? value + 1 : nextFloat(value, true);
+
+/** `value - 1`, or the next float below it where `- 1` rounds back. */
+const below = (value: number): number =>
+  value - 1 < value ? value - 1 : nextFloat(value, false);
+
+/**
+ * The smallest positive integer that is a multiple of `step` (5 for
+ * 2.5, 1 for 0.5 or 1/3), from a short search of `step * k` for k up to
+ * 1,000; undefined when none is found, and `multipleOf` is then not
+ * followed.
+ */
+function integerStep(step: number): number | undefined {
+  for (let k = 1; k <= 1000; k += 1) {
+    const multiple = step * k;
+    if (Number.isInteger(multiple)) return multiple;
+  }
+  return undefined;
+}
+
 const count = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isInteger(value) && value >= 0
     ? value
@@ -90,9 +132,16 @@ function generateObject(schema: SchemaObject): Record<string, unknown> {
   return result;
 }
 
-/** One item, or `minItems` of them, but never more than `maxItems`. */
+/**
+ * One item, or `minItems` of them (at most `GENERATED_LENGTH_CAP`), but
+ * never more than `maxItems`. `uniqueItems` is not followed: the items
+ * may be equal.
+ */
 function generateArray(schema: SchemaObject): unknown[] {
-  const least = Math.max(1, count(schema['minItems']) ?? 0);
+  const least = Math.min(
+    GENERATED_LENGTH_CAP,
+    Math.max(1, count(schema['minItems']) ?? 0),
+  );
   const most = count(schema['maxItems']);
   const length = most === undefined ? least : Math.min(least, most);
   return Array.from({ length }, () => generateFromSchema(schema.items));
@@ -139,9 +188,10 @@ function bounds(schema: SchemaObject): {
 
 /**
  * The least integer the lower bound allows, or 1 (or the upper bound,
- * when that is below 1) without one; then the next multiple of an
- * integer `multipleOf`. Where no integer fits, the least one the lower
- * bound allows.
+ * when that is below 1) without one; then the next multiple of
+ * `multipleOf`'s smallest integer multiple (`integerStep`). Where no
+ * integer fits, the least one the lower bound allows. Past 2^53 the next
+ * integer is the next float (`above`, `below`).
  */
 function generateInteger(schema: SchemaObject): number {
   const { low, lowExclusive, high, highExclusive } = bounds(schema);
@@ -149,42 +199,66 @@ function generateInteger(schema: SchemaObject): number {
     low === undefined
       ? undefined
       : lowExclusive
-        ? Math.floor(low) + 1
+        ? above(Math.floor(low))
         : Math.ceil(low);
   const most =
     high === undefined
       ? undefined
       : highExclusive
-        ? Math.ceil(high) - 1
+        ? below(Math.ceil(high))
         : Math.floor(high);
   let value = least ?? Math.min(1, most ?? 1);
-  const step = finite(schema['multipleOf']);
-  if (step !== undefined && step > 0 && Number.isInteger(step)) {
+  const multipleOf = finite(schema['multipleOf']);
+  const step =
+    multipleOf !== undefined && multipleOf > 0
+      ? integerStep(multipleOf)
+      : undefined;
+  if (step !== undefined) {
     const stepped = Math.ceil(value / step) * step;
     if (most === undefined || stepped <= most || least !== undefined)
       value = stepped;
     else value = Math.floor(most / step) * step;
   }
-  return value;
+  return plain(value);
 }
 
 /**
  * An inclusive `minimum` when the bounds allow it (as before), else 1,
- * else a number inside the bounds.
+ * else a number inside the bounds; then, with `multipleOf`, the nearest
+ * multiple at or above it that the bounds allow, else at or below it.
+ * The multiple is `multipleOf * k` in floating point, so a step such as
+ * 0.1 gives 0.30000000000000004 for 3, which a validator dividing in
+ * floating point may still refuse. Where no multiple fits, the bounds
+ * win and `multipleOf` is not followed.
  */
 function generateNumber(schema: SchemaObject): number {
   const { low, lowExclusive, high, highExclusive } = bounds(schema);
   const fits = (value: number): boolean =>
     (low === undefined || (lowExclusive ? value > low : value >= low)) &&
     (high === undefined || (highExclusive ? value < high : value <= high));
-  if (low !== undefined && !lowExclusive && fits(low)) return low;
-  if (fits(1)) return 1;
-  if (high !== undefined && !highExclusive && fits(high)) return high;
-  if (low !== undefined && high !== undefined) return (low + high) / 2;
-  if (low !== undefined) return low + 1;
-  return (high as number) - 1;
+  let value: number;
+  if (low !== undefined && !lowExclusive && fits(low)) value = low;
+  else if (fits(1)) value = 1;
+  else if (high !== undefined && !highExclusive && fits(high)) value = high;
+  else if (low !== undefined && high !== undefined) value = (low + high) / 2;
+  else if (low !== undefined) value = above(low);
+  else value = below(high as number);
+  const step = finite(schema['multipleOf']);
+  if (step !== undefined && step > 0) {
+    const k = Math.ceil(value / step);
+    const candidates = [k, k + 1, k - 1, k - 2].map((n) => n * step);
+    const multiple = candidates.find(fits);
+    if (multiple !== undefined) value = multiple;
+  }
+  return plain(value);
 }
 
+/**
+ * A string for its `format`, or `string-<n>` padded to `minLength` (at
+ * most `GENERATED_LENGTH_CAP`) and cut at `maxLength`. `maxLength` is not
+ * followed for a formatted string (a `date-time` is 24 characters
+ * whatever it says), and `pattern` is not followed at all.
+ */
 function generateString(schema: SchemaObject): string {
   switch (schema.format) {
     case 'date-time':
@@ -201,7 +275,11 @@ function generateString(schema: SchemaObject): string {
     default: {
       stringCounter += 1;
       const value = `string-${stringCounter}`;
-      const least = count(schema['minLength']);
+      const minimum = count(schema['minLength']);
+      const least =
+        minimum === undefined
+          ? undefined
+          : Math.min(minimum, GENERATED_LENGTH_CAP);
       const most = count(schema['maxLength']);
       const padded =
         least !== undefined && value.length < least
