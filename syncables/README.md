@@ -29,8 +29,8 @@ The extension versions this source reads, against the specifications in
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.8.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) and its `response.incomplete` ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
-| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`. |
+| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), and Reference Objects resolved to a path (`resolveReference`, §4.1.3). Not its request, patch or mint semantics. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft, plan tiers from 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. Not yet 0.4.0's `blocked` meaning (#533): a signal that declares it is not read, so such a refusal is retried. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -506,6 +506,35 @@ const client = createApiClient(doc, {
     failure.status === 409 ? 'retry' : defaultWriteFailureClass(failure),
 });
 ```
+
+##### Plan tiers
+
+A Limit Object may declare `tiers` instead of `requests` and `window`
+(Throttling 0.5.0): one bucket whose amount and window depend on the
+account's plan, as Clockify documents (30 requests per hour on FREE, 20
+per second on TRIAL, BASIC, STANDARD and PRO, 50 per second on
+ENTERPRISE), each tier naming its `plans`. With `throttlingPlan` set to
+the account's plan, as the provider names it (`'PRO'`), the client paces
+by the tier whose `plans` include it, as by a plain limit. Without one, or
+with a plan no tier names, it keeps within every tier at once, each
+counted separately over the same requests (the spec's `limits_in_force`):
+no single tier is safe on its own, since a lower average rate over a
+longer window (30 per hour) still allows a burst a shorter tier forbids
+(20 per second). The window a time-less `quotaExhausted` answer waits out
+is the plan's tier's, else the longest (`fallback_window`). A limit whose
+tiers fail the checks that decide which tier binds (no `plans`, an empty
+or repeated plan, a `requests` or `window.seconds` that is not a positive
+integer) is left out, as other entries that do not parse are. The client
+is more lenient than the spec's validator elsewhere: a window `kind` it
+does not know is read as `sliding`, an `anchor` that does not parse is
+left out, and unknown fields, or `requests` and `window` beside `tiers`,
+are ignored (the tiers are read). `throttlingPlan` is an option
+of `createApiClient`, `readCollections`, `readPlatform` and `paginate`;
+`declaredThrottling(document, plan)` gives the tiers in force in
+`tieredQuotas` (a plan's tier goes into `quotas`), and `parseTiers`,
+`limitsInForce` and `fallbackWindow` are exported. How a client learns
+its plan is up to the caller. Pacing counts only this client's requests
+(above).
 
 #### Refused credentials
 
@@ -1579,6 +1608,38 @@ writes held as unavailable before downgrading. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
+### APIs that cannot update (`replace`, `unkeyedLists`)
+
+Some APIs can create and delete an object but not change it, and give the
+items of a list no id: Google Keep API v1 is one. CRUD Causality 0.7.0
+declares both on the CRUD Resource Object (§4.8 `replace`, §4.9
+`unkeyedLists`), and `syncables/browser` exports the pure parts a consumer
+needs to write to such an API through its own requests:
+
+- `replaceOf(document, resource)` reads `replace` (or `{ refused }` for a
+  declaration rule 28 refuses), and `replaceBlock(replace, object)` names
+  the Block Object that forbids replacing an object (an attachment the API
+  cannot copy, collaborators a new object would lose), or `undefined`.
+  Replace by creating the new object, then deleting the old one; keep the
+  old one's identity as retiring until its delete succeeds.
+- `unkeyedListsOf(document, resource)` reads `unkeyedLists`;
+  `flattenList`/`nestList` turn a list into its items (a child right after
+  its parent) and back; `pairItems` pairs the items of a remote list with
+  the baseline's on the declared `match` fields and by position (§4.9.2).
+- `mergeUnkeyedList({ spec, base, local, remote })` merges three versions
+  of such a list: the baseline, the local items (with their own ids and the
+  baseline index each was at), and the remote list. A field changed on one
+  side takes that side's value (both sides: the local one, counted in
+  `conflicts`); an item deleted on one side and edited on the other stays;
+  the order is the local one with the remote moves applied. So an item
+  moved remotely and ticked locally comes out moved and ticked. `send` says
+  the merged list differs from the remote one.
+- `fingerprint(value)` is a 14-character digest of a JSON value, for a
+  record's baseline when the fields themselves need not be kept.
+
+`createApiClient` does not use them yet: `update()` on a resource with no
+update operation still throws, rather than replacing.
+
 ## One engine in Node and browsers
 
 The Node `syncables` and browser `syncables/browser` entries both export
@@ -1707,6 +1768,16 @@ and fails on any Node built-in import. It does not include the mock
 server, environment loader or file-path loaders, so pass documents and
 overlays as parsed objects.
 
+`prepareDocument` applies overlays with `applyOverlay`, which reads the
+target grammar integration-proxy reads: `$`, then `.name` or `['name']`
+segments, as in `$.paths['/users.list'].get.responses['200']`. Wildcards,
+filters and array indexes are refused. An `update` object is deep-merged
+onto an object target; any other `update`, or one onto an array or a
+scalar, replaces the target, as the proxy does (Overlay 1.0 would append
+to an array). Objects missing along a target's path are created, where
+the proxy refuses the action. Every overlay under
+[`overlays/APIs/`](../overlays/APIs/) applies.
+
 ```ts
 import {
   prepareDocument,
@@ -1815,7 +1886,10 @@ const { records, ontology, errors } = await readPlatform(document, {
   read unpaginated, one request taken as the whole list, so only where
   that is true), or apply a valid scheme with an explicit `x-pagination`
   entry. An explicit entry naming the invalid scheme makes the read fail
-  instead. `x-pagination: []` applies nothing and does not opt out: the
+  instead, as does one that is not a Pagination Application Object (an
+  empty `scheme`, `overrides` that are not an object, a `description`
+  that is not a string, or a field other than those and `x-` ones).
+  `x-pagination: []` applies nothing and does not opt out: the
   operation is still matched by auto-detection. A scheme whose
   `autoDetect` is neither a boolean nor an object (`null`) is invalid
   too, and auto-detection reads it as the default options. The validator
@@ -1827,6 +1901,35 @@ const { records, ontology, errors } = await readPlatform(document, {
   spec allows, because this client does not implement it.
   An `outcome` passed to `paginate` again starts clean: an earlier walk's
   mark does not carry over.
+- **A field that identifies another resource** (CRUD Causality §4.1.3,
+  Reference Objects): `resolveReference(document, resource, reference,
+  object, context)` fills the referenced resource's
+  `identity.urlTemplate` from the referring object's fields, and a
+  variable the reference does not bind from `context` (the path variables
+  of the request the object was read through, such as a shared
+  `{workspaceId}`), giving `{ resource, path, values }`. A time entry with
+  `projectId: "p-9"`, read under workspace 42, resolves to
+  `/workspaces/42/projects/p-9`. A reference with `required: false` whose
+  field is absent or `null` resolves to nothing, even when a context
+  variable is missing too: bound fields are read first. An empty string
+  is a value, not an absence, and throws whether the reference is
+  required or not. Anything else that cannot be filled throws: a
+  required field absent, a value that is neither a string nor a safe
+  integer (`Number.isSafeInteger`: beyond 2^53 - 1 a parsed number may
+  not be the id the API sent), a variable missing from `context`, or a
+  declaration it cannot read. A declaration it cannot read includes an
+  `identity.urlTemplate` that is not a path starting with one `/` (an
+  absolute URL, a variable in the host), or that holds a backslash, a
+  control character, a space or DEL (a URL parser reads
+  `/\evil.example/` as that host, and strips a tab, LF or CR anywhere, so
+  `/<tab>/evil.example/` too): `path` is always relative to the API's
+  server. A value, bound or from `context`, also
+  throws when it is `.` or `..` (it survives percent-encoding, and
+  `/projects/..` normalises to `/`, another resource), has leading or
+  trailing whitespace, contains NUL, or holds a lone surrogate. Other
+  characters are percent-encoded (`/` as `%2F`, `%` as `%25`). It
+  asserts identity only: nothing is fetched, and the path need not exist
+  or be readable.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -1969,7 +2072,82 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **Unreleased**: `validatePaginationScheme` follows the spec's
+- **Unreleased**: `generateFromSchema`, which the mock server seeds
+  records and answers responses with, keeps to the schema it generates
+  from: an OpenAPI 3.1 type list (`['string', 'null']` gave `null`, now a
+  string), `examples` and `const`, numeric bounds (`maximum`, 3.0 and 3.1
+  exclusive bounds, a fractional `minimum` on an integer, an integer
+  `multipleOf`), `minLength` and `maxLength` on an unformatted string,
+  and `minItems` and `maxItems`. An inclusive `minimum` is still the value
+  generated. A fractional `multipleOf` on an integer gives its smallest
+  integer multiple (5 for 2.5), `multipleOf` on a number is followed
+  where the bounds allow (a value that already divides evenly is kept),
+  a bound past 2^53 or 1e17 is kept strictly by stepping to the next
+  float (at `±Number.MAX_VALUE` the bound itself, not an infinity), and
+  `-0` is generated as `0`. `minItems` and `minLength` are capped at
+  10,000 per array or string, and one call makes at most 100,000 array
+  items and padding characters in all, so nested minimums cannot
+  multiply; past those limits a value is short of its minimum instead of
+  throwing a `RangeError` or exhausting memory. Not followed: `pattern`,
+  `uniqueItems`, and `maxLength` on a formatted string.
+- **Unreleased**: `applyOverlay` (and so `prepareDocument`) reads
+  `['name']` target segments, as integration-proxy does, and replaces an
+  array or scalar target with the `update` instead of throwing. Before,
+  174 of the 524 overlays under `overlays/APIs/` threw "Unsupported
+  overlay target" (1,803 of their 2,336 actions address a path such as
+  `$.paths['/users.list'].get`, or carry an array `update`), and an array
+  `update` (Notion's auth overlay) was merged index by index into an
+  object. An `update` is now copied, so a later change to the result no
+  longer changes the overlay. `OverlayAction.update` is typed
+  `Record<string, unknown> | unknown[]`. A target that applied before
+  gives the same result, with two exceptions no overlay in this
+  repository uses: a falsy `update` (`null`, `0`, `false`, `''`) now
+  replaces the target instead of being skipped, and an object `update`
+  onto an existing scalar replaces it instead of throwing.
+- **Unreleased**: `resolveReference` (and the `ResolvedReference` type)
+  resolves a CRUD Causality §4.1.3 Reference Object for an object: the
+  referenced resource's identity path, filled from the object's fields and
+  the request context. A value of `.` or `..`, an empty or
+  whitespace-padded one, one with NUL or a lone surrogate, an integer
+  beyond `Number.MAX_SAFE_INTEGER`, or a target template that is not a
+  path, throws instead of naming another object. Additive.
+- **Unreleased**: `resolveReference` also refuses an `identity.urlTemplate`
+  holding a backslash (`/\evil.example/` resolves to that host), a C0
+  control character (a URL parser strips tab, LF and CR, so
+  `/<tab>/evil.example/` does too), a space or DEL. Its error messages
+  name a bigint, symbol, cyclic or other value `JSON.stringify` cannot
+  write instead of throwing a `TypeError`, and cut a value at 200
+  characters (#611's re-review).
+- **Unreleased**: An explicit `x-pagination` entry must be a Pagination
+  Application Object as the spec's `schema.json` gives it: a nonempty
+  `scheme`, an object `overrides`, a string `description`, and no other
+  field but `x-` ones, on every entry. One that is not fails the read
+  with a `PaginationSchemeError`, as an undeclared scheme does; before, a
+  typo such as `overide:` dropped the overrides without a word. Every
+  `x-pagination` entry in this repository's YAML and JSON files passes
+  (1,275 entries, counted on 2026-10-15 by walking every file for
+  `x-pagination` arrays).
+- **0.24.0**: CRUD Causality 0.7.0's `replace` and `unkeyedLists` for
+  APIs that cannot update an object or give list items no id (see "APIs
+  that cannot update"): `replaceOf`, `replaceBlock`, `unkeyedListsOf`,
+  `flattenList`, `nestList`, `pairItems`, `mergeUnkeyedList` and
+  `fingerprint`, in both entries. Moved from the Google Keep drive app
+  (ontola/atomic-plugins#593). `createApiClient` does not use them yet.
+  Also in this release: Throttling 0.5.0 plan tiers: a Limit Object's `tiers`
+  is paced by the tier whose `plans` name `throttlingPlan`, else by every
+  tier at once, each counted separately; a time-less `quotaExhausted`
+  waits out the plan's tier's window, else the longest. `throttlingPlan`
+  is a new option of `createApiClient`, `readCollections`, `readPlatform`
+  and `paginate`; `ThrottlingDeclaration.tieredQuotas`, `Pacer`'s optional
+  third argument, `parseTiers`, `limitsInForce`, `fallbackWindow` and the
+  `Tier` type are new (`tieredQuotas` is optional on the type, so a
+  declaration built by hand still type-checks). A limit whose tiers fail
+  the checks that decide which tier binds is left out. Behaviour change
+  only for documents whose `x-throttling` declares `tiers` (before, such
+  a limit had no window and was not paced). This client reads plan tiers
+  from Throttling 0.5.0-draft but not yet 0.4.0's `blocked` meaning
+  (#533).
+  Also: `validatePaginationScheme` follows the spec's
   `schema.json`: a field the spec does not define (other than `x-`) on a
   scheme or an object in it, or a value of the wrong type, makes the
   scheme invalid, and a scheme that is not an object no longer makes it
