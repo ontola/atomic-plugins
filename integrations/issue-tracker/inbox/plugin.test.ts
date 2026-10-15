@@ -265,7 +265,7 @@ describe('the webhook inbox plugin, run as a sync session', () => {
         }
       ).lastError;
     since(host);
-    // Run 1: the page of four is over the cap.
+    // Run 1: a page of up to four (all three events) is over the cap.
     await host.run();
     expect(urls().at(-1)).toMatch(/[?&]limit=4(&|$)/);
     expect(lastError()?.message).toContain('exceeds the byte limit');
