@@ -3,15 +3,21 @@
 #   "The Notion API enforces two rate limits: a per-connection limit and a per-workspace
 #   limit." Per connection: "Business and Enterprise | 600 requests per minute (an average of
 #   10 per second)", "All other plans | 180 requests per minute (an average of 3 per second)";
+#   "Each connection has a fixed budget of requests per 60-second window, based on the
+#   workspace’s plan"; "The budget can be spent at any pace within the window — spread out
+#   evenly or in a single burst. When a request exceeds this limit, the Retry-After value is the
+#   time until the window resets, so it is at most 60 seconds."
 #   "Rate limits may change". Over a limit: HTTP 429, the code "rate_limited", a Retry-After of
 #   "an integer number of seconds", and additional_data.rate_limit_reason; for
-#   public_api_request_blocked: "This connection's API access has been restricted. Retrying
-#   won't help. Contact Notion support."
+#   public_api_request_blocked: "This connection’s API access has been restricted. Retrying
+#   won’t help. Contact Notion support."
 # v3: v2's header and signals (throttling-v2-0c8e2296..., #533: v1 plus public_api_request_blocked
 # as blocked), plus the per-connection limit as plan tiers (Throttling 0.5.0). A consumer that is
 # not told the workspace's plan keeps within both tiers at once, so in effect 180 per minute. The
 # second tier's plan is named as Notion's page names it ("All other plans"); a consumer told another
-# plan name matches no tier and also keeps within both.
+# plan name matches no tier and falls back to the default: it keeps within both.
+# The window is Throttling's `fixed`: a budget per 60-second window that resets ("the time until
+# the window resets"), spendable "in a single burst"; its phase is not documented (no anchor).
 # Not declared: the per-workspace limit (no number), and 529 service_overload, since Throttling
 # does not treat a 5xx as a throttling signal.
 # Needs Throttling 0.5.0-draft (openapi-extensions/spec/throttling: blocked, tiers).
@@ -30,15 +36,16 @@ actions:
             description: >-
               The per-connection limit. A connection (an integration in one
               workspace) authenticates with its own token, so it is
-              partitioned by credential. Notion gives each rate as "an
-              average" per second, so the window kind is unspecified.
+              partitioned by credential. "a fixed budget of requests per
+              60-second window" that can be spent "in a single burst" and
+              resets: a fixed window, phase unknown.
             tiers:
               - plans: [Business, Enterprise]
                 requests: 600
-                window: { seconds: 60, kind: unspecified }
+                window: { seconds: 60, kind: fixed }
               - plans: [All other plans]
                 requests: 180
-                window: { seconds: 60, kind: unspecified }
+                window: { seconds: 60, kind: fixed }
         applies: [perConnection]
         headers:
           Retry-After:

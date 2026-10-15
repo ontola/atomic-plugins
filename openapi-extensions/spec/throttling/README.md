@@ -124,8 +124,8 @@ that does not know the plan, or whose plan no tier names, MUST keep within
 every tier at once, each tier's `requests` in its own `window`
 as a separate count over the same requests. No single tier is safe on its
 own: a lower average rate over a longer window can still allow a burst that
-a shorter tier forbids (30 per hour permits 30 requests in one second, which
-breaks 20 per second). Where the provider gives a tier no number, leave it
+a shorter tier forbids (a tier of 100 per hour permits 100 requests in one
+second, which breaks a tier of 50 per second). Where the provider gives a tier no number, leave it
 out; with no numbered tier, declare no `tiers` and no `requests`.
 
 When a `quotaExhausted` response names such a bucket and gives no time, the
