@@ -1,4 +1,5 @@
-# Reviewed 2026-10-14 against the pinned OAD and official provider documentation; no live calls.
+# Reviewed 2026-10-15 against the pinned OAD and official provider documentation; no live calls.
+# Quotes checked word for word against the raw pages with curl.
 # Source: https://docs.github.com/en/rest/issues/issues?apiVersion=2022-11-28#get-an-issue
 #   ("The API returns a 301 Moved Permanently status if the issue was transferred to another
 #   repository. If the issue was transferred to or deleted from a repository where the
@@ -6,11 +7,16 @@
 #   was deleted from a repository where the authenticated user has read access, the API
 #   returns a 410 Gone status.")
 # Source: same page, "List repository issues": state "Default: `open`"; the crud-causality
-#   overlays fix state=all for the issues collection. "'Issues' endpoints may return both
-#   issues and pull requests in the response."
-# GitHub also answers 410 for every issue of a repository whose issues are turned off (body:
-# "Issues are disabled for this repo"), which the owner can switch back, so a 410 is not
-# declared a deletion (no gone: deleted).
+#   overlays fix state=all for the issues collection. 'For this reason, "Issues" endpoints
+#   may return both issues and pull requests in the response.'
+# Source: same page, "Create an issue": "If issues are disabled in the repository, the API
+#   returns a 410 Gone status." That is documented for the create only. That an issue's own
+#   read also answers 410 while issues are disabled, and with what body, is not verified;
+#   it is assumed here, and the owner can switch issues back on, so a 410 is not declared a
+#   deletion (no gone: deleted).
+# Source: https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api
+#   (its issues example's next link is `issues?per_page=2&page=2`): the list pages by page
+#   number.
 # Needs Collection Completeness 0.2.0-draft (notFound, parentAbsent). Compose after
 # crud-causality-v2-920631db...-overlay.yaml (or v1), in either order: it deep-merges into
 # components.crudResources. The same declaration as the github-issues document's
@@ -38,11 +44,12 @@ actions:
                   another repository or deleted, so absence is removed. Its
                   own read then answers 301 (transferred), 404 (transferred or
                   deleted where the caller lacks read access) or 410 (deleted
-                  where the caller has read access), and also 410 for every
-                  issue of a repository whose issues are turned off ("Issues
-                  are disabled for this repo"), which can be switched back. A
-                  404 may be a transfer and a 410 may be disabled issues, so
-                  both are unavailable; no gone is declared. The list is paged
+                  where the caller has read access). GitHub documents a 410
+                  for a create while issues are disabled in the repository;
+                  whether a read answers 410 then is not verified, and issues
+                  can be switched back on. A 404 may be a transfer and a 410
+                  may be disabled issues, so both are unavailable; no gone is
+                  declared. The list is paged
                   by page number: an issue deleted or transferred during a
                   read moves the later ones back one place, so the issue after
                   it on the next page can be skipped. That issue still exists;

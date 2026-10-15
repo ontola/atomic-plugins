@@ -95,7 +95,9 @@ class GitHubRestCompletenessTests(unittest.TestCase):
         classify = lambda status, body=None: completeness.classify_read(declaration, None, "number", 7, status, body,
                                                                          not_found)
         self.assertEqual(classify(404), "unavailable")  # possibly transferred out of reach
-        self.assertEqual(classify(410, {"message": "Issues are disabled for this repo"}), "unavailable")
+        # A 410: a deletion, or (assumed, not verified for a read) issues disabled. No body text is relied on.
+        self.assertEqual(classify(410), "unavailable")
+        self.assertEqual(classify(410, {"message": "Gone"}), "unavailable")
         self.assertEqual(classify(200, {"number": 7, "state": "closed"}), "present")
         self.assertEqual(classify(301), "unknown")  # transferred
 
