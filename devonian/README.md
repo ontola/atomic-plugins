@@ -19,16 +19,17 @@ Already familiar with Cambria? Start with [Devonian for Cambria users](docs/from
 ## Which API to use
 
 Devonian is pre-1.0: a minor version may change an API. Each part below is
-covered by deterministic tests with fakes. No part has been run against a
-live provider, a real browser engine or a service worker (see "Entry points
-and browser support").
+covered by deterministic tests with fakes. Every entry point and the
+background scheduler also run in headless Chromium, the scheduler with a
+service worker (see "Entry points and browser support"). No part has been
+run against a live provider, Firefox or Safari.
 
 | Part (import) | What it does | Tested guarantees | What it does not do | The host's responsibilities |
 |---|---|---|---|---|
 | **Native Atomic Data** (`devonian/atomic`): `AtomicStore`, `AtomicIdentityMap`, `AtomicLens` | Imports, creates, updates and deletes between Atomic Data resources and one platform's records through a connector; subject URLs are identities | Scoped identities (connector and entity, string and number ids apart); unmanaged fields kept; explicit removal; a failure does not poison the queue; one lens's calls in call order (`__tests__/atomic/*.test.ts`) | Durable storage (the store is in memory), cross-lens or cross-process locking, stale-event rejection, conflict resolution, signed Atomic Commits, Atomic Server transport | Snapshot after awaited work and reload before replay ([Persistence and restart](docs/atomic-data.md#persistence-and-restart), [Recovering from a crash](docs/atomic-data.md#recovering-from-a-crash)); one lock for every lens that touches the same resources ([Concurrency](docs/atomic-data.md#concurrency-and-next-milestones)); ordering delayed events ([Event ordering](docs/atomic-data.md#event-ordering)); a connector that honours the idempotency key, or reconciles its creates ([Recovering from a crash](docs/atomic-data.md#recovering-from-a-crash)) |
 | **Value lenses** (`devonian/lenses`, 0.9.0) | Pure, synchronous field and custom mappings between a source and an editable view | Declared ownership, unchanged-value preservation, detached copies, example-based GetPut, PutGet and stable put (`__tests__/unit/lenses.test.ts`) | Any I/O, identity, ordering or conflict handling; laws over all values (examples only) | Running a lens inside its own read/write path ([Value lenses](docs/value-lenses.md)) |
 | **Reflection** (`devonian/reflect`) | Copies new records both ways between two `syncables` clients, agrees open/closed state, reflects comments, suppresses echoes | Echo suppression, no duplicates across restarts through `IdMap` plus a marker scan, a serialised runner (`__tests__/unit/reflect/*.test.ts`) | Field updates beyond state, deletions, OAuth, overlays or documents of its own | Building the two `ApiClient`s, persisting `IdMap` and `KvStore` (`File*` only in Node) |
-| **Background scheduler** (`devonian/background`): `BackgroundSync` | Runs a sync pass on a persisted schedule from a tab, a service worker or Node | Due-time, pause and backoff state across restarts; one pass at a time under a lease (`__tests__/unit/background/*.test.ts`) | Choosing the browser's cadence (Periodic Background Sync is Chromium-only); locking across contexts without Web Locks (the fallback is in-process only) | Supplying the key-value store (IndexedDB in a browser) and classifying permanent failures |
+| **Background scheduler** (`devonian/background`): `BackgroundSync` | Runs a sync pass on a persisted schedule from a tab, a service worker or Node | Due-time, pause and backoff state across restarts; one pass at a time under a lease (`__tests__/unit/background/*.test.ts`); in Chromium, one Web Locks lease and one IndexedDB schedule across two tabs, the lease released when its tab closes, and a service worker `sync` event running a pass (`__tests__/real-browser/background.spec.ts`) | Choosing the browser's cadence (Periodic Background Sync is Chromium-only); locking across contexts without Web Locks (the fallback is in-process only) | Supplying the key-value store (IndexedDB in a browser) and classifying permanent failures |
 | **Legacy row API** (exported from the `devonian` root, which also re-exports the APIs above except reflection): `DevonianLens`, `DevonianTable`, `DevonianClient`, `DevonianIndex` | Copies **additions** between two tables, with foreign-id bookkeeping | Additions and foreign ids (`__tests__/unit/DevonianTable.test.ts`, `DevonianIndex.test.ts`); `__tests__/examples/extractEntity.test.ts` also shows that a changed record arrives as a new addition and is copied as a new record | **Updates and deletions**: `DevonianLens` only listens for additions, so a changed record a client emits again is copied as a **duplicate**, and a deletion is not copied; none is planned in #259 | Migrating to the native API for anything more (see "How the legacy row API works") |
 | **Automerge storage** | Experimental storage for the row API | Its own unit test only | Reachable from no entry point (`storage/Automerge.ts` is not exported) | None: not for use |
 
@@ -93,8 +94,24 @@ subpath with esbuild `platform: 'browser'`, failing on any Node built-in, and
 runs a small driver per entry point in a `node:vm` context that has browser
 globals (timers, `structuredClone`, `TextEncoder`, `URL`, `crypto`) and no
 `process`, `Buffer`, `require` or `global`. CI runs it against `src/` and,
-after `pnpm build`, against `build/`. Not yet verified: a real browser engine,
-and the service-worker path beyond unit tests with fakes.
+after `pnpm build`, against `build/`.
+
+`__tests__/real-browser/` runs in Chromium's new headless mode under
+Playwright (`pnpm build && pnpm run test:real-browser`; it needs `pnpm exec
+playwright install chromium` once). The same drivers, bundled from `build/`,
+must give the same results as in the `node:vm` context
+(`entry-points.spec.ts`). `background.spec.ts` checks `devonian/background`
+with the browser's own Web Locks, IndexedDB and a service worker:
+- Two tabs share one lease: a tick finds it taken.
+- They share one schedule: the next tick is not due.
+- A tab closed mid-pass leaves no stale lease.
+- `registerBackgroundSync` registers one-shot sync and reports Periodic
+  Background Sync's refusal ("Permission denied." for a site that is not an
+  installed app).
+- The worker's `sync` event runs one pass.
+
+Not verified: Periodic Background Sync firing, Firefox, Safari and mobile
+browsers.
 
 ## Background sync scheduler
 
@@ -104,7 +121,7 @@ and the service-worker path beyond unit tests with fakes.
 - `tick()` runs a pass only if one is due, the schedule is not paused and nobody holds the lease, and it re-reads the state inside the lease. `syncNow()` waits for the lease and ignores the due time. `withLock(fn)` puts other work that must not overlap a pass under the same lease. Leases default to Web Locks (`navigator.locks`), falling back to `processLocks()`, which is in-process only.
 - Transient failures back off exponentially, capped by `maxBackoffMs`. Failures that `isPermanent` classifies as needing a person pause the schedule until `resume()`.
 
-The GitHub issues lens (now in ontola/atomic-plugins' `integrations/issue-tracker/devonian/github-issues/`) wraps it as `createBackgroundSync`. Its README describes the browser support limits: Periodic Background Sync is Chromium-only and the browser sets the cadence. Coverage so far is unit tests with fakes, with no real-browser or service-worker run.
+The GitHub issues lens (now in ontola/atomic-plugins' `integrations/issue-tracker/devonian/github-issues/`) wraps it as `createBackgroundSync`. Its README describes the browser support limits: Periodic Background Sync is Chromium-only and the browser sets the cadence. Coverage: unit tests with fakes, and in headless Chromium two tabs and a service worker sharing the lease and the schedule (`__tests__/real-browser/background.spec.ts`); Periodic Background Sync firing is not verified.
 
 ## Local Identifiers and IdMaps
 What I think none of the other lens projects are currently offering is a built-in way to deal with the mapping of local identifiers.
@@ -189,7 +206,7 @@ The `DevonianIndex` class keeps track of different identifiers an object may hav
 **Experimental, and not reachable from any entry point** (`storage/Automerge.ts` is not exported; see "Entry points and browser support"). The row API's in-memory storage resolves a conflicting update by the last write; the [Automerge](https://automerge.org) storage was an experiment in handling such conflicts more gracefully, without an example that shows it working.
 
 ## Usage
-Pick the part from "Which API to use" above; each row links to its guarantees and to what the host must do. Devonian is pre-1.0, so pin an exact version. The [examples folder](examples/) has a native Atomic Data example ([AtomicExtractEntity.ts](examples/AtomicExtractEntity.ts)) and the legacy row API's. Live provider and real-browser behaviour are not verified; the roadmap for durability, ordering and browser checks is [ontola/atomic-plugins#259](https://github.com/ontola/atomic-plugins/issues/259).
+Pick the part from "Which API to use" above; each row links to its guarantees and to what the host must do. Devonian is pre-1.0, so pin an exact version. `@tomic/lib` (>= 0.40.0) is an optional peer dependency, which npm does not install: install it yourself to use the native API, `devonian/atomic` or the root that re-exports it (`npm install devonian@0.9.0 @tomic/lib`). The [examples folder](examples/) has a native Atomic Data example ([AtomicExtractEntity.ts](examples/AtomicExtractEntity.ts)) and the legacy row API's. [`examples/packaged-consumer/consumer.mjs`](examples/packaged-consumer/consumer.mjs) is a consumer as an npm user writes one: plain ESM importing only `devonian/atomic` and `devonian/lenses`, through ingest, a native edit, publish, a failed and retried publish, a checkpoint and a restart, against a deterministic in-memory platform. `pnpm build && pnpm run test:packaged` runs it against the packed tarball (`pnpm pack`), installed with no network (`__tests__/packaged/consumer.test.ts`); CI runs it with the build checks. Live provider behaviour, and browsers other than Chromium, are not verified; the roadmap for durability, ordering and browser checks is [ontola/atomic-plugins#259](https://github.com/ontola/atomic-plugins/issues/259).
 
 ## Contributing
 Devonian lives in [ontola/atomic-plugins](https://github.com/ontola/atomic-plugins) (`devonian/`); open an issue or pull request there. Its working rules are in [AGENTS.md](AGENTS.md).

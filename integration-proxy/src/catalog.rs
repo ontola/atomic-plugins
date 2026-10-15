@@ -125,6 +125,12 @@ impl Catalog {
             }
             refuse_ref_path_items(&platform.name, &document)?;
             if let Some(selection) = platform.selection {
+                for problem in crate::pacing::plan_selection_problems(&document, &selection) {
+                    tracing::warn!(
+                        platform = %platform.name,
+                        "throttlingPlans: {problem}; the bucket keeps within every tier"
+                    );
+                }
                 selections.insert(platform.name.clone(), Value::Object(selection));
             }
             insert_document(
@@ -339,7 +345,12 @@ impl Catalog {
             let paths = document.get("paths")?.as_object()?;
             let template = paths.keys().find(|t| path_matches(t, relative))?;
             let operation = paths.get(template)?.get(method.to_ascii_lowercase())?;
-            Some(crate::pacing::selected_buckets(&document, operation))
+            let plans = self
+                .selections
+                .get(platform)
+                .and_then(|selection| selection.get("throttlingPlans"))
+                .and_then(Value::as_object);
+            Some(crate::pacing::selected_buckets(&document, operation, plans))
         };
         resolve().unwrap_or_default()
     }

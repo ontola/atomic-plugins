@@ -24,11 +24,118 @@ ruby scripts/generate_moneybird_metadata.rb /path/to/APIs/moneybird.com/v2-reado
 ruby scripts/validate_moneybird_metadata.rb /path/to/APIs/moneybird.com/v2-readonly
 ```
 
+## A bounded read-only import: what the overlays declare (#102)
+
+Checked on 2026-10-15 from documentation only, with no account and no token:
+the pinned OAD and Moneybird's
+[introduction](https://developer.moneybird.com/introduction.md) (static
+Markdown, listed in `/llms.txt`; the HTML site renders client-side).
+
+| Concern | Overlay | Declares | Status |
+| --- | --- | --- | --- |
+| Paging | `pagination-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` (new) | The 19 lists v1 pages follow the `Link` header's `rel="next"`; no `rel="next"` is the last page. No `per_page` is sent (default 50). | This PR; no catalog selects it |
+| Paging | `pagination-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` (v1) | `page`/`per_page` on the same lists, with no response field: a reader cannot tell the last page. | On `main`, in the catalogs |
+| Unpaged lists | none needed | Twelve lists have no page parameter: one answer is the list. | Evidence in #578 |
+| Financial mutations | `pagination-range-window-85a61052…` | "Limited to 100", no page parameter: read by period windows. | #614 |
+| Completeness | `completeness-85a61052…` | `absent: removed`, `notFound: unavailable` on 20 collections. | #585 |
+| Rate limits | `throttling-85a61052…` (v1) | 150 requests per 300 s per source IP. | On `main` |
+| Rate limits | `throttling-v2-85a61052…` | v1 plus `Retry-After` and a 429 as `quotaExhausted`. | #615 |
+
+Why the paging revision sends no `per_page`: the introduction gives
+`per_page` "default: 50, maximum: 100" and says "Each paginated response
+contains a `Link` header with information about the previous and next page",
+but its example link carries only `page=3`. Whether a next link keeps a
+`per_page` the client sent is not documented; a link that dropped it would
+make the second page overlap the first. With the default the pages stay
+consistent, at about twice the requests of 100 per page: 1,000 contacts take
+20 requests, against the 150 per 5 minutes per IP. (The Money drive app,
+`integrations/money/moneybird/read.ts`, sends `per_page=100` and follows the
+links; it is verified against its synthetic fixture only.)
+
+Stays unverified until a live run against a real administration:
+
+- that every paginated answer carries a `Link` header (the pinned OAD
+  attaches one to `downloads.json` only), that the last page's has no
+  `rel="next"`, and that its links stay on `https://moneybird.com/api/v2` and
+  the same list (the documented example link,
+  `https://moneybird.com/api/v2/contacts.json?page=3`, has no administration
+  id segment; taken literally it leaves the list's path, which §4.4.4's
+  same-origin rule would still follow);
+- whether a next link keeps `per_page`;
+- the caching Moneybird warns of: "our API requests are cached for
+  performance optimization. As a result, we strongly advise against using
+  GET methods for verification purposes as this may result in an incomplete
+  result". A list or an item read right after a change can be stale, so a
+  record that #585's `removed` settles by its own read can read as present
+  for a while;
+- what a 404 means beyond "Entity not found", and what any read answers for
+  a deleted record;
+- the units of `RateLimit-Remaining`, `RateLimit-Limit` and `RateLimit-Reset`
+  (the introduction calls `RateLimit-Remaining` "the time remaining"), and
+  whether the window is fixed or sliding; a 403 means "IP is blacklisted for
+  API usage";
+- `X-Total-Count`, documented in the pinned OAD for `downloads.json` only,
+  so not declared;
+- which administration fields and record fields a real administration
+  returns (the drive app's fixture is synthetic).
+
+`../../../tests/test_moneybird_pagination_v2.py` validates the paging
+revision alone and in the catalog's composition, checks it covers exactly
+v1's lists, and follows links of the documented shape with the reference
+`resolve_link` (another origin is refused). No provider was called.
+
 `throttling-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` describes the API's announced 150-request, 300-second
 source-IP quota using [`openapi-extensions/spec/throttling`](../../../../openapi-extensions/spec/throttling/README.md). The
 window algorithm is explicitly unspecified; pacing/retries remain consumer
 choices. The catalog excludes report endpoints, whose stricter quota is not
 modeled by this overlay. Source: https://developer.moneybird.com/#throttling
+
+`completeness-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` declares
+[Collection Completeness 0.2.0-draft](../../../../openapi-extensions/spec/collection-completeness/README.md)
+`absent: removed` and `notFound: unavailable` on the five lists whose read
+sends no filter and leaves nothing out by default: identities,
+ledger_accounts, task_list_templates, task_lists and workflows. §4.2 says
+`removed` "still tells a consumer that the list does not filter by default",
+which holds for these; an absent record may still exist and is settled by its
+own read. The evidence is the pinned document and developer.moneybird.com's
+server-rendered `/api/<resource>` pages, which embed the same OpenAPI and are
+readable with curl: `/api/ledger-accounts` lists "Returns 404 when requesting
+unexisting ledger account" with the ledger account read, and `/api/identities`
+"Returns 404 when identity does not exist" with the identity read. Neither
+says what a deleted record's read answers, nor tells a deleted record from
+one that never existed or that the caller cannot read, so a 404 is
+`unavailable` rather than the default `deleted`.
+
+Not declared:
+
+- Lists whose documented default leaves out records that still exist: the
+  documents, estimates, external and sales invoices and time entries
+  (`filter` default `period:this_year`), purchase transactions
+  (`unbatched:true`) and recurring sales invoices (`state:active`). With
+  `removed`, every record outside the default would go unconfirmed and need
+  its own read; on 1 January that is every prior-year record, against a
+  check budget of 50 per sync and 150 requests per 300 s.
+- Assets, products, projects and contacts (`active` default true,
+  `state:active`, archived contacts only with `include_archived`). A
+  crud-causality revision that fixes the widening query as a `listQuery`, as
+  `all-records-selection.json` does, could declare them on that read later.
+- `financial_mutations` (capped at 100 with no page parameter, read by period
+  windows below), `subscriptions` (listed per contact through a `contact_id`
+  query the collection does not model), the resources without an item read,
+  `gone` (no 410 documented) and `parentAbsent` (no administration resource).
+
+Not verified: what any read answers for a deleted record. No dated catalog
+selects it yet. `../../../tests/test_moneybird_completeness.py` composes it
+with the catalog's Moneybird overlays in either order, runs both validators,
+checks that exactly the five unfiltered lists are declared and that every
+narrowing list stays undeclared, and checks the outcomes `classify_read`
+gives. No provider was called.
+
+`all-records-selection.json` sends `active: false` on assets. The parameter
+reads "Whether to include only active assets", and the pinned document's
+example for `false` is named `ReturnsAListOfAllAssets` ("Returns a list of all
+assets", as `/api/assets` shows it), so `false` lists all assets, active and
+inactive.
 
 `pagination-range-window-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml`
 declares `GET /{administration_id}/financial_mutations.json` as a
@@ -55,3 +162,11 @@ filter "replaces the defaults below entirely", and those defaults are
 and its `sync()` applies a windowed read from 0.22.0; no dated catalog
 selects it yet. Check it with
 `python3 overlays/tests/test_moneybird_range_window.py --directory <openapi-directory clone>`.
+
+`throttling-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` (#615) keeps
+v1's limits exactly and adds what the introduction's Throttling section
+documents for a 429: `Retry-After` ("the time after which a new request can
+be made") and a 429 as `quotaExhausted` on the `apiRequests` bucket.
+`RateLimit-Remaining`, `RateLimit-Limit` and `RateLimit-Reset` are not
+declared: the introduction gives them no units. No dated catalog selects it
+yet. `../../../tests/test_throttling_overlays.py` checks it.

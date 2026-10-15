@@ -28,9 +28,9 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.8.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) and its `response.incomplete` ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), and Reference Objects resolved to a path (`resolveReference`, §4.1.3). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft, plan tiers from 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. Not yet 0.4.0's `blocked` meaning (#533): a signal that declares it is not read, so such a refusal is retried. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -222,7 +222,9 @@ is `observed` or `assumed`). Only a finished read by range windows over
 `x-time-zone` window fields keeps its `spans`, with `reason:
 'incomplete'`. An open end is left out. A `probe` read reads no zone and
 converts nothing.
-`readPlatform` does not report coverage. Only query parameters are read;
+`readPlatform` reports the same entries, in `ReadResult.coverage`
+(`CollectionCoverage`, as `sync()` gives them), also for a collection
+whose read failed, where `sync()` throws. Only query parameters are read;
 an `x-time-zone` in a request body or path is ignored.
 `wallClockParam`, `instantsOf` and `coveredSpan` are exported (the spec's
 `wall_clock_param`, `instants_of` and `covered_span`); `instantsOf` takes
@@ -344,6 +346,7 @@ A write the server answers with a non-2xx status is classified. The defaults
 | --- | --- | --- |
 | 404 or 410 to a delete | `satisfied` | The record is already gone, so the delete settles as if it had succeeded |
 | A response that is throttling under the document's `x-throttling` ([below](#throttling)): a matching signal, or any 429 | `retry` | Sent again no earlier than the earliest retry time the response gives, else after the backoff |
+| A response a `blocked` signal matches (Throttling 0.4.0), whatever its status | `permanent` | Not sent again: the API documents that retrying won't help |
 | 401 | `auth` | The write becomes `blocked` and the client stops sending writes (below); no attempt is counted |
 | 403 with `Retry-After` or `x-ratelimit-remaining: 0`, when the document declares no `x-throttling.signals` | `retry` | A rate limit, as GitHub sends it; with signals declared, a 403 is throttling only when a signal matches |
 | Other 403 | `auth` | As 401, except for a request sent after `authRenewed()` before any response showed the renewed credentials accepted (below): then `permanent` |
@@ -395,14 +398,22 @@ create or update counts as `permanent`.
 #### Throttling
 
 The draft [Throttling extension](../openapi-extensions/spec/throttling/README.md)
-(0.3.0-draft) lets a document say, at the root `x-throttling`, which
+(0.4.0-draft) lets a document say, at the root `x-throttling`, which
 response headers report the rate limit (`headers`: roles `limit`,
 `remaining`, `used`, `reset` and `retryAfter`, the last two with a time
 unit), which JSON body fields report the same roles (`bodyFields`, since
 0.3.0, keyed by a dot-path such as Todoist's `error_extra.retry_after`) and
 which responses are rate-limit refusals (`signals`: a status
 list plus a header or JSON-body predicate, with the meaning `throttled` or
-`quotaExhausted`, an optional `bucket` of `limits` and `minDelaySeconds`).
+`quotaExhausted`, an optional `bucket` of `limits` and `minDelaySeconds`;
+since 0.4.0 also `blocked`, a refusal the API documents as not worth
+retrying, such as Notion's `public_api_request_blocked`).
+A `blocked` verdict is not throttling: it has no retry time, a read
+returns the response (and fails on it) without sleeping, and a write is
+`permanent` by default and is not sent again. A signal with a meaning this
+version does not recognise (or none, or one that is not a string) is read
+as `blocked`; a `blocked` signal with a `bucket` or `minDelaySeconds` is
+kept as `blocked`, with those fields ignored.
 `declaredThrottling` reads it and `classifyThrottling` (both exported)
 applies it to a response, after the spec's `classify()`: the first signal
 that matches decides; without one, a 429 is `throttled` (with or without a
@@ -1776,7 +1787,11 @@ onto an object target; any other `update`, or one onto an array or a
 scalar, replaces the target, as the proxy does (Overlay 1.0 would append
 to an array). Objects missing along a target's path are created, where
 the proxy refuses the action. Every overlay under
-[`overlays/APIs/`](../overlays/APIs/) applies.
+[`overlays/APIs/`](../overlays/APIs/) applies. Nothing in a target is
+unescaped, as in the proxy: `$.paths['a\'b']` names `a\'b`, and a
+segment ends at the first `']`. Unlike the proxy, a `__proto__` segment
+is refused, and a document or `update` key named `__proto__` stays an
+ordinary own member: it never sets an object's prototype.
 
 ```ts
 import {
@@ -1901,6 +1916,39 @@ const { records, ontology, errors } = await readPlatform(document, {
   spec allows, because this client does not implement it.
   An `outcome` passed to `paginate` again starts clean: an earlier walk's
   mark does not carry over.
+- **A cursor read from the last item** (Pagination Schemes 0.9.1
+  §4.3.3): a `pageToken` scheme whose one `pageToken` or `cursor` field
+  declares `fromLastItem` (a dot-path into an item, as Stripe's
+  `starting_after` takes the last object's `id`) is read by sending that
+  value of each page's last item, in that field only: a string as it is,
+  a safe integer in decimal. Another `pageToken`- or `cursor`-role field,
+  which rule 28 allows beside it (Stripe's `ending_before`), gets no
+  value. The first request goes without a cursor. The read ends at an empty
+  page or at a `hasMore` body field of `false`, complete unless a response
+  was marked (§4.4.6; the mark is kept across pages); a short page does not
+  end it. It ends with a `PageReadError`, not complete, when the last item
+  has no such value (or a boolean, `null`, a fraction, an array or an
+  object, or an integer beyond `Number.MAX_SAFE_INTEGER`, which was
+  rounded when parsed), when the value equals the one sent for that
+  page, when a page holds an item an earlier page returned (by identity,
+  else the whole item), when an empty page says `hasMore: true`, and when
+  `hasMore` is present but not a boolean, `null` included (Pagination
+  Schemes 0.9.1; only an absent `hasMore` decides nothing). The cursor field
+  must be a query parameter or, on a POST, a body field; a header
+  field ends the read with an error. The validator checks rules 27 to 29.
+  Not served by the mock server.
+  With `order: ascending` or `descending` beside `fromLastItem`
+  (Pagination Schemes 0.10.0, rule 30), the read checks that the
+  `fromLastItem` values of all its items, within and between pages, are
+  strictly in that order, and ends with a `PageReadError`, not complete,
+  before yielding a page with a pair out of order, two equal values, a
+  value that cannot be ordered, or a number beside text. A non-negative
+  integer or a string of ASCII digits compares as an exact number
+  (`BigInt`, so 19-digit Discord snowflakes beyond 2^53 compare
+  correctly; leading zeros do not count). Any other string compares by
+  code point. A negative or fractional number, a signed digit string
+  beside a number, a boolean, `null` or a missing value cannot be
+  ordered. Without `order` nothing is checked.
 - **A field that identifies another resource** (CRUD Causality §4.1.3,
   Reference Objects): `resolveReference(document, resource, reference,
   object, context)` fills the referenced resource's
@@ -2072,6 +2120,47 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: Pagination Schemes 0.10.0 `order` beside
+  `fromLastItem`: the read checks that the cursor values of all its items
+  are strictly ascending or descending, comparing digit strings and
+  non-negative integers exactly (`BigInt`) and other strings by code
+  point, and fails with a `PageReadError` at a pair out of order, an
+  equal pair or a value that cannot be ordered. The validator accepts
+  `order` only beside `fromLastItem` (rule 30). Additive: a document
+  without `order` reads as before.
+- **Unreleased**: Throttling 0.4.0-draft `blocked`. A signal with
+  `meaning: blocked` (Notion's `public_api_request_blocked`), or with a
+  meaning this version does not recognise (or none, or a non-string one), gives `classifyThrottling` the
+  verdict `{ meaning: 'blocked' }` with no `retryAt`: not throttling, never
+  resent automatically. Such a signal keeps a `bucket` or `minDelaySeconds`
+  ignored rather than being dropped. A write answered `blocked` (its own
+  answer, or a precondition read's) fails at once (`permanent` in
+  `defaultWriteFailureClass`), with no `notBefore` and no bucket pause; a
+  read returns the answer without sleeping and fails on it. API semantic
+  change: a `ThrottlingVerdict` no longer always means "retry later"; a
+  custom `classifyWriteFailure` that returns `retry` for any
+  `failure.throttling` now retries a blocked answer, so check its meaning.
+- **Unreleased**: Pagination Schemes 0.9.1: a cursor read from the last
+  item (`fromLastItem`, Stripe's `starting_after`) with the `hasMore`
+  response role, after the spec's `read_item_cursor`. The cursor goes in
+  the `fromLastItem` field only, never in another cursor-role field
+  beside it, and an integer cursor value must be a safe integer; a
+  `hasMore` that is present but not a boolean, `null` included, ends the
+  read with an error (0.9.1). The validator accepts these fields under
+  rules 27 to 29; no scheme in this repository's overlays changes
+  verdict (those that declare a `hasMore` role beside a next token were
+  refused before, for the unknown role, and still are, by rule 29).
+  Additive for documents without these fields.
+- **Unreleased**: `applyOverlay` copies a root (`$`) `update` as it
+  already copied every other one. Before, the result shared the
+  overlay's objects, so a later action such as `$.x.y` changed the
+  caller's overlay, and applying it again gave a different document.
+- **Unreleased**: `applyOverlay` refuses a `__proto__` target segment,
+  and sets every member it merges or creates as an own property, so a
+  document or `update` key named `__proto__` (an own key after
+  `JSON.parse`) no longer sets the prototype of the result or of an
+  object in it. Tests pin that target segments are not unescaped, as in
+  integration-proxy (#618's review).
 - **Unreleased**: `generateFromSchema`, which the mock server seeds
   records and answers responses with, keeps to the schema it generates
   from: an OpenAPI 3.1 type list (`['string', 'null']` gave `null`, now a
@@ -2160,6 +2249,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   Auto-detection also skips a malformed operation `parameters` (not an
   array) or parameter entry (not an object) instead of throwing, so such
   an operation no longer makes the read of that collection fail.
+- **Unreleased**: `readPlatform` reports coverage: `ReadResult.coverage`
+  (`CollectionCoverage`) lists each collection's `ReadCoverage` with
+  `collection` and `context`, as `SyncResult.coverage` does. Before,
+  only `sync()` reported it. Additive.
 - **0.23.0**: a data-loss fix for pagination schemes that auto-detection
   would apply but that are invalid; Pagination Schemes 0.8.0
   `response.incomplete`; Deletion Feeds 0.3.0-draft list tombstones and
