@@ -72,7 +72,10 @@ Data flows through four stages, each its own directory under `src/`:
    source once per `readCollections` through its budget and re-checks it at
    the end, `wallClockQuery` rewrites the query and computes the
    `ReadCoverage` set on `CollectionSnapshot.coverage` (and the client's
-   `SyncResult.coverage`). For a `rangeWindow` read with a range whose
+   `SyncResult.coverage`, and `readPlatform`'s `ReadResult.coverage`,
+   the same `CollectionCoverage`, `context` from `contextParams`, left
+   out when empty).
+   For a `rangeWindow` read with a range whose
    window fields include such parameters, `wallClockWindows` gives
    `walkPages` the `windowValue` hook (wall-clock digits per zoned window
    parameter, from the same cached zone reads) and the outer range's
@@ -548,8 +551,10 @@ type-based generation recursively. It keeps to the schema's numeric bounds
 (3.0 boolean and 3.1 numeric exclusive bounds, kept strictly past 2^53
 by stepping to the next float; `multipleOf`, on an integer through its
 smallest integer multiple), `minLength`/`maxLength` on unformatted
-strings, `minItems`/`maxItems` (minimums capped at
-`GENERATED_LENGTH_CAP`, 10,000), never `-0`, and reads a 3.1 type list
+strings, `minItems`/`maxItems` (minimums capped at 10,000 per value, and
+100,000 array items and padding characters per call, `LENGTH_CAP` and
+`SIZE_BUDGET`, both internal), never `-0`, never an infinity at
+`±Number.MAX_VALUE`, and reads a 3.1 type list
 (`['string', 'null']`: the first non-null type). Not followed: `pattern`,
 `uniqueItems`, `maxLength` on a formatted string, and string formats
 beyond the listed ones. A
@@ -568,8 +573,11 @@ minimal Overlay implementation: `update`/`remove` actions with the target
 grammar of integration-proxy's `catalog.rs` `parse_target`, `$` then
 `.name` or `['name']` segments (`parseOverlayTarget`), not the full
 JSONPath grammar; a non-object `update`, or one onto a non-object target,
-replaces it, as the proxy does; `overlay-targets.test.ts` applies every
-overlay under `overlays/APIs/`).
+replaces it, as the proxy does; a `__proto__` segment is refused and
+every merged or created member is defined as an own property (`define`),
+so a `__proto__` key never sets a prototype; nothing in a target is
+unescaped; `overlay-targets.test.ts` applies every overlay under
+`overlays/APIs/`).
 
 - `types.ts` mirrors the extension's spec objects verbatim.
 - `validate.ts` checks a scheme against the spec's own rules (§9); an

@@ -93,8 +93,8 @@ proxy. No credential ever reaches the frame.
   (0.4.0; see the limits below for the shape), and the translation between
   option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
   at the host boundary.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 179,723 bytes for
-  0.5.5 (179,518 for 0.5.4) with syncables 0.23.0 (145,070 for 0.5.3; 144,024 for 0.5.2, with syncables 0.21.0; 125,914 for 0.5.1 with devonian 0.9.0 and
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 179,742 bytes for
+  0.5.6 (179,723 for 0.5.5; 179,518 for 0.5.4) with syncables 0.23.0 (145,070 for 0.5.3; 144,024 for 0.5.2, with syncables 0.21.0; 125,914 for 0.5.1 with devonian 0.9.0 and
   syncables 0.19.0; 125,712 for 0.5.0; 115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
   document, syncables' read path, devonian's Atomic Data API and the shared
   sync-status card with its `card.css` (through `cssRawPlugin` from
@@ -252,7 +252,9 @@ verified against live Notion or the real integration proxy.
   and a send says the same, whether the PATCH or the GET before it was
   refused (0.5.5). From 0.5.5 the read transport throws on such an answer,
   so syncables does not send the request again (it retries a 429 with a
-  short `Retry-After`). `isBlockedByNotion` (`transport.ts`) reads the
+  short `Retry-After`); from 0.5.6 it then sends nothing more in that sync,
+  so the read stops at the first block instead of requesting every
+  remaining data source once more. `isBlockedByNotion` (`transport.ts`) reads the
   response body, so it holds whatever syncables makes of the status;
   fixture scenario `blocked`. Nothing
   is sent while the app is closed (no `afterCommit` hook at the pin).

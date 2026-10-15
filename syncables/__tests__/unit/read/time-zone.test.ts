@@ -5,6 +5,7 @@ import {
   createApiClient,
   instantsOf,
   readCollections,
+  readPlatform,
   wallClockParam,
   type OpenApiDocument,
   type QuerySelection,
@@ -589,6 +590,65 @@ describe('x-time-zone in a collection read', () => {
         ],
       },
     ]);
+  });
+
+  it('reports the coverage from readPlatform, as sync() does', async () => {
+    const selection = window('2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z');
+    const viaClient = await createApiClient(document(), {
+      transport: provider([AMS]).transport,
+      constants,
+      selection,
+    }).sync();
+    const result = await readPlatform(document(), {
+      platform: 'clockify-like',
+      transport: provider([AMS]).transport,
+      constants,
+      selection,
+    });
+    expect(result.records).toHaveLength(1);
+    expect(result.coverage).toEqual(viaClient.coverage);
+    // Without values there is no coverage to report.
+    const plain = await readPlatform(document(), {
+      platform: 'clockify-like',
+      transport: provider([AMS]).transport,
+      constants,
+    });
+    expect(plain).not.toHaveProperty('coverage');
+  });
+
+  it('gives readPlatform the collection’s own context: no unused constant, none for a root collection', async () => {
+    const selection = window('2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z');
+    const extra = { ...constants, unrelated: 'x' };
+    const nested = await readPlatform(document(), {
+      platform: 'clockify-like',
+      transport: provider([AMS]).transport,
+      constants: extra,
+      selection,
+    });
+    expect(nested.coverage?.[0]?.context).toEqual(constants);
+    // The same document with the entries at the root.
+    const root = JSON.parse(
+      JSON.stringify(document()).replaceAll(ENTRIES, '/entries'),
+    ) as OpenApiDocument;
+    const rooted = await readPlatform(root, {
+      platform: 'clockify-like',
+      transport: provider([AMS]).transport,
+      constants: extra,
+      selection: {
+        query_overrides: [
+          {
+            path: '/entries',
+            values: {
+              start: '2026-01-01T00:00:00Z',
+              end: '2026-02-01T00:00:00Z',
+            },
+          },
+        ],
+      },
+    });
+    expect(rooted.coverage).toHaveLength(1);
+    expect(rooted.coverage?.[0]).not.toHaveProperty('context');
+    expect(rooted.coverage?.[0]?.collection).toBe('entries');
   });
 
   it('gives one span per x-filter field, never merging bounds of different fields', async () => {

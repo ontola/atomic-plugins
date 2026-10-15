@@ -222,7 +222,9 @@ is `observed` or `assumed`). Only a finished read by range windows over
 `x-time-zone` window fields keeps its `spans`, with `reason:
 'incomplete'`. An open end is left out. A `probe` read reads no zone and
 converts nothing.
-`readPlatform` does not report coverage. Only query parameters are read;
+`readPlatform` reports the same entries, in `ReadResult.coverage`
+(`CollectionCoverage`, as `sync()` gives them), also for a collection
+whose read failed, where `sync()` throws. Only query parameters are read;
 an `x-time-zone` in a request body or path is ignored.
 `wallClockParam`, `instantsOf` and `coveredSpan` are exported (the spec's
 `wall_clock_param`, `instants_of` and `covered_span`); `instantsOf` takes
@@ -1776,7 +1778,11 @@ onto an object target; any other `update`, or one onto an array or a
 scalar, replaces the target, as the proxy does (Overlay 1.0 would append
 to an array). Objects missing along a target's path are created, where
 the proxy refuses the action. Every overlay under
-[`overlays/APIs/`](../overlays/APIs/) applies.
+[`overlays/APIs/`](../overlays/APIs/) applies. Nothing in a target is
+unescaped, as in the proxy: `$.paths['a\'b']` names `a\'b`, and a
+segment ends at the first `']`. Unlike the proxy, a `__proto__` segment
+is refused, and a document or `update` key named `__proto__` stays an
+ordinary own member: it never sets an object's prototype.
 
 ```ts
 import {
@@ -2072,6 +2078,12 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: `applyOverlay` refuses a `__proto__` target segment,
+  and sets every member it merges or creates as an own property, so a
+  document or `update` key named `__proto__` (an own key after
+  `JSON.parse`) no longer sets the prototype of the result or of an
+  object in it. Tests pin that target segments are not unescaped, as in
+  integration-proxy (#618's review).
 - **Unreleased**: `generateFromSchema`, which the mock server seeds
   records and answers responses with, keeps to the schema it generates
   from: an OpenAPI 3.1 type list (`['string', 'null']` gave `null`, now a
@@ -2081,11 +2093,15 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   and `minItems` and `maxItems`. An inclusive `minimum` is still the value
   generated. A fractional `multipleOf` on an integer gives its smallest
   integer multiple (5 for 2.5), `multipleOf` on a number is followed
-  where the bounds allow, a bound past 2^53 or 1e17 is kept strictly by
-  stepping to the next float, `-0` is generated as `0`, and `minItems`
-  and `minLength` are capped at `GENERATED_LENGTH_CAP` (10,000) instead of
-  throwing a `RangeError`. Not followed: `pattern`, `uniqueItems`, and
-  `maxLength` on a formatted string.
+  where the bounds allow (a value that already divides evenly is kept),
+  a bound past 2^53 or 1e17 is kept strictly by stepping to the next
+  float (at `±Number.MAX_VALUE` the bound itself, not an infinity), and
+  `-0` is generated as `0`. `minItems` and `minLength` are capped at
+  10,000 per array or string, and one call makes at most 100,000 array
+  items and padding characters in all, so nested minimums cannot
+  multiply; past those limits a value is short of its minimum instead of
+  throwing a `RangeError` or exhausting memory. Not followed: `pattern`,
+  `uniqueItems`, and `maxLength` on a formatted string.
 - **Unreleased**: `applyOverlay` (and so `prepareDocument`) reads
   `['name']` target segments, as integration-proxy does, and replaces an
   array or scalar target with the `update` instead of throwing. Before,
@@ -2156,6 +2172,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   Auto-detection also skips a malformed operation `parameters` (not an
   array) or parameter entry (not an object) instead of throwing, so such
   an operation no longer makes the read of that collection fail.
+- **Unreleased**: `readPlatform` reports coverage: `ReadResult.coverage`
+  (`CollectionCoverage`) lists each collection's `ReadCoverage` with
+  `collection` and `context`, as `SyncResult.coverage` does. Before,
+  only `sync()` reported it. Additive.
 - **0.23.0**: a data-loss fix for pagination schemes that auto-detection
   would apply but that are invalid; Pagination Schemes 0.8.0
   `response.incomplete`; Deletion Feeds 0.3.0-draft list tombstones and
