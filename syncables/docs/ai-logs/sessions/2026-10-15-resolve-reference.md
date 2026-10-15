@@ -66,3 +66,18 @@ bigint as `10n` and falls back to the value's type when `JSON.stringify`
 throws or gives nothing. A template with any backslash is refused. Six
 new tests, five failing on the code before (the sixth pins the URL
 parser's reading of `/\host`). README, changelog, CLAUDE.md.
+
+## Turn 5
+
+**Human (via the coordinator session):** the WHATWG URL parser strips
+tab, LF and CR anywhere, so `/<tab>/evil.example/p` resolves to that
+host; refuse any C0 control character, space or DEL in the template;
+test a cyclic value's message; cut `show()` output at about 200
+characters.
+
+**Assistant:** The template check now refuses any character up to
+space, DEL and backslash (a character scan, since the lint rule
+`no-control-regex` refuses `/[\u0000- ]/`). `show` cuts at 200 characters and
+adds `…`. Tests for tab, LF, CR, NUL, space and DEL templates, the URL
+parser's reading of `/<tab>/host`, a cyclic value and a 500-character
+value. README, changelog, CLAUDE.md.

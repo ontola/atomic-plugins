@@ -89,7 +89,8 @@ Data flows through four stages, each its own directory under `src/`:
    variable order does not matter; `''` is a value and throws; anything
    else unfillable throws, as do a `.`, `..`, whitespace-padded, NUL or
    lone-surrogate value, an unsafe integer, and a target template that
-   is not a `/` path or holds a backslash); nothing is fetched
+   is not a `/` path or holds a backslash, control character, space or
+   DEL); nothing is fetched
    (`unit/read/references.test.ts`, the spec's §7.6 example).
    `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata

@@ -29,21 +29,29 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const own = (value: Record<string, unknown>, key: string): unknown =>
   Object.hasOwn(value, key) ? value[key] : undefined;
 
+/** The longest value `show` writes, in UTF-16 code units, before `…`. */
+const SHOWN = 200;
+
 /**
  * A value for an error message. `JSON.stringify` throws on a bigint (and
  * on a cycle), which would replace the message with a bare `TypeError`.
+ * A long value is cut at `SHOWN` characters.
  */
 function show(value: unknown): string {
-  if (typeof value === 'bigint') return `${String(value)}n`;
-  if (typeof value === 'number') return String(value);
-  try {
-    const text = JSON.stringify(value);
-    if (text !== undefined) return text;
-  } catch {
-    // fall through
+  let text: string | undefined;
+  if (typeof value === 'bigint') text = `${String(value)}n`;
+  else if (typeof value === 'number') text = String(value);
+  else
+    try {
+      text = JSON.stringify(value);
+    } catch {
+      // a cycle or a nested bigint: named by its type below
+    }
+  if (text === undefined) {
+    const type = typeof value;
+    return `${type === 'object' || type === 'undefined' ? 'an' : 'a'} ${type}`;
   }
-  const type = typeof value;
-  return `${type === 'object' || type === 'undefined' ? 'an' : 'a'} ${type}`;
+  return text.length > SHOWN ? `${text.slice(0, SHOWN)}…` : text;
 }
 
 /** A dot-path's value in an object: own properties, names split on `.`. */
@@ -124,14 +132,18 @@ export function resolveReference(
   // A path only: an absolute URL, or a variable in the host, could send
   // the caller anywhere, and `//` would start a host. So would `/\`: the
   // WHATWG URL parser reads a backslash as a slash in a special scheme's
-  // URL, so `/\evil.example/` resolves to that host. No backslash at all.
+  // URL, so `/\evil.example/` resolves to that host. It also strips tab,
+  // LF and CR anywhere, so `/\t/evil.example/` does too. No backslash, C0
+  // control character, space or DEL at all.
   if (
     !template.startsWith('/') ||
     template.startsWith('//') ||
-    template.includes('\\')
+    [...template].some(
+      (char) => char <= ' ' || char === '\u007f' || char === '\\',
+    )
   )
     throw new Error(
-      `${where}: ${targetName}'s identity.urlTemplate ${show(template)} is not a path starting with one / and without a backslash`,
+      `${where}: ${targetName}'s identity.urlTemplate ${show(template)} is not a path starting with one /, without a backslash, control character or space`,
     );
   const bindings = own(declared, 'bindings');
   if (!isRecord(bindings)) throw new Error(`${where}.bindings is required`);
