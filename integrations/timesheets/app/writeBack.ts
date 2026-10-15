@@ -1369,6 +1369,7 @@ async function sendOne(
   }
 
   const remote = entryValues(fresh, names);
+
   if (!remote) {
     // A running timer or a break says so; otherwise name the lens's reason
     // (a start or end Clockify sent that is not an ISO instant, say).
