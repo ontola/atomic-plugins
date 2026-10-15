@@ -448,6 +448,32 @@ reads. No dated catalog selects it yet. `tests/test_gitlab_throttling.py`
 composes it alone and after the catalog's GitLab overlays and classifies synthetic
 responses. No provider was called.
 
+## Discord pagination v2: a cursor from the last item
+
+[`pagination-v2-9d0d73c6…`](APIs/discord.com/10/pagination-v2-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+declares [Pagination Schemes 0.9.0](../openapi-extensions/spec/pagination-schemes/README.md)
+`fromLastItem` (§4.3.3) on the two Discord operations whose order is
+documented: [Get Guild Bans](https://docs.discord.com/developers/resources/guild)
+("Users will always be returned in ascending order by `user.id`") and
+[Get Guild Scheduled Event Users](https://docs.discord.com/developers/resources/guild-scheduled-event)
+("ascending order by `user_id`"). Both take `after` as a strict bound
+("consider only users after given user id"), so the next page's `after` is
+the last item's `user.id`: rule (b) of §4.3.3. The first request sends no
+`after`, and an empty page ends the read (Discord has no has-more field). The
+pinned OAD does not require `user` on a scheduled-event user; an item without
+it ends the read with an error. Not declared, because Discord does not
+document their order: List Guild Members (its `after` is "the highest user id
+in the previous page", but the order is not stated), Get Reactions, List
+Thread Members, Get Answer Voters, List Entitlements, List SKU
+Subscriptions, Get Current User Guilds, the scheduled-event exception users,
+Get Channel Messages, and the audit log (whose cursor-less first page is not
+ascending). It keeps v1's one action, the guild list's description, revised.
+A 0.8.0 consumer would stop after one page, so it needs a 0.9.0 reader. No
+dated catalog selects it; the catalogs read neither operation.
+`tests/test_discord_pagination_v2.py` validates it alone and in place of v1
+after the catalog's Discord overlays, and reads synthetic pages with the
+reference `read_item_cursor`. No provider was called.
+
 ## Discord throttling
 
 [Discord API v10 throttling](APIs/discord.com/10/throttling-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
