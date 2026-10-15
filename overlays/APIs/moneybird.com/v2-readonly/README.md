@@ -30,6 +30,32 @@ window algorithm is explicitly unspecified; pacing/retries remain consumer
 choices. The catalog excludes report endpoints, whose stricter quota is not
 modeled by this overlay. Source: https://developer.moneybird.com/#throttling
 
+`pagination-range-window-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml`
+declares `GET /{administration_id}/financial_mutations.json` as a
+[Pagination Schemes 0.5.0](../../../../openapi-extensions/spec/pagination-schemes/README.md#46-range-windows)
+`rangeWindow`: the list has no page parameter and its description says it is
+"Limited to 100 financial mutations" (the pinned document, and
+https://developer.moneybird.com/api/financial_mutations/), so a client reads
+a range of days as `filter=period:YYYYMMDD..YYYYMMDD` windows and halves a
+window whose answer holds 100 mutations, down to single days. A single day
+with 100 mutations ends the read with an error. The Money app's
+`integrations/money/moneybird/read.ts` splits windows the same way in code
+today, but asks its first window as the named `period:this_year`. Moneybird's
+financial mutations synchronization API, which the pinned read-only document
+does not include, is the documented alternative for reading more than 100. Declared, not
+verified against a live administration: that the period bounds are
+inclusive (inferred from the documented example `20130101..20130131`), that
+a one-day period is accepted, which mutation field the period compares
+(`date` is likely, so the overlay names no `field`), and whose time zone the
+days are in (so it names no `timeZone`), and that a `period:` filter
+alone still selects every state and mutation type (Moneybird says a passed
+filter "replaces the defaults below entirely", and those defaults are
+`state:all` and `mutation_type:all`). The overlay goes after the
+`pagination` overlay in a catalog. syncables reads `rangeWindow` schemes,
+and its `sync()` applies a windowed read from 0.22.0; no dated catalog
+selects it yet. Check it with
+`python3 overlays/tests/test_moneybird_range_window.py --directory <openapi-directory clone>`.
+
 `throttling-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` (#615) keeps
 v1's limits exactly and adds what the introduction's Throttling section
 documents for a 429: `Retry-After` ("the time after which a new request can
