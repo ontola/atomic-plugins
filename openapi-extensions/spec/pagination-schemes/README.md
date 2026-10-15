@@ -189,28 +189,31 @@ one of these:
   values are unique, and that the items are returned in the order of that
   field that the bound pages through: ascending for a lower bound ("after"),
   as Discord's Get Guild Bans documents, or, since 0.10.0, descending for an
-  upper bound ("before"). An operation that documents the bound but not the
-  order, such as List Guild Members, does not qualify. Under (b) the field
-  SHOULD declare `order`; or
-- (c) since 0.10.0, that the cursor parameter is such a strict bound, and
-  that the items are returned in an order of another property that the
-  provider documents the field's values follow. Discord's Get Channel
-  Messages "Returns an array of message objects from newest to oldest" and
-  takes `before`, "Get messages before this message ID"; its reference says
-  "snowflake IDs are just numbers with a timestamp"
-  ([reference](https://docs.discord.com/developers/reference)), so newest
-  to oldest is descending ids except for ids of the same millisecond, whose
-  order the page does not state. Under (c) the field MUST declare `order`,
-  so that a client checks the inference instead of trusting it.
+  upper bound ("before"), as Discord's List Joined Private Archived Threads
+  documents ("Threads are ordered by their id, in descending order"; before
+  "returns threads before this id"). An operation that documents the bound
+  but not the order of that field, such as List Guild Members, does not
+  qualify; nor does one that documents an order of another property (Get
+  Channel Messages, "from newest to oldest"), since a bound on the id over
+  items sorted by time can drop an item whose id is out of time order at a
+  page boundary, unseen. Under (b) the field SHOULD declare `order`.
 
 With `order`, the `fromLastItem` values of the items a read returns, in the
 order the pages return them, MUST be strictly ascending (or descending)
 across the whole read, within and between pages. Two values compare as
-numbers when both are integers, or strings of ASCII digits without a sign
-(as Discord's snowflakes are); otherwise both must be strings, compared by
-code point. A client ends the read with an error, not complete, at the first
-pair out of order, at a value that is neither, or at a number beside a
-string. Without `order` it checks nothing beyond step 4 below.
+numbers when each is a non-negative integer or a string of ASCII digits
+without a sign (as Discord's snowflakes are), an integer beside a digit
+string included (`10` after `"9"` is ascending). Numbers compare exactly,
+whatever their size (Discord's ids exceed 2^53), and leading zeros do not
+count (`"010"` equals `"10"`). Otherwise both values must be strings that
+are not all digits, compared by code point: in a field whose values are
+text, values that are all digits still compare as numbers, and a mix of
+the two kinds ends the read with an error. A client ends the read with an
+error, not complete, at the first pair out of order, at a value that is
+neither kind, or at a number beside a non-digit string. Without `order` it
+checks nothing beyond step 4 below. The check sees only the items the read
+returns: it does not show that the provider returned every item, which is
+why rule (b) asks for a documented order of the field itself.
 
 A request field with `fromLastItem` names the item field. A client that reads
 with it:
@@ -235,7 +238,7 @@ A `hasMore` of `true` on a page with items, or no `hasMore`, decides nothing:
 the client asks again, and an empty page ends the list. Without `hasMore` a
 read costs one request more than the pages that hold items. A short page does
 not end the read: neither provider documents that it is the last. Rules 27
-to 29 say where `fromLastItem` and `hasMore` may appear.
+to 30 say where `fromLastItem`, `hasMore` and `order` may appear.
 
 ### 4.4 Response Pagination Fields Object
 
@@ -1121,7 +1124,7 @@ cd openapi-extensions/spec/pagination-schemes
 
 ## Changes
 
-- **0.10.0** (2026-10-15): adds `order` beside `fromLastItem` (§4.3.3): the declared order of the cursor values, which the client checks across the read and which ends it with an error when broken. Extends the evidence rule: (b) also covers an upper bound ("before") over items in descending order, and a new (c) covers an order documented by another property the field follows (Discord's messages, newest to oldest, with time-prefixed snowflake ids), only with `order` declared. Validation rule 30, `read_item_cursor` checks `order`, an example (`examples/item-order.yaml`) and tests. A 0.9.1 document stays valid and means the same. A 0.9.1 validator rejects `order`; a consumer that does not validate ignores it and does not check the order.
+- **0.10.0** (2026-10-15): adds `order` beside `fromLastItem` (§4.3.3): the declared order of the cursor values, which the client checks across the read and which ends it with an error when broken (non-negative integers and digit strings compare exactly as numbers, other strings by code point). Extends the evidence rule (b) to an upper bound ("before") over items in documented descending order of the unique field, as Discord's List Joined Private Archived Threads documents. An order of another property (Discord's messages, newest to oldest) does not qualify: the check sees only the items returned, and an item out of id order at a page boundary would be dropped unseen. Validation rule 30, `read_item_cursor` checks `order`, an example (`examples/item-order.yaml`) and tests. A 0.9.1 document stays valid and means the same. A 0.9.1 validator rejects `order`; a consumer that does not validate ignores it and does not check the order, so a document that relies on `order` should not be used with a 0.9.x consumer, and no overlay should declare it until syncables checks it.
 - **0.9.1** (2026-10-15): a `hasMore` field that is present but not a boolean (`"false"`, `0`, `null`) ends an item-cursor read with an error (§4.3.3 step 4); 0.9.0 read it as absent, so `"false"` asked for another page and an empty page then ended the read as complete. `read_item_cursor` and a test. No document changes meaning.
 - **0.9.0** (2026-10-14): adds `fromLastItem` to the Request Field Object (§4.3.3): a cursor the client reads from a field of the previous page's last item, as Stripe's `starting_after` and Discord's `after` take; and the response role `hasMore`, whose `false` ends the list. Validation rules 27–29, `read_item_cursor` in the validator, an example and tests. A document valid under 0.8.0 stays valid and means the same. A 0.8.0 validator rejects `fromLastItem` and the `hasMore` role. A 0.8.0 consumer that does not validate reads such a scheme as a `pageToken` scheme without a next token: it stops after one page and takes that page as the complete list, so a document that needs `fromLastItem` should not be used with one.
 - **0.8.0** (2026-10-13): adds `incomplete` to the Response Pagination Fields Object (§4.4.6), the Incomplete Object: a response body value (`field` with `equals` or `in`) that marks the result as cut short by the server, as Notion's query does past 10,000 results with `has_more: false`. A read in which any response is marked is not complete; paging is unchanged. Validation rule 26, `response_incomplete` in the validator, and `complete` in `read_pages` and `read_offsets` honour it; an example and tests. Allowed on `pageNumber`, `pageToken` and `nextLink` schemes only. Collection Completeness 0.4.0-draft §3 states that such a read is not complete. A document valid under 0.7.1 stays valid and means the same. A 0.7.1 validator rejects a scheme with `incomplete`; a consumer that does not validate ignores it and takes a marked read as complete. The Notion overlay revision that declares it follows separately.
