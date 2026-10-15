@@ -1,0 +1,107 @@
+# Reviewed 2026-10-14 against the pinned OAD and official provider documentation; no live calls.
+# Source: the pinned OAD (https://developers.asana.com/reference/rest-api-reference carries
+#   the same text):
+#   - GET /projects/{project_gid}/tasks: "Returns the compact task records for all tasks
+#     within the given project, ordered by their priority within the project. Tasks can exist
+#     in more than one project at a time."
+#   - DELETE /tasks/{task_gid}: "Deleted tasks go into the “trash” of the user making the
+#     delete request. Tasks can be recovered from the trash within a period of 30 days;
+#     afterward they are completely removed from the system."
+#   - the NotFound response: "Either the request method and path supplied do not specify a
+#     known action in the API, or the object specified by the request does not exist."
+#   - the completed_since parameter: "Only return tasks that are either incomplete or that
+#     have been completed since this time."
+#   - the next_page object: "Note that an offset token will expire after some time, as data
+#     may have changed."
+#   - GET /workspaces: "Returns the compact records for all workspaces visible to the
+#     authorized user."
+#   - GET /workspaces/{workspace_gid}/projects: "Returns the compact project records for all
+#     projects in the workspace."; its `archived` parameter "Only return projects whose
+#     `archived` field takes on the value of this parameter." (an optional filter, not sent).
+#   - GET /users: "Returns the user records for all users in all workspaces and organizations
+#     accessible to the authenticated user." (`workspace` and `team` are optional filters,
+#     not sent).
+# Needs Collection Completeness 0.2.0-draft (notFound, parentAbsent). Compose after
+# crud-causality-v2-b58c91d9...-overlay.yaml, in either order: it deep-merges into its
+# resources. Not with v1: v1's read sends no `limit`, and Asana's pagination guide says an
+# unpaginated query "will be truncated at about 1,000 objects", so a large project would read
+# as complete while missing tasks, and with `removed` those would all go unconfirmed. v2 fixes
+# `limit: '100'` on the read (CRUD Causality listQuery), so it pages through every task.
+#
+# Without a declaration a consumer takes a 404 from a task's own read as a deletion (the
+# notFound default). Asana's 404 says the object "does not exist", but a deleted task can be
+# "recovered from the trash within a period of 30 days", and what a task's read answers
+# while it is in the trash is not documented. So a 404 is unavailable, not a final deletion.
+# A task leaves a project's list when it is deleted or removed from that project (it can be
+# in several), so absence is removed: it leads to the task's own read.
+# The four lists send no narrowing filter (each optional filter is left out), so `removed`
+# holds as Collection Completeness §4.2 reads it: the list does not filter by default, and an
+# absent object (a workspace the user left, a project deleted or moved, a user no longer
+# in a shared workspace) may still exist and is settled by its own read. The NotFound text is
+# the same for every read, so each 404 is unavailable.
+# parentAbsent: unavailable on workspaceProjects (parent: workspaces) and projectTasks
+# (parent: workspaceProjects' project): once a workspace or project is concluded gone, its
+# projects or tasks are unavailable, never deleted by that alone.
+# Not declared: `gone` (no 410 documented).
+# Not verified: GET /workspaces/{workspace_gid}/projects "may timeout for large domains" (the
+# OAD's note); a timed-out read is not complete.
+# Not verified: that the list without completed_since returns completed tasks (the
+# parameter's text implies it; the catalog sends none); whether subtasks not added to the
+# project are listed (the reference does not say). An expired offset token fails the read,
+# which then is not complete.
+overlay: 1.0.0
+info:
+  title: Asana collection completeness
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/b58c91d9f59c6a10178916e7948793809edae46d/APIs/asana.com/1.0/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        workspace:
+          collections:
+            workspaces:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                description: >-
+                  Every workspace "visible to the authorized user". One leaves
+                  the list when the user leaves it or loses access, so absence
+                  is removed and a 404 from its read is unavailable.
+        project:
+          collections:
+            workspaceProjects:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                parentAbsent: unavailable
+                description: >-
+                  "All projects in the workspace" (the archived filter is not
+                  sent). A project leaves it when deleted or moved, so absence
+                  is removed; a 404 from its read is unavailable. When the
+                  workspace is concluded gone, its projects are unavailable.
+        user:
+          collections:
+            users:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                description: >-
+                  "All users in all workspaces and organizations accessible to
+                  the authenticated user" (no workspace or team filter sent).
+                  A user leaves it when no longer in a shared workspace, so
+                  absence is removed; a 404 from its read is unavailable.
+        task:
+          collections:
+            projectTasks:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                parentAbsent: unavailable
+                description: >-
+                  A project's tasks, every page. A task leaves the list when
+                  deleted or removed from the project ("Tasks can exist in more
+                  than one project at a time"), so absence is removed. Deleted
+                  tasks "can be recovered from the trash within a period of 30
+                  days", and what a trashed task's read answers is not
+                  documented, so a 404 from its own read is unavailable.
