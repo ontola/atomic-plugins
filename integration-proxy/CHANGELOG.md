@@ -3,6 +3,13 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
+## Unreleased
+
+- Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
+  paced at the tier whose `plans` name the plan the catalog selection's
+  `throttlingPlans` gives for it, else within every tier at once (each its
+  own count). Unknown entries are logged at load and ignored.
+
 ## 0.4.0 (2026-10-13)
 
 - Opt-in OAuth device authorization for public CLI clients (#565), with Atomic
