@@ -1579,6 +1579,38 @@ writes held as unavailable before downgrading. Set `outboxNamespace` to
 store the outbox under another namespace (it must not equal a collection
 name), or to `false` to keep writes in memory only.
 
+### APIs that cannot update (`replace`, `unkeyedLists`)
+
+Some APIs can create and delete an object but not change it, and give the
+items of a list no id: Google Keep API v1 is one. CRUD Causality 0.7.0
+declares both on the CRUD Resource Object (§4.8 `replace`, §4.9
+`unkeyedLists`), and `syncables/browser` exports the pure parts a consumer
+needs to write to such an API through its own requests:
+
+- `replaceOf(document, resource)` reads `replace` (or `{ refused }` for a
+  declaration rule 28 refuses), and `replaceBlock(replace, object)` names
+  the Block Object that forbids replacing an object (an attachment the API
+  cannot copy, collaborators a new object would lose), or `undefined`.
+  Replace by creating the new object, then deleting the old one; keep the
+  old one's identity as retiring until its delete succeeds.
+- `unkeyedListsOf(document, resource)` reads `unkeyedLists`;
+  `flattenList`/`nestList` turn a list into its items (a child right after
+  its parent) and back; `pairItems` pairs the items of a remote list with
+  the baseline's on the declared `match` fields and by position (§4.9.2).
+- `mergeUnkeyedList({ spec, base, local, remote })` merges three versions
+  of such a list: the baseline, the local items (with their own ids and the
+  baseline index each was at), and the remote list. A field changed on one
+  side takes that side's value (both sides: the local one, counted in
+  `conflicts`); an item deleted on one side and edited on the other stays;
+  the order is the local one with the remote moves applied. So an item
+  moved remotely and ticked locally comes out moved and ticked. `send` says
+  the merged list differs from the remote one.
+- `fingerprint(value)` is a 14-character digest of a JSON value, for a
+  record's baseline when the fields themselves need not be kept.
+
+`createApiClient` does not use them yet: `update()` on a resource with no
+update operation still throws, rather than replacing.
+
 ## One engine in Node and browsers
 
 The Node `syncables` and browser `syncables/browser` entries both export
@@ -1969,7 +2001,12 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **Unreleased**: `validatePaginationScheme` follows the spec's
+- **0.24.0**: CRUD Causality 0.7.0's `replace` and `unkeyedLists` for
+  APIs that cannot update an object or give list items no id (see "APIs
+  that cannot update"): `replaceOf`, `replaceBlock`, `unkeyedListsOf`,
+  `flattenList`, `nestList`, `pairItems`, `mergeUnkeyedList` and
+  `fingerprint`, in both entries. Moved from the Google Keep drive app
+  (ontola/atomic-plugins#593). `createApiClient` is unchanged. Also: `validatePaginationScheme` follows the spec's
   `schema.json`: a field the spec does not define (other than `x-`) on a
   scheme or an object in it, or a value of the wrong type, makes the
   scheme invalid, and a scheme that is not an object no longer makes it
