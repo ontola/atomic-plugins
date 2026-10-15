@@ -16,7 +16,7 @@ import { fixtureProxy } from './fixtureProxy.js';
 import { classify } from './problem.js';
 import { ensureSchema } from './schema.js';
 import type { PluginStore } from './store.js';
-import { ProxyError } from './transport.js';
+import { ProxyError, proxyRefusal } from './transport.js';
 
 const NOW = Date.parse('2026-09-23T12:00:00Z');
 
@@ -75,14 +75,53 @@ describe('classify', () => {
         ),
       ).kind,
     ).toBe('reauth');
+    // The proxy's access check (0.8.2): not "choose another workspace".
     expect(
       classify(Object.assign(new Error('refused'), { code: 'forbidden' })).kind,
-    ).toBe('forbidden');
+    ).toBe('proxy-access');
+    expect(
+      classify(
+        new Error(
+          'The integration proxy refused the request (access_denied: this agent may not use the proxy: not on the list).',
+        ),
+      ).kind,
+    ).toBe('proxy-access');
+    // Someone else's connection, or a transferred owner id: connect again.
+    for (const code of ['not_owner', 'agent_retired'])
+      expect(
+        classify(
+          new Error(
+            `The integration proxy refused this connection (${code}). Connect again.`,
+          ),
+        ).kind,
+        code,
+      ).toBe('reauth');
+    // Clockify's own 403 on a workspace stays "choose another workspace".
+    expect(classify(err(403)).kind).toBe('forbidden');
     expect(
       classify(
         new Error('The integration proxy refused the request (bad_signature).'),
       ).kind,
     ).toBe('other');
+  });
+
+  it('reads not_owner and agent_retired as the proxy refusing this connection (0.8.2)', () => {
+    for (const code of ['not_owner', 'agent_retired']) {
+      const refused = proxyRefusal({
+        status: 403,
+        body: { error: code, message: 'm' },
+      });
+      expect(refused?.message, code).toMatch(
+        /refused this connection .* Connect again\./,
+      );
+      expect(classify(refused).kind, code).toBe('reauth');
+    }
+
+    const denied = proxyRefusal({
+      status: 403,
+      body: { error: 'access_denied', message: 'not on the list' },
+    });
+    expect(classify(denied).kind).toBe('proxy-access');
   });
 
   it('reads retry-after as seconds or a date, else 60', () => {

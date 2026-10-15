@@ -11,6 +11,12 @@ export type ProblemKind =
   | 'reauth'
   /** 403 on time entries: this account cannot read that workspace. */
   | 'forbidden'
+  /**
+   * The integration proxy's own access check refuses this person or app
+   * (`access_denied`: "this agent may not use the proxy"): neither another
+   * workspace nor a reconnect changes that (0.8.2).
+   */
+  | 'proxy-access'
   /** 429. */
   | 'rate-limited'
   /** The relay or the proxy could not be reached (no HTTP status). */
@@ -36,18 +42,23 @@ const REAUTH = new Set([
   'capability_scope',
   'platform_mismatch',
   'credential_refresh_failed',
+  // The connection belongs to another owner, or its owner's id was
+  // transferred to a new key (#410): connecting again gives this person a
+  // connection of their own (0.8.2; before, both read as "choose another
+  // workspace").
+  'not_owner',
+  'agent_retired',
   // Only after the frame client's own single retry. (The retired
   // Bearer-code refusal is left out, as in transport.ts: only a host from
   // before #54 sends it, and build.test.ts keeps that word out of the bundle.)
   'capability_expired',
 ]);
-/** Proxy refusal codes that mean: this app or person may not do that. */
-const ACCESS = new Set([
-  'unauthorized',
-  'forbidden',
-  'access_denied',
-  'not_owner',
-]);
+/**
+ * Proxy refusal codes that mean: the proxy's access check refuses this
+ * person or app (`integration-proxy/src/api_error.rs` `AccessDenied`; the
+ * other two are older spellings). Only whoever runs the proxy can change it.
+ */
+const ACCESS = new Set(['unauthorized', 'forbidden', 'access_denied']);
 
 /** `retry-after` as seconds (a number or an HTTP date), else undefined. */
 export function retryAfterSeconds(
@@ -102,7 +113,7 @@ export function classify(error: unknown, now = Date.now()): Problem {
       : /refused (?:this connection|the request) \((\w+)/.exec(detail)?.[1];
   if (/refused this connection/.test(detail) || (code && REAUTH.has(code)))
     return { kind: 'reauth', detail };
-  if (code && ACCESS.has(code)) return { kind: 'forbidden', detail };
+  if (code && ACCESS.has(code)) return { kind: 'proxy-access', detail };
   if (code || /refused the request/.test(detail))
     return { kind: 'other', detail };
   if (/returned more than \d+ pages/.test(detail))

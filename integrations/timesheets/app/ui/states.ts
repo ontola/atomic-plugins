@@ -334,6 +334,16 @@ export function problemBanner(
         }),
         details,
       });
+    case 'proxy-access':
+      return banner(h, {
+        tone: 'neg',
+        icon: 'err',
+        role: 'alert',
+        lead: 'The integration proxy does not let you use it.',
+        text: "Reconnecting won't help; ask whoever runs the integration proxy for access.",
+        action: retry(),
+        details,
+      });
     case 'rate-limited':
       return banner(h, {
         tone: 'warn',

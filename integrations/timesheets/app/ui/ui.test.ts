@@ -385,6 +385,12 @@ describe('frames', () => {
       'Import 7 days instead',
       'Sync failed',
     ],
+    [
+      'j7',
+      'The integration proxy does not let you use it.',
+      'Try again',
+      'Sync failed',
+    ],
   ] as const)(
     'J (%s): the banner, its recovery and the pill; data stays',
     (id, lead, action, pillText) => {

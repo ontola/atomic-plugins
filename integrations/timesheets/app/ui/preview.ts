@@ -88,6 +88,7 @@ export const FRAMES = {
   j4: { width: 560, title: 'J Forbidden' },
   j5: { width: 560, title: 'J Warnings' },
   j6: { width: 560, title: 'J Too many' },
+  j7: { width: 560, title: 'J Proxy access refused' },
   k: { width: 560, title: 'K No relay' },
   l: { width: 560, title: 'L Week outside the window' },
   m: { width: 560, title: 'M Settings' },
@@ -352,6 +353,13 @@ export function renderFrame(root: HTMLElement, id: FrameId): Shell {
     ],
     j6: [
       problem('too-many', 'Clockify /api/v1/… returned more than 200 pages'),
+      sheet,
+    ],
+    j7: [
+      problem(
+        'proxy-access',
+        'The integration proxy refused the request (access_denied: this agent may not use the proxy).',
+      ),
       sheet,
     ],
     k: [{ kind: 'no-proxy' }, offline],
