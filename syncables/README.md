@@ -1768,6 +1768,16 @@ and fails on any Node built-in import. It does not include the mock
 server, environment loader or file-path loaders, so pass documents and
 overlays as parsed objects.
 
+`prepareDocument` applies overlays with `applyOverlay`, which reads the
+target grammar integration-proxy reads: `$`, then `.name` or `['name']`
+segments, as in `$.paths['/users.list'].get.responses['200']`. Wildcards,
+filters and array indexes are refused. An `update` object is deep-merged
+onto an object target; any other `update`, or one onto an array or a
+scalar, replaces the target, as the proxy does (Overlay 1.0 would append
+to an array). Objects missing along a target's path are created, where
+the proxy refuses the action. Every overlay under
+[`overlays/APIs/`](../overlays/APIs/) applies.
+
 ```ts
 import {
   prepareDocument,
@@ -2062,6 +2072,20 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: `applyOverlay` (and so `prepareDocument`) reads
+  `['name']` target segments, as integration-proxy does, and replaces an
+  array or scalar target with the `update` instead of throwing. Before,
+  174 of the 524 overlays under `overlays/APIs/` threw "Unsupported
+  overlay target" (1,803 of their 2,336 actions address a path such as
+  `$.paths['/users.list'].get`, or carry an array `update`), and an array
+  `update` (Notion's auth overlay) was merged index by index into an
+  object. An `update` is now copied, so a later change to the result no
+  longer changes the overlay. `OverlayAction.update` is typed
+  `Record<string, unknown> | unknown[]`. A target that applied before
+  gives the same result, with two exceptions no overlay in this
+  repository uses: a falsy `update` (`null`, `0`, `false`, `''`) now
+  replaces the target instead of being skipped, and an object `update`
+  onto an existing scalar replaces it instead of throwing.
 - **Unreleased**: `resolveReference` (and the `ResolvedReference` type)
   resolves a CRUD Causality §4.1.3 Reference Object for an object: the
   referenced resource's identity path, filled from the object's fields and
