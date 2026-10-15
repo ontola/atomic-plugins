@@ -78,7 +78,11 @@ function loadPages(collection, apiDir) {
   for (let n = 1; ; n++) {
     const file = new URL(`GET__api__v1__${collection}__page-${n}.json`, apiDir);
     if (!existsSync(file)) break;
-    pages.push(loadJson(file));
+    const page = loadJson(file);
+    // record.mjs records a page that answered with an error (a 429, say)
+    // and stops there; its rows end at the page before.
+    if (page.status !== 200 || !Array.isArray(page.body?.results)) break;
+    pages.push(page);
   }
 
   return pages;
