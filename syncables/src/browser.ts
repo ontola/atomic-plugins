@@ -69,6 +69,7 @@ export type {
   SyncResult,
   CollectionCoverage,
   IncompleteRead,
+  MatchedCreate,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';

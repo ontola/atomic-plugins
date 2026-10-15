@@ -382,6 +382,22 @@ export interface ApiClientOptions {
    */
   idempotencyKeyHeader?: string | false;
   /**
+   * Bind an unbound create (a 2xx that did not identify the record, CRUD
+   * Causality §4.3.2) from the next complete read of its collection. Only
+   * for a collection named in `uniqueFields` (by its name, or its path in a
+   * legacy document), and only when the create sent one of the fields listed
+   * for it (a value that is not `null` or `""`; the id field does not
+   * count): the app declares that no other record of the collection has the
+   * same value in that field. The read must then hold exactly one record
+   * that is new since the create was answered, belongs to no other local
+   * write, equals every field the create sent (the id field left out), and
+   * is no other unbound create's candidate. One chance, in memory: not
+   * after a restart, not without a complete read of the collection before
+   * the create, and not by any later read. Without it, or without such a
+   * match, the create stays `uncertain` and `unbound` for `resolveWrite`.
+   */
+  matchUnboundCreates?: { uniqueFields: Record<string, string[]> };
+  /**
    * Called when a refresh shows that a field with a pending local update
    * also changed remotely. The pending local value stays visible and is the
    * one the queued write sends; the conflict is also listed on
@@ -528,6 +544,16 @@ export interface PaginateOptions {
   body?: Record<string, unknown>;
 }
 
+/** An unbound create bound from a read (`ApiClientOptions.matchUnboundCreates`). */
+export interface MatchedCreate {
+  collection: string;
+  context?: Record<string, string>;
+  /** The record's local id, under which it was created. */
+  localId: string;
+  /** The server's id, from the read. */
+  id: string;
+}
+
 export interface SyncResult {
   /** Collection names (legacy: paths) whose local copy changed during this sync. */
   changed: string[];
@@ -538,6 +564,11 @@ export interface SyncResult {
    * end of the sync), one per record. Absent when there were none.
    */
   presence?: PresenceChange[];
+  /**
+   * Unbound creates this sync bound to a record of its read
+   * (`matchUnboundCreates`): the local id and the server's id.
+   */
+  matched?: MatchedCreate[];
   /**
    * Collections this sync read without error but not completely: a read by
    * range windows (Pagination Schemes 0.5.0 §4.6.4) or one ended by a short
@@ -1831,6 +1862,31 @@ export function createApiClient(
   // once. In memory only: after a restart, a member's failed writes still
   // carry `missingRecord`, but a member without writes is not marked.
   const goneParents = new Map<string, Evidence>();
+  /**
+   * `matchUnboundCreates`: per unbound create, the ids its scope's
+   * confirmed copy held when it was answered, what it sent, and the read
+   * count then; dropped after the first complete read of the scope that
+   * starts later. In memory only.
+   */
+  const unboundKnown = new Map<
+    QueuedWrite,
+    { known: Set<string>; sent: Record<string, unknown>; read: number }
+  >();
+  /** Scopes with a complete read applied since this client started. */
+  const completeScopes = new Set<string>();
+  /**
+   * `matchUnboundCreates.uniqueFields` by collection name; an unknown
+   * collection throws here, at construction.
+   */
+  const uniqueByCollection = new Map(
+    Object.entries(options.matchUnboundCreates?.uniqueFields ?? {}).map(
+      ([name, fields]) => [resolveRoute(name).collection.name, [...fields]],
+    ),
+  );
+  function uniqueFieldsOf(route: ClientRoute): string[] {
+    return uniqueByCollection.get(route.collection.name) ?? [];
+  }
+  let readsStarted = 0;
   const nestedUnder = new Map<
     string,
     { route: ClientRoute; param: string }[]
@@ -3383,6 +3439,26 @@ export function createApiClient(
             (isRecord(result) ? result[idField] : undefined);
           if (!identity || id === undefined || id === null || id === '') {
             write.unbound = true;
+            // Remembered only when the body carries a declared unique
+            // value: matching on the other fields alone could take a record
+            // someone else created with the same values.
+            if (
+              completeScopes.has(write.scope) &&
+              isRecord(body) &&
+              uniqueFieldsOf(route).some(
+                (field) =>
+                  field !== route.collection.idField &&
+                  Object.hasOwn(body, field) &&
+                  body[field] !== null &&
+                  body[field] !== undefined &&
+                  body[field] !== '',
+              )
+            )
+              unboundKnown.set(write, {
+                known: new Set(remote(write.scope).keys()),
+                sent: structuredClone(body),
+                read: readsStarted,
+              });
             throw new UnusableResponseError(
               'Create response does not identify the created record as its x-crud declares (CRUD Causality §4.3.2); the record is unbound and is not sent again',
             );
@@ -4298,8 +4374,9 @@ export function createApiClient(
   const conditionalTransport: Transport = async (request) => {
     const operation = readOperation(request);
     // A paginated operation is not cached conditionally. An explicit
-    // x-pagination that cannot be applied counts as paginated here; the read
-    // itself fails on it (walkPages).
+    // x-pagination that cannot be applied counts as paginated here (the read
+    // itself fails on it, walkPages), and so does an invalid scheme that
+    // auto-detection would apply (the read is not complete).
     const cacheable = request.method === 'GET' && !paginated(operation);
     const key = request.url.href;
     const cached = cacheable ? conditionalCache.get(key) : undefined;
@@ -5890,6 +5967,8 @@ export function createApiClient(
 
   async function performSync(): Promise<SyncResult> {
     await whenRestored();
+    const thisRead = ++readsStarted;
+    const matched: MatchedCreate[] = [];
     // The records this sync's reads return were seen at its start.
     const readAt = new Date().toISOString();
     const started = new Map(revisions);
@@ -6002,6 +6081,7 @@ export function createApiClient(
           item,
         ]),
       );
+      await matchUnbound(route, scope, context, records, thisRead, matched);
       const read = { route, scope, context, budget, sync: round };
       // Records no write settled on during the read are still fresh.
       const isFresh = (id: string): boolean =>
@@ -6180,6 +6260,9 @@ export function createApiClient(
         }
         confirmedBefore = new Map(remote(scope));
         confirmed.set(scope, records);
+        // Applied: the confirmed copy is this complete read
+        // (matchUnboundCreates may now remember creates of the scope).
+        completeScopes.add(scope);
         // The newest confirmed copy of each written record: from this read,
         // or, for a record the read lacks, from just before it.
         for (const write of allWrites()) {
@@ -6213,20 +6296,31 @@ export function createApiClient(
         // Confirmed records and conflict bases of pending writes moved on.
         if (writeQueues.size || gaveUpWrites.size) await persistLater();
       }
+      // The read equals the last one applied: the confirmed copy is
+      // already this complete read.
+      if (!differs) completeScopes.add(scope);
       // An unchanged read rebuilds nothing, but unconfirmed records, then
       // unavailable ones (second pass), are still checked; not records with
-      // queued or held writes, which their writes' checks settle.
-      if (!differs)
-        for (const mark of keptMarks.values())
+      // queued or held writes, which their writes' checks settle. A kept
+      // mark this read lists as a tombstone is settled (deleted, no
+      // request) whether or not the collection makes checks, as on a
+      // changed read: its members can be unchanged while a tombstone is new.
+      if (!differs) {
+        const listed = listTombstoned.get(scope);
+        for (const mark of keptMarks.values()) {
           if (
-            mark.scope === scope &&
-            !records.has(mark.id) &&
-            !unsettled(scope, mark.id) &&
-            lookupPlanned(route, mark.id, scope)
-          ) {
-            if (mark.presence === 'unconfirmed') vanished.push(mark.id);
-            else if (mark.presence === 'unavailable') unavailable.push(mark.id);
-          }
+            mark.scope !== scope ||
+            records.has(mark.id) ||
+            unsettled(scope, mark.id)
+          )
+            continue;
+          if (listed?.has(mark.id) && mark.presence !== 'deleted')
+            vanished.push(mark.id);
+          else if (!lookupPlanned(route, mark.id, scope)) continue;
+          else if (mark.presence === 'unconfirmed') vanished.push(mark.id);
+          else if (mark.presence === 'unavailable') unavailable.push(mark.id);
+        }
+      }
       for (const id of unavailable) round.unavailable.push({ read, id });
       // isFresh: a write that settled on a record during the rebuild above
       // makes this read too old to judge that record.
@@ -6279,11 +6373,93 @@ export function createApiClient(
     return {
       changed: [...changed],
       incomplete,
+      ...(matched.length ? { matched } : {}),
       ...(result.describers ? { describers: result.describers } : {}),
       ...(warnings.length ? { warnings } : {}),
       ...(round.presence.length ? { presence: round.presence } : {}),
       ...(coverage.length ? { coverage } : {}),
     };
+  }
+
+  /**
+   * `matchUnboundCreates`: binds each unbound create of `scope` whose first
+   * complete read since its answer this is (only creates that sent a
+   * declared unique value were remembered), when exactly one record of the
+   * read is new since then, has no local writes, equals every field the
+   * create sent (the local id left out), and is no other create's
+   * candidate. The create is then confirmed with that id, as
+   * `resolveWrite(confirm)` does. Each create gets this one chance.
+   */
+  async function matchUnbound(
+    route: ClientRoute,
+    scope: string,
+    context: Record<string, string>,
+    records: Map<string, Record<string, unknown>>,
+    thisRead: number,
+    matched: MatchedCreate[],
+  ): Promise<void> {
+    const idField = route.collection.idField;
+    const found = new Map<QueuedWrite, string[]>();
+    for (const [write, entry] of unboundKnown) {
+      if (write.scope !== scope || thisRead <= entry.read) continue;
+      unboundKnown.delete(write);
+      const head = writeQueues.get(keyFor(scope, write.id))?.[0];
+      if (head !== write || write.state !== 'uncertain' || !write.unbound)
+        continue;
+      const sent = Object.entries(entry.sent).filter(([k]) => k !== idField);
+      if (!sent.length) continue;
+      found.set(
+        write,
+        [...records]
+          .filter(
+            ([id, item]) =>
+              id !== write.id &&
+              !entry.known.has(id) &&
+              !writeQueues.has(keyFor(scope, id)) &&
+              !gaveUpWrites.has(keyFor(scope, id)) &&
+              // Nor the id another create was confirmed with, whose
+              // settling has not moved its writes there yet.
+              !allWrites().some(
+                (other) => other.scope === scope && other.confirmedId === id,
+              ) &&
+              sent.every(
+                ([k, v]) => Object.hasOwn(item, k) && deepEqual(item[k], v),
+              ),
+          )
+          .map(([id]) => id),
+      );
+    }
+    const claims = new Map<string, number>();
+    for (const ids of found.values())
+      for (const id of ids) claims.set(id, (claims.get(id) ?? 0) + 1);
+    let bound = false;
+    for (const [write, ids] of found) {
+      const id = ids.length === 1 ? ids[0] : undefined;
+      if (id === undefined || claims.get(id) !== 1) continue;
+      // As resolveWrite(confirm) does.
+      write.confirmedId = id;
+      delete write.unbound;
+      delete write.missingRecord;
+      write.state = 'pending';
+      bound = true;
+      matched.push({
+        collection: route.collection.name,
+        ...(Object.keys(context).length ? { context: { ...context } } : {}),
+        localId: write.id,
+        id,
+      });
+    }
+    if (!bound) return;
+    await persistLater();
+    // Drained now, in the middle of the sync, as after a resolveWrite
+    // confirm during one: the settle sends no request and counts as a
+    // write on the scope, so this snapshot's stale checks in performSync treat it
+    // as any write that settles while a sync runs.
+    for (const write of found.keys()) {
+      const key = keyFor(scope, write.id);
+      if (write.confirmedId !== undefined && !draining.has(key))
+        void drainQueue(key);
+    }
   }
 
   function sync(): Promise<SyncResult> {
