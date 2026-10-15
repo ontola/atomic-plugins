@@ -2077,6 +2077,18 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   from Throttling 0.5.0-draft but not yet 0.4.0's `blocked` meaning
   (#533).
   Also: `validatePaginationScheme` follows the spec's
+  `schema.json`: a field the spec does not define (other than `x-`) on a
+  scheme or an object in it, or a value of the wrong type, makes the
+  scheme invalid, and a scheme that is not an object no longer makes it
+  throw. Stricter validation can turn a read that used to page into one
+  that is not complete (an auto-detected scheme that is now invalid), or
+  one that fails (an explicit `x-pagination` naming it). In this
+  repository's overlays the one scheme affected is Shutterstock's
+  `pageNumber` (`response.properties` where `bodyFields` was meant), in
+  no catalog; every scheme a catalog applies explicitly is still valid.
+  Auto-detection also skips a malformed operation `parameters` (not an
+  array) or parameter entry (not an object) instead of throwing, so such
+  an operation no longer makes the read of that collection fail.
 - **0.23.0**: a data-loss fix for pagination schemes that auto-detection
   would apply but that are invalid; Pagination Schemes 0.8.0
   `response.incomplete`; Deletion Feeds 0.3.0-draft list tombstones and
