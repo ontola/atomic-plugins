@@ -1900,8 +1900,11 @@ const { records, ontology, errors } = await readPlatform(document, {
   field is absent or `null` resolves to nothing; anything else that cannot
   be filled (a required field absent, a value that is not a string or an
   integer, a variable missing from `context`, a declaration it cannot
-  read) throws. It asserts identity only: nothing is fetched, and the
-  path need not exist or be readable.
+  read) throws. So does a value, bound or from `context`, that is `.` or
+  `..` (it survives percent-encoding, and `/projects/..` normalises to
+  `/`, another resource) or has leading or trailing whitespace. It
+  asserts identity only: nothing is fetched, and the path need not exist
+  or be readable.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -2047,7 +2050,8 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 - **Unreleased**: `resolveReference` (and the `ResolvedReference` type)
   resolves a CRUD Causality §4.1.3 Reference Object for an object: the
   referenced resource's identity path, filled from the object's fields and
-  the request context. Additive.
+  the request context. A value of `.` or `..`, or one padded with
+  whitespace, throws instead of moving the path. Additive.
 - **0.24.0**: CRUD Causality 0.7.0's `replace` and `unkeyedLists` for
   APIs that cannot update an object or give list items no id (see "APIs
   that cannot update"): `replaceOf`, `replaceBlock`, `unkeyedListsOf`,

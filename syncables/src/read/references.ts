@@ -38,6 +38,19 @@ function fieldValue(object: unknown, path: string): unknown {
 }
 
 /**
+ * Why `value` cannot fill a path segment, or undefined when it can. `.`
+ * and `..` survive percent-encoding and would move the path to another
+ * resource (`/projects/..` normalises to `/`), and a value padded with
+ * whitespace is not the identifier it looks like.
+ */
+function segmentProblem(value: string): string | undefined {
+  if (value === '') return 'empty';
+  if (value === '.' || value === '..') return 'a dot segment';
+  if (value.trim() !== value) return 'padded with whitespace';
+  return undefined;
+}
+
+/**
  * Resolves `reference` of `resource` for `object`, reached through a
  * request whose path variables are `context`. Returns undefined when the
  * reference is not `required` (`required: false`) and a bound field is
@@ -45,7 +58,8 @@ function fieldValue(object: unknown, path: string): unknown {
  * declaration cannot be read (no such resource or reference, a target
  * without an `identity.urlTemplate`, a binding without a `field`), when a
  * required reference's field is absent, when a value is neither a string
- * nor an integer, or when an unbound variable is not in `context`.
+ * nor an integer, when an unbound variable is not in `context`, or when a
+ * value, bound or from `context`, is `.`, `..` or padded with whitespace.
  */
 export function resolveReference(
   document: OpenApiDocument,
@@ -92,6 +106,11 @@ export function resolveReference(
         throw new Error(
           `${where}: {${name}} is not bound and not in the request context`,
         );
+      const problem = segmentProblem(carried);
+      if (problem !== undefined)
+        throw new Error(
+          `${where}: {${name}} from the request context is ${JSON.stringify(carried)}, ${problem}`,
+        );
       values[name] = carried;
       continue;
     }
@@ -103,8 +122,14 @@ export function resolveReference(
       if (!required) return undefined;
       throw new Error(`${where}: the required field ${field} is absent`);
     }
-    if (typeof value === 'string' && value !== '') values[name] = value;
-    else if (typeof value === 'number' && Number.isInteger(value))
+    if (typeof value === 'string' && value !== '') {
+      const problem = segmentProblem(value);
+      if (problem !== undefined)
+        throw new Error(
+          `${where}: ${field} is ${JSON.stringify(value)}, ${problem}`,
+        );
+      values[name] = value;
+    } else if (typeof value === 'number' && Number.isInteger(value))
       values[name] = String(value);
     else
       throw new Error(

@@ -20,3 +20,16 @@ an absent or null field gives undefined; anything unfillable throws.
 Exported from both entries. Tests on the §7.6 example in
 `unit/read/references.test.ts`. README (table row, section, changelog),
 CLAUDE.md.
+
+## Turn 2
+
+**Human (via the coordinator session):** make sure `resolveReference`
+refuses `.` and `..` values, since `/pages/..` normalises to `/`, and
+values with leading or trailing whitespace, with tests.
+
+**Assistant:** It did not: `encodeURIComponent` leaves `.` alone.
+`segmentProblem` now refuses `.`, `..` and a value whose `trim()`
+differs, for bound fields and context values alike, with a message
+naming the field or variable. `...` and inner spaces or dots still pass.
+Eleven new tests, all failing on the code before. README section and
+changelog, CLAUDE.md.

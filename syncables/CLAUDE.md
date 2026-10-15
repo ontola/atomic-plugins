@@ -85,8 +85,9 @@ Data flows through four stages, each its own directory under `src/`:
    (`resolveReference`) resolves a CRUD Causality §4.1.3 Reference Object
    to the target's identity path (bound fields from the object, unbound
    variables from the request context; `required: false` and an absent or
-   null field give undefined; anything else unfillable throws); nothing is
-   fetched (`unit/read/references.test.ts`, the spec's §7.6 example).
+   null field give undefined; anything else unfillable throws, as does a
+   `.`, `..` or whitespace-padded value, which would move the path);
+   nothing is fetched (`unit/read/references.test.ts`, the spec's §7.6 example).
    `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's

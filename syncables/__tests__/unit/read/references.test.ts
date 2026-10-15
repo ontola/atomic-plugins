@@ -144,6 +144,48 @@ describe('resolveReference', () => {
     ).toThrow(message);
   });
 
+  // `.` and `..` survive percent-encoding, and `/projects/..` normalises
+  // to `/`: a value that moved the path would name another resource.
+  it.each(['.', '..', ' p-9', 'p-9 ', '\tp-9', 'p-9\n', ' '])(
+    'refuses the bound value %j',
+    (projectId) => {
+      expect(() =>
+        resolveReference(
+          document(),
+          'timeEntry',
+          'project',
+          { projectId },
+          { workspaceId: '42' },
+        ),
+      ).toThrow(/projectId is ".*", (a dot segment|padded with whitespace)$/);
+    },
+  );
+
+  it.each(['.', '..', ' 42', '42 '])(
+    'refuses the context value %j',
+    (workspaceId) => {
+      expect(() =>
+        resolveReference(document(), 'timeEntry', 'project', entry, {
+          workspaceId,
+        }),
+      ).toThrow(
+        /\{workspaceId\} from the request context is ".*", (a dot segment|padded with whitespace)$/,
+      );
+    },
+  );
+
+  it('keeps dots and inner spaces that are not a whole segment', () => {
+    expect(
+      resolveReference(
+        document(),
+        'timeEntry',
+        'project',
+        { projectId: '...' },
+        { workspaceId: 'a.b c' },
+      )?.path,
+    ).toBe('/workspaces/a.b%20c/projects/...');
+  });
+
   it('throws for an unknown resource or reference', () => {
     expect(() =>
       resolveReference(document(), 'nothing', 'project', entry),
