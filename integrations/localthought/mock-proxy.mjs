@@ -23,6 +23,7 @@ import {
   verifyCapability,
   verifyRequest,
 } from './mock-proxy-auth.mjs';
+import { mockInbox } from './mock-proxy-inbox.mjs';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -203,6 +204,8 @@ export function mockProxy({
 
     return caller;
   };
+
+  const inbox = mockInbox({ authenticate, connections, standing, now });
 
   const listFor = owner => ({
     owner,
@@ -437,6 +440,32 @@ export function mockProxy({
       } catch (error) {
         return refuse(error);
       }
+    }
+
+    // The webhook inbox's consumer routes (mock-proxy-inbox.mjs, #369).
+    const consumed = await inbox.route(req, url, readBody);
+    if (consumed)
+      return json(consumed.status, consumed.body, {
+        'Cache-Control': 'no-store',
+      });
+
+    // Test-side inbox driver and view: a verified delivery for every
+    // subscription on a connection, and the subscriptions' state.
+    if (url.pathname === '/__mock/inbox' && req.method === 'GET')
+      return json(200, { subscriptions: inbox.state() });
+
+    if (url.pathname === '/__mock/inbox/deliver' && req.method === 'POST') {
+      const text = (await readBody(4 * 1024 * 1024))?.toString('utf8');
+      if (text === undefined) return json(413, {});
+      let command;
+
+      try {
+        command = JSON.parse(text);
+      } catch {
+        return json(400, { error: 'Invalid delivery' });
+      }
+
+      return json(200, { routed: inbox.deliver(command) });
     }
 
     // Management, signed by the owner.

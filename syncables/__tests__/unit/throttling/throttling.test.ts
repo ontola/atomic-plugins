@@ -8,7 +8,10 @@ import {
   type OpenApiDocument,
   type ThrottlingVerdict,
 } from '../../../src/browser.js';
-import { responseSignals } from '../../fixtures/throttling.js';
+import {
+  notionThrottling,
+  responseSignals,
+} from '../../fixtures/throttling.js';
 
 // Throttling 0.2.0-draft: `headers`, `signals` and the earliest retry time.
 // The cases mirror `ClassifyTests` in
@@ -485,5 +488,69 @@ describe('declaredThrottling', () => {
       operationBuckets(declaration!, { responses: {}, 'x-throttling': [] }),
     ).toEqual([]);
     expect(operationBuckets(declaration!, undefined)).toEqual(['core']);
+  });
+});
+
+describe('blocked (Throttling 0.4.0)', () => {
+  const notion = {
+    'x-throttling': notionThrottling,
+  } as unknown as OpenApiDocument;
+  const body = (reason: string): unknown => ({
+    object: 'error',
+    status: 429,
+    code: 'rate_limited',
+    additional_data: { rate_limit_reason: reason },
+  });
+
+  it('is not throttling: no retry time, whatever Retry-After says', () => {
+    expect(
+      classify(
+        429,
+        { 'retry-after': '2' },
+        body('public_api_request_blocked'),
+        notion,
+      ),
+    ).toEqual({ meaning: 'blocked' });
+    expect(
+      classify(
+        429,
+        { 'retry-after': '2' },
+        body('public_api_request_rate_limit'),
+        notion,
+      ),
+    ).toEqual({ meaning: 'throttled', retryAt: s(2) });
+  });
+
+  it('reads an unrecognised meaning as blocked', () => {
+    const d = {
+      'x-throttling': { signals: [{ status: [429], meaning: 'suspended' }] },
+    } as unknown as OpenApiDocument;
+    expect(declaredThrottling(d)?.signals?.[0]?.meaning).toBe('blocked');
+    expect(classify(429, { 'retry-after': '2' }, undefined, d)).toEqual({
+      meaning: 'blocked',
+    });
+  });
+
+  it('keeps a blocked signal that has a bucket or a delay as blocked, ignoring them (fails safe)', () => {
+    for (const meaning of ['blocked', 'suspended', '', 7, null, undefined]) {
+      for (const extra of [
+        { minDelaySeconds: 30 },
+        { bucket: 'b' },
+        { bucket: 7, minDelaySeconds: -1 },
+      ]) {
+        const d = {
+          'x-throttling': {
+            signals: [{ status: [429], meaning, ...extra }],
+          },
+        } as unknown as OpenApiDocument;
+        const [signal] = declaredThrottling(d)?.signals ?? [];
+        expect(signal).toMatchObject({ meaning: 'blocked' });
+        expect(signal?.bucket).toBeUndefined();
+        expect(signal?.minDelaySeconds).toBeUndefined();
+        expect(classify(429, { 'retry-after': '2' }, undefined, d)).toEqual({
+          meaning: 'blocked',
+        });
+      }
+    }
   });
 });
