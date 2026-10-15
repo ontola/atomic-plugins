@@ -81,7 +81,15 @@ Data flows through four stages, each its own directory under `src/`:
    a finished windowed read keeps its spans with reason `incomplete`,
    while any other read that is not complete (failed, or an undocumented
    short-page end) gets `spans: null`.
-   `read/read.ts` adds ontology/type projection.
+   `read/read.ts` adds ontology/type projection. `read/references.ts`
+   (`resolveReference`) resolves a CRUD Causality §4.1.3 Reference Object
+   to the target's identity path (bound fields from the object, unbound
+   variables from the request context; `required: false` and an absent or
+   null field give undefined, checked in a first pass so the template's
+   variable order does not matter; `''` is a value and throws; anything
+   else unfillable throws, as do a `.`, `..`, whitespace-padded, NUL or
+   lone-surrogate value, an unsafe integer, and a target template that
+   is not a `/` path); nothing is fetched (`unit/read/references.test.ts`, the spec's §7.6 example).
    `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
