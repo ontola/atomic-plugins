@@ -1919,13 +1919,17 @@ const { records, ontology, errors } = await readPlatform(document, {
   not be the id the API sent), a variable missing from `context`, or a
   declaration it cannot read. A declaration it cannot read includes an
   `identity.urlTemplate` that is not a path starting with one `/` (an
-  absolute URL, a variable in the host): `path` is always relative to
-  the API's server. A value, bound or from `context`, also throws when it
-  is `.` or `..` (it survives percent-encoding, and `/projects/..`
-  normalises to `/`, another resource), has leading or trailing
-  whitespace, contains NUL, or holds a lone surrogate. Other characters
-  are percent-encoded (`/` as `%2F`, `%` as `%25`). It asserts identity
-  only: nothing is fetched, and the path need not exist or be readable.
+  absolute URL, a variable in the host), or that holds a backslash, a
+  control character, a space or DEL (a URL parser reads
+  `/\evil.example/` as that host, and strips a tab, LF or CR anywhere, so
+  `/<tab>/evil.example/` too): `path` is always relative to the API's
+  server. A value, bound or from `context`, also
+  throws when it is `.` or `..` (it survives percent-encoding, and
+  `/projects/..` normalises to `/`, another resource), has leading or
+  trailing whitespace, contains NUL, or holds a lone surrogate. Other
+  characters are percent-encoded (`/` as `%2F`, `%` as `%25`). It
+  asserts identity only: nothing is fetched, and the path need not exist
+  or be readable.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -2089,6 +2093,13 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   whitespace-padded one, one with NUL or a lone surrogate, an integer
   beyond `Number.MAX_SAFE_INTEGER`, or a target template that is not a
   path, throws instead of naming another object. Additive.
+- **Unreleased**: `resolveReference` also refuses an `identity.urlTemplate`
+  holding a backslash (`/\evil.example/` resolves to that host), a C0
+  control character (a URL parser strips tab, LF and CR, so
+  `/<tab>/evil.example/` does too), a space or DEL. Its error messages
+  name a bigint, symbol, cyclic or other value `JSON.stringify` cannot
+  write instead of throwing a `TypeError`, and cut a value at 200
+  characters (#611's re-review).
 - **Unreleased**: An explicit `x-pagination` entry must be a Pagination
   Application Object as the spec's `schema.json` gives it: a nonempty
   `scheme`, an object `overrides`, a string `description`, and no other
