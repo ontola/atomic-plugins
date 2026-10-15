@@ -18,6 +18,9 @@ coverage
 # Transpiled files
 build/
 
+# Test output (Playwright's outputDir; `pnpm clean` removes it)
+tmp/
+
 # VS Code
 .vscode
 !.vscode/tasks.js

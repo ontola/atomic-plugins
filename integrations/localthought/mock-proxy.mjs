@@ -694,11 +694,15 @@ export function mockProxy({
         : {};
       // A fixture may answer asynchronously, or never (to simulate a lost
       // response; see the Clockify fixture's `applyThenDrop`).
+      // The fifth argument says which connection the request came through,
+      // so a fixture can keep per-connection state (a deliberate outage
+      // that each test's own connection meets at the same point).
       const result = await instances[platform].request(
         req.method,
         upstream,
         input,
         forwarded,
+        { connection: row.connection_id },
       );
 
       return json(result.status, result.body, result.headers ?? {});

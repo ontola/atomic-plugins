@@ -320,6 +320,9 @@ export const SCENARIOS = [
   'empty',
   'unauthorized',
   'rate-limited',
+  // A 429 Notion marks as permanent: its requests are blocked (the body's
+  // additional_data.rate_limit_reason), not limited for a while.
+  'blocked',
   'bad-gateway',
 ];
 
@@ -594,6 +597,19 @@ export function notionFixture({ scenario = 'default', blank = false } = {}) {
             ...error(429, 'rate_limited', 'Rate limited'),
             headers: { 'retry-after': '120' },
           };
+
+        if (current === 'blocked') {
+          const blocked = error(
+            429,
+            'rate_limited',
+            'This request was blocked.',
+          );
+          blocked.body.additional_data = {
+            rate_limit_reason: 'public_api_request_blocked',
+          };
+
+          return { ...blocked, headers: { 'retry-after': '120' } };
+        }
 
         return paginate(found.pages, body ?? {}, 'page_or_data_source');
       }

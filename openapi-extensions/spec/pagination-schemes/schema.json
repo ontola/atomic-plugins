@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ontola.github.io/atomic-plugins/openapi-extensions/spec/pagination-schemes/schema.json",
-  "title": "Pagination Schemes 0.8.0",
-  "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3), $defs.window the Range Window Object (§4.6.1), $defs.shortPage the Short Page Object (§4.4.5), $defs.incomplete the Incomplete Object (§4.4.6). Covers validation rules 1-4, 8-10, 12-16, 19, 20, 23, 24 and 26; validate.py adds 5, 11, 17, 18, 21, 22 and 25.",
+  "title": "Pagination Schemes 0.10.0",
+  "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3), $defs.window the Range Window Object (§4.6.1), $defs.shortPage the Short Page Object (§4.4.5), $defs.incomplete the Incomplete Object (§4.4.6). Covers validation rules 1-4, 8-10, 12-16, 19, 20, 23, 24, 26, 27 and 30; validate.py adds 5, 11, 17, 18, 21, 22, 25, 28 and 29.",
   "$ref": "#/$defs/scheme",
   "$defs": {
     "scheme": {
@@ -165,6 +165,8 @@
         "required": { "type": "boolean" },
         "start": { "description": "Rule 19.", "type": "integer", "minimum": 0 },
         "advance": { "description": "Rule 24.", "enum": ["itemCount", "pageSize"] },
+        "fromLastItem": { "description": "Rule 27.", "type": "string", "pattern": "^[^.]+(\\.[^.]+)*$" },
+        "order": { "description": "Rule 30.", "enum": ["ascending", "descending"] },
         "template": {
           "description": "Rule 15: {start} and {end} once each, no other braces.",
           "type": "string",
@@ -178,7 +180,9 @@
       "else": { "not": { "required": ["template"] } },
       "dependentSchemas": {
         "start": { "required": ["role"], "properties": { "role": { "const": "page" } } },
-        "advance": { "required": ["role"], "properties": { "role": { "const": "offset" } } }
+        "advance": { "required": ["role"], "properties": { "role": { "const": "offset" } } },
+        "fromLastItem": { "required": ["role"], "properties": { "role": { "enum": ["pageToken", "cursor"] } } },
+        "order": { "required": ["fromLastItem"] }
       }
     },
     "response": {
@@ -258,7 +262,8 @@
                 "totalPages",
                 "pageSize",
                 "currentPage",
-                "offset"
+                "offset",
+                "hasMore"
               ]
             },
             { "type": "string", "pattern": "^x-" }

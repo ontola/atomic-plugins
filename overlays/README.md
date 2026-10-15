@@ -110,6 +110,21 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
+## Throttling response signals
+
+Four standalone overlays declare [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md#throttling-signals)
+`headers` and `signals`; no dated catalog selects them.
+`tests/test_throttling_overlays.py` composes each with its pinned OAD and
+classifies synthetic responses shaped as the provider documents them. No
+provider was called.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [GitHub REST 2022-11-28](APIs/github.com/api.github.com.2022-11-28/1.1.4/throttling-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml) | `x-ratelimit-limit`, `-remaining`, `-used`, `-reset` (epoch seconds), `retry-after` (seconds); 403/429 with remaining `0` as `quotaExhausted`, with `retry-after` or a secondary-limit message as `throttled` (60 s minimum). | [Rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api). The secondary-limit message text is assumed from GitHub's description: not documented as an exact string and not recorded here (the issue-tracker app also matches "abuse detection", not declared). |
+| [GitHub Issues 1.1.4](APIs/github.com/github-issues/1.1.4/throttling-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | The same declarations as the GitHub REST 2022-11-28 row: the github-issues subset (the issue-tracker app's catalog platform) is served by the same API and limits. | As above |
+| [Google Tasks v1](APIs/googleapis.com/tasks/v1/throttling-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | 403/429 with `rateLimitExceeded` or `userRateLimitExceeded` in `error.errors[].reason` as `throttled`. No `Retry-After`: Google does not document sending it. | Inferred from the [Calendar error guide](https://developers.google.com/workspace/calendar/api/guides/errors); the [Tasks limits page](https://developers.google.com/workspace/tasks/limits) documents no error responses. |
+| [Moneybird v2-readonly v2](APIs/moneybird.com/v2-readonly/throttling-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml) | v1's 150-per-300-s source-IP bucket, standard `Retry-After`, and 429 as `quotaExhausted` on that bucket. `RateLimit-*` are not declared: no documented units. | [Introduction, Throttling](https://developer.moneybird.com/introduction) |
+
 ## Pagination Schemes 0.7.0 catalog: Google Tasks empty lists and Box offsets
 
 `catalog/2026-10-12-tasks-box-pages.json` is `catalog/2026-10-12-box-pagination-v2.json`
@@ -146,7 +161,8 @@ v2, validates it and reads a synthetic offset list with the reference
 fails through 2026-10-11 and reads as empty through this catalog;
 `tests/box_offsets_syncables.test.ts`: a short page is read again under v2
 and stepped over under v3); run them from `syncables/` with
-`npx vitest run --root .. overlays/tests/<file>`.
+`npx vitest run --root .. overlays/tests/<file>` (all of them:
+`overlays/tests/`), as Overlays CI's `reads` job does.
 
 ## Read and list tombstones
 
@@ -190,6 +206,34 @@ yet. syncables reads both. `tests/test_calendar_read_tombstone_v2.py` and
 `tests/test_calendar_list_tombstone.py` compose them after the catalog's
 Calendar overlays. Declared from the document; not verified against a live
 calendar.
+
+## Notion pages completeness
+
+[`completeness-0c8e2296…-overlay.yaml`](APIs/notion.com/2026-03-11/completeness-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Notion `pages` collection (a data source's query): `absent: removed`
+and `notFound: unavailable`. Notion's
+[status codes](https://developers.notion.com/reference/status-codes) say a 404
+`object_not_found` "can also indicate that the resource has not been shared
+with owner of the bearer token", so without this overlay a consumer would take
+a page no longer shared with the connection as deleted (the `notFound`
+default). The [query](https://developers.notion.com/reference/query-a-data-source)
+"returns non-archived pages" by default, so absence alone settles nothing.
+Inferred, not documented: that a trashed page leaves the query and that an
+archived or trashed page's own read still answers 2xx; neither changes an
+outcome. The query is capped at 10,000 results, so a catalog selects this
+overlay only together with `pagination-v3-0c8e2296…`, which marks a capped
+read incomplete; under an earlier pagination revision a query over 10,000
+results looks complete (the test asserts this pairing). Not declared:
+`gone` (no 410 documented), anything on `data_sources` (`POST /search`, not
+documented as returning every shared data source), and so `parentAbsent`,
+which needs a parent collection with a Completeness Object (§4.4). The pinned
+OAD is an authored subset without descriptions, so the evidence is Notion's
+reference. No dated catalog selects it yet.
+`tests/test_notion_pages_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays (and with pagination-v3), in
+either order, runs both validators, and checks the outcomes `classify_read`
+gives. No provider was called.
 
 ## Write preconditions
 
@@ -294,8 +338,32 @@ the comment `id`) `source: server`, which §4.5 does not define; v2 says
 create body. Nothing else changes; v1 stays published. No dated
 catalog selects v2 yet. `tests/test_github_crud_patch_format.py` checks
 that every update of each composition names a rule-5 mode and a §4.6
-format, that v2 differs from v1 only there, and that the CRUD Causality
-validator passes. No provider was called.
+format, that v2 differs from v1 only in patch formats, added-field sources
+and descriptions, and that the CRUD Causality validator passes. No provider
+was called.
+
+## GitHub compound creates
+
+[GitHub Issues compound create](APIs/github.com/github-issues/1.1.4/compound-create-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml)
+declares a [CRUD Causality 0.5.0](../openapi-extensions/spec/crud-causality/README.md#47-compound-creates)
+compound create for an issue with labels: the create sends `labels`
+(`create: include`), and the follow-up `issues-add-labels` adds those the
+created issue lacks (`itemKey: name`). GitHub's
+[Create an issue](https://docs.github.com/en/rest/issues/issues#create-an-issue)
+says "Only users with push access can set labels for new issues. Labels are
+silently dropped otherwise", and the follow-up can be refused after the issue
+exists, so the create is then partly applied. It composes after
+crud-causality v2, not v1: v2's issue number is a `generated` added field,
+so a create body leaves the client's placeholder out. syncables reads
+`followUps` since 0.22.0. Declared, not verified against a live account. No
+dated catalog selects it yet. `tests/test_github_compound_create.py` checks it with the spec's
+`compound_create`. `tests/github_compound_create_syncables.test.ts` runs it
+through syncables on the catalog's bytes (a dropped label added by the
+follow-up; a 403 follow-up failed, the create not sent again). No CI
+workflow runs the `overlays/tests/*.test.ts` files (overlays CI runs only
+`test_*.py`, and syncables' vitest config covers only `syncables/__tests__`),
+so run it by hand from `syncables/` after `npm ci`:
+`npx vitest run --root .. overlays/tests/github_compound_create_syncables.test.ts`.
 
 ## Google Calendar throttling
 
@@ -319,6 +387,29 @@ catalog selects it yet. `tests/test_calendar_throttling.py` composes it
 alone and after the catalog's Calendar overlays, and classifies synthetic
 errors in the guide's shape. No provider was called.
 
+## Spotify playlists completeness
+
+[`completeness-2914e6be…-overlay.yaml`](APIs/spotify.com/1.0.0-readonly/completeness-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Spotify `playlists` collection (`GET /me/playlists`): `absent: removed`
+and `notFound: unavailable`. Spotify's
+[playlists concepts](https://developer.spotify.com/documentation/web-api/concepts/playlists)
+say "the notion of deleting a playlist is not relevant": removing one from
+the user's list is "simply unfollowing it", and restoring it is following it
+again. So a playlist absent from the list was unfollowed, not deleted, and its
+own read settles it. Spotify's
+[status codes](https://developer.spotify.com/documentation/web-api/concepts/api-calls)
+say a 404 "can be due to a temporary or permanent condition", so a 404 is not
+a deletion either. The list is whole only with both `playlist-read-private`
+and `playlist-read-collaborative`, which the catalog's auth overlay requests.
+Not declared: `gone` (no 410 listed); no `parentAbsent` (the list has no path
+variable). Not verified: what a playlist's read answers after its owner
+unfollows it. No dated catalog selects it yet.
+`tests/test_spotify_playlists_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays, in either order, runs both
+validators, checks the scopes and the outcomes `classify_read` gives. No
+provider was called.
+
 ## Spotify throttling
 
 [Spotify Web API throttling](APIs/spotify.com/1.0.0-readonly/throttling-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml)
@@ -335,6 +426,30 @@ extends). No dated catalog selects
 it yet. `tests/test_spotify_throttling.py` composes it alone and after the
 catalog's Spotify overlays and classifies synthetic responses. No provider
 was called.
+
+## Airtable table records completeness
+
+[`completeness-1f5368e0…-overlay.yaml`](APIs/airtable.com/1.0-readonly/completeness-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Airtable `tableRecords` collection: `absent: removed` and
+`notFound: unavailable`. Airtable's
+[errors page](https://airtable.com/developers/web/api/errors) says a 404 is
+returned "if the resource doesn't exist (e.g. has been deleted)", but a
+record read's 404 answers just as well for a deleted or renamed table
+(`tableIdOrName` may be a name) or a deleted base, and the pinned OAD adds
+"or is not accessible"; the answer does not say which, so a 404 is not
+taken as the record's deletion. [List records](https://airtable.com/developers/web/api/list-records)
+returns every record when no view or `filterByFormula` is given, in
+arbitrary order; nothing is documented about records skipped during offset
+paging, so absence is `removed` and settled by the record's own read. Not
+declared: `gone` (no 410 documented), anything on bases or tables, and
+`parentAbsent` (no resource binds `tableIdOrName`). Not verified: whether a
+deleted record can be restored (the interface has a trash; the API reference
+does not mention it). No dated catalog selects it yet.
+`tests/test_airtable_records_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays, in either order, runs both
+validators, checks the pinned wording and the outcomes `classify_read` gives.
+No provider was called.
 
 ## Airtable throttling
 
@@ -367,6 +482,78 @@ version of the extension does not describe. No dated catalog selects it
 yet. `tests/test_asana_throttling.py` composes it alone and after the
 catalog's Asana overlays and classifies a synthetic 429. No provider was
 called.
+
+## GitLab throttling
+
+[GitLab.com REST API v4 throttling](APIs/gitlab.com/v4-readonly/throttling-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the read-only GitLab.com document, from GitLab.com's
+[rate-limits page](https://docs.gitlab.com/user/gitlab_com/rate_limits/):
+"Authenticated API traffic for a user" ("2,000 requests each minute", per
+user) and "All traffic from an IP address" ("2,000 requests each minute",
+`sourceIp`, shared by everyone behind a proxy) on every operation; the
+project list's own limit ("2,000 requests every 10 minutes") and the single
+project read's ("400 requests each minute") on those two operations, with no
+partition, since the rows do not say per what they count. The page's
+tier-aware limits are proposed, not in effect. Also the documented
+[response headers](https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/)
+`RateLimit-Limit` (adjusted "to approximately the nearest 60-minute period"
+for a throttle whose period is not a minute), `RateLimit-Observed`,
+`RateLimit-Remaining`, `RateLimit-Reset` (Unix time) and, on a 429,
+`Retry-After` (seconds), and a 429 as `throttled` with no bucket named.
+"Rate limiting responses for the Projects, Groups, and Users APIs do not
+include informational headers", so a 429 from the project list's or project
+read's own limit has no `RateLimit-*` or `Retry-After`.
+Not declared: `RateLimit-ResetTime`, `RateLimit-Name` and the
+unauthenticated limit ("500 requests each minute" per IP, in effect; every
+operation here sends a user's token); the page names no limit for the issue
+reads. No dated catalog selects it yet. `tests/test_gitlab_throttling.py`
+composes it alone and after the catalog's GitLab overlays and classifies synthetic
+responses. No provider was called.
+
+## Discord pagination v2: a cursor from the last item
+
+[`pagination-v2-9d0d73c6…`](APIs/discord.com/10/pagination-v2-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+declares [Pagination Schemes 0.9.0](../openapi-extensions/spec/pagination-schemes/README.md)
+`fromLastItem` (§4.3.3) on the two Discord operations whose order is
+documented: [Get Guild Bans](https://docs.discord.com/developers/resources/guild)
+("Users will always be returned in ascending order by `user.id`") and
+[Get Guild Scheduled Event Users](https://docs.discord.com/developers/resources/guild-scheduled-event)
+("ascending order by `user_id`"). Both take `after` as a strict bound
+("consider only users after given user id"), so the next page's `after` is
+the last item's `user.id`: rule (b) of §4.3.3. The first request sends no
+`after`, and an empty page ends the read (Discord has no has-more field). The
+pinned OAD does not require `user` on a scheduled-event user; an item without
+it ends the read with an error. Not declared, because Discord does not
+document their order: List Guild Members (its `after` is "the highest user id
+in the previous page", but the order is not stated), Get Reactions, List
+Thread Members, Get Answer Voters, List Entitlements, List SKU
+Subscriptions, Get Current User Guilds, the scheduled-event exception users,
+Get Channel Messages, and the audit log (whose cursor-less first page is not
+ascending). It keeps v1's one action, the guild list's description, revised.
+A 0.8.0 consumer would stop after one page, so it needs a 0.9.0 reader. No
+dated catalog selects it; the catalogs read neither operation.
+`tests/test_discord_pagination_v2.py` validates it alone and in place of v1
+after the catalog's Discord overlays, and reads synthetic pages with the
+reference `read_item_cursor`. No provider was called.
+
+The overlay file's comment is published and cannot change; checked again
+on 2026-10-15, it needs these corrections and additions. Get Channel
+Messages does state its order, "from newest to oldest" (it takes
+`before`, `after` and `around`; newest to oldest is not ascending, so its
+`after` is no rule (b) bound either). Newest-first, too, are the `before`-only
+lists the comment does not name: List Public Archived Threads and List
+Private Archived Threads ("ordered by `archive_timestamp`, in descending
+order", `before` a timestamp), List Joined Private Archived Threads
+("ordered by their `id`, in descending order", `before` an id) and Get
+Channel Pins (`before` a pin timestamp, order not stated). Rule (b) covers
+an ascending order with a lower bound only, so none of them qualifies in
+Pagination Schemes 0.9.0. Get Guild Join Requests takes `before` and
+`after` but is undocumented (it is in the pinned OAD only). Checked word for word against the raw
+pages with curl on 2026-10-15, every quote in the overlay matches except
+one: the scheduled-event users' `after` row reads "consider only users
+after given user id" (lowercase), not "Consider ...", and its `limit` row
+reads "number of users to return (up to maximum 100)".
 
 ## Discord throttling
 
@@ -407,7 +594,7 @@ fixed read is the request the drive app sends. No provider was called.
 
 ## Collection completeness
 
-Two standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
+Three standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
 `x-completeness`, which syncables reads (`absent`, `notFound`, `gone`,
 `parentAbsent`). No dated catalog selects them yet.
 
@@ -416,14 +603,36 @@ Two standalone overlays declare [Collection Completeness](../openapi-extensions/
 | [Google Tasks v1 completeness](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks `absent: removed`, `notFound: unavailable`; tasks `parentAbsent: unavailable`; the task read tombstone `deleted: true`. Needs crud-causality v2 (the fixed read that returns hidden tasks). | The pinned OAD (tasklists.list "Returns all the authenticated user's task lists"; Task.deleted "Flag indicating whether the task has been deleted"); what a 404 means is not documented |
 | [GitHub Issues completeness](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | Issues `absent: removed`, `notFound: unavailable`, no `gone`; comments the same plus `parentAbsent: unavailable`. Page-number paging can skip an issue deleted or transferred during a read; it stays unconfirmed until its GET settles it. | [Get an issue](https://docs.github.com/en/rest/issues/issues#get-an-issue): 301 when transferred, 404 when transferred or deleted out of the caller's reach, 410 when deleted where the caller can read, and 410 for every issue when issues are turned off, so neither a 404 nor a 410 is declared a deletion |
 
-A Todoist overlay drafted with these is left out: Todoist's API reference
-could not be read for the task fields and single-task read it relies on,
-and its pinned OAD is an authored subset without descriptions.
-`tests/test_completeness_overlays.py` and
-`tests/test_github_issues_completeness.py` compose each overlay with the
+| [Todoist v1 active-task completeness](APIs/todoist.com/1/completeness-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml) (#99) | Tasks `absent: removed`, `notFound: unavailable`; no read tombstone and no `gone`. | [API v1 reference](https://developer.todoist.com/api/v1/), read raw with curl: Get Tasks "Get all active tasks for the user"; Get Task "Returns a single active (non-completed) task by ID"; Close Task "Regular tasks are marked complete and moved to history"; Delete Task "Delete a task and all of its subtasks."; pagination "When next_cursor is null, you've reached the end of the results." A task that leaves the list may be completed, deleted or out of reach, and its read cannot return it as `checked` or `is_deleted`; no read answer is taken as a deletion, and a read that stops before a null `next_cursor` is not complete |
+
+An earlier Todoist draft was left out because the reference could not be
+read; read raw, it settles the declaration above. Not verified without a
+live account, so not declared: the status `GET /tasks/{task_id}` answers
+for a completed, a deleted or an inaccessible task; whether `GET /tasks`
+includes tasks of an archived project; and whether "Tasks Completed By
+Completion Date" (up to 3 months) lists every task that left the active
+list by completion, which would tell completion from deletion.
+`tests/test_completeness_overlays.py`,
+`tests/test_github_issues_completeness.py` and
+`tests/test_todoist_completeness.py` compose each overlay with the
 overlays it needs, run the Collection Completeness and CRUD Causality
 validators, and classify synthetic reads with the spec's `classify_read`.
 No provider was called.
+
+## Throttling with plan tiers
+
+Three overlays declare [Throttling 0.5.0-draft](../openapi-extensions/spec/throttling/README.md#plan-tiers)
+`tiers`: limits whose amount (or window) depends on the account's plan. A
+consumer that is not told the plan keeps within every tier at once. No
+dated catalog selects them. `tests/test_plan_tier_overlays.py` composes each
+with its pinned OAD, checks the documented numbers and the limits without a plan, and
+checks that each revision keeps its earlier one. No provider was called.
+
+| Overlay | Tiers | Evidence |
+| --- | --- | --- |
+| [Asana throttling v2](APIs/asana.com/1.0/throttling-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml) | v1 with the standard per-token limit as Free 150 and Paid 1,500 per minute (without a plan: both, so 150). | [Rate limits](https://developers.asana.com/docs/rate-limits), re-read 2026-10-13 |
+| [Notion throttling v3](APIs/notion.com/2026-03-11/throttling-v3-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | v2's header and signals (`public_api_request_blocked` as `blocked`), plus the per-connection limit, a fixed 60-second window ("a fixed budget of requests per 60-second window" that resets): Business and Enterprise 600, all other plans 180 per minute (without a plan: both, so 180). The per-workspace limit has no number. | [Request limits](https://developers.notion.com/reference/request-limits) |
+| [Clockify throttling](APIs/clockify.me/1.0.0-readonly/throttling-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) | The first for Clockify: per workspace, "Newly created workspaces on the Free plan are restricted to 30 API requests per hour" and "Workspaces on any paid plan maintain the standard limit of 50 requests per second" (without a plan: both). Older Free workspaces, trials and any per-API-key limit are not documented and not declared; no signal or header. docs.clockify.me's Rate limiting section covers only the `X-Addon-Token` limit, which the catalog does not use. | [Webhook and API limitations](https://clockify.me/help/getting-started/webhook-and-api-limitations) |
 
 ## Directory layout and OAD revisions
 
@@ -562,7 +771,16 @@ Checks:
   (`tests/test_identity_overlays.py` also checks the pets
   demo's document and data). It reads the
   Pages-published sources from the checkout, so it validates a change before
-  Pages serves it.
+  Pages serves it. Its `reads` job runs every `tests/*.test.ts` (syncables
+  reads through the catalogs, with vitest from `syncables/`) when an overlay
+  or syncables' source changes; the composer reads each pinned OAD from the
+  same openapi-directory clone (`OPENAPI_DIRECTORY_REPO`). With that
+  variable set, a pinned OAD the clone cannot show is an error naming the
+  pin and the path, never a silent read from raw.githubusercontent.com
+  (`scripts/pinned_oad.py`, used by `tests/compose_gitlab_platform.py`,
+  `tests/test_asana_airtable_readonly.py` and
+  `tests/test_google_tasks_readonly.py`); without it, the default clones
+  next to this repository and then the network are tried, as before.
 - `integration-proxy`'s `default_catalog_*` tests (PRs touching this folder):
   compose the selected dated catalog with the proxy's runtime loader, reading
   overlays from this folder. Its
@@ -948,6 +1166,37 @@ fixes the older validator's rejection of required properties defined inside
 `oneOf`, as used by Intercom's data-attribute schema.
 Notion body-schema cases check optional first-page requests, preserved extra
 fields, page-size bounds, and opaque cursor types.
+
+## Stripe pagination v2: a cursor from the last item
+
+[`pagination-v2-dec74da7…`](APIs/stripe.com/2022-11-15/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
+declares [Pagination Schemes 0.9.0](../openapi-extensions/spec/pagination-schemes/README.md)
+`fromLastItem` under rule (a) of §4.3.3: Stripe's
+[pagination reference](https://docs.stripe.com/api/pagination), read on
+2026-10-14, says every v1
+list method takes `starting_after`, "an object ID that defines your place in
+the list" (receive objects "ending with `obj_foo`" and send
+`starting_after=obj_foo`), and that `has_more` false means "this set
+comprises the end of the list". That live page documents a newer Stripe API
+version than the pinned 2022-11-15 document, so it is evidence only where the
+pinned document agrees: its own `starting_after` descriptions carry the same
+"defines your place in the list" text, and its list responses have `data`
+and `has_more`. Objects come newest first; rule (a) needs no ascending
+order. v1 declared the `cursor` scheme but applied it to no
+operation and had no way to find the next cursor; v2 redefines it
+(`starting_after` from the last item's `id`, items in `data`, `has_more` as
+`hasMore`) and applies it to all 99 list operations of the pinned document
+that take `starting_after`. 97 of them describe it in the words above;
+exchange rates say "the currency that defines your place in the list" (an
+exchange rate's id is its currency code); treasury financial accounts say
+only "An object ID cursor for use in pagination", covered by the reference
+page's statement about all list methods. Not declared: `ending_before` (it
+pages backwards) and the `/v2` APIs. It needs a 0.9.0 reader. Of the
+catalog and overlay platforms, Stripe is the only one whose docs describe a
+rule (a) cursor; Discord's two lists use rule (b) (#590). No dated catalog
+selects it. `tests/test_stripe_pagination_v2.py` validates it, checks the
+operation set and the pinned wording, and reads synthetic pages with the
+reference `read_item_cursor`. No provider was called.
 
 ## Swagger 2.0 documents
 

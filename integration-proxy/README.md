@@ -197,6 +197,22 @@ Subscriptions, `openapi-extensions/spec/`):
   `agent` (a node's app agent) as a runtime of installation `app` for the
   signer. `DELETE /runtimes/{agent}` removes it. A runtime can use every
   connection its app is delegated.
+- `POST /agents/transfer` — **signed by the old agent**; body `{"to",
+  "proof"}` moves the signer's connections and runtimes to the agent `to`
+  and retires the signer (key rotation, #410). `proof` is `to`'s Ed25519
+  signature (base64, either alphabet) over
+  `integration-proxy-agent-transfer-v1\n{old id}\n{new id}\n{proxy origin}\n{this request's x-atomic-timestamp}`,
+  ids canonical. The proxy origin is `BASE_URL`'s scheme, host and port only
+  (no path, no trailing `/`), the same `aud` a frame capability carries;
+  `BASE_URL` itself, path included, is what the request signature covers. `to` must pass the access policy and must not be retired.
+  Delegations stay as they are. Afterwards the old id is refused
+  (`403 agent_retired`) as the signer of management calls, of
+  `/connect/redeem` and of another transfer, and capabilities it signed no
+  longer verify. `409 transfer_blocked` while the old agent has open
+  webhook subscriptions; `409 transfer_conflict`, with nothing moved, when
+  the new agent already has a runtime with the same agent. `200`
+  `{"from", "to", "connections", "runtimes"}` (the counts moved). Only for a
+  key the user still holds: see SECURITY.md, "Key rotation".
 - `GET /healthz` — `200 ok` when the database answers.
 
 Delegations and runtimes are read on every proxied request, so removing one
@@ -231,8 +247,9 @@ Signed endpoints answer errors as JSON, `{"error": "<code>", "message": "<text>"
 
 | Status | `error` |
 | --- | --- |
-| 401 | `missing_signature`, `unsupported_signature_version`, `invalid_agent`, `agent_key_mismatch`, `stale_timestamp`, `bad_signature`, `replayed`, `unsupported_authorization` (e.g. a retired `Bearer` connection code), `invalid_capability`, `capability_expired`, `capability_too_long`, `wrong_audience`, `capability_key_mismatch`, `credential_refresh_failed` (connect again) |
-| 403 | `not_owner`, `not_delegated`, `capability_scope`, `platform_mismatch`, `access_denied` |
+| 401 | `missing_signature`, `unsupported_signature_version`, `invalid_agent`, `agent_key_mismatch`, `stale_timestamp`, `bad_signature`, `replayed`, `unsupported_authorization` (e.g. a retired `Bearer` connection code), `invalid_capability`, `capability_expired`, `capability_too_long`, `wrong_audience`, `capability_key_mismatch`, `credential_refresh_failed` (connect again), `invalid_transfer_proof` |
+| 403 | `not_owner`, `not_delegated`, `capability_scope`, `platform_mismatch`, `access_denied`, `agent_retired` |
+| 409 | `transfer_blocked`, `transfer_conflict` |
 | 404 | `unknown_connection` (deleted, idle-expired, or never existed: connect again) |
 | 400 | `bad_request`, `invalid_handoff` |
 | 429 | `provider_quota`, from `/proxy/…` only, with `Retry-After` in seconds: the proxy's own requests to the platform are at a quota the provider counts on the proxy's address (`x-throttling`; see "Pacing under provider quotas") |
@@ -678,6 +695,18 @@ paces its own requests under it:
   `window.seconds`. Buckets partitioned by user, credential or anything else
   are each caller's own and not paced; a bucket over 10,000 requests per
   window is not paced either.
+- **Plan tiers** (Throttling 0.5.0). A bucket whose limit has `tiers` is
+  paced at the tier whose `plans` name the deployment's plan, given in the
+  dated catalog entry's `selection` as
+  `"throttlingPlans": {"<bucket id>": "<plan>"}`. Without one, or for a plan
+  no tier names, the proxy keeps within every tier at once, each tier's
+  `requests` in its own window as a separate count over the same requests
+  (no single tier is safe alone: 30 an hour still allows a burst 20 a second
+  forbids). For these proxy-wide buckets the plan that counts is the
+  deployment's own (its address or application), so the deployment's
+  catalog chooses it. An entry for a bucket without tiers or for a plan no
+  tier names is logged when the catalog loads and ignored. A tier over
+  10,000 requests per window is left out; the other tiers still count.
 - **How.** A sliding log per platform and bucket: at most `requests`
   requests in any `window.seconds`, which stays under the limit for `fixed`
   (with or without an `anchor`), `sliding` and `unspecified` windows alike.

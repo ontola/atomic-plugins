@@ -57,7 +57,7 @@ import pathlib
 
 import yaml
 
-from validate import classify
+from validate import classify, fallback_window, limits_in_force
 
 EXAMPLES = pathlib.Path(__file__).parent / "examples"
 NOW = 1_800_000_000
@@ -343,6 +343,123 @@ class BodyFieldFollowUpTests(unittest.TestCase):
         # A positive body wait shorter than minDelaySeconds is used as it is: a fallback, not a floor.
         body = {"error_extra": {"retry_after": 5}}
         self.assertEqual(classify(self.document(min_delay=30), 429, {}, body, NOW)["retryAt"], NOW + 5)
+
+
+class BlockedTests(unittest.TestCase):
+    """0.4.0: a refusal the API documents as not worth retrying (Notion's public_api_request_blocked)."""
+
+    def document(self):
+        return example("blocked.yaml")
+
+    def body(self, reason):
+        return {"object": "error", "status": 429, "code": "rate_limited",
+                "additional_data": {"rate_limit_reason": reason}}
+
+    def test_example_is_valid(self):
+        validate(self.document())
+
+    def test_blocked_is_not_throttling_and_has_no_retry_time(self):
+        d = self.document()
+        blocked = {"meaning": "blocked", "bucket": None, "retryAt": None}
+        self.assertEqual(classify(d, 429, {"Retry-After": "2"}, self.body("public_api_request_blocked"), NOW), blocked)
+        # Other reasons stay throttled, with their Retry-After.
+        self.assertEqual(classify(d, 429, {"Retry-After": "2"}, self.body("public_api_request_rate_limit"), NOW),
+                         {"meaning": "throttled", "bucket": None, "retryAt": NOW + 2})
+        # A non-429 status may be blocked too, when a signal lists it.
+        d["x-throttling"]["signals"][0]["status"] = [403, 429]
+        validate(d)
+        self.assertEqual(classify(d, 403, {}, self.body("public_api_request_blocked"), NOW), blocked)
+
+    def test_order_decides(self):
+        d = self.document()
+        d["x-throttling"]["signals"].reverse()
+        validate(d)  # valid, but the broader signal now wins
+        self.assertEqual(classify(d, 429, {}, self.body("public_api_request_blocked"), NOW)["meaning"], "throttled")
+
+    def test_blocked_takes_no_bucket_or_delay(self):
+        for extra in ({"minDelaySeconds": 30}, {"bucket": "b"}):
+            d = self.document()
+            d["x-throttling"]["limits"] = {"b": {"requests": 1, "window": {"seconds": 1, "kind": "fixed"}}}
+            d["x-throttling"]["applies"] = ["b"]
+            d["x-throttling"]["signals"][0].update(extra)
+            with self.subTest(extra=extra), self.assertRaises(ValueError) as raised:
+                validate(d)
+            self.assertIn("bucket and minDelaySeconds are not allowed with blocked", str(raised.exception))
+            # A consumer still treats such a signal as blocked, ignoring the field (README).
+            self.assertEqual(classify(d, 429, {"Retry-After": "2"}, self.body("public_api_request_blocked"), NOW),
+                             {"meaning": "blocked", "bucket": None, "retryAt": None})
+
+    def test_unrecognised_meaning_is_never_resent(self):
+        d = self.document()
+        d["x-throttling"]["signals"][0]["meaning"] = "suspended"
+        with self.assertRaises(ValueError):
+            validate(d)
+        # classify on an unvalidated document: the unknown meaning reads as blocked.
+        self.assertEqual(classify(d, 429, {"Retry-After": "2"}, self.body("public_api_request_blocked"), NOW),
+                         {"meaning": "blocked", "bucket": None, "retryAt": None})
+
+
+class PlanTierTests(unittest.TestCase):
+    """0.5.0: a Limit Object with tiers (synthetic plans)."""
+
+    def document(self):
+        return example("plan-tiers.yaml")
+
+    def limit(self, document):
+        return document["x-throttling"]["limits"]["perAccount"]
+
+    def test_example_is_valid(self):
+        validate(self.document())
+
+    def test_shape(self):
+        for mutate in (lambda l: l.update(window={"seconds": 1, "kind": "fixed"}),
+                       lambda l: l.update(requests=5),
+                       lambda l: l.update(tiers=[]),
+                       lambda l: l["tiers"].append(dict(l["tiers"][0])),  # basic in two tiers
+                       lambda l: l["tiers"][1].update(plans=["plus", "basic"]),
+                       lambda l: l["tiers"][0].pop("window"),
+                       lambda l: l["tiers"][0].pop("requests"),
+                       lambda l: l["tiers"][0].update(plans=[]),
+                       lambda l: l["tiers"][0].update(plans=[""]),
+                       lambda l: l["tiers"][0].update(plans="basic"),
+                       lambda l: l["tiers"][0].update(name="basic"),
+                       lambda l: l["tiers"][0].update(requests=0),
+                       lambda l: l["tiers"][0]["window"].update(kind="rolling")):
+            d = self.document()
+            mutate(self.limit(d))
+            with self.subTest(), self.assertRaises(ValueError):
+                validate(d)
+        d = self.document()
+        del self.limit(d)["tiers"]
+        with self.assertRaises(ValueError):  # neither window nor tiers
+            validate(d)
+
+    def test_limits_in_force(self):
+        limit = self.limit(self.document())
+        pairs = lambda entries: sorted((e["requests"], e["window"]["seconds"]) for e in entries)
+        self.assertEqual(pairs(limits_in_force(limit, "plus")), [(20, 1)])
+        self.assertEqual(pairs(limits_in_force(limit, "standard")), [(20, 1)])
+        self.assertEqual(pairs(limits_in_force(limit, "premium")), [(50, 1)])
+        # No plan, or an unknown one: every tier at once. 30 per hour alone would allow
+        # 30 requests in one second, which 20 per second forbids.
+        for plan in (None, "Premium"):  # names compare exactly
+            self.assertEqual(pairs(limits_in_force(limit, plan)), [(20, 1), (30, 3600), (50, 1)])
+        plain = {"requests": 5, "window": {"seconds": 10, "kind": "fixed"}}
+        self.assertEqual(limits_in_force(plain, "x"), [plain])
+        self.assertEqual(limits_in_force({"window": {"seconds": 10, "kind": "fixed"}}), [])
+
+    def test_quota_exhausted_falls_back_to_the_tier_window(self):
+        d = self.document()
+        self.assertEqual(classify(d, 429, {}, None, NOW),
+                         {"meaning": "quotaExhausted", "bucket": "perAccount", "retryAt": NOW + 3600})
+        self.assertEqual(classify(d, 429, {}, None, NOW, plan="premium")["retryAt"], NOW + 1)
+        self.assertEqual(fallback_window(self.limit(d)), 3600)
+        self.assertEqual(fallback_window(self.limit(d), "plus"), 1)
+
+    def test_0_4_documents_stay_valid(self):
+        for name in ("windowed.yaml", "response-signals.yaml", "body-fields.yaml", "blocked.yaml"):
+            validate(example(name))
+
 
 
 if __name__ == "__main__": unittest.main()
