@@ -460,6 +460,50 @@ describe('review and send', () => {
     expect(patches()).toEqual([]);
   });
 
+  it('a batch stops at a blocked GET: the rows before it are sent, the rows after it not tried (#596 review)', async () => {
+    const base = fixtureProxy();
+    const blocked = {
+      status: 429,
+      headers: { 'retry-after': '120' },
+      body: {
+        object: 'error',
+        status: 429,
+        code: 'rate_limited',
+        message: 'This request was blocked.',
+        additional_data: { rate_limit_reason: 'public_api_request_blocked' },
+      },
+    };
+    let block = false;
+    const { controller, edit } = await synced({
+      request: async request =>
+        block &&
+        request.method === 'GET' &&
+        request.path === `/v1/pages/${CHANGELOG}`
+          ? blocked
+          : base.request(request),
+    });
+    edit(LAUNCH, POINTS, 5);
+    edit(CHANGELOG, POINTS, 1);
+    edit(RETRO, POINTS, 2);
+    await controller.refreshRows();
+    block = true;
+    const before = base.calls.length;
+    const state = await controller.send();
+    expect('outcomes' in state && state.outcomes).toMatchObject([
+      { status: 'sent' },
+      {
+        status: 'failed',
+        message: expect.stringMatching(/Retrying won't help/),
+      },
+    ]);
+    // What reached Notion: row 1's GET and PATCH. Row 2's GET was answered
+    // blocked before it; row 3 was never requested.
+    expect(base.calls.slice(before).map(c => `${c.method} ${c.path}`)).toEqual([
+      `GET /v1/pages/${LAUNCH}`,
+      `PATCH /v1/pages/${LAUNCH}`,
+    ]);
+  });
+
   it('a 5xx answer to a PATCH is unknown, not "nothing was written"', async () => {
     const base = fixtureProxy();
     const gateway = { status: 502, headers: {}, body: 'Bad gateway' };

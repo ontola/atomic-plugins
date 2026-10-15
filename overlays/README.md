@@ -547,6 +547,21 @@ overlays it needs, run the Collection Completeness and CRUD Causality
 validators, and classify synthetic reads with the spec's `classify_read`.
 No provider was called.
 
+## Throttling with plan tiers
+
+Three overlays declare [Throttling 0.5.0-draft](../openapi-extensions/spec/throttling/README.md#plan-tiers)
+`tiers`: limits whose amount (or window) depends on the account's plan. A
+consumer that is not told the plan keeps within every tier at once. No
+dated catalog selects them. `tests/test_plan_tier_overlays.py` composes each
+with its pinned OAD, checks the documented numbers and the limits without a plan, and
+checks that each revision keeps its earlier one. No provider was called.
+
+| Overlay | Tiers | Evidence |
+| --- | --- | --- |
+| [Asana throttling v2](APIs/asana.com/1.0/throttling-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml) | v1 with the standard per-token limit as Free 150 and Paid 1,500 per minute (without a plan: both, so 150). | [Rate limits](https://developers.asana.com/docs/rate-limits), re-read 2026-10-13 |
+| [Notion throttling v3](APIs/notion.com/2026-03-11/throttling-v3-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | v2's header and signals (`public_api_request_blocked` as `blocked`), plus the per-connection limit, a fixed 60-second window ("a fixed budget of requests per 60-second window" that resets): Business and Enterprise 600, all other plans 180 per minute (without a plan: both, so 180). The per-workspace limit has no number. | [Request limits](https://developers.notion.com/reference/request-limits) |
+| [Clockify throttling](APIs/clockify.me/1.0.0-readonly/throttling-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml) | The first for Clockify: per workspace, "Newly created workspaces on the Free plan are restricted to 30 API requests per hour" and "Workspaces on any paid plan maintain the standard limit of 50 requests per second" (without a plan: both). Older Free workspaces, trials and any per-API-key limit are not documented and not declared; no signal or header. docs.clockify.me's Rate limiting section covers only the `X-Addon-Token` limit, which the catalog does not use. | [Webhook and API limitations](https://clockify.me/help/getting-started/webhook-and-api-limitations) |
+
 ## Directory layout and OAD revisions
 
 Provider overlays mirror `openapi-directory` including its `APIs/` prefix:
@@ -687,7 +702,13 @@ Checks:
   Pages serves it. Its `reads` job runs every `tests/*.test.ts` (syncables
   reads through the catalogs, with vitest from `syncables/`) when an overlay
   or syncables' source changes; the composer reads each pinned OAD from the
-  same openapi-directory clone (`OPENAPI_DIRECTORY_REPO`).
+  same openapi-directory clone (`OPENAPI_DIRECTORY_REPO`). With that
+  variable set, a pinned OAD the clone cannot show is an error naming the
+  pin and the path, never a silent read from raw.githubusercontent.com
+  (`scripts/pinned_oad.py`, used by `tests/compose_gitlab_platform.py`,
+  `tests/test_asana_airtable_readonly.py` and
+  `tests/test_google_tasks_readonly.py`); without it, the default clones
+  next to this repository and then the network are tried, as before.
 - `integration-proxy`'s `default_catalog_*` tests (PRs touching this folder):
   compose the selected dated catalog with the proxy's runtime loader, reading
   overlays from this folder. Its
