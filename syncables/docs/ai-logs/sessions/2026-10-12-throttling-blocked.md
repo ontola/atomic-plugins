@@ -31,3 +31,20 @@ read fails on it. Tests cover the classification, the unknown meaning, the
 invalid combinations, a failed write that is not resent, another Notion
 reason that is still retried, the default class and a read that does not
 sleep.
+
+## Turn 2
+
+**Human (via the coordinator session):** Review of #533: a blocked signal
+that also has a `bucket` or `minDelaySeconds`, or a signal whose meaning is
+unknown, missing or not a string, makes `parseSignal` drop the whole
+`signals` array, so the matching 429 falls back to `throttled` and is
+retried, while the spec's `classify()` says `blocked`. Fail closed; fix the
+README, JSDoc and changelog; merge main.
+
+**Assistant:** Turn 1's "leaves the whole `signals` array out" is reversed:
+such a signal is now kept as `blocked`, with `bucket` and `minDelaySeconds`
+ignored, and a missing, empty or non-string meaning is read as `blocked`
+too. `ThrottlingVerdict.retryAt` and `classifyThrottling` say a blocked
+verdict means never retry (an API semantic change); the README row and
+changelog say the same. Merged main, which brought 0.5.0 plan tiers: the
+README table row now names both.

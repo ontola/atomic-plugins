@@ -83,6 +83,14 @@ export interface ThrottlingDeclaration {
    * reading; an `anchor` that does not parse as a time is left out.
    */
   quotas: Map<string, Quota>;
+  /**
+   * Throttling 0.5.0 plan tiers: for a bucket whose Limit Object declares
+   * `tiers` and no tier names the configured plan (or none is configured),
+   * every tier, each kept within at once over the same requests
+   * (`limitsInForce`). Such a bucket has no entry in `quotas`; one whose
+   * tier names the plan has its tier there, as a plain limit.
+   */
+  tieredQuotas?: Map<string, Quota[]>;
   /** The default bucket selection (`applies`). */
   applies: string[];
   /** Header Role Objects by lower-cased header name. */
@@ -155,6 +163,86 @@ const isScalar = (value: unknown): value is JsonScalar =>
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0;
 
+/** A Window Object's quota fields, or undefined when `seconds` does not parse. */
+function quotaOf(requests: unknown, window: unknown): Quota | undefined {
+  if (!isRecord(window) || !isPositiveInteger(window['seconds'])) return;
+  if (!isPositiveInteger(requests)) return;
+  const kind = window['kind'];
+  const anchor = window['anchor'];
+  const anchorMs = typeof anchor === 'string' ? Date.parse(anchor) : NaN;
+  return {
+    requests,
+    seconds: window['seconds'],
+    kind: kind === 'fixed' || kind === 'unspecified' ? kind : 'sliding',
+    ...(kind === 'fixed' && Number.isFinite(anchorMs)
+      ? { anchor: anchorMs }
+      : {}),
+  };
+}
+
+/** A parsed Tier Object (Throttling 0.5.0). */
+export interface Tier {
+  plans: string[];
+  quota: Quota;
+}
+
+/**
+ * A Limit Object's `tiers`, with the spec validator's checks that decide
+ * which tier binds: a nonempty array of Tier Objects, each with a nonempty
+ * `plans` of nonempty strings (no plan in two tiers), a positive integer
+ * `requests` and a window with positive integer `seconds`. Undefined when
+ * any of that fails: a tier that does not parse might be the one that
+ * binds, so none is guessed and the limit is left out. More lenient than
+ * the validator elsewhere, as for a plain limit: an unknown window `kind`
+ * reads as `sliding`, an `anchor` that does not parse is left out, and
+ * unknown fields (or `requests`/`window` beside `tiers`) are ignored.
+ */
+export function parseTiers(tiers: unknown): Tier[] | undefined {
+  if (!Array.isArray(tiers) || tiers.length === 0) return undefined;
+  const parsed: Tier[] = [];
+  const seen = new Set<string>();
+  for (const tier of tiers) {
+    if (!isRecord(tier)) return undefined;
+    const plans = tier['plans'];
+    if (
+      !Array.isArray(plans) ||
+      plans.length === 0 ||
+      !plans.every((plan) => typeof plan === 'string' && plan !== '')
+    )
+      return undefined;
+    for (const plan of plans as string[]) {
+      if (seen.has(plan)) return undefined;
+      seen.add(plan);
+    }
+    const quota = quotaOf(tier['requests'], tier['window']);
+    if (!quota) return undefined;
+    parsed.push({ plans: plans as string[], quota });
+  }
+  return parsed;
+}
+
+/**
+ * Throttling 0.5.0, after the spec's `limits_in_force`: the quotas a
+ * consumer keeps within, all at once. The tier whose `plans` name `plan`;
+ * without a plan, or one no tier names, every tier, each counted
+ * separately over the same requests (no single tier bounds both bursts
+ * and averages).
+ */
+export function limitsInForce(tiers: Tier[], plan?: string): Quota[] {
+  const named =
+    plan === undefined ? undefined : tiers.find((t) => t.plans.includes(plan));
+  return named ? [named.quota] : tiers.map((t) => t.quota);
+}
+
+/**
+ * Throttling 0.5.0, after the spec's `fallback_window`: the window a
+ * time-less `quotaExhausted` falls back to, the configured tier's, else
+ * the longest among the tiers.
+ */
+export function fallbackWindow(tiers: Tier[], plan?: string): number {
+  return Math.max(...limitsInForce(tiers, plan).map((q) => q.seconds));
+}
+
 /**
  * Reads the document's root `x-throttling`. Undefined when absent or not an
  * object. A `headers` entry that does not parse (an unknown role, a missing
@@ -169,13 +257,27 @@ const isPositiveInteger = (value: unknown): value is number =>
  */
 export function declaredThrottling(
   document: OpenApiDocument,
+  plan?: string,
 ): ThrottlingDeclaration | undefined {
   const root = (document as Record<string, unknown>)['x-throttling'];
   if (!isRecord(root)) return undefined;
   const windows = new Map<string, number>();
   const quotas = new Map<string, Quota>();
+  const tieredQuotas = new Map<string, Quota[]>();
   if (isRecord(root['limits']))
     for (const [name, limit] of Object.entries(root['limits'])) {
+      // Throttling 0.5.0 plan tiers (`plan`: the account's plan, as the
+      // provider names it): a limit whose tiers do not all parse is left
+      // out, as any other limit that does not parse.
+      if (isRecord(limit) && limit['tiers'] !== undefined) {
+        const tiers = parseTiers(limit['tiers']);
+        if (!tiers) continue;
+        windows.set(name, fallbackWindow(tiers, plan));
+        const inForce = limitsInForce(tiers, plan);
+        if (inForce.length === 1) quotas.set(name, inForce[0] as Quota);
+        else tieredQuotas.set(name, inForce);
+        continue;
+      }
       const window = isRecord(limit) ? limit['window'] : undefined;
       const seconds = isRecord(window) ? window['seconds'] : undefined;
       if (!isPositiveInteger(seconds)) continue;
@@ -206,6 +308,7 @@ export function declaredThrottling(
   const declaration: ThrottlingDeclaration = {
     windows,
     quotas,
+    tieredQuotas,
     applies,
     headers,
     bodyFields,

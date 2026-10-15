@@ -146,7 +146,8 @@ v2, validates it and reads a synthetic offset list with the reference
 fails through 2026-10-11 and reads as empty through this catalog;
 `tests/box_offsets_syncables.test.ts`: a short page is read again under v2
 and stepped over under v3); run them from `syncables/` with
-`npx vitest run --root .. overlays/tests/<file>`.
+`npx vitest run --root .. overlays/tests/<file>` (all of them:
+`overlays/tests/`), as Overlays CI's `reads` job does.
 
 ## Read and list tombstones
 
@@ -322,8 +323,32 @@ the comment `id`) `source: server`, which §4.5 does not define; v2 says
 create body. Nothing else changes; v1 stays published. No dated
 catalog selects v2 yet. `tests/test_github_crud_patch_format.py` checks
 that every update of each composition names a rule-5 mode and a §4.6
-format, that v2 differs from v1 only there, and that the CRUD Causality
-validator passes. No provider was called.
+format, that v2 differs from v1 only in patch formats, added-field sources
+and descriptions, and that the CRUD Causality validator passes. No provider
+was called.
+
+## GitHub compound creates
+
+[GitHub Issues compound create](APIs/github.com/github-issues/1.1.4/compound-create-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml)
+declares a [CRUD Causality 0.5.0](../openapi-extensions/spec/crud-causality/README.md#47-compound-creates)
+compound create for an issue with labels: the create sends `labels`
+(`create: include`), and the follow-up `issues-add-labels` adds those the
+created issue lacks (`itemKey: name`). GitHub's
+[Create an issue](https://docs.github.com/en/rest/issues/issues#create-an-issue)
+says "Only users with push access can set labels for new issues. Labels are
+silently dropped otherwise", and the follow-up can be refused after the issue
+exists, so the create is then partly applied. It composes after
+crud-causality v2, not v1: v2's issue number is a `generated` added field,
+so a create body leaves the client's placeholder out. syncables reads
+`followUps` since 0.22.0. Declared, not verified against a live account. No
+dated catalog selects it yet. `tests/test_github_compound_create.py` checks it with the spec's
+`compound_create`. `tests/github_compound_create_syncables.test.ts` runs it
+through syncables on the catalog's bytes (a dropped label added by the
+follow-up; a 403 follow-up failed, the create not sent again). No CI
+workflow runs the `overlays/tests/*.test.ts` files (overlays CI runs only
+`test_*.py`, and syncables' vitest config covers only `syncables/__tests__`),
+so run it by hand from `syncables/` after `npm ci`:
+`npx vitest run --root .. overlays/tests/github_compound_create_syncables.test.ts`.
 
 ## Google Calendar throttling
 
@@ -443,6 +468,32 @@ operation here sends a user's token); the page names no limit for the issue
 reads. No dated catalog selects it yet. `tests/test_gitlab_throttling.py`
 composes it alone and after the catalog's GitLab overlays and classifies synthetic
 responses. No provider was called.
+
+## Discord pagination v2: a cursor from the last item
+
+[`pagination-v2-9d0d73c6…`](APIs/discord.com/10/pagination-v2-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+declares [Pagination Schemes 0.9.0](../openapi-extensions/spec/pagination-schemes/README.md)
+`fromLastItem` (§4.3.3) on the two Discord operations whose order is
+documented: [Get Guild Bans](https://docs.discord.com/developers/resources/guild)
+("Users will always be returned in ascending order by `user.id`") and
+[Get Guild Scheduled Event Users](https://docs.discord.com/developers/resources/guild-scheduled-event)
+("ascending order by `user_id`"). Both take `after` as a strict bound
+("consider only users after given user id"), so the next page's `after` is
+the last item's `user.id`: rule (b) of §4.3.3. The first request sends no
+`after`, and an empty page ends the read (Discord has no has-more field). The
+pinned OAD does not require `user` on a scheduled-event user; an item without
+it ends the read with an error. Not declared, because Discord does not
+document their order: List Guild Members (its `after` is "the highest user id
+in the previous page", but the order is not stated), Get Reactions, List
+Thread Members, Get Answer Voters, List Entitlements, List SKU
+Subscriptions, Get Current User Guilds, the scheduled-event exception users,
+Get Channel Messages, and the audit log (whose cursor-less first page is not
+ascending). It keeps v1's one action, the guild list's description, revised.
+A 0.8.0 consumer would stop after one page, so it needs a 0.9.0 reader. No
+dated catalog selects it; the catalogs read neither operation.
+`tests/test_discord_pagination_v2.py` validates it alone and in place of v1
+after the catalog's Discord overlays, and reads synthetic pages with the
+reference `read_item_cursor`. No provider was called.
 
 ## Discord throttling
 
@@ -638,7 +689,10 @@ Checks:
   (`tests/test_identity_overlays.py` also checks the pets
   demo's document and data). It reads the
   Pages-published sources from the checkout, so it validates a change before
-  Pages serves it.
+  Pages serves it. Its `reads` job runs every `tests/*.test.ts` (syncables
+  reads through the catalogs, with vitest from `syncables/`) when an overlay
+  or syncables' source changes; the composer reads each pinned OAD from the
+  same openapi-directory clone (`OPENAPI_DIRECTORY_REPO`).
 - `integration-proxy`'s `default_catalog_*` tests (PRs touching this folder):
   compose the selected dated catalog with the proxy's runtime loader, reading
   overlays from this folder. Its
@@ -1024,6 +1078,32 @@ fixes the older validator's rejection of required properties defined inside
 `oneOf`, as used by Intercom's data-attribute schema.
 Notion body-schema cases check optional first-page requests, preserved extra
 fields, page-size bounds, and opaque cursor types.
+
+## Stripe pagination v2: a cursor from the last item
+
+[`pagination-v2-dec74da7…`](APIs/stripe.com/2022-11-15/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
+declares [Pagination Schemes 0.9.0](../openapi-extensions/spec/pagination-schemes/README.md)
+`fromLastItem` under rule (a) of §4.3.3: Stripe's
+[pagination reference](https://docs.stripe.com/api/pagination) says every v1
+list method takes `starting_after`, "an object ID that defines your place in
+the list" (receive objects "ending with `obj_foo`" and send
+`starting_after=obj_foo`), and that `has_more` false means "this set
+comprises the end of the list". Objects come newest first; rule (a) needs no
+ascending order. v1 declared the `cursor` scheme but applied it to no
+operation and had no way to find the next cursor; v2 redefines it
+(`starting_after` from the last item's `id`, items in `data`, `has_more` as
+`hasMore`) and applies it to all 99 list operations of the pinned document
+that take `starting_after`. 97 of them describe it in the words above;
+exchange rates say "the currency that defines your place in the list" (an
+exchange rate's id is its currency code); treasury financial accounts say
+only "An object ID cursor for use in pagination", covered by the reference
+page's statement about all list methods. Not declared: `ending_before` (it
+pages backwards) and the `/v2` APIs. It needs a 0.9.0 reader. Of the
+catalog and overlay platforms, Stripe is the only one whose docs describe a
+rule (a) cursor; Discord's two lists use rule (b) (#586). No dated catalog
+selects it. `tests/test_stripe_pagination_v2.py` validates it, checks the
+operation set and the pinned wording, and reads synthetic pages with the
+reference `read_item_cursor`. No provider was called.
 
 ## Swagger 2.0 documents
 

@@ -73,13 +73,63 @@ def validate(document):
 
 def validate_limit(name, limit):
     require(isinstance(name, str) and name, "empty bucket identifier")
-    require(isinstance(limit, dict) and "window" in limit, f"{name}: window required")
-    require(set(limit) <= {"requests", "window", "partitionBy", "description"}, f"{name}: unknown field")
-    if "requests" in limit:
-        positive(limit["requests"], f"{name}.requests")
+    require(isinstance(limit, dict), f"{name}: expected object")
+    require(set(limit) <= {"requests", "window", "partitionBy", "description", "tiers"}, f"{name}: unknown field")
     if "description" in limit:
         require(isinstance(limit["description"], str), f"{name}.description: expected string")
-    window = limit["window"]
+    if "tiers" in limit:  # 0.5.0
+        require("window" not in limit and "requests" not in limit, f"{name}: tiers replace requests and window")
+        tiers = limit["tiers"]
+        require(isinstance(tiers, list) and tiers, f"{name}.tiers: expected nonempty array")
+        plans = []
+        for index, tier in enumerate(tiers):
+            label = f"{name}.tiers[{index}]"
+            require(isinstance(tier, dict) and {"plans", "requests", "window"} <= set(tier)
+                    <= {"plans", "requests", "window", "description"}, f"{label}: plans, requests and window required")
+            require(isinstance(tier["plans"], list) and tier["plans"]
+                    and all(isinstance(p, str) and p for p in tier["plans"]), f"{label}.plans: expected nonempty strings")
+            plans.extend(tier["plans"])
+            positive(tier["requests"], f"{label}.requests")
+            if "description" in tier:
+                require(isinstance(tier["description"], str), f"{label}.description: expected string")
+            validate_window(label, tier["window"])
+        require(len(set(plans)) == len(plans), f"{name}.tiers: a plan in two tiers")
+    else:
+        require("window" in limit, f"{name}: window required")
+        validate_window(name, limit["window"])
+    if "requests" in limit:
+        positive(limit["requests"], f"{name}.requests")
+    if "partitionBy" in limit:
+        strings(limit["partitionBy"], f"{name}.partitionBy")
+        for dimension in limit["partitionBy"]:
+            uri = urlparse(dimension)
+            require(dimension in DIMENSIONS or (uri.scheme and (uri.path or uri.netloc)), f"{name}: unknown non-URI dimension")
+
+
+def limits_in_force(limit, plan=None):
+    """0.5.0: the [{requests, window}] a consumer keeps within, all at once.
+
+    Without tiers, the limit itself (no entry when it states no requests).
+    With tiers, the tier whose plans name `plan`; without a plan, or one no
+    tier names, every tier.
+    """
+    tiers = limit.get("tiers")
+    if not tiers:
+        return [{"requests": limit["requests"], "window": limit["window"]}] if "requests" in limit else []
+    for tier in tiers:
+        if plan in tier["plans"]:
+            return [{"requests": tier["requests"], "window": tier["window"]}]
+    return [{"requests": tier["requests"], "window": tier["window"]} for tier in tiers]
+
+
+def fallback_window(limit, plan=None):
+    """0.5.0: the window seconds a time-less quotaExhausted falls back to: the plan's tier's, else the longest."""
+    if not limit.get("tiers"):
+        return limit["window"]["seconds"]
+    return max(entry["window"]["seconds"] for entry in limits_in_force(limit, plan))
+
+
+def validate_window(name, window):
     require(isinstance(window, dict) and {"seconds", "kind"} <= set(window) <= {"seconds", "kind", "anchor"}, f"{name}.window: invalid fields")
     positive(window["seconds"], f"{name}.window.seconds")
     require(window["kind"] in ("fixed", "sliding", "unspecified"), f"{name}: invalid window kind")
@@ -88,11 +138,6 @@ def validate_limit(name, limit):
         require(window["kind"] == "fixed", f"{name}: anchor only valid for fixed windows")
         require(isinstance(anchor, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)", anchor), f"{name}: anchor must be RFC3339 timestamp")
         datetime.datetime.fromisoformat(anchor.replace("Z", "+00:00"))
-    if "partitionBy" in limit:
-        strings(limit["partitionBy"], f"{name}.partitionBy")
-        for dimension in limit["partitionBy"]:
-            uri = urlparse(dimension)
-            require(dimension in DIMENSIONS or (uri.scheme and (uri.path or uri.netloc)), f"{name}: unknown non-URI dimension")
 
 def validate_headers(headers):
     validate_roles(headers, "headers", case_insensitive=True)
@@ -304,7 +349,7 @@ def _body_text(body, path):
     return value.strip(WHITESPACE) if isinstance(value, str) else None
 
 
-def classify(document, status, headers, body, received_at):
+def classify(document, status, headers, body, received_at, plan=None):
     """Classify one response under the document's x-throttling.
 
     `headers` maps names (any case) to a value, or to a list of values when the
@@ -368,7 +413,7 @@ def classify(document, status, headers, body, received_at):
     elif "minDelaySeconds" in matched:
         retry_at = received_at + matched["minDelaySeconds"]
     elif matched["meaning"] == "quotaExhausted" and bucket in root.get("limits", {}):
-        retry_at = received_at + root["limits"][bucket]["window"]["seconds"]
+        retry_at = received_at + fallback_window(root["limits"][bucket], plan)
     else:
         retry_at = None
     return {"meaning": matched["meaning"], "bucket": bucket, "retryAt": retry_at}

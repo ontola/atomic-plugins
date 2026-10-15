@@ -1,6 +1,6 @@
 # OpenAPI Throttling Extension
 
-**Spec version:** 0.4.0-draft
+**Spec version:** 0.5.0-draft
 
 This proposal addresses [issue #13](https://github.com/pondersource/openapi-extensions/issues/13).
 It describes announced API request quotas, the response headers that report
@@ -79,17 +79,75 @@ A Limit Object contains:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `requests` | positive integer, optional | Announced maximum number of counted requests in the window. Omission means the amount is unknown or not published. |
-| `window` | Window Object, required | Duration and known window semantics. |
+| `requests` | positive integer, optional | Announced maximum number of counted requests in the window. Omission means the amount is unknown or not published. Not allowed with `tiers`. |
+| `window` | Window Object, required without `tiers` | Duration and known window semantics. Not allowed with `tiers`. |
+| `tiers` | nonempty array of Tier Objects, optional | Since 0.5.0. The limit as it differs between the provider's plans. See [Plan tiers](#plan-tiers). |
 | `partitionBy` | array of dimension names, optional | Dimensions forming one joint bucket key. Omission means partitioning is unknown; `[]` explicitly means one counter shared by all callers. |
 | `description` | string, optional | API-specific identity meanings, qualifications, or remaining unknowns. |
 
 Each request counts as one unit against each applicable bucket. Weighted costs,
 concurrency limits, token/leaky buckets, burst allowances, and conditional
-account-tier formulas are outside this first version. Do not approximate those
+account-tier formulas other than the plan tiers below are outside this
+version. Do not approximate those
 rules as exact request-count windows. Omit an unknown numeric limit instead of
 inventing one or using zero/infinity. A documented minimum service allowance
 (such as “20 or more per minute”) is not a maximum quota.
+
+### Plan tiers
+
+Since 0.5.0. Some providers publish a limit whose amount, or even window,
+depends on the account's plan. Asana documents 150 requests per minute on a
+free domain and 1,500 on a paid one
+([rate limits](https://developers.asana.com/docs/rate-limits)); Notion 600
+per minute per connection on Business and Enterprise plans and 180 on all
+others ([request limits](https://developers.notion.com/reference/request-limits));
+Clockify, per workspace with an API key, "30 requests per hour" on FREE, "20
+requests per second" on TRIAL, BASIC, STANDARD and PRO, and "50 requests per
+second" on ENTERPRISE ([API documentation](https://docs.clockify.me/)). A
+Limit Object with `tiers` declares each of them, instead of `requests` and
+`window`:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `plans` | nonempty array of strings, required | The provider's plans this tier applies to, as it names them. A plan appears in at most one tier of the limit. |
+| `requests` | positive integer, required | Announced maximum number of counted requests in the window, on this tier. |
+| `window` | Window Object, required | Duration and known window semantics, on this tier. |
+| `description` | string, optional | Qualifications, such as the source of the claim. |
+
+The limit's `partitionBy` and `description` apply to every tier, and so does
+the bucket's identity: one bucket, whose amount and window depend on the
+account's plan. A consumer that knows the account's plan (from its own
+configuration; this extension does not say how to find out) uses the tier
+whose `plans` name it. One that does not, or whose plan no tier names, MUST
+keep within every tier at once, each tier's `requests` in its own `window`
+as a separate count over the same requests. No single tier is safe on its
+own: a lower average rate over a longer window can still allow a burst that
+a shorter tier forbids (30 per hour permits 30 requests in one second, which
+breaks 20 per second). Where the provider gives a tier no number, leave it
+out; with no numbered tier, declare no `tiers` and no `requests`.
+
+When a `quotaExhausted` response names such a bucket and gives no time, the
+bucket window it falls back to (Earliest retry time) is the configured tier's
+window, or, without one, the longest window among the tiers.
+
+```yaml
+x-throttling:
+  limits:
+    workspace:
+      partitionBy: [account]
+      description: Counted per workspace for requests with an API key.
+      tiers:
+        - { plans: [FREE], requests: 30, window: { seconds: 3600, kind: unspecified } }
+        - { plans: [TRIAL, BASIC, STANDARD, PRO], requests: 20, window: { seconds: 1, kind: unspecified } }
+        - { plans: [ENTERPRISE], requests: 50, window: { seconds: 1, kind: unspecified } }
+  applies: [workspace]
+```
+
+A consumer told that the workspace is on PRO keeps to 20 per second. One
+without a configured plan keeps to 30 per hour, 20 per second and 50 per
+second together; the last adds nothing beside 20 per second, but each is
+counted. A 0.4.0 validator rejects a Limit Object with `tiers`, and one
+without `window`.
 
 ### Windows
 
@@ -524,7 +582,10 @@ consumer that does not understand it still sees normal operations, responses,
 and security requirements.
 
 Validators MUST check object shapes, positive integer amounts/durations, known
-window kinds, anchor format and placement, unique partition dimensions, and
+window kinds, since 0.5.0 a Limit Object with either `window` or a nonempty
+`tiers` (never both, and no `requests` beside `tiers`), each tier's nonempty
+`plans` of nonempty strings, no plan in two tiers, and each tier's
+`requests` and `window`, anchor format and placement, unique partition dimensions, and
 unique/defined bucket references at the root and every operation. An operation
 selection without root definitions is invalid. Unknown numeric capacity and
 unknown partitioning are valid and must remain distinguishable from zero and
@@ -556,7 +617,7 @@ repository root:
 cd openapi-extensions/spec/throttling
 pip install -r requirements.txt
 python3 -m unittest test_validate
-python3 validate.py examples/windowed.yaml examples/response-signals.yaml examples/blocked.yaml
+python3 validate.py examples/windowed.yaml examples/response-signals.yaml examples/blocked.yaml examples/plan-tiers.yaml
 ```
 
 The tests need PyYAML ([requirements.txt](requirements.txt)); they also check
@@ -570,6 +631,14 @@ API throttling.
 
 ## Changes
 
+- **0.5.0-draft** (2026-10-13): adds `tiers` to the Limit Object (Plan tiers):
+  one bucket whose amount and window depend on the account's plan, as Asana,
+  Notion and Clockify document, each tier naming its `plans`. A consumer
+  uses the tier its configured plan is in; without one it keeps within every
+  tier at once, since no single tier bounds both bursts and averages. The
+  window `quotaExhausted` falls back to is the configured tier's, else the
+  longest. `limits_in_force()` in the validator, an example and tests. A
+  0.4.0 document stays valid and means the same.
 - **0.4.0-draft** (2026-10-12): adds the signal meaning `blocked`, for a
   refusal the API documents as not worth retrying (Notion's
   `public_api_request_blocked`): not throttling, never resent automatically,
