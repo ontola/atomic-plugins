@@ -2058,6 +2058,14 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: `generateFromSchema`, which the mock server seeds
+  records and answers responses with, keeps to the schema it generates
+  from: an OpenAPI 3.1 type list (`['string', 'null']` gave `null`, now a
+  string), `examples` and `const`, numeric bounds (`maximum`, 3.0 and 3.1
+  exclusive bounds, a fractional `minimum` on an integer, an integer
+  `multipleOf`), `minLength` and `maxLength` on an unformatted string,
+  and `minItems` and `maxItems`. An inclusive `minimum` is still the value
+  generated. `pattern` is not followed.
 - **Unreleased**: `resolveReference` (and the `ResolvedReference` type)
   resolves a CRUD Causality §4.1.3 Reference Object for an object: the
   referenced resource's identity path, filled from the object's fields and

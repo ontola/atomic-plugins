@@ -540,8 +540,13 @@ Data flows through four stages, each its own directory under `src/`:
 
 `fake-data/generate.ts` (`generateFromSchema`) is shared by both the mock
 server (seeding + example responses) and is the only place schema-to-value
-synthesis logic lives — it prefers a schema's own `example`, then `enum`,
-then handles `allOf`/`oneOf`/`anyOf`/type-based generation recursively. A
+synthesis logic lives — it prefers a schema's own `example`, then
+`examples[0]`, `const`, `enum`, then handles `allOf`/`oneOf`/`anyOf`/
+type-based generation recursively. It keeps to the schema's numeric bounds
+(3.0 boolean and 3.1 numeric exclusive bounds, integer `multipleOf`),
+`minLength`/`maxLength` on unformatted strings, `minItems`/`maxItems`, and
+reads a 3.1 type list (`['string', 'null']`: the first non-null type);
+`pattern` and string formats beyond the listed ones are not followed. A
 schema's own fixed `example` is reused verbatim on every call, so callers
 generating more than one item from the same schema (resource seeding,
 paginated list generation) must inject their own unique `id` afterward
