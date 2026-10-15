@@ -57,7 +57,8 @@ import {
 
 /**
  * The atomic-server checkout the lanes use: ATOMIC_SERVER_CHECKOUT when set
- * (CI and the cloud hook set it). Otherwise this pin's per-SHA checkout,
+ * and not empty (CI and the cloud hook set it; `ATOMIC_SERVER_CHECKOUT=''`
+ * counts as unset). Otherwise this pin's per-SHA checkout,
  * `~/.cache/atomic-plugins/atomic-server/<.atomic-server-ref>`, when that
  * directory exists (one checkout per SHA, docs/agents/build-vps.md), and
  * `/tmp/atomic-server` when it does not.

@@ -157,7 +157,15 @@ HTTP 403 `insufficient_scope` (unapproved connection, method or discovery),
 HTTP 403 `access_denied` (owner policy), and existing catalog/proxy errors.
 Bearer errors include `WWW-Authenticate`. Connection deletion or idle expiry
 removes it from discovery and prevents subsequent proxy use, even while a
-session token remains otherwise live. Requests already authorized/in flight
+session token remains otherwise live.
+
+A key transfer (`POST /agents/transfer`, SECURITY.md "Key rotation") does not
+move device sessions: they belong to the owner that approved them, and once
+that owner is retired every use answers HTTP 403 `agent_retired`. Approve the
+CLI again with the new key. Neither the old nor the new key can revoke the old
+sessions through the owner routes (the old one is refused, the new one does
+not own them); they stay inert until they expire, at most 30 days after
+approval, and the CLI can still end its own with `/oauth/device/revoke`. Requests already authorized/in flight
 are not cancelled by revocation.
 
 ## Concrete browser owner integration

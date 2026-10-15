@@ -42,9 +42,13 @@ import {
   classes as sharedClasses,
   properties as sharedProperties,
 } from '../../../ontology-kit/terms.mjs';
+import { appVersion } from '../../tooling/apps.mjs';
 
-/** The catalog's version of the Moneybird app (integrations/catalog.json). */
-const VERSION = '0.3.0';
+/**
+ * The catalog's version of the Moneybird app (integrations/catalog.json), read at
+ * load by `appVersion`, so a version bump needs no edit here.
+ */
+const VERSION = appVersion('moneybird');
 
 /** The shared classes and fields, as the bundle has them (#177). */
 const TIME_ENTRY = sharedClasses['time-entry-v1'].subject;

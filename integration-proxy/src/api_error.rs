@@ -27,12 +27,20 @@ pub enum ApiError {
     InvalidToken,
     TokenScope,
     CredentialRefreshFailed,
+    InvalidTransferProof,
     // 403: the caller is known but not allowed.
     NotOwner,
     NotDelegated,
     CapabilityScope,
     AccessDenied(String),
     PlatformMismatch,
+    /// The signer was retired by a key transfer (#410).
+    AgentRetired,
+    // 409
+    /// The old owner still has open webhook subscriptions.
+    TransferBlocked,
+    /// The transfer would collide with what the new id already holds.
+    TransferConflict,
     // 404
     UnknownConnection,
     // 400
@@ -64,9 +72,11 @@ impl ApiError {
             | CapabilityKeyMismatch
             | InvalidToken
             | UnsupportedAuthorization
-            | CredentialRefreshFailed => StatusCode::UNAUTHORIZED,
+            | CredentialRefreshFailed
+            | InvalidTransferProof => StatusCode::UNAUTHORIZED,
             NotOwner | NotDelegated | CapabilityScope | TokenScope | AccessDenied(_)
-            | PlatformMismatch => StatusCode::FORBIDDEN,
+            | PlatformMismatch | AgentRetired => StatusCode::FORBIDDEN,
+            TransferBlocked | TransferConflict => StatusCode::CONFLICT,
             UnknownConnection => StatusCode::NOT_FOUND,
             BadRequest(_) | InvalidHandoff => StatusCode::BAD_REQUEST,
             ProviderQuota(_) => StatusCode::TOO_MANY_REQUESTS,
@@ -94,6 +104,10 @@ impl ApiError {
             InvalidToken => "invalid_token",
             TokenScope => "insufficient_scope",
             CredentialRefreshFailed => "credential_refresh_failed",
+            InvalidTransferProof => "invalid_transfer_proof",
+            AgentRetired => "agent_retired",
+            TransferBlocked => "transfer_blocked",
+            TransferConflict => "transfer_conflict",
             NotOwner => "not_owner",
             NotDelegated => "not_delegated",
             CapabilityScope => "capability_scope",
@@ -127,6 +141,10 @@ impl ApiError {
             InvalidToken => "the Local Thought access token is invalid, expired or revoked".into(),
             TokenScope => "the client session does not grant this connection or operation".into(),
             CredentialRefreshFailed => "the provider refused to refresh this connection's token; connect again".into(),
+            InvalidTransferProof => "proof is not the new agent's signature over this transfer (old id, new id, this proxy's origin and this request's timestamp)".into(),
+            AgentRetired => "this agent id was transferred to another one and can no longer own connections".into(),
+            TransferBlocked => "the agent still has open webhook subscriptions; delete them before transferring".into(),
+            TransferConflict => "the new agent already holds something the transfer would move (a runtime with the same agent); nothing was moved".into(),
             NotOwner => "only the connection's owner may do this".into(),
             NotDelegated => "the signing agent has no delegation for this connection".into(),
             CapabilityScope => "the capability is for a different connection or platform".into(),

@@ -69,6 +69,7 @@ export type {
   SyncResult,
   CollectionCoverage,
   IncompleteRead,
+  MatchedCreate,
 } from './client/client.js';
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';
@@ -135,8 +136,11 @@ export type { LinkResolutionObject } from './pagination/types.js';
 export {
   classifyThrottling,
   declaredThrottling,
+  fallbackWindow,
   headerTime,
+  limitsInForce,
   operationBuckets,
+  parseTiers,
 } from './throttling/throttling.js';
 export type {
   BodyPredicate,
@@ -145,6 +149,7 @@ export type {
   HeaderRoleObject,
   SignalObject,
   ThrottlingDeclaration,
+  Tier,
   ThrottlingMeaning,
   ThrottlingResponse,
   ThrottlingVerdict,

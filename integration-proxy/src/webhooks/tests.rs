@@ -308,6 +308,42 @@ fn ended_reason(error: InboxError) -> (String, String) {
 
 // --- the abandonment proof -----------------------------------------------------
 
+/// #410: a key transfer is refused while the old owner has a subscription
+/// that is not closed (subscriptions, receipts and usage are keyed by
+/// owner), checked inside the transfer's transaction; another owner's
+/// subscriptions do not count; once it is closed, the transfer goes through.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn a_key_transfer_waits_for_the_owners_subscriptions_to_close() {
+    let env = env(Policy::pilot(1 << 30)).await;
+    let owner = agent("transferer");
+    let other = agent("bystander");
+    let successor = agent("successor");
+    let connection = env.connection(&owner).await;
+    let theirs = env.connection(&other).await;
+    let hook = env.shared().await;
+    let sub = env
+        .subscribe(&owner, &connection, &hook.hook_id, "p-1", at(0))
+        .await
+        .unwrap();
+    env.subscribe(&other, &theirs, &hook.hook_id, "p-2", at(0))
+        .await
+        .unwrap();
+    assert!(matches!(
+        env.security.transfer_owner(&owner, &successor).await,
+        Err(crate::security::TransferError::Blocked)
+    ));
+    assert!(!env.security.is_retired(&owner).await.unwrap());
+    env.store.close(&sub.id, "test", at(60)).await.unwrap();
+    let moved = env
+        .security
+        .transfer_owner(&owner, &successor)
+        .await
+        .unwrap();
+    assert_eq!(moved.connections, 1);
+    assert!(env.security.is_retired(&owner).await.unwrap());
+}
+
 /// One signup, then nothing from the consumer ever again, while events
 /// keep arriving every hour for a month: retention stops at the lease, and
 /// after the sweeps nothing of the subscription is left but the shared hook.
