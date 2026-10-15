@@ -486,7 +486,11 @@ order", `before` a timestamp), List Joined Private Archived Threads
 Channel Pins (`before` a pin timestamp, order not stated). Rule (b) covers
 an ascending order with a lower bound only, so none of them qualifies in
 Pagination Schemes 0.9.0. Get Guild Join Requests takes `before` and
-`after` but has no documented order.
+`after` but has no documented order. Checked word for word against the raw
+pages with curl on 2026-10-15, every quote in the overlay matches except
+one: the scheduled-event users' `after` row reads "consider only users
+after given user id" (lowercase), not "Consider ...", and its `limit` row
+reads "number of users to return (up to maximum 100)".
 
 ## Discord throttling
 
