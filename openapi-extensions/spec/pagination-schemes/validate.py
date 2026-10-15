@@ -451,6 +451,31 @@ def _item_cursor_fields(scheme):
     ]
 
 
+DIGITS = re.compile(r"[0-9]+")
+
+
+def _order_key(value):
+    """0.10.0: (kind, key) to compare fromLastItem values; None when the value is neither kind."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return ("number", value) if value >= 0 else None
+    if isinstance(value, str):
+        if DIGITS.fullmatch(value):
+            return ("number", int(value))
+        return ("text", value)
+    return None
+
+
+def _in_order(previous, current, order):
+    """Whether two order keys are strictly in `order`; None when they cannot be compared."""
+    if previous is None or current is None:
+        return None
+    if previous[0] != current[0]:
+        return None
+    return previous[1] < current[1] if order == "ascending" else previous[1] > current[1]
+
+
 def _response_roles(scheme):
     response = scheme.get("response", {})
     return [field.get("role") for kind in ("bodyFields", "headers")
@@ -541,6 +566,22 @@ def response_incomplete(scheme, body):
     if "equals" in marker:
         return _json_equal(value, marker["equals"])
     return any(_json_equal(value, v) for v in marker.get("in", []))
+
+
+_ABSENT = object()
+
+
+def _present_role_value(body, scheme, role):
+    """The value of the body field with this role, _ABSENT when the field is not in the body (None when it is null)."""
+    for name, field in scheme.get("response", {}).get("bodyFields", {}).items():
+        if isinstance(field, dict) and field.get("role") == role:
+            value = body
+            for segment in name.split("."):
+                if not isinstance(value, dict) or segment not in value:
+                    return _ABSENT
+                value = value[segment]
+            return value
+    return _ABSENT
 
 
 def _count(value):
@@ -736,6 +777,8 @@ def read_item_cursor(scheme, request, *, page_size=None, identity=_default_ident
     if len(fields) != 1:
         raise ValueError("an item-cursor read has exactly one fromLastItem field (rule 28)")
     [(location, name, path)] = fields
+    order = scheme["request"][location][name].get("order")
+    last_key = None
     size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
     items, seen, cursors = [], set(), []
     marked = False
@@ -753,9 +796,22 @@ def read_item_cursor(scheme, request, *, page_size=None, identity=_default_ident
         if any(i in seen for i in ids):
             raise PageReadError(f"the page after {cursor!r} holds an item an earlier page returned")
         seen.update(ids)
+        if order:  # 0.10.0: strictly in the declared order across the whole read
+            for item in page:
+                value = item
+                for segment in path.split("."):
+                    value = value.get(segment) if isinstance(value, dict) else None
+                key = _order_key(value)
+                if key is None:
+                    raise PageReadError(f"an item's {path} cannot be ordered: {value!r}")
+                if last_key is not None and not _in_order(last_key, key, order):
+                    raise PageReadError(f"{path} {value!r} is out of {order} order; the read is not complete")
+                last_key = key
         items.extend(page)
         marked = marked or response_incomplete(scheme, body)
-        has_more = _role_value(body, scheme, "hasMore")
+        has_more = _present_role_value(body, scheme, "hasMore")
+        if has_more is not _ABSENT and not isinstance(has_more, bool):
+            raise PageReadError(f"the page after {cursor!r} has a hasMore that is not a boolean: {has_more!r}")
         if not page and has_more is True:
             raise PageReadError(f"the page after {cursor!r} is empty but says hasMore true; the read is not complete")
         if not page or has_more is False:
