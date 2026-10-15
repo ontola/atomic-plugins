@@ -1,11 +1,12 @@
 # OpenAPI Throttling Extension
 
-**Spec version:** 0.3.0-draft
+**Spec version:** 0.5.0-draft
 
 This proposal addresses [issue #13](https://github.com/pondersource/openapi-extensions/issues/13).
 It describes announced API request quotas, the response headers that report
 them (`headers`, since 0.2.0), and the responses that mean a request was
-throttled (`signals`, since 0.2.0). It does not describe a client's
+throttled (`signals`, since 0.2.0) or, since 0.4.0, refused in a way that
+repeating it will not change (`blocked`). It does not describe a client's
 scheduler, retry count, import budget, or chosen delay between requests.
 
 An API can also throttle because of load, abuse detection, or unpublished rules.
@@ -78,17 +79,76 @@ A Limit Object contains:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `requests` | positive integer, optional | Announced maximum number of counted requests in the window. Omission means the amount is unknown or not published. |
-| `window` | Window Object, required | Duration and known window semantics. |
+| `requests` | positive integer, optional | Announced maximum number of counted requests in the window. Omission means the amount is unknown or not published. Not allowed with `tiers`. |
+| `window` | Window Object, required without `tiers` | Duration and known window semantics. Not allowed with `tiers`. |
+| `tiers` | nonempty array of Tier Objects, optional | Since 0.5.0. The limit as it differs between the provider's plans. See [Plan tiers](#plan-tiers). |
 | `partitionBy` | array of dimension names, optional | Dimensions forming one joint bucket key. Omission means partitioning is unknown; `[]` explicitly means one counter shared by all callers. |
 | `description` | string, optional | API-specific identity meanings, qualifications, or remaining unknowns. |
 
 Each request counts as one unit against each applicable bucket. Weighted costs,
 concurrency limits, token/leaky buckets, burst allowances, and conditional
-account-tier formulas are outside this first version. Do not approximate those
+account-tier formulas other than the plan tiers below are outside this
+version. Do not approximate those
 rules as exact request-count windows. Omit an unknown numeric limit instead of
 inventing one or using zero/infinity. A documented minimum service allowance
 (such as “20 or more per minute”) is not a maximum quota.
+
+### Plan tiers
+
+Since 0.5.0. Some providers publish a limit whose amount, or even window,
+depends on the account's plan. Asana documents 150 requests per minute on a
+free domain and 1,500 on a paid one
+([rate limits](https://developers.asana.com/docs/rate-limits)); Notion 600
+per minute per connection on Business and Enterprise plans and 180 on all
+others ([request limits](https://developers.notion.com/reference/request-limits));
+Clockify, per workspace: "Newly created workspaces on the Free plan are
+restricted to 30 API requests per hour for the entire workspace. Workspaces
+on any paid plan maintain the standard limit of 50 requests per second"
+([webhook and API limitations](https://clockify.me/help/getting-started/webhook-and-api-limitations)).
+A Limit Object with `tiers` declares each of them, instead of `requests` and
+`window`:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `plans` | nonempty array of strings, required | The provider's plans this tier applies to, as it names them. A plan appears in at most one tier of the limit. Plan names are compared exactly, case included. |
+| `requests` | positive integer, required | Announced maximum number of counted requests in the window, on this tier. |
+| `window` | Window Object, required | Duration and known window semantics, on this tier. |
+| `description` | string, optional | Qualifications, such as the source of the claim. |
+
+The limit's `partitionBy` and `description` apply to every tier, and so does
+the bucket's identity: one bucket, whose amount and window depend on the
+account's plan. A consumer that knows the account's plan (from its own
+configuration; this extension does not say how to find out) uses the tier
+whose `plans` name it, and uses a tier only for the plans it names. One
+that does not know the plan, or whose plan no tier names, MUST keep within
+every tier at once, each tier's `requests` in its own `window`
+as a separate count over the same requests. No single tier is safe on its
+own: a lower average rate over a longer window can still allow a burst that
+a shorter tier forbids (a tier of 100 per hour permits 100 requests in one
+second, which breaks a tier of 50 per second). Where the provider gives a tier no number, leave it
+out; with no numbered tier, declare no `tiers` and no `requests`.
+
+When a `quotaExhausted` response names such a bucket and gives no time, the
+bucket window it falls back to ([Earliest retry time](#throttling-signals),
+step 3) is the configured tier's window, or, without one, the longest window
+among the tiers.
+
+```yaml
+x-throttling:
+  limits:
+    workspace:
+      partitionBy: [account]
+      description: Counted for the entire workspace (Clockify-shaped).
+      tiers:
+        - { plans: [Free], requests: 30, window: { seconds: 3600, kind: unspecified } }
+        - { plans: [Paid], requests: 50, window: { seconds: 1, kind: unspecified } }
+  applies: [workspace]
+```
+
+A consumer told that the workspace is on a paid plan keeps to 50 per second.
+One without a configured plan, or with a plan no tier names, keeps to 30 per
+hour and 50 per second together. A 0.4.0 validator rejects a Limit Object with `tiers`, and one
+without `window`.
 
 ### Windows
 
@@ -264,9 +324,9 @@ that matches determines the response's meaning.
 | `status` | array of integer HTTP status codes, required | Nonempty, unique, each 100–599. |
 | `header` | Header Predicate, optional | A condition on one response header. |
 | `body` | Body Predicate, optional | A condition on the JSON response body. |
-| `meaning` | `throttled` or `quotaExhausted`, required | What a matching response means; see below. |
-| `bucket` | bucket identifier, optional | The `limits` bucket the response reports exhausted, when the API's documentation establishes it. Requires `limits`. |
-| `minDelaySeconds` | positive integer, optional | A delay the API's documentation asks for when the response carries no `retryAfter` or `reset` time. |
+| `meaning` | `throttled`, `quotaExhausted` or, since 0.4.0, `blocked`, required | What a matching response means; see below. |
+| `bucket` | bucket identifier, optional | The `limits` bucket the response reports exhausted, when the API's documentation establishes it. Requires `limits`. Not allowed with `blocked`. |
+| `minDelaySeconds` | positive integer, optional | A delay the API's documentation asks for when the response carries no `retryAfter` or `reset` time. Not allowed with `blocked`. |
 | `description` | string, optional | API-specific notes. |
 
 A **Header Predicate** has a `name` (case-insensitive) and exactly one of:
@@ -294,6 +354,41 @@ A body that is not JSON, or a `pointer` that does not resolve, does not match.
 | --- | --- |
 | `throttled` | Treats the request as refused because of rate limiting. It retries no earlier than the earliest retry time below. |
 | `quotaExhausted` | Treats the request as refused and the bucket as exhausted until it resets: every request counted against the same bucket will be refused until then, so it pauses them all, not only this one. When `bucket` is given, those are the requests to operations that select it. |
+| `blocked` | Since 0.4.0. Treats the request as refused, and as one the API documents will not succeed if it is repeated: the caller's access is blocked or restricted, not counted. It does not send the request again by itself, after any delay, whatever a `retryAfter` or `reset` value says, and reports it as a failure that needs a person's or the application's action. It does not pause other requests on that account. |
+
+Declare `blocked` only when the provider documents that retrying the response
+will not help. Notion is the example: its `429` with the code `rate_limited`
+carries `additional_data.rate_limit_reason`, and for the reason
+`public_api_request_blocked` it says "This connection's API access has been
+restricted. Retrying won't help. Contact Notion support."
+([request limits](https://developers.notion.com/reference/request-limits)).
+Such a response usually also matches a broader signal (Notion's other reasons
+share the code), so the `blocked` signal comes first:
+
+```yaml
+x-throttling:
+  headers:
+    Retry-After: { role: retryAfter, unit: deltaSeconds }
+  signals:
+    - status: [429]
+      body: { pointer: /additional_data/rate_limit_reason, equals: public_api_request_blocked }
+      meaning: blocked
+    - status: [429]
+      body: { pointer: /code, equals: rate_limited }
+      meaning: throttled
+```
+
+A `blocked` response is not throttling, even with status `429`: the default
+below does not apply once the signal matches, and the earliest retry time is
+not computed. A consumer MUST NOT resend automatically a request whose
+response matches a `blocked` signal, or a signal whose `meaning` it does not
+recognise: it MUST treat a response matching a signal with an unrecognised
+`meaning` as `blocked`. It MUST also treat a `blocked` signal that carries a
+`bucket` or `minDelaySeconds` (which a valid document does not) as `blocked`,
+ignoring those fields, rather than dropping the signal. It MAY stop sending
+other requests with the same credentials until a person or the application
+acts. A 0.3.0 validator rejects a document that declares `blocked`, so a
+document that uses it needs a 0.4.0 consumer.
 
 A signal declares a response the API documents as a rate-limit refusal. That
 the refused request was not applied is an inference, as for any refusal before
@@ -319,7 +414,8 @@ JSON's whitespace (RFC 8259 §2), which includes a header's optional
 whitespace (RFC 9110 §5.6.3). Other characters, such as U+00A0 or U+3000,
 are kept, so a value that holds them does not parse.
 
-**Earliest retry time.** For a matching response, a consumer computes:
+**Earliest retry time.** For a matching response whose meaning is not
+`blocked`, a consumer computes:
 
 1. T1, from the `retryAfter` header or body field, when it is declared,
    present and parses (the later of the two when both do);
@@ -347,7 +443,9 @@ signals; those are consumer decisions.
 
 **Classification.** A response with status `429` (RFC 6585) is throttling,
 with the meaning `throttled`, unless a Signal Object matches it first; this
-holds whether or not `signals` is present. When `signals` is present, a
+holds whether or not `signals` is present. A `blocked` signal (or one with an
+unrecognised meaning) that matches first makes the response not throttling
+and not to be resent (above). When `signals` is present, a
 consumer classifies any other response as throttling only when it matches a
 Signal Object; in particular, a `403` that matches no signal is not
 throttling. When `signals` is absent, this extension says nothing about
@@ -485,7 +583,10 @@ consumer that does not understand it still sees normal operations, responses,
 and security requirements.
 
 Validators MUST check object shapes, positive integer amounts/durations, known
-window kinds, anchor format and placement, unique partition dimensions, and
+window kinds, since 0.5.0 a Limit Object with either `window` or a nonempty
+`tiers` (never both, and no `requests` beside `tiers`), each tier's nonempty
+`plans` of nonempty strings, no plan in two tiers, and each tier's
+`requests` and `window`, anchor format and placement, unique partition dimensions, and
 unique/defined bucket references at the root and every operation. An operation
 selection without root definitions is invalid. Unknown numeric capacity and
 unknown partitioning are valid and must remain distinguishable from zero and
@@ -497,7 +598,8 @@ unique case-insensitively; known roles, each at most once; `unit` present
 exactly for `reset` and `retryAfter`, with a known Time Unit; for each Signal
 Object, a nonempty array of unique integer statuses within 100–599, a known
 `meaning`, a positive integer `minDelaySeconds`, a `bucket` defined in
-`limits`; for each predicate, exactly one operator, a nonempty `in`, a string
+`limits`; since 0.4.0, neither `bucket` nor `minDelaySeconds` with `blocked`;
+for each predicate, exactly one operator, a nonempty `in`, a string
 `equals` and a nonempty `name` in a Header Predicate, a valid RFC 6901
 `pointer` (empty, or `/`-separated with only `~0` and `~1` escapes), JSON
 scalar operands in a Body Predicate, and a nested `item` checked by the same
@@ -516,7 +618,7 @@ repository root:
 cd openapi-extensions/spec/throttling
 pip install -r requirements.txt
 python3 -m unittest test_validate
-python3 validate.py examples/windowed.yaml examples/response-signals.yaml
+python3 validate.py examples/windowed.yaml examples/response-signals.yaml examples/blocked.yaml examples/plan-tiers.yaml
 ```
 
 The tests need PyYAML ([requirements.txt](requirements.txt)); they also check
@@ -530,6 +632,19 @@ API throttling.
 
 ## Changes
 
+- **0.5.0-draft** (2026-10-13): adds `tiers` to the Limit Object (Plan tiers):
+  one bucket whose amount and window depend on the account's plan, as Asana,
+  Notion and Clockify document, each tier naming its `plans`. A consumer
+  uses the tier its configured plan is in; without one it keeps within every
+  tier at once, since no single tier bounds both bursts and averages. The
+  window `quotaExhausted` falls back to is the configured tier's, else the
+  longest. `limits_in_force()` in the validator, an example and tests. A
+  0.4.0 document stays valid and means the same.
+- **0.4.0-draft** (2026-10-12): adds the signal meaning `blocked`, for a
+  refusal the API documents as not worth retrying (Notion's
+  `public_api_request_blocked`): not throttling, never resent automatically,
+  no bucket and no `minDelaySeconds`; an unrecognised meaning is treated the
+  same way. A 0.3.0 document stays valid and means the same.
 - **0.3.0-draft** (2026-10-12, second follow-up): the whitespace that is
   removed is exactly SP, HTAB, CR and LF; an integer above 2^53 − 1 does not
   parse, in a header or a body field, integral float included; a body field

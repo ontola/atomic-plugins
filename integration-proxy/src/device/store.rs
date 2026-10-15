@@ -173,7 +173,13 @@ pub async fn approve(
         if connections.is_empty() || connections.len() > 20 {
             return Err(Error::oauth("invalid_request"));
         }
-        for id in connections {
+        // In connection_id order, the order a key transfer locks the same
+        // rows in (`FOR UPDATE ... ORDER BY connection_id`), so the two cannot
+        // deadlock.
+        let mut ordered: Vec<&String> = connections.iter().collect();
+        ordered.sort_unstable();
+        ordered.dedup();
+        for id in ordered {
             tx.query_opt("SELECT 1 FROM agent_connections WHERE connection_id=$1 AND owner=$2 AND last_used_at>clock_timestamp()-INTERVAL '90 days' FOR SHARE", &[&id, &owner]).await?.ok_or(Error::oauth("access_denied"))?;
         }
     }

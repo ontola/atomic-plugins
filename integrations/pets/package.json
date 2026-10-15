@@ -1,11 +1,11 @@
 {
   "name": "@atomic-integrations/pets",
   "private": true,
-  "version": "0.1.5",
+  "version": "0.1.6",
   "type": "module",
   "description": "Trivial demo Pets collection; no external provider",
   "dependencies": {
-    "syncables": "0.22.0"
+    "syncables": "0.23.0"
   },
   "atomicCertification": {
     "owner": "Ontola",
