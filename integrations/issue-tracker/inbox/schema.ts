@@ -46,7 +46,7 @@ export const DELIVERY_FIELDS = [
   [
     'webhook-payload',
     'Payload',
-    'The raw payload, base64, exactly as the receiver handed it over.',
+    'The raw payload, base64, exactly as the receiver handed it over. Absent when the receiver left the body out as too large (maxBytes); Payload bytes and Payload SHA-256 still describe it.',
   ],
 ] as const;
 
