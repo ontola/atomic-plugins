@@ -147,6 +147,8 @@ export class Budget {
         body: response.body,
         receivedAt,
       });
+      // A blocked answer (Throttling 0.4.0) has no retry time either: it is
+      // returned, and the read fails on it.
       if (!throttled || throttled.retryAt === undefined) {
         return response;
       }
@@ -935,9 +937,14 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
 }
 
 /** The request field a scheme reads from the last item (0.9.0 §4.3.3), if any. */
-function itemCursorField(
-  scheme: PaginationSchemeObject,
-): { location: string; name: string; path: string } | undefined {
+function itemCursorField(scheme: PaginationSchemeObject):
+  | {
+      location: string;
+      name: string;
+      path: string;
+      order?: 'ascending' | 'descending';
+    }
+  | undefined {
   for (const location of [
     'queryParameters',
     'bodyFields',
@@ -947,8 +954,68 @@ function itemCursorField(
       scheme.request?.[location] ?? {},
     ))
       if (typeof field.fromLastItem === 'string')
-        return { location, name, path: field.fromLastItem };
+        return {
+          location,
+          name,
+          path: field.fromLastItem,
+          ...(field.order === 'ascending' || field.order === 'descending'
+            ? { order: field.order }
+            : {}),
+        };
   return undefined;
+}
+
+/**
+ * Pagination Schemes 0.10.0 §4.3.3: the key an `order` check compares a
+ * `fromLastItem` value by, after the spec's `_order_key`. A non-negative
+ * integer, or a string of ASCII digits without a sign (Discord's 19-digit
+ * snowflakes), is a number, compared exactly as a `BigInt` (leading zeros
+ * do not count). Any other string is text, compared by code point. Any
+ * other value (a negative or fractional number, a boolean, `null`, an
+ * object) cannot be ordered: undefined. Unlike the Python reference, which
+ * refuses a float, a JSON `2.0` is accepted: `JSON.parse` gives the
+ * integer 2, and the client cannot tell them apart.
+ */
+function orderKey(
+  value: unknown,
+): { kind: 'number'; key: bigint } | { kind: 'text'; key: string } | undefined {
+  if (typeof value === 'number')
+    return Number.isInteger(value) && value >= 0
+      ? { kind: 'number', key: BigInt(value) }
+      : undefined;
+  if (typeof value !== 'string') return undefined;
+  return /^[0-9]+$/.test(value)
+    ? { kind: 'number', key: BigInt(value) }
+    : { kind: 'text', key: value };
+}
+
+/** Compares two strings by code point (not UTF-16 code unit), as Python does. */
+function compareCodePoints(a: string, b: string): number {
+  const left = [...a];
+  const right = [...b];
+  for (let i = 0; i < Math.min(left.length, right.length); i += 1) {
+    const difference =
+      (left[i] as string).codePointAt(0)! -
+      (right[i] as string).codePointAt(0)!;
+    if (difference !== 0) return difference;
+  }
+  return left.length - right.length;
+}
+
+/** Whether `current` strictly follows `previous` in `order`; undefined when they cannot be compared. */
+function inOrder(
+  previous: NonNullable<ReturnType<typeof orderKey>>,
+  current: NonNullable<ReturnType<typeof orderKey>>,
+  order: 'ascending' | 'descending',
+): boolean | undefined {
+  let comparison: number;
+  if (previous.kind === 'number' && current.kind === 'number')
+    comparison =
+      previous.key < current.key ? -1 : previous.key > current.key ? 1 : 0;
+  else if (previous.kind === 'text' && current.kind === 'text')
+    comparison = compareCodePoints(previous.key, current.key);
+  else return undefined;
+  return order === 'ascending' ? comparison < 0 : comparison > 0;
 }
 
 /**
@@ -968,12 +1035,22 @@ function itemCursorField(
  * true`, and when `hasMore` is present and not a boolean (stricter than
  * the 0.9.0 reference, which lets a non-boolean decide nothing; 0.9.1
  * makes `null` an error too, so only an absent `hasMore` is no
- * information). A short page does not end it.
+ * information). A short page does not end it. With 0.10.0's `order`, the
+ * `fromLastItem` values of every item, across the whole read, must be
+ * strictly in that order (`orderKey`, `inOrder`, after the spec's
+ * `_order_key` and `_in_order`): a pair out of order, an equal pair, a
+ * value that cannot be ordered, or a number beside text ends the read
+ * with a `PageReadError` before that page is yielded.
  */
 async function* walkItemCursor(
   walk: PageWalk,
   scheme: PaginationSchemeObject,
-  field: { location: string; name: string; path: string },
+  field: {
+    location: string;
+    name: string;
+    path: string;
+    order?: 'ascending' | 'descending';
+  },
   responseSchema: SchemaObject | undefined,
 ): AsyncGenerator<Page> {
   const { document, operation, budget, upstream } = walk;
@@ -993,6 +1070,7 @@ async function* walkItemCursor(
   )?.[0];
   const basePath = upstream.pathname.replace(/\/$/, '');
   const seenItems = new Set<string>();
+  let lastKey: ReturnType<typeof orderKey>;
   let cursor: string | undefined;
   for (;;) {
     // The page size, but no token: buildQuery and buildBody would write a
@@ -1068,6 +1146,23 @@ async function* walkItemCursor(
         );
       seenItems.add(key);
     }
+    if (field.order !== undefined)
+      for (const item of items) {
+        const value = itemValue(item, field.path);
+        const key = orderKey(value);
+        if (key === undefined)
+          throw new PageReadError(
+            `an item of ${after} has a ${field.path} of ${value === undefined ? 'nothing' : JSON.stringify(value)}, which cannot be ordered; the read is not complete`,
+          );
+        if (
+          lastKey !== undefined &&
+          inOrder(lastKey, key, field.order) !== true
+        )
+          throw new PageReadError(
+            `${field.path} ${JSON.stringify(value)} in ${after} is out of ${field.order} order; the read is not complete`,
+          );
+        lastKey = key;
+      }
     yield { url, items, body };
     let hasMore: unknown;
     if (hasMoreField !== undefined) {
