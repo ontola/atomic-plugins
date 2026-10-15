@@ -400,13 +400,13 @@ class BlockedTests(unittest.TestCase):
 
 
 class PlanTierTests(unittest.TestCase):
-    """0.5.0: a Limit Object with tiers (Clockify-, Asana- and Notion-shaped)."""
+    """0.5.0: a Limit Object with tiers (synthetic plans)."""
 
     def document(self):
         return example("plan-tiers.yaml")
 
     def limit(self, document):
-        return document["x-throttling"]["limits"]["workspace"]
+        return document["x-throttling"]["limits"]["perAccount"]
 
     def test_example_is_valid(self):
         validate(self.document())
@@ -415,14 +415,14 @@ class PlanTierTests(unittest.TestCase):
         for mutate in (lambda l: l.update(window={"seconds": 1, "kind": "fixed"}),
                        lambda l: l.update(requests=5),
                        lambda l: l.update(tiers=[]),
-                       lambda l: l["tiers"].append(dict(l["tiers"][0])),  # FREE in two tiers
-                       lambda l: l["tiers"][1].update(plans=["PRO", "FREE"]),
+                       lambda l: l["tiers"].append(dict(l["tiers"][0])),  # basic in two tiers
+                       lambda l: l["tiers"][1].update(plans=["plus", "basic"]),
                        lambda l: l["tiers"][0].pop("window"),
                        lambda l: l["tiers"][0].pop("requests"),
                        lambda l: l["tiers"][0].update(plans=[]),
                        lambda l: l["tiers"][0].update(plans=[""]),
-                       lambda l: l["tiers"][0].update(plans="FREE"),
-                       lambda l: l["tiers"][0].update(name="FREE"),
+                       lambda l: l["tiers"][0].update(plans="basic"),
+                       lambda l: l["tiers"][0].update(name="basic"),
                        lambda l: l["tiers"][0].update(requests=0),
                        lambda l: l["tiers"][0]["window"].update(kind="rolling")):
             d = self.document()
@@ -437,12 +437,12 @@ class PlanTierTests(unittest.TestCase):
     def test_limits_in_force(self):
         limit = self.limit(self.document())
         pairs = lambda entries: sorted((e["requests"], e["window"]["seconds"]) for e in entries)
-        self.assertEqual(pairs(limits_in_force(limit, "PRO")), [(20, 1)])
-        self.assertEqual(pairs(limits_in_force(limit, "TRIAL")), [(20, 1)])
-        self.assertEqual(pairs(limits_in_force(limit, "ENTERPRISE")), [(50, 1)])
+        self.assertEqual(pairs(limits_in_force(limit, "plus")), [(20, 1)])
+        self.assertEqual(pairs(limits_in_force(limit, "standard")), [(20, 1)])
+        self.assertEqual(pairs(limits_in_force(limit, "premium")), [(50, 1)])
         # No plan, or an unknown one: every tier at once. 30 per hour alone would allow
         # 30 requests in one second, which 20 per second forbids.
-        for plan in (None, "PREMIUM"):
+        for plan in (None, "Premium"):  # names compare exactly
             self.assertEqual(pairs(limits_in_force(limit, plan)), [(20, 1), (30, 3600), (50, 1)])
         plain = {"requests": 5, "window": {"seconds": 10, "kind": "fixed"}}
         self.assertEqual(limits_in_force(plain, "x"), [plain])
@@ -451,10 +451,10 @@ class PlanTierTests(unittest.TestCase):
     def test_quota_exhausted_falls_back_to_the_tier_window(self):
         d = self.document()
         self.assertEqual(classify(d, 429, {}, None, NOW),
-                         {"meaning": "quotaExhausted", "bucket": "workspace", "retryAt": NOW + 3600})
-        self.assertEqual(classify(d, 429, {}, None, NOW, plan="ENTERPRISE")["retryAt"], NOW + 1)
+                         {"meaning": "quotaExhausted", "bucket": "perAccount", "retryAt": NOW + 3600})
+        self.assertEqual(classify(d, 429, {}, None, NOW, plan="premium")["retryAt"], NOW + 1)
         self.assertEqual(fallback_window(self.limit(d)), 3600)
-        self.assertEqual(fallback_window(self.limit(d), "PRO"), 1)
+        self.assertEqual(fallback_window(self.limit(d), "plus"), 1)
 
     def test_0_4_documents_stay_valid(self):
         for name in ("windowed.yaml", "response-signals.yaml", "body-fields.yaml", "blocked.yaml"):

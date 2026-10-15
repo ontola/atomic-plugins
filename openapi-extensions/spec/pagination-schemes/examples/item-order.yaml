@@ -1,0 +1,44 @@
+openapi: 3.0.3
+info:
+  title: Illustrative list in descending id order paged by the last item's id
+  version: 1.0.0
+  description: >-
+    Synthetic, shaped like Discord's List Joined Private Archived Threads:
+    items come ordered by their id in descending order, ids are numbers sent
+    as strings, and before takes an id. The cursor is the last (lowest)
+    item's id, and the declared descending order is checked by the client.
+servers:
+  - url: https://api.example.com
+components:
+  paginationSchemes:
+    beforeLastMessage:
+      type: pageToken
+      autoDetect: false
+      request:
+        queryParameters:
+          before:
+            role: cursor
+            fromLastItem: id
+            order: descending
+          limit:
+            role: pageSize
+paths:
+  /channels/{channel_id}/messages:
+    get:
+      parameters:
+        - { name: channel_id, in: path, required: true, schema: { type: string } }
+        - { name: before, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+      x-pagination:
+        - scheme: beforeLastMessage
+      responses:
+        '200':
+          description: Messages, newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }
