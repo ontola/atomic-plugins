@@ -477,19 +477,24 @@ reference `read_item_cursor`. No provider was called.
 
 
 [`pagination-v3-9d0d73c6…`](APIs/discord.com/10/pagination-v3-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
-(Pagination Schemes 0.10.0) keeps v2 and adds `order: ascending` to its
-scheme, so a client checks the documented order, and puts
+(Pagination Schemes 0.10.0) keeps v2, adds `order: ascending` to its scheme
+so a client checks the documented order, and pages
+[List Joined Private Archived Threads](https://docs.discord.com/developers/resources/channel)
+back with `before` from the last thread's `id`, `order: descending`, and
+`has_more` as `hasMore`: "Threads are ordered by their id, in descending
+order" and `before` "returns threads before this id" (§4.3.3 rule (b)).
 [Get Channel Messages](https://docs.discord.com/developers/resources/message)
-under a second scheme: `before` from the last (oldest) message's `id`, with
-`order: descending`. Discord returns messages "from newest to oldest" and
-says "snowflake IDs are just numbers with a timestamp"
-([reference](https://docs.discord.com/developers/reference)): rule (c) of
-§4.3.3, whose inference the declared order makes the client check. Without
-READ_MESSAGE_HISTORY "no messages will be returned", so an empty read cannot
-be told from an empty channel; no completeness is declared for messages. No
-dated catalog selects v3. `tests/test_discord_pagination_v3.py` composes it,
-runs the validators, and reads synthetic pages with `read_item_cursor`,
-including out-of-order pages that fail. No provider was called.
+stays without a scheme: its "newest to oldest" is an order of time, not of
+the id `before` bounds, and "If the current user is missing the
+READ_MESSAGE_HISTORY permission in the channel, then no messages will be
+returned", so an empty read cannot be told from an empty channel. The
+public and private archived-thread lists are ordered by `archive_timestamp`,
+which is not unique, and stay without one too. No dated catalog selects v3,
+and Pagination Schemes 0.10.0 asks that no overlay declaring `order` be
+published until syncables checks it. `tests/test_discord_pagination_v3.py`
+composes it, runs the validators, and reads synthetic pages with
+`read_item_cursor`, including out-of-order pages that fail. No provider was
+called.
 
 ## Discord throttling
 

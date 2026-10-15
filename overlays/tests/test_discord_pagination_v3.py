@@ -4,8 +4,9 @@ Composes pagination-v3 with the pinned OAD alone and in place of v1 after the
 catalog's Discord overlays, runs the Pagination Schemes validator (and CRUD
 Causality on the catalog composition), checks the operations that use each
 scheme and that their parameters exist, reads synthetic pages with the
-reference `read_item_cursor` (newest-first messages with `before`, ascending
-bans with `after`, and out-of-order pages that must fail), and checks that v3
+reference `read_item_cursor` (joined private archived threads in descending
+id order with `before`, ascending bans with `after`, and out-of-order pages
+that must fail); Get Channel Messages stays without a scheme, and checks that v3
 keeps every action of v2 apart from the declared changes. No dated catalog
 selects it. No provider is called; the pinned OAD is downloaded by its
 full-SHA URL.
@@ -40,6 +41,7 @@ V1 = f"pagination-{PIN}-overlay.yaml"
 V2 = f"pagination-v2-{PIN}-overlay.yaml"
 V3 = f"pagination-v3-{PIN}-overlay.yaml"
 OPENAPI = f"https://raw.githubusercontent.com/ontola/openapi-directory/{PIN}/APIs/discord.com/10/openapi.yaml"
+THREADS = "/channels/{channel_id}/users/@me/threads/archived/private"
 MESSAGES = "/channels/{channel_id}/messages"
 BANS = "/guilds/{guild_id}/bans"
 EVENT_USERS = "/guilds/{guild_id}/scheduled-events/{guild_scheduled_event_id}/users"
@@ -88,24 +90,27 @@ class DiscordPaginationV3Tests(unittest.TestCase):
                 for path, item in self.alone["paths"].items()
                 for method, operation in item.items()
                 if isinstance(operation, dict) and "x-pagination" in operation}
-        self.assertEqual(used, {MESSAGES: "beforeMessageId", BANS: "afterUserId", EVENT_USERS: "afterUserId"})
-        for path, cursor in ((MESSAGES, "before"), (BANS, "after"), (EVENT_USERS, "after")):
+        self.assertEqual(used, {THREADS: "beforeThreadId", BANS: "afterUserId", EVENT_USERS: "afterUserId"})
+        self.assertNotIn(MESSAGES, used)
+        for path, cursor in ((THREADS, "before"), (BANS, "after"), (EVENT_USERS, "after")):
             names = {p["name"] for p in self.original["paths"][path]["get"].get("parameters", [])}
             self.assertTrue({cursor, "limit"} <= names, path)
 
-    def test_newest_first_messages_page_back_with_before(self):
-        scheme = self.schemes["beforeMessageId"]
-        request, sent = pages([{"id": "1300000000000000300"}, {"id": "1300000000000000200"}],
-                              [{"id": "1300000000000000100"}])
+    def test_threads_page_back_with_before_and_stop_at_has_more(self):
+        scheme = self.schemes["beforeThreadId"]
+        request, sent = pages({"threads": [{"id": "1300000000000000300"}, {"id": "1300000000000000200"}],
+                               "has_more": True},
+                              {"threads": [{"id": "1300000000000000100"}], "has_more": False})
         result = pagination.read_item_cursor(scheme, request, page_size=2)
         self.assertTrue(result["complete"])
-        self.assertEqual([v.get(("queryParameters", "before")) for v in sent],
-                         [None, "1300000000000000200", "1300000000000000100"])
+        self.assertEqual([v.get(("queryParameters", "before")) for v in sent], [None, "1300000000000000200"])
         self.assertEqual({v[("queryParameters", "limit")] for v in sent}, {2})
 
-    def test_out_of_order_messages_end_the_read(self):
-        scheme = self.schemes["beforeMessageId"]
-        for bodies in (([{"id": "200"}, {"id": "300"}],), ([{"id": "300"}, {"id": "200"}], [{"id": "250"}])):
+    def test_out_of_order_threads_end_the_read(self):
+        scheme = self.schemes["beforeThreadId"]
+        for bodies in (({"threads": [{"id": "200"}, {"id": "300"}], "has_more": True},),
+                       ({"threads": [{"id": "300"}, {"id": "200"}], "has_more": True},
+                        {"threads": [{"id": "250"}], "has_more": False})):
             request, _ = pages(*bodies)
             with self.subTest(bodies=bodies), self.assertRaises(pagination.PageReadError):
                 pagination.read_item_cursor(scheme, request, identity=lambda item: object())
@@ -126,10 +131,10 @@ class DiscordPaginationV3Tests(unittest.TestCase):
         schemes2 = v2["actions"][0]["update"]["paginationSchemes"]
         schemes3 = copy.deepcopy(v3["actions"][0]["update"]["paginationSchemes"])
         self.assertEqual(schemes3["afterUserId"]["request"]["queryParameters"]["after"].pop("order"), "ascending")
-        schemes3.pop("beforeMessageId")
+        schemes3.pop("beforeThreadId")
         self.assertEqual(schemes3, schemes2)
         rest2 = [a for a in v2["actions"][1:]]
-        rest3 = [a for a in v3["actions"][1:] if a["target"] != f"$.paths['{MESSAGES}'].get"]
+        rest3 = [a for a in v3["actions"][1:] if a["target"] != f"$.paths['{THREADS}'].get"]
         self.assertEqual(rest3, rest2)
 
     def test_no_dated_catalog_selects_it(self):

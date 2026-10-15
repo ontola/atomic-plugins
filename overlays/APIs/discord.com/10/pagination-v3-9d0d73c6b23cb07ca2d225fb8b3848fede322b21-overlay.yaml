@@ -1,27 +1,28 @@
 # Reviewed 2026-10-15 against the pinned OAD and official provider documentation; no live calls.
 # Revision 3 of pagination-9d0d73c6...: v2's actions, each kept, plus two changes that Pagination
-# Schemes 0.10.0 allows (order beside fromLastItem, §4.3.3 (b) and (c)):
+# Schemes 0.10.0 allows (order beside fromLastItem; §4.3.3 (b) with an upper bound):
 # - afterUserId declares order: ascending, which Discord documents for both lists it serves
 #   (Get Guild Bans and Get Guild Scheduled Event Users: "Users will always be returned in
 #   ascending order by `user.id`" / "by `user_id`"), so a client checks it;
-# - a new scheme, beforeMessageId, on Get Channel Messages. Discord: "Returns an array of message
-#   objects from newest to oldest"; before: "Get messages before this message ID"
-#   (https://docs.discord.com/developers/resources/message); "snowflake IDs are just numbers with
-#   a timestamp" (https://docs.discord.com/developers/reference). Newest to oldest is an order of
-#   time, which message ids follow (§4.3.3 (c)); the page does not state the order of ids made in
-#   the same millisecond, so order: descending is declared and the client checks it: a page out of
-#   strictly descending id order ends the read with an error, never a silent gap.
-# The first request sends no before; an empty page ends the read (Discord sends no has-more field).
-# A read pages from the newest message back to the channel's first. Caveat: "If the current user
-# is missing the READ_MESSAGE_HISTORY permission in the channel, then no messages will be
-# returned": the first page is then empty and the read ends as if the channel had no messages.
-# Pagination cannot tell the two apart; no Collection Completeness is declared for messages, so
-# no consumer may conclude from such a read that messages were deleted.
+# - a new scheme, beforeThreadId, on List Joined Private Archived Threads. Discord: "Threads are
+#   ordered by their id, in descending order"; before: "returns threads before this id"; has_more:
+#   "whether there are potentially additional threads that could be returned on a subsequent
+#   call" (https://docs.discord.com/developers/resources/channel). The thread id is unique and
+#   before is a strict upper bound over items in descending order of it: §4.3.3 (b). The cursor is
+#   the last (lowest) thread's id; has_more false ends the read, as does an empty page.
+# Not declared, because §4.3.3 (b) needs a documented order of the cursor's own unique field:
+#   Get Channel Messages ("Returns an array of message objects from newest to oldest": an order of
+#   time, not of id; and "If the current user is missing the READ_MESSAGE_HISTORY permission in the
+#   channel, then no messages will be returned", so an empty read looks like an empty channel), and
+#   List Public or Private Archived Threads ("Threads are ordered by archive_timestamp, in
+#   descending order", a field that is not unique, with a timestamp before).
+# Pagination Schemes 0.10.0 says no overlay should declare order until syncables checks it: this
+# revision stays unpublished until then.
 # Not declared, as in v2: the lists whose order Discord does not document (List Guild Members, Get
 # Reactions, List Thread Members, Get Answer Voters, List Entitlements, List SKU Subscriptions, Get
 # Current User Guilds, the scheduled-event exception users, the guild audit log).
 # Needs Pagination Schemes 0.10.0. A 0.9.x consumer that validates rejects order; one that does not
-# ignores it and reads without the check.
+# ignores it and reads without the check, so do not use this revision with one.
 overlay: 1.0.0
 info:
   title: Discord API Pagination Schemes (revision 3)
@@ -47,16 +48,14 @@ actions:
                 order: ascending
               limit:
                 role: pageSize
-        beforeMessageId:
+        beforeThreadId:
           type: pageToken
           autoDetect: false
           description: >-
             Send no `before` first, then the `id` of the previous page's last
-            (oldest) message. Discord returns messages "from newest to oldest"
-            and `before` gets "messages before this message ID"; ids are
-            "numbers with a timestamp", so they must come in strictly
-            descending order, which the client checks. An empty page ends the
-            list; a short page does not.
+            (lowest) thread. Discord orders these threads "by their id, in
+            descending order" and `before` "returns threads before this id".
+            has_more false, or an empty page, ends the list.
           request:
             queryParameters:
               before:
@@ -65,10 +64,16 @@ actions:
                 order: descending
               limit:
                 role: pageSize
-  - target: $.paths['/channels/{channel_id}/messages'].get
+          response:
+            envelope:
+              itemsField: threads
+            bodyFields:
+              has_more:
+                role: hasMore
+  - target: $.paths['/channels/{channel_id}/users/@me/threads/archived/private'].get
     update:
       x-pagination:
-        - scheme: beforeMessageId
+        - scheme: beforeThreadId
   - target: $.paths['/guilds/{guild_id}/bans'].get
     update:
       x-pagination:
