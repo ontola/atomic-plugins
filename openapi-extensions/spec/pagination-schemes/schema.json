@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ontola.github.io/atomic-plugins/openapi-extensions/spec/pagination-schemes/schema.json",
-  "title": "Pagination Schemes 0.10.0",
+  "title": "Pagination Schemes 0.10.1",
   "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3), $defs.window the Range Window Object (§4.6.1), $defs.shortPage the Short Page Object (§4.4.5), $defs.incomplete the Incomplete Object (§4.4.6). Covers validation rules 1-4, 8-10, 12-16, 19, 20, 23, 24, 26, 27 and 30; validate.py adds 5, 11, 17, 18, 21, 22, 25, 28 and 29.",
   "$ref": "#/$defs/scheme",
   "$defs": {
