@@ -683,8 +683,11 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   the `hasMore` response role. `checkItemCursor` (validator) ports rules
   27–29 (`_item_cursor_problems`). `walkAllPages` hands a scheme with such
   a field (`itemCursorField`) to `walkItemCursor` in `read/pages.ts`,
-  after the spec's `read_item_cursor`: the cursor goes as `PageCursor.
-  pageToken` through `buildQuery`/`buildBody`, `itemValue` reads the last
+  after the spec's `read_item_cursor`: `buildQuery`/`buildBody` get no
+  token (they would write it into every pageToken- or cursor-role field,
+  and rule 28 allows another beside it), and the cursor is set in the
+  `fromLastItem` field alone; an integer value must be
+  `Number.isSafeInteger`. `itemValue` reads the last
   item's dot-path (own properties, split on `.`), the repeat check keys
   items by `identity`, else the whole item, the incomplete mark goes on
   `outcome.marked`; a present non-boolean `hasMore`, `null` included, is

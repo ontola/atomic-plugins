@@ -268,6 +268,16 @@ describe('a read by the last item ends with an error', () => {
       /no usable id/,
     ],
     [
+      'an integer id past 2^53, already rounded when parsed',
+      [{ data: [{ id: 2 ** 53 }], has_more: true }],
+      /not a safe integer/,
+    ],
+    [
+      'an integer id of 1e21, which String() writes as 1e+21',
+      [{ data: [{ id: 1e21 }], has_more: true }],
+      /not a safe integer/,
+    ],
+    [
       'a repeated item',
       [
         { data: [{ id: 'a' }], has_more: true },
@@ -444,5 +454,90 @@ describe('a cursor in a POST body', () => {
       { query: 'x', starting_after: 'b' },
     ]);
     expect(outcome.complete).toBe(true);
+  });
+});
+
+// Rule 28 allows another pageToken- or cursor-role field beside the
+// fromLastItem one (Stripe's ending_before beside starting_after). Only the
+// fromLastItem field carries the cursor, as in the spec's read_item_cursor:
+// sending it in ending_before too bounded the read from both sides, the
+// second page came back empty, and the read ended with 2 of 5 items as
+// complete (#600's review).
+describe('another cursor-role field beside fromLastItem', () => {
+  const ids = ['a', 'b', 'c', 'd', 'e'];
+  /** Honours both bounds, as Stripe does. */
+  const bounded = (
+    read: (request: Parameters<Transport>[0]) => Json,
+  ): { requests: Json[]; transport: Transport } => {
+    const fake = {
+      requests: [] as Json[],
+      transport: (async (request) => {
+        const params = read(request);
+        fake.requests.push(params);
+        const after = params['starting_after'] as string | undefined;
+        const before = params['ending_before'] as string | undefined;
+        const from = after ? ids.indexOf(after) + 1 : 0;
+        const to = before ? ids.indexOf(before) : ids.length;
+        const data = ids
+          .slice(from, Math.min(to, from + 2))
+          .map((id) => ({ id }));
+        const body = { data, has_more: from + 2 < to };
+        return { status: 200, headers: {}, body: JSON.stringify(body) };
+      }) as Transport,
+    };
+    return fake;
+  };
+
+  it('is valid, and gets no cursor in the query', async () => {
+    const doc = example();
+    ((scheme(doc)['request'] as Json)['queryParameters'] as Json)[
+      'ending_before'
+    ] = { role: 'pageToken' };
+    expect(
+      validatePaginationScheme(
+        'afterLastObject',
+        scheme(doc) as unknown as PaginationSchemeObject,
+      ),
+    ).toEqual([]);
+    const fake = bounded((request) =>
+      Object.fromEntries(request.url.searchParams),
+    );
+    const { items, outcome } = await read(fake.transport, doc);
+    expect(items.map((item) => item['id'])).toEqual(ids);
+    expect(outcome.complete).toBe(true);
+    expect(fake.requests.every((params) => !('ending_before' in params))).toBe(
+      true,
+    );
+  });
+
+  it('gets no cursor in a POST body', async () => {
+    const doc = example();
+    scheme(doc)['request'] = {
+      bodyFields: {
+        starting_after: { role: 'cursor', fromLastItem: 'id' },
+        ending_before: { role: 'cursor' },
+      },
+    };
+    doc.paths['/v1/customers/search'] = {
+      post: {
+        'x-pagination': [{ scheme: 'afterLastObject' }],
+        responses: { '200': { description: 'A page of customers.' } },
+      },
+    } as never;
+    const fake = bounded((request) =>
+      request.body ? (JSON.parse(request.body) as Json) : {},
+    );
+    const outcome: WalkOutcome = { complete: true };
+    const items = await paginate(doc, {
+      transport: fake.transport,
+      path: '/v1/customers/search',
+      method: 'POST',
+      outcome,
+    });
+    expect(items.map((item) => item['id'])).toEqual(ids);
+    expect(outcome.complete).toBe(true);
+    expect(fake.requests.every((body) => !('ending_before' in body))).toBe(
+      true,
+    );
   });
 });

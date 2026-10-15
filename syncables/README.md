@@ -1892,18 +1892,21 @@ const { records, ontology, errors } = await readPlatform(document, {
   §4.3.3): a `pageToken` scheme whose one `pageToken` or `cursor` field
   declares `fromLastItem` (a dot-path into an item, as Stripe's
   `starting_after` takes the last object's `id`) is read by sending that
-  value of each page's last item: a string as it is, an integer in
-  decimal. The first request goes without it. The read ends at an empty
+  value of each page's last item, in that field only: a string as it is,
+  a safe integer in decimal. Another `pageToken`- or `cursor`-role field,
+  which rule 28 allows beside it (Stripe's `ending_before`), gets no
+  value. The first request goes without a cursor. The read ends at an empty
   page or at a `hasMore` body field of `false`, complete unless a response
   was marked (§4.4.6; the mark is kept across pages); a short page does not
   end it. It ends with a `PageReadError`, not complete, when the last item
   has no such value (or a boolean, `null`, a fraction, an array or an
-  object), when the value equals the one sent for that page, when a page
-  holds an item an earlier page returned (by identity, else the whole
-  item), when an empty page says `hasMore: true`, and when `hasMore` is
-  present but not a boolean, `null` included (Pagination Schemes 0.9.1;
-  only an absent `hasMore` decides nothing). The cursor
-  field must be a query parameter or, on a POST, a body field; a header
+  object, or an integer beyond `Number.MAX_SAFE_INTEGER`, which was
+  rounded when parsed), when the value equals the one sent for that
+  page, when a page holds an item an earlier page returned (by identity,
+  else the whole item), when an empty page says `hasMore: true`, and when
+  `hasMore` is present but not a boolean, `null` included (Pagination
+  Schemes 0.9.1; only an absent `hasMore` decides nothing). The cursor field
+  must be a query parameter or, on a POST, a body field; a header
   field ends the read with an error. The validator checks rules 27 to 29.
   Not served by the mock server.
 - **User-defined fields** (draft
@@ -2055,7 +2058,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   declare a `hasMore` role beside a next token were refused before, for
   the unknown role, and still are, by rule 29). The read follows the
   spec's `read_item_cursor`, and, as 0.9.1 says, refuses a `hasMore`
-  that is present but not a boolean, `null` included. Additive for documents without these fields.
+  that is present but not a boolean, `null` included. The cursor goes in
+  the `fromLastItem` field only, never in another cursor-role field beside
+  it, and an integer cursor value must be a safe integer. Additive for
+  documents without these fields.
 - **0.24.0**: CRUD Causality 0.7.0's `replace` and `unkeyedLists` for
   APIs that cannot update an object or give list items no id (see "APIs
   that cannot update"): `replaceOf`, `replaceBlock`, `unkeyedListsOf`,
