@@ -56,7 +56,7 @@ export function nextStep(
 ): string {
   // Neither is fixed by reconnecting (read.ts `googleRefusal`, 0.1.1).
   if (refusal === 'daily-quota')
-    return 'Try again tomorrow: the quota resets once a day.';
+    return "Try again after midnight Pacific time, when Google resets daily quotas. The quota belongs to the integration proxy's Google project, so whoever runs the proxy can ask Google to raise it.";
   if (refusal === 'api-disabled')
     return 'Ask whoever runs the integration proxy to turn on the Google Tasks API for its Google project.';
   if (status === 401 || status === 403) return 'Reconnect Google Tasks.';

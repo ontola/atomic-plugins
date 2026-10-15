@@ -151,9 +151,11 @@ Two refusals are neither a wait nor a lost grant (0.1.1, `read.ts`
   `dailyLimitExceeded`, or a google.rpc `ErrorInfo` `RATE_LIMIT_EXCEEDED`
   whose `metadata.quota_limit` is a per-day limit (a per-minute one stays a
   rate limit). The pass stops before any write; the card says "Google Tasks'
-  daily quota for this app is used up … It resets once a day; reconnecting
-  won't help." with the next step "Try again tomorrow: the quota resets once
-  a day."
+  daily quota for this app is used up … Google resets it at midnight Pacific
+  time; reconnecting won't help." with the next step "Try again after
+  midnight Pacific time, when Google resets daily quotas. The quota belongs
+  to the integration proxy's Google project, so whoever runs the proxy can
+  ask Google to raise it."
 - **The Tasks API turned off** in the Google project behind the integration
   proxy: 403 with `accessNotConfigured`, or an `ErrorInfo`
   `SERVICE_DISABLED`. The next step is "Ask whoever runs the integration

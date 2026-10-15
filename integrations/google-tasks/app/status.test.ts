@@ -375,7 +375,8 @@ describe('syncStatusFor', () => {
     })!;
     expect(daily.last).toMatchObject({
       ok: false,
-      nextStep: 'Try again tomorrow: the quota resets once a day.',
+      nextStep:
+        "Try again after midnight Pacific time, when Google resets daily quotas. The quota belongs to the integration proxy's Google project, so whoever runs the proxy can ask Google to raise it.",
     });
     const off = syncStatusFor({
       state: { ...base, message: 'off', refusal: 'api-disabled' },

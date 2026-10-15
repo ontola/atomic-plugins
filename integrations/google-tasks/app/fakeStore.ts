@@ -37,7 +37,6 @@ export const ROW_EXTRAS = 'did:ad:plugin-row-extras';
 /** Someone else's issue-v1 table the app can be added to as a view. */
 export const OTHER_TABLE = 'did:ad:table-theirs';
 
-/** Google's 403 body for a quota overrun, as its reference shows it. */
 /**
  * Google's documented 403 bodies for a used-up daily quota and for the Tasks
  * API turned off in the project (0.1.1, read.ts `googleRefusal`). Shapes from
@@ -81,6 +80,7 @@ export const API_DISABLED_403 = {
   },
 };
 
+/** Google's 403 body for a quota overrun, as its reference shows it. */
 export const RATE_LIMIT_403 = {
   error: {
     code: 403,

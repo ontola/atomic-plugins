@@ -157,6 +157,10 @@ describe('googleRefusal (0.1.1)', () => {
       'daily-quota',
     );
     expect(isRateLimit(perDay('defaultPerDayPerProject'))).toBe(false);
+    // Kebab-case and snake_case limit names are per-day too.
+    expect(googleRefusal(perDay('requests-per-day'))).toBe('daily-quota');
+    expect(isRateLimit(perDay('requests-per-day'))).toBe(false);
+    expect(googleRefusal(perDay('requests_per_day'))).toBe('daily-quota');
     // A per-minute ErrorInfo stays a rate limit.
     expect(
       googleRefusal(perDay('ReadRequestsPerMinutePerUser')),

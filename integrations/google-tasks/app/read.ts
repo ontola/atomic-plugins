@@ -80,7 +80,7 @@ export class GoogleRefused extends GoogleError {
   ) {
     super(
       refusal === 'daily-quota'
-        ? `Google Tasks' daily quota for this app is used up (${status} for ${what}). It resets once a day; reconnecting won't help.`
+        ? `Google Tasks' daily quota for this app is used up (${status} for ${what}). Google resets it at midnight Pacific time; reconnecting won't help.`
         : `The Google Tasks API is turned off for the Google project behind this connection (${status} for ${what}). Reconnecting won't help.`,
       status,
     );
@@ -189,7 +189,7 @@ export function googleRefusal(response: GoogleResponse): Refusal | undefined {
       i.reason === 'RATE_LIMIT_EXCEEDED' &&
       isRow(i.metadata) &&
       typeof i.metadata.quota_limit === 'string' &&
-      /per ?day/i.test(i.metadata.quota_limit),
+      /per[-_ ]?day/i.test(i.metadata.quota_limit),
   );
   if (reasons.includes('dailyLimitExceeded') || perDay) return 'daily-quota';
   if (response.status !== 403) return undefined;
