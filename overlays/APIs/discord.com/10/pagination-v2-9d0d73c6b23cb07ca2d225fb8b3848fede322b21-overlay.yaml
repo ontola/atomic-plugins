@@ -1,0 +1,66 @@
+# Reviewed 2026-10-14 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://docs.discord.com/developers/resources/guild ("Get Guild Bans": "Users will
+#   always be returned in ascending order by `user.id`. If both `before` and `after` are
+#   provided, only `before` is respected."; after "consider only users after given user id";
+#   limit "number of users to return (up to maximum 1000)", default 1000).
+# Source: https://docs.discord.com/developers/resources/guild-scheduled-event ("Get Guild
+#   Scheduled Event Users": "Users will always be returned in ascending order by `user_id`.";
+#   after "Consider only users after given user id"; limit up to 100, default 100).
+# Needs Pagination Schemes 0.9.0 (openapi-extensions/spec/pagination-schemes, fromLastItem,
+# §4.3.3). A 0.8.0 consumer reads the scheme as a pageToken scheme without a next token and
+# stops after one page, so do not use this revision with one.
+#
+# Revision 2 of pagination-9d0d73c6...: v1's one action (the guild list's description) plus
+# a cursor read from the last item on the two operations whose order Discord documents. Each
+# qualifies under §4.3.3 (b): `after` is a strict bound on the user id, unique per item, and
+# the items come in ascending order of it, so the next page's `after` is the last item's
+# `user.id`. The first request sends no `after`; an empty page ends the read (Discord sends
+# no has-more field). In the scheduled-event users the pinned OAD does not require `user`:
+# an item without it ends the read with an error (§4.3.3 step 4), never a silent stop.
+# Not declared, because Discord does not document their order: List Guild Members (its
+# `after` is "the highest user id in the previous page", but the order of the members is not
+# stated), Get Reactions, List Thread Members, Get Answer Voters, List Entitlements, List
+# SKU Subscriptions, Get Current User Guilds, the scheduled-event exception users, Get
+# Channel Messages, and the guild audit log (its order depends on before or after, so the
+# cursor-less first page is not in ascending order).
+overlay: 1.0.0
+info:
+  title: Discord API Pagination Schemes (revision 2)
+  version: 2.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9d0d73c6b23cb07ca2d225fb8b3848fede322b21/APIs/discord.com/10/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        afterUserId:
+          type: pageToken
+          autoDetect: false
+          description: >-
+            Send no `after` first, then the `user.id` of the previous page's
+            last item. Discord returns these users "in ascending order" of
+            their id and `after` considers "only users after given user id".
+            An empty page ends the list; a short page does not.
+          request:
+            queryParameters:
+              after:
+                role: cursor
+                fromLastItem: user.id
+              limit:
+                role: pageSize
+  - target: $.paths['/guilds/{guild_id}/bans'].get
+    update:
+      x-pagination:
+        - scheme: afterUserId
+  - target: $.paths['/guilds/{guild_id}/scheduled-events/{guild_scheduled_event_id}/users'].get
+    update:
+      x-pagination:
+        - scheme: afterUserId
+  - target: $.paths['/users/@me/guilds'].get
+    update:
+      description: >-
+        The initial read-only integration requests the maximum 200 guilds in
+        one page: Discord says 200 "is the maximum number of guilds a non-bot
+        user can join. Therefore, pagination is not needed". Discord also
+        supports `before` and `after`, but does not document the order of the
+        guilds it returns, so no cursor read from the last item is declared
+        (Pagination Schemes §4.3.3).
