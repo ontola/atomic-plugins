@@ -146,7 +146,8 @@ v2, validates it and reads a synthetic offset list with the reference
 fails through 2026-10-11 and reads as empty through this catalog;
 `tests/box_offsets_syncables.test.ts`: a short page is read again under v2
 and stepped over under v3); run them from `syncables/` with
-`npx vitest run --root .. overlays/tests/<file>`.
+`npx vitest run --root .. overlays/tests/<file>` (all of them:
+`overlays/tests/`), as Overlays CI's `reads` job does.
 
 ## Read and list tombstones
 
@@ -681,7 +682,10 @@ Checks:
   (`tests/test_identity_overlays.py` also checks the pets
   demo's document and data). It reads the
   Pages-published sources from the checkout, so it validates a change before
-  Pages serves it.
+  Pages serves it. Its `reads` job runs every `tests/*.test.ts` (syncables
+  reads through the catalogs, with vitest from `syncables/`) when an overlay
+  or syncables' source changes; the composer reads each pinned OAD from the
+  same openapi-directory clone (`OPENAPI_DIRECTORY_REPO`).
 - `integration-proxy`'s `default_catalog_*` tests (PRs touching this folder):
   compose the selected dated catalog with the proxy's runtime loader, reading
   overlays from this folder. Its
