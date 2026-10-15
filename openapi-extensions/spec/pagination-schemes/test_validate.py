@@ -1081,6 +1081,19 @@ class ItemOrderTests(unittest.TestCase):
             with self.subTest(pages=pages), self.assertRaises(PageReadError):
                 read_item_cursor(self.scheme(), self.pages(*pages), identity=lambda item: object())
 
+    def test_numbers_compare_exactly_and_mix_with_digit_strings(self):
+        scheme = copy.deepcopy(self.scheme())
+        scheme["request"]["queryParameters"]["before"]["order"] = "ascending"
+        # An integer beside a digit string compares as a number.
+        self.assertTrue(read_item_cursor(scheme, self.pages([{"id": "9"}, {"id": 10}]))["complete"])
+        with self.assertRaises(PageReadError):
+            read_item_cursor(scheme, self.pages([{"id": 10}, {"id": "9"}]), identity=lambda item: object())
+        # Exact beyond 2**53, and leading zeros do not count.
+        big = 2 ** 63
+        self.assertTrue(read_item_cursor(scheme, self.pages([{"id": str(big)}, {"id": str(big + 1)}]))["complete"])
+        with self.assertRaises(PageReadError):  # "010" equals "10": not strictly ascending
+            read_item_cursor(scheme, self.pages([{"id": "10"}, {"id": "010"}]), identity=lambda item: object())
+
     def test_text_values_compare_by_code_point_and_ascending_works(self):
         scheme = copy.deepcopy(self.scheme())
         scheme["request"]["queryParameters"]["before"]["order"] = "ascending"

@@ -1,12 +1,12 @@
 openapi: 3.0.3
 info:
-  title: Illustrative newest-first list paged by the last item's id
+  title: Illustrative list in descending id order paged by the last item's id
   version: 1.0.0
   description: >-
-    Synthetic, shaped like Discord's Get Channel Messages: messages come from
-    newest to oldest, ids are numbers with a time prefix sent as strings, and
-    before takes a message id. The cursor is the last (oldest) message's id,
-    and the declared descending order of ids is checked by the client.
+    Synthetic, shaped like Discord's List Joined Private Archived Threads:
+    items come ordered by their id in descending order, ids are numbers sent
+    as strings, and before takes an id. The cursor is the last (lowest)
+    item's id, and the declared descending order is checked by the client.
 servers:
   - url: https://api.example.com
 components:

@@ -455,7 +455,12 @@ DIGITS = re.compile(r"[0-9]+")
 
 
 def _order_key(value):
-    """0.10.0: (kind, key) to compare fromLastItem values; None when the value is neither kind."""
+    """0.10.0: (kind, key) to compare fromLastItem values; None when the value is neither kind.
+
+    Non-negative integers and ASCII digit strings are numbers, compared exactly
+    (Python integers have arbitrary precision; "010" equals "10"). Other
+    strings are text, compared by code point.
+    """
     if isinstance(value, bool):
         return None
     if isinstance(value, int):
