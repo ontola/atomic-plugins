@@ -136,7 +136,7 @@ export function applyOverlay<T extends Record<string, unknown>>(
         if (!isPlainObject(update))
           throw new Error('Overlay cannot replace the document root');
         for (const [key, value] of Object.entries(update))
-          result[key] = deepMergeValue(result[key], value);
+          result[key] = deepMergeValue(result[key], deepClone(value));
         continue;
       }
       const key = segments[segments.length - 1] as string;

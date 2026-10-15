@@ -2072,6 +2072,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: `applyOverlay` copies a root (`$`) `update` as it
+  already copied every other one. Before, the result shared the
+  overlay's objects, so a later action such as `$.x.y` changed the
+  caller's overlay, and applying it again gave a different document.
 - **Unreleased**: `generateFromSchema`, which the mock server seeds
   records and answers responses with, keeps to the schema it generates
   from: an OpenAPI 3.1 type list (`['string', 'null']` gave `null`, now a
