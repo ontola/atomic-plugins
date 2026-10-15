@@ -1015,9 +1015,11 @@ function inOrder(
  * field; the read ends at an empty page or at `hasMore: false`, complete
  * unless a response of the read was marked (§4.4.6; the mark is kept
  * across pages on `outcome.marked`). Otherwise the next request sends the
- * value at `fromLastItem` in the last item: a string as it is, an integer
- * in decimal. `PageReadError` ends the read, not complete, when that value
- * is missing or neither a string nor an integer, when it equals the one
+ * value at `fromLastItem` in the last item, in that field only (never in
+ * another `pageToken`- or `cursor`-role field, which rule 28 allows): a
+ * string as it is, a safe integer in decimal. `PageReadError` ends the
+ * read, not complete, when that value is missing or neither a string nor
+ * a safe integer (`Number.isSafeInteger`), when it equals the one
  * sent for this page, when a page holds an item an earlier page returned
  * (`identity`, else the whole item), when an empty page says `hasMore:
  * true`, and when `hasMore` is present and not a boolean (stricter than
@@ -1061,7 +1063,13 @@ async function* walkItemCursor(
   let lastKey: ReturnType<typeof orderKey>;
   let cursor: string | undefined;
   for (;;) {
-    const page: PageCursor = cursor === undefined ? {} : { pageToken: cursor };
+    // The page size, but no token: buildQuery and buildBody would write a
+    // token into every pageToken- or cursor-role field, and rule 28 allows
+    // another one (an `ending_before` beside `starting_after`), which would
+    // then bound the read from the other side and end it early, as if
+    // complete. Only the fromLastItem field carries the cursor, as in the
+    // spec's read_item_cursor.
+    const page: PageCursor = {};
     const url = new URL(upstream.href);
     url.pathname = basePath + walk.path;
     for (const [key, value] of Object.entries({
@@ -1069,6 +1077,8 @@ async function* walkItemCursor(
       ...buildQuery(scheme, page, pageSize),
     }))
       url.searchParams.set(key, value);
+    if (cursor !== undefined && field.location === 'queryParameters')
+      url.searchParams.set(field.name, cursor);
     const request: TransportRequest = {
       url,
       method: walk.method,
@@ -1076,9 +1086,10 @@ async function* walkItemCursor(
     };
     if (walk.method === 'POST') {
       request.headers['content-type'] = 'application/json';
-      request.body = JSON.stringify(
-        withBody(walk.body, buildBody(scheme, page, pageSize)),
-      );
+      const fields = buildBody(scheme, page, pageSize);
+      if (cursor !== undefined && field.location === 'bodyFields')
+        setNestedField(fields, field.name, cursor);
+      request.body = JSON.stringify(withBody(walk.body, fields));
     }
     const response = await budget.send(request);
     if (response.status < 200 || response.status >= 300)
@@ -1157,8 +1168,18 @@ async function* walkItemCursor(
     if (items.length === 0 || hasMore === false) return;
     const value = itemValue(items[items.length - 1], field.path);
     if (
+      typeof value === 'number' &&
+      Number.isInteger(value) &&
+      !Number.isSafeInteger(value)
+    )
+      // Past 2^53 the parsed number was already rounded, so it may not be
+      // the id the API sent, and from 1e21 String() writes `1e+21`.
+      throw new PageReadError(
+        `the last item of ${after} has a ${field.path} of ${String(value)}, not a safe integer to continue from; the read is not complete`,
+      );
+    if (
       typeof value !== 'string' &&
-      !(typeof value === 'number' && Number.isInteger(value))
+      !(typeof value === 'number' && Number.isSafeInteger(value))
     )
       throw new PageReadError(
         `the last item of ${after} has no usable ${field.path} to continue from; the read is not complete`,
