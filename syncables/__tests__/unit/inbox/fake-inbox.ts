@@ -225,20 +225,45 @@ export class FakeInbox {
         const start = after ? Number(after.split(':')[1]) : sub.ack;
         const pending = sub.refs.filter((ref) => ref.seq > start);
         const generation = pending[0]?.generation ?? sub.generation;
-        const events = pending
+        let events: InboxEvent[] = pending
           .filter((ref) => ref.generation === generation)
           .map((ref) => ({
             ...ref.event,
             cursor: `${ref.generation}:${ref.seq}`,
             generation: `g${ref.generation}`,
           }));
+        // `maxBytes`, as integration-proxy's `fetch_within`: an event that
+        // does not fit ends the page, unless it is the first, which then
+        // comes back alone without its body.
+        const maxBytes = /[?&]maxBytes=(\d+)/.exec(request.url.search)?.[1];
+        let cut = false;
+        if (maxBytes !== undefined) {
+          let room = Number(maxBytes);
+          const kept: InboxEvent[] = [];
+          for (const event of events) {
+            const size = event.payload.body?.length ?? 0;
+            if (size <= room) {
+              room -= size;
+              kept.push(event);
+              continue;
+            }
+            if (kept.length === 0) {
+              const payload = { ...event.payload, omitted: true as const };
+              delete payload.body;
+              kept.push({ ...event, payload });
+            }
+            break;
+          }
+          cut = kept.length < events.length;
+          events = kept;
+        }
         const required = this.required(sub);
         const page: InboxEventPage = {
           subscription: sub.id,
           generation: `g${generation}`,
           events,
           next: events.at(-1)?.cursor ?? null,
-          more: false,
+          more: cut,
           ...(required ? { reconciliationRequired: required } : {}),
         };
         return json(200, page);

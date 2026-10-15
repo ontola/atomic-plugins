@@ -102,6 +102,13 @@ export interface InboxConsumerOptions {
    */
   wait?: number;
   limit?: number;
+  /**
+   * Base64 payload bytes per fetch (`InboxClient.events`). An event whose
+   * body alone is over it reaches `append` without its body
+   * (`payload.omitted`); the journal decides what to keep of it. It is
+   * acknowledged like any other.
+   */
+  maxBytes?: number;
   now?: () => number;
   /**
    * When an appended event is acknowledged.
@@ -217,6 +224,9 @@ export class InboxConsumer {
       ...(this.options.limit === undefined
         ? {}
         : { limit: this.options.limit }),
+      ...(this.options.maxBytes === undefined
+        ? {}
+        : { maxBytes: this.options.maxBytes }),
     });
     let added = 0;
     let duplicates = 0;

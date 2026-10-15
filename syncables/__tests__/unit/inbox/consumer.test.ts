@@ -450,3 +450,58 @@ describe('InboxError.backoff', () => {
     ).toBeUndefined();
   });
 });
+
+describe('maxBytes', () => {
+  it('is sent with every fetch; an event over it alone reaches the journal without its body, and is acknowledged', async () => {
+    const inbox = new FakeInbox();
+    const urls: string[] = [];
+    const journal = new InMemoryInboxJournal();
+    const consumer = new InboxConsumer({
+      client: new InboxClient('https://proxy.example', async (request) => {
+        urls.push(request.url.href);
+        return inbox.transport(request);
+      }),
+      journal,
+      subscription: {
+        connection: 'c-1',
+        source: 'project',
+        parameters: { projectId: 'p-1' },
+        events: ['task'],
+      },
+      reconcile: async (): Promise<void> => {},
+      now: (): number => inbox.now,
+      maxBytes: 64,
+    });
+    await consumer.step();
+    // About 140 bytes in base64: over 64 alone.
+    inbox.deliver('d-big', { text: 'x'.repeat(90) });
+    inbox.deliver('d-small');
+    await consumer.step();
+    expect(urls.at(-2)).toMatch(/\/events\?.*maxBytes=64(&|$)/);
+    expect(ids(journal.events)).toEqual(['d-big']);
+    const [big] = journal.events;
+    expect(big!.payload.omitted).toBe(true);
+    expect(big!.payload.body).toBeUndefined();
+    expect(big!.payload.bytes).toBe(
+      JSON.stringify({ text: 'x'.repeat(90) }).length,
+    );
+    expect(big!.payload.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(
+      inbox.subs.get('sub-1')!.refs.map((r) => r.event.deliveryId),
+    ).toEqual(['d-small']);
+    await consumer.step();
+    expect(ids(journal.events)).toEqual(['d-big', 'd-small']);
+    expect(journal.events[1]!.payload.body).toBeDefined();
+    expect(inbox.subs.get('sub-1')!.refs).toHaveLength(0);
+  });
+
+  it('is refused unless it is an integer of at least 1', () => {
+    const client = new InboxClient(
+      'https://proxy.example',
+      new FakeInbox().transport,
+    );
+    for (const maxBytes of [0, -1, 1.5, Number.NaN]) {
+      expect(() => client.events('sub-1', { maxBytes })).toThrow(RangeError);
+    }
+  });
+});

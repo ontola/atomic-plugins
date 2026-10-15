@@ -132,4 +132,11 @@ describe('scopedReads', () => {
     expect(scopedReads(document, event('issues', 'not json'))).toEqual([]);
     expect(scopedReads({}, event('issues', delivery.body))).toEqual([]);
   });
+
+  it('asks nothing for an event that came without its body (maxBytes)', () => {
+    const whole = event('issues', delivery.body);
+    const payload = { ...whole.payload, omitted: true as const };
+    delete payload.body;
+    expect(scopedReads(document, { ...whole, payload })).toEqual([]);
+  });
 });
