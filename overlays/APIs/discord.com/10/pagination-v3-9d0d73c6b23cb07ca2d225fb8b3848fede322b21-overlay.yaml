@@ -1,0 +1,88 @@
+# Reviewed 2026-10-15 against the pinned OAD and official provider documentation; no live calls.
+# Revision 3 of pagination-9d0d73c6...: v2's actions, each kept, plus two changes that Pagination
+# Schemes 0.10.0 allows (order beside fromLastItem, §4.3.3 (b) and (c)):
+# - afterUserId declares order: ascending, which Discord documents for both lists it serves
+#   (Get Guild Bans and Get Guild Scheduled Event Users: "Users will always be returned in
+#   ascending order by `user.id`" / "by `user_id`"), so a client checks it;
+# - a new scheme, beforeMessageId, on Get Channel Messages. Discord: "Returns an array of message
+#   objects from newest to oldest"; before: "Get messages before this message ID"
+#   (https://docs.discord.com/developers/resources/message); "snowflake IDs are just numbers with
+#   a timestamp" (https://docs.discord.com/developers/reference). Newest to oldest is an order of
+#   time, which message ids follow (§4.3.3 (c)); the page does not state the order of ids made in
+#   the same millisecond, so order: descending is declared and the client checks it: a page out of
+#   strictly descending id order ends the read with an error, never a silent gap.
+# The first request sends no before; an empty page ends the read (Discord sends no has-more field).
+# A read pages from the newest message back to the channel's first. Caveat: "If the current user
+# is missing the READ_MESSAGE_HISTORY permission in the channel, then no messages will be
+# returned": the first page is then empty and the read ends as if the channel had no messages.
+# Pagination cannot tell the two apart; no Collection Completeness is declared for messages, so
+# no consumer may conclude from such a read that messages were deleted.
+# Not declared, as in v2: the lists whose order Discord does not document (List Guild Members, Get
+# Reactions, List Thread Members, Get Answer Voters, List Entitlements, List SKU Subscriptions, Get
+# Current User Guilds, the scheduled-event exception users, the guild audit log).
+# Needs Pagination Schemes 0.10.0. A 0.9.x consumer that validates rejects order; one that does not
+# ignores it and reads without the check.
+overlay: 1.0.0
+info:
+  title: Discord API Pagination Schemes (revision 3)
+  version: 3.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9d0d73c6b23cb07ca2d225fb8b3848fede322b21/APIs/discord.com/10/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        afterUserId:
+          type: pageToken
+          autoDetect: false
+          description: >-
+            Send no `after` first, then the `user.id` of the previous page's
+            last item. Discord returns these users "in ascending order" of
+            their id and `after` considers "only users after given user id".
+            An empty page ends the list; a short page does not.
+          request:
+            queryParameters:
+              after:
+                role: cursor
+                fromLastItem: user.id
+                order: ascending
+              limit:
+                role: pageSize
+        beforeMessageId:
+          type: pageToken
+          autoDetect: false
+          description: >-
+            Send no `before` first, then the `id` of the previous page's last
+            (oldest) message. Discord returns messages "from newest to oldest"
+            and `before` gets "messages before this message ID"; ids are
+            "numbers with a timestamp", so they must come in strictly
+            descending order, which the client checks. An empty page ends the
+            list; a short page does not.
+          request:
+            queryParameters:
+              before:
+                role: cursor
+                fromLastItem: id
+                order: descending
+              limit:
+                role: pageSize
+  - target: $.paths['/channels/{channel_id}/messages'].get
+    update:
+      x-pagination:
+        - scheme: beforeMessageId
+  - target: $.paths['/guilds/{guild_id}/bans'].get
+    update:
+      x-pagination:
+        - scheme: afterUserId
+  - target: $.paths['/guilds/{guild_id}/scheduled-events/{guild_scheduled_event_id}/users'].get
+    update:
+      x-pagination:
+        - scheme: afterUserId
+  - target: $.paths['/users/@me/guilds'].get
+    update:
+      description: >-
+        The initial read-only integration requests the maximum 200 guilds in
+        one page: Discord says 200 "is the maximum number of guilds a non-bot
+        user can join. Therefore, pagination is not needed". Discord also
+        supports `before` and `after`, but does not document the order of the
+        guilds it returns, so no cursor read from the last item is declared
+        (Pagination Schemes §4.3.3).

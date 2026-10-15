@@ -475,6 +475,22 @@ dated catalog selects it; the catalogs read neither operation.
 after the catalog's Discord overlays, and reads synthetic pages with the
 reference `read_item_cursor`. No provider was called.
 
+
+[`pagination-v3-9d0d73c6…`](APIs/discord.com/10/pagination-v3-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+(Pagination Schemes 0.10.0) keeps v2 and adds `order: ascending` to its
+scheme, so a client checks the documented order, and puts
+[Get Channel Messages](https://docs.discord.com/developers/resources/message)
+under a second scheme: `before` from the last (oldest) message's `id`, with
+`order: descending`. Discord returns messages "from newest to oldest" and
+says "snowflake IDs are just numbers with a timestamp"
+([reference](https://docs.discord.com/developers/reference)): rule (c) of
+§4.3.3, whose inference the declared order makes the client check. Without
+READ_MESSAGE_HISTORY "no messages will be returned", so an empty read cannot
+be told from an empty channel; no completeness is declared for messages. No
+dated catalog selects v3. `tests/test_discord_pagination_v3.py` composes it,
+runs the validators, and reads synthetic pages with `read_item_cursor`,
+including out-of-order pages that fail. No provider was called.
+
 ## Discord throttling
 
 [Discord API v10 throttling](APIs/discord.com/10/throttling-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
