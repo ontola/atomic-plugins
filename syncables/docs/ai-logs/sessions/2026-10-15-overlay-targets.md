@@ -38,3 +38,23 @@ and `own` reads only own members. Before, a root `update` with a
 `__proto__` key (own after `JSON.parse`) set the result's prototype. Six
 new tests; the four on `__proto__` fail on the code before, and the two
 escape tests pin behaviour that was already right.
+
+## Turn 3
+
+**Human (via the coordinator session):** a root (`$`) update is merged
+without `deepClone`, so the result can alias the overlay; and
+root-cause the flaky `client/pacing.test.ts` test "waits through the
+injected sleep once the window holds the fraction of requests".
+
+**Assistant:** The root update's values are now cloned; a test (`$`
+then `$.x.y` and `$.x.z.w`) fails on the code before, with the overlay
+changed. The flake was the real clock: the client's pacer measures the
+wait from `Date.now()` while the injected sleep returns at once, so the
+wait shrinks by however long the test runs, and more than a second
+between the setup's first request and the paced one (a loaded full run)
+gave 58,896 ms, under the asserted 59,000; reproduced by adding a 1.1 s
+pause. The Moneybird test had the same dependency (120 syncs within
+10 s). Both now run with `Date` frozen (`vi.useFakeTimers({ toFake:
+['Date'] })`, timers real) and assert the exact wait (60,000 and
+300,000 ms); the first keeps a 1.1 s pause to show it no longer
+matters.
