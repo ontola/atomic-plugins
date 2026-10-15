@@ -790,6 +790,33 @@ Checks:
   served dated catalogs, every overlay and Pages-published OAD they list, and
   the pets demo's data match the built commit.
 
+### What a completeness overlay is declared on
+
+A Collection Completeness overlay is a claim about a collection's read as one
+crud-causality revision defines it (its fixed query, its page size) and, for
+some, as one pagination revision pages it. Selected with another revision the
+same declaration can be wrong: Asana's tasks completeness assumes
+crud-causality v2's `limit=100`, without which Asana truncates a list at about
+1,000 objects. So a new completeness overlay states what it is declared on in
+its `info`, as groups of revision filenames of its own pin, each group met by
+selecting any one of its files:
+
+```yaml
+info:
+  title: …
+  version: 1.0.0
+  x-requires:
+    - anyOf: [crud-causality-v2-<pin>-overlay.yaml]
+```
+
+Published completeness overlays cannot change, so
+`tests/test_completeness_requirements.py` holds the same groups for them in a
+table (and for those still in review when it was written). For every dated
+catalog it checks that each completeness overlay it selects has every group
+met, and that no other revision of a group's kinds is selected for that
+platform; it also fails on a completeness overlay that states no
+requirement either way.
+
 ## Reviewed standalone pagination overlays
 
 The [2026-10-08 handoff](HANDOFF-2026-10-08.md) records the completed
