@@ -183,6 +183,27 @@
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-D2ZK9Jdtxmjg61MOPcqmpO29Z13mieObEDt3mY/PQ//RZ9WdheVxz8b5HlQ9SPj9"
   },
   {
+    "https://atomicdata.dev/properties/localId": "google-keep",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "google-keep",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": false,
+    "https://atomicdata.dev/properties/name": "Google Keep",
+    "https://atomicdata.dev/properties/emoji": "📝",
+    "https://atomicdata.dev/properties/description": "Sync your Google Keep notes and lists with a table in your drive, both ways, while the app is open.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Imports the connected account's Google Keep notes (not those in Keep's trash) into the app's own table, one row per note: the title as Name and the body as Description, a list note as a Markdown checklist (- [ ] / - [x], one level of child items). Every minute while the app is open in anyone's browser it syncs both ways: a change in Keep updates its row, an edited row is sent to Keep, a row added here becomes a new note. A note changed on both sides is held as a conflict until you pick a version. A note trashed or deleted in Keep is marked so and its row kept. A row deleted here is neither imported again nor deleted in Keep unless you choose to.",
+    "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps and connect Google Keep through the host's consent bar. The app syncs when it is opened, on Sync now and every minute while it stays open; two open browsers take turns. Nothing runs while no one has it open.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Google offers the Keep API to Google Workspace accounts only; a personal Google account cannot connect (Google refuses the scope). The API has no update: an edited note is sent as a new note and the old one deleted, losing its colour, labels, pins and reminders, so a note that is shared or has an attachment is never replaced and its edit is held back instead. Images and drawings are not imported. One Google account per table. Declared, and tested against a synthetic fixture only: not verified against a live Workspace account.",
+    "https://atomicdata.dev/integrations/properties/keywords": "google keep notes lists checklists two-way sync drive app workspace",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Note",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Notes",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-keep/0.1.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-sylz5nWvaKTYJptqE+BHfPI2nZrk0hvjSjgZWmRiQ4fC1I29VMDT0dJvjaEX46nd"
+  },
+  {
     "https://atomicdata.dev/properties/localId": "google-tasks",
     "https://atomicdata.dev/properties/isA": [
       "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"

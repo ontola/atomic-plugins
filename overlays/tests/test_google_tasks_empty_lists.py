@@ -104,7 +104,8 @@ class GoogleTasksEmptyListTests(unittest.TestCase):
 
     def test_no_other_catalog_selects_v2(self):
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
-            if catalog.name != CATALOG:
+            # A later dated catalog carries the selection forward.
+            if catalog.name < CATALOG:
                 with self.subTest(catalog=catalog.name):
                     self.assertNotIn(V2, catalog.read_text(encoding="utf-8"))
 
