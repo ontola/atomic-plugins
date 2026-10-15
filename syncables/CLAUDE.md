@@ -570,8 +570,11 @@ minimal Overlay implementation: `update`/`remove` actions with the target
 grammar of integration-proxy's `catalog.rs` `parse_target`, `$` then
 `.name` or `['name']` segments (`parseOverlayTarget`), not the full
 JSONPath grammar; a non-object `update`, or one onto a non-object target,
-replaces it, as the proxy does; `overlay-targets.test.ts` applies every
-overlay under `overlays/APIs/`).
+replaces it, as the proxy does; a `__proto__` segment is refused and
+every merged or created member is defined as an own property (`define`),
+so a `__proto__` key never sets a prototype; nothing in a target is
+unescaped; `overlay-targets.test.ts` applies every overlay under
+`overlays/APIs/`).
 
 - `types.ts` mirrors the extension's spec objects verbatim.
 - `validate.ts` checks a scheme against the spec's own rules (§9); an
