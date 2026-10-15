@@ -18,10 +18,11 @@ describe('money drive-app bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 122,545 bytes minified (JS and embedded CSS) on 2026-10-14,
+    // Measured 122,855 bytes minified (JS and embedded CSS) on 2026-10-15,
     // at the 7dab1ce pin, for 0.4.5 (a failed import rechecks before it
-    // offers Import again, and every check of a file reads the whole table
-    // first and trusts only a complete read, #539, #572); the limit is that plus about
+    // offers Import again; every check of a file reads the whole table
+    // first, trusts only a complete read, and also compares with every row
+    // seen or written, #539, #572); the limit is that plus about
     // 10%, rounded up. 0.4.4 measured 120,662 bytes on 2026-10-13 (an
     // import made here told from rows that arrived from elsewhere). 0.4.3
     // measured 120,397 bytes on 2026-10-12 (0.4.2's card with the
@@ -35,7 +36,7 @@ describe('money drive-app bundle', async () => {
     // term, not only the bank ones) plus the app's own schema and write
     // path (`own.ts`, `write.ts`, `adopt.ts`). 0.4.0 measured 108,795
     // bytes, 0.3.0 88,741.
-    expect(bytes).toBeLessThan(134_800);
+    expect(bytes).toBeLessThan(135_200);
   });
 
   it('embeds its stylesheets minified', () => {

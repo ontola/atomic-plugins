@@ -375,7 +375,7 @@ minified, one module). Screenshots, axe and the render budget:
 
 ## Verified
 
-At 0.4.5 (app module `apps/money/0.4.5/ui.js`, 122,545 bytes; `plugin.js`
+At 0.4.5 (app module `apps/money/0.4.5/ui.js`, 122,855 bytes; `plugin.js`
 again 0.3.0's bundle with only the manifest's `version` changed) the paths
 by which one copy of the app wrote a row twice after a failed or overlapping
 import, found in #539 and the review of #572, are closed. What changed, and
@@ -432,9 +432,12 @@ the same resource. The follow-up finds duplicates when reading instead, and
 counts each transaction once; the host side (a `query` that rejects on a
 failed page, an idempotent create) is not this repository's to change.
 
-The five money e2e tests, this step included, passed on 2026-10-14 at
-0.4.5 against the pin `7dab1ce` (the build VPS's source build), in 5.0
-minutes.
+The six money e2e tests (`e2e/money.spec.ts` and `moneybird.spec.ts`,
+the table without import dates of #588 included), this step included,
+passed on 2026-10-15 at 0.4.5 against the pin `7dab1ce` (the build VPS's
+source build), in 6.5 minutes. The e2e has no step for the error-less
+short listing, the empty read or the late commit; those are unit-tested
+only.
 
 At 0.4.3 (`plugin.js` sha256
 `fa91ad60bf341e7e8c8da523be6e11b4ad81a1403a806b4ee895eb941e692bde`, again
