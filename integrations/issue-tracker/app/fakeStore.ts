@@ -87,6 +87,19 @@ export interface FakeStore extends PluginStore {
     /** Matching calls let through first (the create before its label). */
     skip?: number;
   };
+  /**
+   * Answers the next `remaining` relayed writes as a GitHub refusal that
+   * applied nothing (#357): `status` with a GitHub-shaped body (`message`,
+   * and `errors` when given); nothing reaches the fixture for those.
+   */
+  refuse?: {
+    status: number;
+    remaining: number;
+    message?: string;
+    errors?: unknown[];
+    /** Matching writes let through first (the create before its label). */
+    skip?: number;
+  };
   /** Answers every call with this integration-proxy refusal code. */
   refusal?: string;
   lagReads: number;
@@ -333,6 +346,26 @@ export function fakeStore({
       if (limit && limit.remaining > 0 && (write || !limit.writesOnly)) {
         if (limit.skip) limit.skip--;
         else return answerLimited(limit);
+      }
+
+      const refuse = fake.refuse;
+
+      if (refuse && refuse.remaining > 0 && write) {
+        if (refuse.skip) refuse.skip--;
+        else {
+          refuse.remaining--;
+
+          return {
+            status: refuse.status,
+            headers: {},
+            body: {
+              message: refuse.message ?? 'Validation Failed',
+              ...(refuse.errors ? { errors: refuse.errors } : {}),
+              documentation_url:
+                'https://docs.github.com/rest/issues/issues#create-an-issue',
+            },
+          };
+        }
       }
 
       const url = new URL(

@@ -8,7 +8,11 @@
  * transformation.
  */
 
-export type SchemeType = 'pageNumber' | 'pageToken' | 'nextLink';
+export type SchemeType =
+  | 'pageNumber'
+  | 'pageToken'
+  | 'nextLink'
+  | 'rangeWindow';
 
 export type RequestRole =
   | 'page'
@@ -17,7 +21,42 @@ export type RequestRole =
   | 'pageToken'
   | 'cursor'
   | 'previousPageToken'
-  | 'syncToken';
+  | 'syncToken'
+  | 'windowStart'
+  | 'windowEnd'
+  | 'windowRange';
+
+export type WindowUnit = 'day' | 'second' | 'integer';
+export type WindowFormat =
+  | 'date'
+  | 'basicDate'
+  | 'dateTime'
+  | 'unixSeconds'
+  | 'integer';
+export type WindowBounds = 'closed' | 'halfOpen';
+
+/**
+ * Range Window Object (spec 0.5.0 §4.6.1): a `rangeWindow` scheme's
+ * operation has no page parameter and answers at most `cap` items; a client
+ * reads a range of one item field as windows, splitting a full window.
+ */
+export interface RangeWindowObject {
+  unit: WindowUnit;
+  /** How a bound is written (§4.6.2); fits `unit`. */
+  format: WindowFormat;
+  /** `closed`: `[start, end]`; `halfOpen`: `[start, end)`. */
+  bounds: WindowBounds;
+  /** The most items one answer holds; an answer with that many is full. */
+  cap: number;
+  /** The narrowest window the operation selects correctly, in units. Default 1. */
+  minimumWidth?: number;
+  /** JSON Pointer to the item field the range selects on. */
+  field?: string;
+  /** `unit: day` only: an IANA time zone, or `unspecified`. */
+  timeZone?: string;
+  description?: string;
+  [key: `x-${string}`]: unknown;
+}
 
 export type ResponseRole =
   | 'nextPageToken'
@@ -52,6 +91,16 @@ export interface RequestFieldObject {
   schema?: unknown;
   role?: RequestRole;
   required?: boolean;
+  /** `windowRange` only: the field's value, with `{start}` and `{end}` once each (§4.6.1). */
+  template?: string;
+  /** `page` only: the number of the first page (spec 0.6.0 §4.3.1). Default 1. */
+  start?: number;
+  /**
+   * `offset` only: how the next offset is worked out (spec 0.7.0 §4.3.2).
+   * `itemCount` (default) adds the items the page held; `pageSize` adds the
+   * page size and ends only at `totalCount`.
+   */
+  advance?: 'itemCount' | 'pageSize';
   [key: `x-${string}`]: unknown;
 }
 
@@ -71,9 +120,56 @@ export interface ResponseFieldObject {
   [key: `x-${string}`]: unknown;
 }
 
+/**
+ * Short Page Object (spec 0.6.0 §4.4.5), on a `pageNumber` scheme: a page
+ * with fewer than `size` items ends the list. Only `documented` makes a
+ * read ended that way complete.
+ */
+export interface ShortPageObject {
+  /** Items in a full page, or `request` for the `pageSize` the client sends. */
+  size: number | 'request';
+  assurance: 'documented' | 'observed' | 'assumed';
+  description?: string;
+  [key: `x-${string}`]: unknown;
+}
+
+/**
+ * Envelope Object (spec §4.4.2): where the items array sits in the body.
+ * `itemsField` omitted or `null` means the body root is the array.
+ */
+export interface EnvelopeObject {
+  itemsField?: string | null;
+  /**
+   * Pagination Schemes 0.7.0 §4.4.2: a body in which the `itemsField` field
+   * is absent is a page with no items (for providers that leave an empty
+   * array out). Only with a non-empty string `itemsField` (rule 23).
+   */
+  emptyWhenAbsent?: boolean;
+  [key: `x-${string}`]: unknown;
+}
+
+export type JsonScalar = string | number | boolean | null;
+
+/**
+ * Pagination Schemes 0.8.0 §4.4.6: a response body value that marks the
+ * result the pages come from as cut short by the server (Notion's
+ * `request_status.type: incomplete` past 10,000 results). `field` is a
+ * dot-path of property names matched literally (no bracket escapes in this
+ * version); exactly one of `equals` and `in`, compared by JSON equality.
+ */
+export type IncompleteObject = {
+  field: string;
+  description?: string;
+  [key: `x-${string}`]: unknown;
+} & ({ equals: JsonScalar } | { in: JsonScalar[] });
+
 export interface ResponsePaginationFieldsObject {
+  envelope?: EnvelopeObject;
   bodyFields?: Record<string, ResponseFieldObject>;
   headers?: Record<string, ResponseFieldObject>;
+  shortPage?: ShortPageObject;
+  /** Pagination Schemes 0.8.0 §4.4.6. */
+  incomplete?: IncompleteObject;
   [key: `x-${string}`]: unknown;
 }
 
@@ -90,6 +186,8 @@ export interface PaginationSchemeObject {
   type: SchemeType;
   description?: string;
   autoDetect?: boolean | AutoDetectObject;
+  /** Required for `rangeWindow`, absent otherwise (§4.6). */
+  window?: RangeWindowObject;
   request?: RequestPaginationFieldsObject;
   response?: ResponsePaginationFieldsObject;
   [key: `x-${string}`]: unknown;

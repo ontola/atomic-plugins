@@ -25,6 +25,7 @@ import {
   TASK_STATUS,
   TASK_TAGS,
 } from './tracker.js';
+import { pruneJournal } from './sync.js';
 import { relayDispatch } from './transport.js';
 
 type Ready = Extract<ViewState, { kind: 'ready' }>;
@@ -42,6 +43,20 @@ const property = (store: FakeStore, shortname: string) =>
     ([, props]) => props[SHORTNAME] === shortname,
   )![0];
 
+/** The transport's write journal, as the sync resource holds it. */
+const journalOf = (store: FakeStore): Record<string, { receipt?: unknown }> => {
+  for (const props of store.resources.values())
+    for (const value of Object.values(props))
+      if (typeof value === 'string' && value.startsWith('{"version":1'))
+        return (
+          JSON.parse(value) as {
+            journal: Record<string, { receipt?: unknown }>;
+          }
+        ).journal;
+
+  throw new Error('no sync state');
+};
+
 const rows = (store: FakeStore) =>
   [...store.resources.entries()].filter(([, p]) => p[PARENT] === TABLE);
 
@@ -53,6 +68,28 @@ async function bound(store = fakeStore()) {
 
   return { store, controller, state };
 }
+
+group('pruneJournal', () => {
+  it('drops answered writes only when no record has a saved operation', () => {
+    const journal = (): Record<string, unknown> => ({
+      answered: { signature: 'a', receipt: { status: 200 } },
+      lost: { signature: 'b' },
+    });
+    const idle = journal();
+    expect(pruneJournal(idle, { s: {} })).toBe(1);
+    expect(idle).toEqual({ lost: { signature: 'b' } });
+
+    // A saved operation, held or not, may still use any id: nothing goes.
+    for (const pending of [
+      { operation: 'x' },
+      { operation: 'x', held: true },
+    ]) {
+      const busy = journal();
+      expect(pruneJournal(busy, { s: {}, t: { pending } })).toBe(0);
+      expect(busy).toEqual(journal());
+    }
+  });
+});
 
 group('GitHub issues drive app', () => {
   it('says so and fetches nothing without the host relay', async () => {
@@ -213,6 +250,9 @@ group('GitHub issues drive app', () => {
     expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
       'closed',
     );
+    // Nothing is left pending, so the answered writes left the journal: the
+    // sync state does not grow with every send (0.4.2).
+    expect(journalOf(store)).toEqual({});
 
     // GitHub moved the issue's updated_at, so the row's GitHub source is
     // refreshed once; after that a pass changes nothing.
@@ -457,6 +497,11 @@ group('GitHub issues drive app', () => {
     expect(again.problem).toBeUndefined();
     expect(posts()).toBe(sent);
     expect(store.github.snapshot(SEEDED_REPOSITORY).issues).toHaveLength(3);
+    // The unanswered create stays in the journal (no receipt), so the passes
+    // above never pruned the one thing that guards against a resend.
+    const left = Object.values(journalOf(store));
+    expect(left).toHaveLength(1);
+    expect(left[0].receipt).toBeUndefined();
   });
 
   it('links a lost create to the issue it became, without importing it twice', async () => {

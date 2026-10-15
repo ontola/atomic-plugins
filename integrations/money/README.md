@@ -6,8 +6,8 @@ This needs an atomic-server with the generic file entry point
 (atomic-server#1653: manifest `accepts` and `destination`, and the Import tab
 on a plugin's page; merged as atomic-server#1691). `bc39dac4b`,
 the pin when this was first verified, includes it; see [Verified](#verified)
-for the pins it was last run against, the current pin `a12b74a` included
-(0.4.1, 2026-10-02).
+for the pins it was last run against, the current pin `0fa9c07` included
+(0.4.2, 2026-10-08).
 
 The importer below is one of two ways in. Since 0.4.0 the Money app
 (`app/`) also imports statements by itself, into a table of the shared
@@ -193,6 +193,54 @@ table it is decides how an import gets in (`controller.ts` `Source`):
   so on this host such a row has an empty account, currency or amount, or
   comes from a lens or another writer. A row with all four fields but an
   amount that is not one stays in the ledger as "Not a valid amount".
+- **The sync-status card (0.4.2, Q-084).** The shared card from
+  [`integrations/sync-status/`](../sync-status/README.md) sits first on the
+  Transactions and Imports tabs (not on Sources, which lists where
+  transactions can come from); `app/status.ts` maps the state onto it, pure,
+  with a test per state in `app/status.test.ts`. What it says, truthfully for
+  an app with no provider: the write-back line is "Read-only: edits here stay
+  in Atomic." in every state, followed by "There is no bank connection:
+  transactions come in from the MT940 and camt.053 files you import, and the
+  category and note you add are saved in this table." (plus, on a table whose
+  rows this app may not edit yet, "Saving a category or note asks you to
+  allow editing first.", or after a refusal, "Editing the rows was refused,
+  so a category or note cannot be saved until you allow it."); the "sync" it
+  dates is the last import: the latest rows that arrived while the view is
+  open ("Synced just now", and the rows line ends "; 2 imported here at
+  the last sync" or "; 2 arrived at the last sync"), else the newest
+  `imported` stamp among the stored statements ("Synced 3 days ago"); the
+  rows line counts the complete rows and the statements they came from ("6
+  transactions from 2 statements"). The arrivals are every new row the
+  table subscription brought in. From 0.4.4 those of the refreshes in the
+  15 s after an import this view applied (its own writes, or the host
+  importer it ran) are "imported here", and the header pill says "Imported
+  2 · just now"; any other writer's (the importer's review in another tab,
+  another device) "arrived", with the pill "2 arrived · 3 min ago". The pill
+  is dated like the card (`ago`), so it ages on each render; before 0.4.4 it
+  read "Imported N · just now" for every arrival and never aged. The card's
+  counts line ("Last sync: N added, N updated, N unchanged") is not used:
+  nothing here counts updated or unchanged rows. A table whose statements are only derived
+  from its rows (an older importer table, a hand-made shared-class table)
+  records no import date, so the card reads "Not synced yet" over the rows
+  and the rows line says "when they were imported is not recorded" rather
+  than inventing a date. Loading and an import's steps show as busy ("Reading
+  the file…", "Importing 3 of 10…"); a load error is the failed sync with
+  when it failed (`state.failedAt`, 0.4.2), "Couldn't load the
+  transactions." and the error, and "Try again.", and the header pill says
+  "Sync failed" too, the card's own word for it (the card's headline is
+  fixed by `card.ts`). `arrived.at` and `failedAt` come from the
+  controller's `now` option (`Date.now` by default), which `mount()`'s
+  `now` feeds; an import that
+  stopped midway is a problem ("The import stopped before every row was
+  written.", the rows written so far are kept, check the same file again).
+  Both error texts end in a period only when the message doesn't already
+  end in `.`, `?` or `!` (load errors since 0.4.2, the stopped import since
+  0.4.3).
+  Incomplete rows are ignored groups by what they miss, named, with "Open
+  row" when the host can show a row and the group has one. The card is a
+  region, not a live region: the header's pill stays the one `role="status"`.
+  Its CSS comes through `cssRawPlugin` from `integrations/sync-status/build.mjs`
+  and is appended to the app's one `<style>` element.
 - **Detail**: the bank's fields read-only with the verbatim narrative;
   category and note (`money-category`, `money-note`) saved on change. The
   host lets an app edit the rows of the table it views only after the
@@ -326,6 +374,68 @@ minified, one module). Screenshots, axe and the render budget:
 `app/dist/screenshots/`).
 
 ## Verified
+
+At 0.4.3 (`plugin.js` sha256
+`fa91ad60bf341e7e8c8da523be6e11b4ad81a1403a806b4ee895eb941e692bde`, again
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.3/ui.js`, 120,397 bytes; the only change from 0.4.2 is the
+stopped-import message's punctuation, unit-tested in `app/status.test.ts`)
+the money lane's e2e (`e2e/money.spec.ts` and `moneybird.spec.ts`)
+exited 0 on 2026-10-12 against the pin `7dab1ce` (the build VPS's source build);
+its log was lost, so there are no per-test counts for that run.
+Since 2026-10-13 the card after an import that stopped midway is verified
+end to end too: the installed-app test has the host fail the app's second
+`/app-write` (Playwright `page.route`) while it imports two new
+transactions, and checks the sheet's "The import didn't go through" and the
+card's "The import stopped before every row was written." with "The rows
+written so far are kept; …"; then, after the app's copy of the table caught
+up (its Transactions count), the same file checked again proposes the one
+left (New 1), and the import ends with 2 rows. The five money e2e tests, this step included, passed on 2026-10-13 at
+0.4.3 against the pin `7dab1ce` (the build VPS's source build), in 5.5
+minutes. Known limit, found
+that way (#539): the app writes exactly what its preview said was new, so
+checking the file again before the app's copy of the table caught up, or
+pressing Import again in the failed sheet (it keeps the old preview),
+writes the transaction written before the failure a second time; the first
+run of this step ended with that transaction twice. The sheet's
+"transactions saved before the failure are recognised and not written
+twice" holds only for a check made after the app's copy of the table caught
+up.
+
+At 0.4.2 (`plugin.js` sha256
+`2c4005acaaad5ce1fe730009c452fb59c8213f4852711f915b8e12868e39b963`, again
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.2/ui.js`, 120,413 bytes) the five tests of
+`e2e/money.spec.ts` and `moneybird.spec.ts` passed on 2026-10-08 against the
+pin `0fa9c07` (the build VPS's source build of it), in 6.1 minutes. What the
+run adds over 0.4.1: after the MT940 import into the app's own table, the
+sync-status card reads "Synced just now", "2 transactions from 1
+statement; 2 arrived at the last sync", no "Last sync:" counts line, and
+"Read-only: edits here stay in Atomic. There is no bank connection". On a
+table without import dates it is too, since 2026-10-14: a fourth test makes
+a `bank-transaction-v1` table with two rows by hand, adds Money as a
+read-only view, and checks the card's "Not synced yet" headline, "2
+transactions in this table; when they were imported is not recorded", the
+read-only line and "Saving a category or note asks you to allow editing
+first." (the six money e2e tests passed at pin `7dab1ce` in 6.1 minutes).
+After a stopped import it is since 0.4.3 (above). With
+incomplete rows it is: the installed-app test checks the card's ignored
+group for the hand-typed row ("1 transaction is incomplete (missing
+Amount): …", the row under Which, Open row). On the importer's table too:
+the third test checks the card read-only with "Saving a category or note
+asks you to allow editing first.", dated "Synced just now" with "2 arrived
+at the last sync" after the importer's import, and without that sentence
+once editing is allowed. Both passed on 2026-10-12 at the pin `7dab1ce`
+(the five money e2e tests, 5.5 minutes). After a load error it
+is: `e2e/money.spec.ts` (the installed-app test) has the host fail the
+app's `getData` until the host recovers, by failing the page store's read
+of the app's table,
+and checks the pill and the card's "Sync failed", "Couldn't load the
+transactions." with the error and "Try again.", then that Try again loads
+the rows and clears the failure. The five money e2e tests, this step
+included, passed on 2026-10-12 at the pin `e922179` (candidate21, the
+build VPS's source build) in 5.6 minutes, with the 120,413-byte 0.4.2
+module.
 
 At 0.4.1 (`plugin.js` sha256
 `b58eb564459de4c7d73cc06adb89cd9207810e760f9daabb7423983ba5efbf99`, again
@@ -628,7 +738,36 @@ in `localthought/fixtures/index.mjs`). It pages contacts and time entries by
 contacts on page 2 with 503, and answers at most 100 mutations per period
 window (a test lowers that); all three are test behaviour, not claims about
 Moneybird. **A real recording needs someone with a Moneybird test
-administration and API token**; the steps are in `scenario.mjs`'s header.
+administration and API token**; the recorder is ready for them:
+
+```sh
+MONEYBIRD_TOKEN=<API token> node integrations/money/fixtures/moneybird/record.mjs
+```
+
+It makes GET requests only, on the five operations the app reads, as the
+app sends them (`per_page` 2 by default so a few records span pages,
+`include_archived=true`, `period:this_year`), writes `fixtures/moneybird/api/`
+redacted per its exported `REDACTIONS` list (ids to stable 18-digit fakes
+that keep references intact, names, addresses, e-mails, IBANs and messages
+to stable fakes (one fake per real value, so a project nested in several
+time entries keeps one name), the nested arrays the app never reads to
+`[]`, any unrecognised string, and any number other than `version`,
+`budget`, `paused_duration`, `max_transfer_amount` and `child_order`, to
+`"redacted"` and listed in `api/meta.json` by its full path; inside a
+nested object the list does not know (`sepa_fields`, say) everything is
+redacted whatever its field names, and an object key the recorder's
+`FIELDS` list does not know becomes `redacted-key-<n>`, so a field Moneybird
+adds shows up as a redacted key until it is added there), and never writes the token. Once `api/meta.json` exists, `scenario.mjs` replays the
+recording instead of `synthetic.mjs`, with the same page cap, outage and
+mutation cap, and `this_year` meaning the recording's year;
+`moneybird-fixture.test.ts` proves that replay against an invented `api/`
+and, once recorded, checks the recorded rows hold what the app reads and
+were recorded this civil year (the app asks for `period:this_year` by its
+own clock, so a recording goes stale at New Year). `moneybird/moneybird.test.ts`
+and `e2e/moneybird.spec.ts` import `synthetic.mjs`'s names and counts and
+need their expectations updated to the recorded rows. What the recording
+settles is the right-hand column of the table above; nothing in it moves
+until then.
 
 **Install.** From the catalog's Drive apps section, like the other drive
 apps (see [Publishing a drive app](../README.md#publishing-a-drive-app)).

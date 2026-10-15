@@ -1,0 +1,155 @@
+// @wc-ignore-file
+/**
+ * CRUD Causality 0.4.0's fixed-read example
+ * (`openapi-extensions/spec/crud-causality/examples/fixed-query.yaml`),
+ * transcribed to TypeScript: a task list whose default listing hides
+ * completed tasks (`listQuery`), and a POST search that lists pages with a
+ * fixed filter (`listMethod`, `listBody`). Synthetic; not a declaration for
+ * a real API.
+ */
+import type { OpenApiDocument } from '../../src/browser.js';
+
+export const fixedReads: OpenApiDocument = {
+  openapi: '3.0.3',
+  info: {
+    title: 'Illustrative collections defined by fixed request values',
+    version: '1.0.0',
+  },
+  servers: [{ url: 'https://api.example.com' }],
+  components: {
+    paginationSchemes: {
+      queryToken: {
+        type: 'pageToken',
+        autoDetect: false,
+        request: {
+          queryParameters: {
+            pageToken: { role: 'pageToken' },
+            maxResults: { role: 'pageSize' },
+          },
+        },
+        response: { bodyFields: { nextPageToken: { role: 'nextPageToken' } } },
+      },
+      bodyCursor: {
+        type: 'pageToken',
+        autoDetect: false,
+        request: {
+          bodyFields: {
+            start_cursor: { role: 'pageToken' },
+            page_size: { role: 'pageSize' },
+          },
+        },
+        response: { bodyFields: { next_cursor: { role: 'nextPageToken' } } },
+      },
+    },
+    crudResources: {
+      task: {
+        identity: {
+          urlTemplate: '/lists/{listId}/tasks/{taskId}',
+          bindings: { taskId: { field: 'id' } },
+        },
+        collections: {
+          allTasks: {
+            urlTemplate: '/lists/{listId}/tasks',
+            envelope: { itemsField: 'items' },
+            listQuery: { showCompleted: 'true', showHidden: 'true' },
+          },
+        },
+      },
+      page: {
+        identity: {
+          urlTemplate: '/pages/{pageId}',
+          bindings: { pageId: { field: 'id' } },
+        },
+        collections: {
+          searchedPages: {
+            urlTemplate: '/search',
+            envelope: { itemsField: 'results' },
+            listMethod: 'POST',
+            listBody: {
+              filter: { property: 'object', value: 'page' },
+              page_size: 100,
+            },
+          },
+        },
+      },
+    },
+  },
+  paths: {
+    '/lists/{listId}/tasks': {
+      parameters: [
+        {
+          name: 'listId',
+          in: 'path',
+          required: true,
+          schema: { type: 'string' },
+        },
+      ],
+      get: {
+        parameters: [
+          { name: 'showCompleted', in: 'query', schema: { type: 'boolean' } },
+          { name: 'showHidden', in: 'query', schema: { type: 'boolean' } },
+          { name: 'pageToken', in: 'query', schema: { type: 'string' } },
+          { name: 'maxResults', in: 'query', schema: { type: 'integer' } },
+        ],
+        'x-crud': { action: 'list', resource: 'task', collection: 'allTasks' },
+        'x-pagination': [{ scheme: 'queryToken' }],
+        responses: {
+          '200': {
+            description: 'One page of tasks.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    items: { type: 'array', items: { type: 'object' } },
+                    nextPageToken: { type: 'string' },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    '/search': {
+      post: {
+        requestBody: {
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                properties: {
+                  filter: { type: 'object' },
+                  start_cursor: { type: 'string' },
+                  page_size: { type: 'integer' },
+                },
+              },
+            },
+          },
+        },
+        'x-crud': {
+          action: 'list',
+          resource: 'page',
+          collection: 'searchedPages',
+        },
+        'x-pagination': [{ scheme: 'bodyCursor' }],
+        responses: {
+          '200': {
+            description: 'One page of search results.',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: {
+                    results: { type: 'array', items: { type: 'object' } },
+                    next_cursor: { type: 'string', nullable: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+};

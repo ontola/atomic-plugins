@@ -1,8 +1,8 @@
-# Value lenses (unreleased)
+# Value lenses
 
 `devonian/lenses` is a synchronous, browser-safe lens algebra, also exported
-from `devonian`. It has no runtime dependencies. This entry point is new source
-for the next release; npm `devonian` 0.8.0 does not contain it.
+from `devonian`. It has no runtime dependencies. It is new in 0.9.0; npm
+`devonian` 0.8.0 and earlier do not contain it.
 
 A lens reads a view from a source and puts an edited view back into the
 previous source. It preserves fields outside its declared ownership. The

@@ -11,6 +11,15 @@ export interface EffectiveScheme {
 }
 
 /**
+ * An operation's explicit `x-pagination` cannot be applied: it is not an
+ * array of Pagination Application Objects, names a scheme the document does
+ * not declare, or names one that fails validation (spec §9), before or
+ * after its overrides are merged. A read of such an operation fails rather
+ * than making one request and returning that page as complete (#384).
+ */
+export class PaginationSchemeError extends Error {}
+
+/**
  * Schemes that fail validation (spec §9) are excluded here rather than
  * thrown on eagerly — one malformed scheme in a document (see e.g. Giphy's
  * `type: offset`, which isn't a valid scheme type) shouldn't prevent using
@@ -29,11 +38,53 @@ function validSchemes(
   return map;
 }
 
+/**
+ * The first scheme that fails validation but whose auto-detection would
+ * match the operation, when no valid scheme matches it: the operation
+ * presumably pages, but the scheme cannot be applied. A read that makes
+ * one request must then not take that page as the whole collection.
+ * `undefined` when an explicit `x-pagination` applies, a valid scheme
+ * matches, or no invalid one would.
+ */
+export function invalidAutoDetected(
+  document: OpenApiDocument,
+  operation: OperationObject,
+): { schemeName: string; problems: string[] } | undefined {
+  const explicit = operation['x-pagination'];
+  if (explicit !== undefined && !(Array.isArray(explicit) && !explicit.length))
+    return undefined;
+  const valid = validSchemes(document);
+  for (const scheme of valid.values())
+    if (autoDetectMatches(scheme, operation)) return undefined;
+  const schemes = document.components?.paginationSchemes ?? {};
+  for (const [schemeName, scheme] of Object.entries(schemes)) {
+    if (valid.has(schemeName) || !isPlainObject(scheme)) continue;
+    if (autoDetectMatches(scheme, operation))
+      return {
+        schemeName,
+        problems: validatePaginationScheme(schemeName, scheme),
+      };
+  }
+  return undefined;
+}
+
+/**
+ * The operation's query parameter names. A malformed `parameters` (not an
+ * array) or entry (not an object) is skipped rather than thrown on, so a
+ * broken operation cannot make auto-detection, and every read that runs
+ * it, throw.
+ */
 function queryParamNames(operation: OperationObject): Set<string> {
+  const parameters: unknown = operation.parameters;
+  if (!Array.isArray(parameters)) return new Set();
   return new Set(
-    (operation.parameters ?? [])
-      .filter((parameter) => parameter.in === 'query')
-      .map((parameter) => parameter.name),
+    parameters
+      .filter(
+        (parameter): parameter is { in: unknown; name: unknown } =>
+          isPlainObject(parameter) && parameter['in'] === 'query',
+      )
+      .map((parameter) => parameter.name)
+      .filter((name): name is string => typeof name === 'string'),
   );
 }
 
@@ -52,11 +103,15 @@ function autoDetectMatches(
   scheme: PaginationSchemeObject,
   operation: OperationObject,
 ): boolean {
-  if (scheme.autoDetect === false) {
+  // A rangeWindow scheme is never auto-detected (spec 0.5.0 §4.6): its
+  // window field is often a filter parameter other operations share.
+  if (scheme.autoDetect === false || scheme.type === 'rangeWindow') {
     return false;
   }
-  const options =
-    typeof scheme.autoDetect === 'object' ? scheme.autoDetect : {};
+  // Anything but an Auto-Detect Object (`true`, or an invalid `null`,
+  // string, number or array) means the default options: an invalid scheme
+  // that then matches makes its read not complete, never one page complete.
+  const options = isPlainObject(scheme.autoDetect) ? scheme.autoDetect : {};
   const requireAll = options.requireAll ?? true;
   const results: boolean[] = [];
 
@@ -112,21 +167,101 @@ export function resolveEffectiveScheme(
 ): EffectiveScheme | undefined {
   const schemes = validSchemes(document);
 
-  const explicit = operation['x-pagination'] as
-    | PaginationApplicationObject[]
-    | undefined;
+  // An explicit application is never dropped silently: a reader that
+  // ignored it would make one request and take that page for the whole
+  // collection. (An empty array applies nothing and falls through to
+  // auto-detection, as before.)
+  const explicit = operation['x-pagination'];
+  if (explicit !== undefined && !Array.isArray(explicit)) {
+    throw new PaginationSchemeError(
+      'x-pagination must be an array of Pagination Application Objects',
+    );
+  }
   if (Array.isArray(explicit) && explicit.length > 0) {
-    const application = explicit[0];
-    const base = application ? schemes.get(application.scheme) : undefined;
-    if (!application || !base) {
-      return undefined;
+    const application = explicit[0] as PaginationApplicationObject | undefined;
+    if (!isPlainObject(application) || typeof application.scheme !== 'string') {
+      throw new PaginationSchemeError(
+        'x-pagination[0] must be a Pagination Application Object with a "scheme" name',
+      );
     }
-    return {
-      schemeName: application.scheme,
-      scheme: application.overrides
-        ? deepMerge(base, application.overrides)
-        : base,
-    };
+    const name = application.scheme;
+    const declared = document.components?.paginationSchemes?.[name];
+    if (!declared) {
+      throw new PaginationSchemeError(
+        `x-pagination names the pagination scheme "${name}", which the document does not declare`,
+      );
+    }
+    const invalid = validatePaginationScheme(name, declared);
+    if (invalid.length) {
+      throw new PaginationSchemeError(
+        `x-pagination names the pagination scheme "${name}", which is invalid: ${invalid.join('; ')}`,
+      );
+    }
+    const scheme = application.overrides
+      ? deepMerge(declared, application.overrides)
+      : declared;
+    // The overrides are checked after the merge too (the spec's validator
+    // does the same): a typo in an override is as silent a truncation.
+    const afterMerge = application.overrides
+      ? validatePaginationScheme(name, scheme)
+      : [];
+    if (afterMerge.length) {
+      throw new PaginationSchemeError(
+        `x-pagination's overrides make the pagination scheme "${name}" invalid: ${afterMerge.join('; ')}`,
+      );
+    }
+    // Rule 17: an operation that applies a rangeWindow scheme, after
+    // overrides, applies no other scheme.
+    const windowed = explicit.some((entry) => {
+      if (!isPlainObject(entry)) return false;
+      const overrides = entry['overrides'];
+      const type =
+        isPlainObject(overrides) && 'type' in overrides
+          ? overrides['type']
+          : document.components?.paginationSchemes?.[String(entry['scheme'])]
+              ?.type;
+      return type === 'rangeWindow';
+    });
+    if (windowed && explicit.length > 1) {
+      throw new PaginationSchemeError(
+        'x-pagination applies a rangeWindow scheme together with another scheme',
+      );
+    }
+    // Rule 22: a scheme with a Short Page Object pages by exactly one page field.
+    const pageFields = (['queryParameters', 'bodyFields'] as const).flatMap(
+      (location) =>
+        Object.values(scheme.request?.[location] ?? {}).filter(
+          (field) => field.role === 'page',
+        ),
+    );
+    if (scheme.response?.shortPage !== undefined && pageFields.length !== 1) {
+      throw new PaginationSchemeError(
+        `x-pagination applies the pagination scheme "${name}", whose shortPage needs exactly one request field with role page`,
+      );
+    }
+    // Rule 25 (0.7.0): an offset that advances by the page size needs one.
+    const advancesByPageSize = (
+      ['queryParameters', 'bodyFields'] as const
+    ).some((location) =>
+      Object.values(scheme.request?.[location] ?? {}).some(
+        (field) => field.role === 'offset' && field.advance === 'pageSize',
+      ),
+    );
+    const hasPageSize =
+      (['queryParameters', 'bodyFields'] as const).some((location) =>
+        Object.values(scheme.request?.[location] ?? {}).some(
+          (field) => field.role === 'pageSize',
+        ),
+      ) ||
+      Object.values(scheme.response?.bodyFields ?? {}).some(
+        (field) => field.role === 'pageSize',
+      );
+    if (advancesByPageSize && !hasPageSize) {
+      throw new PaginationSchemeError(
+        `x-pagination applies the pagination scheme "${name}", whose offset advances by the page size but which has no request or response field with role pageSize`,
+      );
+    }
+    return { schemeName: name, scheme };
   }
 
   for (const [schemeName, scheme] of schemes) {

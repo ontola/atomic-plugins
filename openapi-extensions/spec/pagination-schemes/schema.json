@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ontola.github.io/atomic-plugins/openapi-extensions/spec/pagination-schemes/schema.json",
-  "title": "Pagination Schemes 0.5.0",
-  "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3), $defs.window the Range Window Object (§4.6.1). Covers validation rules 1-4, 8-10 and 12-16; validate.py adds 5, 11, 17 and 18.",
+  "title": "Pagination Schemes 0.9.0",
+  "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3), $defs.window the Range Window Object (§4.6.1), $defs.shortPage the Short Page Object (§4.4.5), $defs.incomplete the Incomplete Object (§4.4.6). Covers validation rules 1-4, 8-10, 12-16, 19, 20, 23, 24, 26 and 27; validate.py adds 5, 11, 17, 18, 21, 22, 25, 28 and 29.",
   "$ref": "#/$defs/scheme",
   "$defs": {
     "scheme": {
@@ -21,6 +21,18 @@
       },
       "patternProperties": { "^x-": true },
       "additionalProperties": false,
+      "allOf": [
+        {
+          "description": "Rule 20: shortPage only on a pageNumber scheme.",
+          "if": { "required": ["type"], "properties": { "type": { "const": "pageNumber" } } },
+          "else": { "properties": { "response": { "not": { "required": ["shortPage"] } } } }
+        },
+        {
+          "description": "Rule 26: incomplete only on a pageNumber, pageToken or nextLink scheme.",
+          "if": { "required": ["type"], "properties": { "type": { "enum": ["pageNumber", "pageToken", "nextLink"] } } },
+          "else": { "properties": { "response": { "not": { "required": ["incomplete"] } } } }
+        }
+      ],
       "if": { "required": ["type"], "properties": { "type": { "const": "rangeWindow" } } },
       "then": {
         "description": "Rules 12, 14 (window fields counted by validate.py) and 16.",
@@ -151,6 +163,9 @@
           ]
         },
         "required": { "type": "boolean" },
+        "start": { "description": "Rule 19.", "type": "integer", "minimum": 0 },
+        "advance": { "description": "Rule 24.", "enum": ["itemCount", "pageSize"] },
+        "fromLastItem": { "description": "Rule 27.", "type": "string", "pattern": "^[^.]+(\\.[^.]+)*$" },
         "template": {
           "description": "Rule 15: {start} and {end} once each, no other braces.",
           "type": "string",
@@ -161,14 +176,47 @@
       "additionalProperties": false,
       "if": { "required": ["role"], "properties": { "role": { "const": "windowRange" } } },
       "then": { "required": ["template"] },
-      "else": { "not": { "required": ["template"] } }
+      "else": { "not": { "required": ["template"] } },
+      "dependentSchemas": {
+        "start": { "required": ["role"], "properties": { "role": { "const": "page" } } },
+        "advance": { "required": ["role"], "properties": { "role": { "const": "offset" } } },
+        "fromLastItem": { "required": ["role"], "properties": { "role": { "enum": ["pageToken", "cursor"] } } }
+      }
     },
     "response": {
       "type": "object",
       "properties": {
         "envelope": { "$ref": "#/$defs/envelope" },
         "bodyFields": { "$ref": "#/$defs/responseFields" },
-        "headers": { "$ref": "#/$defs/responseFields" }
+        "headers": { "$ref": "#/$defs/responseFields" },
+        "shortPage": { "$ref": "#/$defs/shortPage" },
+        "incomplete": { "$ref": "#/$defs/incomplete" }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "incomplete": {
+      "description": "Rule 26.",
+      "type": "object",
+      "required": ["field"],
+      "properties": {
+        "field": { "type": "string", "pattern": "^[^.]+(\\.[^.]+)*$" },
+        "equals": { "type": ["string", "number", "boolean", "null"] },
+        "in": { "type": "array", "minItems": 1, "items": { "type": ["string", "number", "boolean", "null"] } },
+        "description": { "type": "string" }
+      },
+      "oneOf": [{ "required": ["equals"] }, { "required": ["in"] }],
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "shortPage": {
+      "description": "Rule 20.",
+      "type": "object",
+      "required": ["size", "assurance"],
+      "properties": {
+        "size": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "const": "request" }] },
+        "assurance": { "enum": ["documented", "observed", "assumed"] },
+        "description": { "type": "string" }
       },
       "patternProperties": { "^x-": true },
       "additionalProperties": false
@@ -176,7 +224,15 @@
     "envelope": {
       "type": "object",
       "properties": {
-        "itemsField": { "type": ["string", "null"] }
+        "itemsField": { "type": ["string", "null"] },
+        "emptyWhenAbsent": { "type": "boolean" }
+      },
+      "dependentSchemas": {
+        "emptyWhenAbsent": {
+          "description": "Rule 23.",
+          "required": ["itemsField"],
+          "properties": { "itemsField": { "type": "string", "minLength": 1 } }
+        }
       },
       "patternProperties": { "^x-": true },
       "additionalProperties": false
@@ -204,7 +260,8 @@
                 "totalPages",
                 "pageSize",
                 "currentPage",
-                "offset"
+                "offset",
+                "hasMore"
               ]
             },
             { "type": "string", "pattern": "^x-" }

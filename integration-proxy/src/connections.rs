@@ -38,6 +38,9 @@ async fn signed<'a>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<Signed<'a>, ApiError> {
+    if headers.contains_key(axum::http::header::AUTHORIZATION) {
+        return Err(ApiError::UnsupportedAuthorization);
+    }
     let security = state.security.as_ref().ok_or(ApiError::Unavailable)?;
     let signer =
         crate::signature::authenticate(state, security, method, uri, headers, body).await?;
@@ -94,6 +97,9 @@ pub async fn list(
 ) -> Response {
     respond(
         async {
+            if let Some(token) = crate::device::bearer(&headers)? {
+                return crate::device::connections(&state, token).await;
+            }
             let signed = signed(&state, &method, &uri, &headers, &body).await?;
             let (connections, runtimes) = signed
                 .security
@@ -124,11 +130,28 @@ pub async fn delete(
         async {
             let signed = signed(&state, &method, &uri, &headers, &body).await?;
             owned(&signed, &connection_id).await?;
-            signed
-                .security
-                .delete_connection(&connection_id, signed.signer.as_str())
-                .await
-                .map_err(|_| ApiError::Unavailable)?;
+            match &state.webhooks {
+                // Its subscriptions end, and the cleanup of hooks this leaves
+                // unused starts, in the same transaction (#369).
+                Some(webhooks) => {
+                    webhooks
+                        .store
+                        .delete_connection(
+                            &connection_id,
+                            signed.signer.as_str(),
+                            crate::webhooks::store::now(),
+                        )
+                        .await
+                        .map_err(|_| ApiError::Unavailable)?;
+                }
+                None => {
+                    signed
+                        .security
+                        .delete_connection(&connection_id, signed.signer.as_str())
+                        .await
+                        .map_err(|_| ApiError::Unavailable)?;
+                }
+            }
             Ok(StatusCode::NO_CONTENT.into_response())
         }
         .await,
@@ -160,11 +183,19 @@ pub async fn add_agent(
                 .map_err(|_| ApiError::BadRequest("body must be {\"agent\", \"label\"?}"))?;
             let delegate = agent(&request.agent)?;
             let label = label(request.label)?;
-            signed
+            if !signed
                 .security
-                .put_delegation(&connection_id, delegate.as_str(), label.as_deref())
+                .put_delegation(
+                    &connection_id,
+                    signed.signer.as_str(),
+                    delegate.as_str(),
+                    label.as_deref(),
+                )
                 .await
-                .map_err(|_| ApiError::Unavailable)?;
+                .map_err(crate::connect::owner_write_error)?
+            {
+                return Err(ApiError::NotOwner);
+            }
             Ok(Json(serde_json::json!({
                 "connection_id": connection_id,
                 "agent": delegate.as_str(),
@@ -192,9 +223,9 @@ pub async fn remove_agent(
             let delegate = agent(&delegate)?;
             signed
                 .security
-                .delete_delegation(&connection_id, delegate.as_str())
+                .delete_delegation(&connection_id, signed.signer.as_str(), delegate.as_str())
                 .await
-                .map_err(|_| ApiError::Unavailable)?;
+                .map_err(crate::connect::owner_write_error)?;
             Ok(StatusCode::NO_CONTENT.into_response())
         }
         .await,
@@ -241,7 +272,7 @@ pub async fn add_runtime(
                     label.as_deref(),
                 )
                 .await
-                .map_err(|_| ApiError::Unavailable)?;
+                .map_err(crate::connect::owner_write_error)?;
             Ok(Json(serde_json::json!({
                 "app": app.as_str(),
                 "agent": runtime.as_str(),
@@ -359,7 +390,10 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         // A delegate cannot delegate further.
-        security.put_delegation(&id, &app.id(), None).await.unwrap();
+        security
+            .put_delegation(&id, &owner.id(), &app.id(), None)
+            .await
+            .unwrap();
         let response = send(
             &app,
             "POST",

@@ -56,6 +56,20 @@ proxy that supports profiles connects Discord with the user profile and
 refuses every other Discord operation. Composition tests cover this; no live
 Discord connection has been made with it.
 
+Discord's guild list needs no pagination for these user tokens. Discord's
+reference for `GET /users/@me/guilds`
+(https://docs.discord.com/developers/resources/user, "Get Current User
+Guilds", checked 2026-10-09) says it "returns 200 guilds by default, which
+is the maximum number of guilds a non-bot user can join", and that
+pagination is not needed to list a user's guilds; `limit` is 1–200. The
+CRUD overlay's fixed `limit: 200` read of `myGuilds` therefore returns every
+guild of a `discordUser` connection, and a guild missing from it is one the
+user left. The comment in
+`APIs/discord.com/10/pagination-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml`
+that Syncables "cannot derive a cursor" for `before`/`after` is moot for
+this read: no cursor is needed. It would matter only for a bot token (the
+`discordBot` profile), which no catalog selects.
+
 `catalog/2026-10-06-google-tasks.json` is the auth-profiles catalog plus one
 platform, `google-tasks` ([#355](https://github.com/ontola/atomic-plugins/issues/355)):
 the Tasks v1 OAD at `7ca47c73cf2308c9812692b482b3713b397bc88c`, its new
@@ -95,6 +109,428 @@ Airtable OAuth integrations without a support email, privacy-policy URL and
 terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
+
+## Pagination Schemes 0.7.0 catalog: Google Tasks empty lists and Box offsets
+
+`catalog/2026-10-12-tasks-box-pages.json` is `catalog/2026-10-12-box-pagination-v2.json`
+with two pagination overlays replaced; every other entry is unchanged.
+
+Google Tasks:
+[v2](APIs/googleapis.com/tasks/v1/pagination-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml)
+in place of v1. v1 declares `envelope.itemsField: items`, and a syncables
+reader from 0.21.0 on fails a body without that array ("No items array at
+items"). An empty task list is expected to come back without `items`: the
+Protocol Buffers JSON mapping leaves an empty repeated field out, and the
+google-tasks drive app reads an absent `items` as empty. The Tasks
+reference does not say what an empty list returns, and no live empty list
+was read. v2 declares `emptyWhenAbsent: true`, which a reader that does not
+know the field ignores, failing such a read as before. No Google Calendar
+overlay is changed: Calendar's reference does not say it leaves `items`
+out, and the Calendar drive app (`integrations/calendar/app/relay.ts`)
+requires the array.
+
+Box:
+[v3](APIs/box.com/2.0.0/pagination-v3-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
+in place of v2: `advance: pageSize` on the offset lists' `offset` field, so
+a 0.7.0 reader steps by the `limit` Box reports and ends at `total_count`,
+as Box documents, instead of advancing by the entries returned (see the v2
+note above for what that does). A reader without 0.7.0 ignores `advance`
+and reads as with v2.
+
+`tests/test_google_tasks_empty_lists.py` checks Tasks v2 against v1, the
+composed Tasks platform with the reference validator, and the catalog
+against its base; `tests/test_box_pagination_v3.py` checks Box v3 against
+v2, validates it and reads a synthetic offset list with the reference
+`read_offsets`. Two syncables tests read through the catalogs
+(`tests/google_tasks_empty_lists_syncables.test.ts`: an empty task list
+fails through 2026-10-11 and reads as empty through this catalog;
+`tests/box_offsets_syncables.test.ts`: a short page is read again under v2
+and stepped over under v3); run them from `syncables/` with
+`npx vitest run --root .. overlays/tests/<file>` (all of them:
+`overlays/tests/`), as Overlays CI's `reads` job does.
+
+## Read and list tombstones
+
+Google Calendar v3 declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#43-tombstone-object)
+tombstones on its events with one reading, wherever an event is answered:
+
+* [read tombstones, revision 2](APIs/googleapis.com/calendar/v3/read-tombstone-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml):
+  `x-read-tombstone: { field: status, values: [cancelled], except: [{
+  field: recurringEventId, present: true }] }` on the event read
+  (`GET /calendars/{calendarId}/events/{eventId}`);
+* [list tombstones](APIs/googleapis.com/calendar/v3/list-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml):
+  `x-list-tombstone` with the same marker and exception on the event list
+  (`GET /calendars/{calendarId}/events`).
+
+The pinned document's `Event.status` says "cancelled" is "The event is
+cancelled (deleted)", that "The get method always returns them", that the
+list returns them with `showDeleted=true` or on incremental sync, and that
+on the organizer's calendar cancelled events "can be restored (undeleted)";
+a consumer treats every such tombstone as restorable. The document gives
+"cancelled" a second meaning: "Cancelled exceptions of an uncancelled
+recurring event indicate that this instance should no longer be presented
+to the user. Clients should store these events for the lifetime of the
+parent recurring event", and "All other cancelled events represent deleted
+events". A cancelled exception carries `recurringEventId`, so the `except`
+condition keeps it out of both declarations: it is not a deletion, whether a
+read or a list answers it, as Deletion Feeds §4.3 requires of a marked state
+the provider documents as something else. A cancelled exception of a
+deleted series is kept too (the item does not say its series' state). In a
+`singleEvents=false` list, as the Calendar drive app reads, the series' own
+item, which has no `recurringEventId`, reports the series. With
+`singleEvents=true` there is no series item: every instance carries
+`recurringEventId`, so the instances of a deleted series are kept as
+members and nothing in that list reports the deletion. This supersedes the reading of
+the first read-tombstone revision,
+[`read-tombstone-32237fa5…`](APIs/googleapis.com/calendar/v3/read-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(#489), which declared cancelled exceptions as deletions of their
+occurrence; that file stays, as published revision files are immutable,
+and no catalog selects it. Both declarations are on operations, so they
+apply with either crud-causality overlay, and no dated catalog selects them
+yet. syncables reads both. `tests/test_calendar_read_tombstone_v2.py` and
+`tests/test_calendar_list_tombstone.py` compose them after the catalog's
+Calendar overlays. Declared from the document; not verified against a live
+calendar.
+
+## Notion pages completeness
+
+[`completeness-0c8e2296…-overlay.yaml`](APIs/notion.com/2026-03-11/completeness-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Notion `pages` collection (a data source's query): `absent: removed`
+and `notFound: unavailable`. Notion's
+[status codes](https://developers.notion.com/reference/status-codes) say a 404
+`object_not_found` "can also indicate that the resource has not been shared
+with owner of the bearer token", so without this overlay a consumer would take
+a page no longer shared with the connection as deleted (the `notFound`
+default). The [query](https://developers.notion.com/reference/query-a-data-source)
+"returns non-archived pages" by default, so absence alone settles nothing.
+Inferred, not documented: that a trashed page leaves the query and that an
+archived or trashed page's own read still answers 2xx; neither changes an
+outcome. The query is capped at 10,000 results, so a catalog selects this
+overlay only together with `pagination-v3-0c8e2296…`, which marks a capped
+read incomplete; under an earlier pagination revision a query over 10,000
+results looks complete (the test asserts this pairing). Not declared:
+`gone` (no 410 documented), anything on `data_sources` (`POST /search`, not
+documented as returning every shared data source), and so `parentAbsent`,
+which needs a parent collection with a Completeness Object (§4.4). The pinned
+OAD is an authored subset without descriptions, so the evidence is Notion's
+reference. No dated catalog selects it yet.
+`tests/test_notion_pages_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays (and with pagination-v3), in
+either order, runs both validators, and checks the outcomes `classify_read`
+gives. No provider was called.
+
+## Write preconditions
+
+Two standalone overlays declare [Write Preconditions 0.1.0-draft](../openapi-extensions/spec/write-preconditions/README.md)
+`x-write-precondition`; no dated catalog selects them.
+`tests/test_write_precondition_overlays.py` composes each with its pinned OAD,
+and Calendar's also after each of its crud-causality overlays, and checks the
+reference client logic against what the drive apps do;
+`syncables/__tests__/unit/client/calendar-recurring-refuse.test.ts` runs the
+Calendar overlay through the syncables client. No provider was called.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [Google Calendar v3](APIs/googleapis.com/calendar/v3/write-preconditions-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Event `PATCH`, `PUT` and `DELETE`: `ifMatch` with the body field `etag`, `412` as conflict; refused for a recurring series' master event (`recurrence` present); an exception of a series (`recurringEventId` present, no `recurrence`) is written ([K18](../docs/design/pieces.md)). The calendar drive app also leaves exceptions out, which is its own scope. | [Versions of resources](https://developers.google.com/workspace/calendar/api/guides/version-resources) |
+| [Notion 2026-03-11](APIs/notion.com/2026-03-11/write-preconditions-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml) | Page `PATCH`: `readVerify`, refused when `in_trash` (or its deprecated alias `archived`) is `true`. | [Page object](https://developers.notion.com/reference/page): no conditional update documented |
+
+## GitLab issues completeness
+
+[`completeness-f6d7940e…-overlay.yaml`](APIs/gitlab.com/v4-readonly/completeness-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the GitLab.com `projectIssues` collection: `absent: removed` and
+`notFound: unavailable`. GitLab's
+[status codes](https://docs.gitlab.com/api/rest/troubleshooting/) give one 404
+for "an ID for a resource couldn't be found" and for "the user isn't
+authorized to access the resource", so without this overlay a consumer would
+take a confidential or no-longer-accessible issue as deleted (the `notFound`
+default). The list's `state` defaults to `all` (the pinned OAD's
+`default: all`) and its `scope` "Defaults to `all`" (the
+[issues reference](https://docs.gitlab.com/api/issues/)), but an issue also
+leaves the list when it becomes confidential to the caller or the caller loses
+access, so absence alone settles nothing. Page-number paging can skip the
+issue after one deleted during a read; that issue still exists, and its own
+read finds it present. Not verified: which issue types (tasks, incidents)
+the list returns without `issue_type`, and whether they are read as issues
+are. Not
+declared: `gone` (no 410 documented for issues), anything on `projects` (the
+catalog narrows it with `membership=true`, and a consumer drops a declaration
+a selection narrows), and so `parentAbsent`, which needs a parent collection
+with a Completeness Object (§4.4). No dated catalog selects it yet.
+`tests/test_gitlab_issues_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays of the same pin, in either order,
+runs both validators, and checks the outcomes `classify_read` gives. No
+provider was called.
+
+## Google Calendar deletion feed
+
+[Google Calendar v3 deletion feed](APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md)
+`x-deletion-feed` on the `events` collection: the feed is the event list
+itself (`calendar.events.list`), read with the cursor `syncToken` and its
+pages only; the cursor for the next read is `nextSyncToken`, "present only
+on the very last page"; a 410 ("sync tokens are invalidated") drops the
+cursor; cancelled events are the tombstones, except items with
+`recurringEventId` (cancelled exceptions, which clients store), the same
+`except` as the read and list tombstones above. The pinned document's
+`syncToken` says "All events deleted since the previous list request will
+always be in the result set and it is not allowed to set showDeleted to
+False", so the feed needs no `showDeleted`, and every feed read sends the
+same parameters, as Google's
+[sync guide](https://developers.google.com/workspace/calendar/api/guides/sync)
+asks. So the first cursor comes from a feed read without a cursor, never
+from the drive app's own list read (`singleEvents=false&showDeleted=true`),
+whose token would then be sent without those parameters. That first read is
+a full listing and counts against the consumer's record budget (syncables'
+`maxRecords`, 5000 by default): a calendar with more events never completes
+it and never gets a cursor. Members and tombstones are those
+`singleEvents=false` (the default) returns: a series is its master event,
+plus exceptions with their own ids; a deleted series has one tombstone, the
+master's, and its instances get none.
+
+It composes with `app-crud-causality-32237fa5…` (the catalogs' choice) or
+`crud-causality-32237fa5…`, both tested, and is selected with
+`read-tombstone-v2-32237fa5…`, not the first revision. Do not select it with
+`pagination-v2-32237fa5…`, whose event-list description says "Full listing
+only: omit syncToken". The first read-tombstone revision's comment "Not
+declared: an `x-deletion-feed` over the event list" is stale since this
+overlay; that file is published and stays as it is. Not verified and not
+documented: that a feed read returns an event at most once; what it returns
+for the exceptions of a deleted series; how an event moved to another
+calendar (`events.move`) or an attendee's copy after the attendee is removed
+appears (both may appear cancelled in the source calendar while the event
+still exists elsewhere). No dated catalog selects it yet.
+`tests/test_calendar_deletion_feed.py` checks the declaration against the
+composed document and the pinned wording. No provider was called.
+
+## GitHub patch formats
+
+[GitHub Issues crud-causality v2](APIs/github.com/github-issues/1.1.4/crud-causality-v2-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml)
+and [GitHub REST crud-causality v2](APIs/github.com/api.github.com/1.1.4/crud-causality-v2-920631db31e628be547e9366821d3ebc7fa0ead5-overlay.yaml)
+replace v1's `patchFormat: merge`, which [CRUD Causality §4.6](../openapi-extensions/spec/crud-causality/README.md#46-patch-formats)
+does not define, so a consumer did not know the body format and sent the
+full record. The issue and comment PATCHes are `jsonMergePatch`: the body is
+a partial object, and GitHub's
+[Update an issue](https://docs.github.com/en/rest/issues/issues#update-an-issue)
+reference documents merge-patch behaviour for its fields ("use null to
+remove the current milestone"; labels and assignees replace the stored set,
+`[]` clears it). GitHub does not name RFC 7396 and takes `application/json`.
+In github-issues the two label writes keep `mode: patch` and say
+`patchFormat: custom`. v1 also gives its added fields (the issue `number`,
+the comment `id`) `source: server`, which §4.5 does not define; v2 says
+`generated`, so a consumer leaves its own placeholder for them out of the
+create body. Nothing else changes; v1 stays published. No dated
+catalog selects v2 yet. `tests/test_github_crud_patch_format.py` checks
+that every update of each composition names a rule-5 mode and a §4.6
+format, that v2 differs from v1 only in patch formats, added-field sources
+and descriptions, and that the CRUD Causality validator passes. No provider
+was called.
+
+## GitHub compound creates
+
+[GitHub Issues compound create](APIs/github.com/github-issues/1.1.4/compound-create-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml)
+declares a [CRUD Causality 0.5.0](../openapi-extensions/spec/crud-causality/README.md#47-compound-creates)
+compound create for an issue with labels: the create sends `labels`
+(`create: include`), and the follow-up `issues-add-labels` adds those the
+created issue lacks (`itemKey: name`). GitHub's
+[Create an issue](https://docs.github.com/en/rest/issues/issues#create-an-issue)
+says "Only users with push access can set labels for new issues. Labels are
+silently dropped otherwise", and the follow-up can be refused after the issue
+exists, so the create is then partly applied. It composes after
+crud-causality v2, not v1: v2's issue number is a `generated` added field,
+so a create body leaves the client's placeholder out. syncables reads
+`followUps` since 0.22.0. Declared, not verified against a live account. No
+dated catalog selects it yet. `tests/test_github_compound_create.py` checks it with the spec's
+`compound_create`. `tests/github_compound_create_syncables.test.ts` runs it
+through syncables on the catalog's bytes (a dropped label added by the
+follow-up; a 403 follow-up failed, the create not sent again). No CI
+workflow runs the `overlays/tests/*.test.ts` files (overlays CI runs only
+`test_*.py`, and syncables' vitest config covers only `syncables/__tests__`),
+so run it by hand from `syncables/` after `npm ci`:
+`npx vitest run --root .. overlays/tests/github_compound_create_syncables.test.ts`.
+
+## Google Calendar throttling
+
+[Google Calendar v3 throttling](APIs/googleapis.com/calendar/v3/throttling-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the Calendar document the catalogs select: the default quotas of
+Google's [quota page](https://developers.google.com/workspace/calendar/api/guides/quota)
+("Per minute per project": "10,000 requests", partitioned by application;
+"Per minute per user per project": "600 requests", by application and user;
+window kind `unspecified`, since Google lets a burst carry into "the next
+window"), and one signal: a 403 or 429 whose `error.errors[].reason` is
+`rateLimitExceeded` or `userRateLimitExceeded` is `throttled`, as the
+[error guide](https://developers.google.com/workspace/calendar/api/guides/errors)
+documents, with no bucket named. Not declared: `Retry-After` (not
+documented), `quotaExceeded` (Calendar usage limits against abuse, not a
+rate to wait out), the per-calendar and operational limits, which have
+no numbers, and the quota page's 1,000,000 requests per day per project,
+which is a billing threshold ("Usage under this threshold doesn't incur
+extra charges"), not a limit at which requests are refused. A project's own quota may differ from the defaults. No dated
+catalog selects it yet. `tests/test_calendar_throttling.py` composes it
+alone and after the catalog's Calendar overlays, and classifies synthetic
+errors in the guide's shape. No provider was called.
+
+## Spotify throttling
+
+[Spotify Web API throttling](APIs/spotify.com/1.0.0-readonly/throttling-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Spotify's [rate-limits page](https://developer.spotify.com/documentation/web-api/concepts/rate-limits):
+one bucket per app (`partitionBy: [application]`) over "a rolling 30 second
+window" (`kind: sliding`) with no request count, because none is published
+and it differs between development and extended quota mode; `Retry-After`
+in seconds, which a 429 "will normally include"; and a 429 as `throttled`.
+The 429 is not declared `quotaExhausted` for the app bucket, because Spotify
+also has endpoint limits that answer 429, of which it names one, "the
+playlist image upload endpoint" (not in the read-only document this overlay
+extends). No dated catalog selects
+it yet. `tests/test_spotify_throttling.py` composes it alone and after the
+catalog's Spotify overlays and classifies synthetic responses. No provider
+was called.
+
+## Airtable throttling
+
+[Airtable Web API throttling](APIs/airtable.com/1.0-readonly/throttling-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Airtable's [rate-limits page](https://airtable.com/developers/web/api/rate-limits):
+"5 requests per second per base", selected by the three operations that
+address a base (partitioned by a URI-named base dimension, since the
+extension's vocabulary has none), and a 429 as `throttled` with
+`minDelaySeconds: 30` ("will need to wait 30 seconds before subsequent
+requests will succeed"). Not declared: the 50-per-second limit, which the
+page states for personal access tokens and service accounts while the
+catalog connects through OAuth, and `Retry-After`, which the page does not
+mention. No dated catalog selects it yet. `tests/test_airtable_throttling.py`
+composes it alone and after the catalog's Airtable overlays and classifies
+a synthetic 429. No provider was called.
+
+## Asana throttling
+
+[Asana API throttling](APIs/asana.com/1.0/throttling-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Asana's [rate-limits page](https://developers.asana.com/docs/rate-limits):
+a standard per-token bucket over minute-long windows with no request count
+(150 per minute on a free domain, 1,500 on a paid one, which a document
+cannot select), a search bucket of 60 per minute per token on the task
+search, `Retry-After` in seconds, and a 429 as `throttled` with no bucket
+named, since the standard, search, concurrency and cost-based limits all
+answer 429. Not declared: the concurrency and cost-based limits, which this
+version of the extension does not describe. No dated catalog selects it
+yet. `tests/test_asana_throttling.py` composes it alone and after the
+catalog's Asana overlays and classifies a synthetic 429. No provider was
+called.
+
+## GitLab throttling
+
+[GitLab.com REST API v4 throttling](APIs/gitlab.com/v4-readonly/throttling-f6d7940e9865903b9c99c5c1fc2d57d92811eef4-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+for the read-only GitLab.com document, from GitLab.com's
+[rate-limits page](https://docs.gitlab.com/user/gitlab_com/rate_limits/):
+"Authenticated API traffic for a user" ("2,000 requests each minute", per
+user) and "All traffic from an IP address" ("2,000 requests each minute",
+`sourceIp`, shared by everyone behind a proxy) on every operation; the
+project list's own limit ("2,000 requests every 10 minutes") and the single
+project read's ("400 requests each minute") on those two operations, with no
+partition, since the rows do not say per what they count. The page's
+tier-aware limits are proposed, not in effect. Also the documented
+[response headers](https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/)
+`RateLimit-Limit` (adjusted "to approximately the nearest 60-minute period"
+for a throttle whose period is not a minute), `RateLimit-Observed`,
+`RateLimit-Remaining`, `RateLimit-Reset` (Unix time) and, on a 429,
+`Retry-After` (seconds), and a 429 as `throttled` with no bucket named.
+"Rate limiting responses for the Projects, Groups, and Users APIs do not
+include informational headers", so a 429 from the project list's or project
+read's own limit has no `RateLimit-*` or `Retry-After`.
+Not declared: `RateLimit-ResetTime`, `RateLimit-Name` and the
+unauthenticated limit ("500 requests each minute" per IP, in effect; every
+operation here sends a user's token); the page names no limit for the issue
+reads. No dated catalog selects it yet. `tests/test_gitlab_throttling.py`
+composes it alone and after the catalog's GitLab overlays and classifies synthetic
+responses. No provider was called.
+
+## Discord pagination v2: a cursor from the last item
+
+[`pagination-v2-9d0d73c6…`](APIs/discord.com/10/pagination-v2-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+declares [Pagination Schemes 0.9.0](../openapi-extensions/spec/pagination-schemes/README.md)
+`fromLastItem` (§4.3.3) on the two Discord operations whose order is
+documented: [Get Guild Bans](https://docs.discord.com/developers/resources/guild)
+("Users will always be returned in ascending order by `user.id`") and
+[Get Guild Scheduled Event Users](https://docs.discord.com/developers/resources/guild-scheduled-event)
+("ascending order by `user_id`"). Both take `after` as a strict bound
+("consider only users after given user id"), so the next page's `after` is
+the last item's `user.id`: rule (b) of §4.3.3. The first request sends no
+`after`, and an empty page ends the read (Discord has no has-more field). The
+pinned OAD does not require `user` on a scheduled-event user; an item without
+it ends the read with an error. Not declared, because Discord does not
+document their order: List Guild Members (its `after` is "the highest user id
+in the previous page", but the order is not stated), Get Reactions, List
+Thread Members, Get Answer Voters, List Entitlements, List SKU
+Subscriptions, Get Current User Guilds, the scheduled-event exception users,
+Get Channel Messages, and the audit log (whose cursor-less first page is not
+ascending). It keeps v1's one action, the guild list's description, revised.
+A 0.8.0 consumer would stop after one page, so it needs a 0.9.0 reader. No
+dated catalog selects it; the catalogs read neither operation.
+`tests/test_discord_pagination_v2.py` validates it alone and in place of v1
+after the catalog's Discord overlays, and reads synthetic pages with the
+reference `read_item_cursor`. No provider was called.
+
+## Discord throttling
+
+[Discord API v10 throttling](APIs/discord.com/10/throttling-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+declares [Throttling 0.3.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Discord's [rate-limits page](https://docs.discord.com/developers/topics/rate-limits)
+and the pinned OAD's own headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`,
+`X-RateLimit-Reset-After` (in seconds), `Retry-After`, the 429 body's
+`retry_after`, and a 429 as `throttled` with no bucket named (Discord's
+per-route buckets are named only at run time). Discord types the reset and
+delay values as numbers and its example has a fraction (`retry_after:
+64.57`); the extension's units are whole seconds, so a fractional value is
+ignored and the consumer falls back to `Retry-After` or its own backoff.
+Plainly: a consumer that follows the spec cannot use a fractional
+`X-RateLimit-Reset-After` or `retry_after` at all, because the Throttling
+spec allows whole seconds only.
+Not declared: the global limit, which applies to bots and users ("Global
+rate limits apply to the total number of requests a bot or user makes") but
+has a published number only for bots ("All bots can make up to 50 requests
+per second"); the per-route limits, which have no published numbers; and the invalid-request limit, which counts only 401, 403 and 429
+responses. No dated catalog selects it yet.
+`tests/test_discord_throttling.py` composes it alone and after the
+catalog's Discord overlays and classifies synthetic responses, fractions
+included. No provider was called.
+
+## Collections with fixed reads
+
+Two standalone overlays declare [CRUD Causality 0.4.0](../openapi-extensions/spec/crud-causality/README.md#421-reading-a-collection)
+`listQuery`; no dated catalog selects them yet.
+`tests/test_crud_fixed_query_overlays.py` composes each with its pinned OAD and
+pagination overlay, runs the collection-read validator, and checks that each
+fixed read is the request the drive app sends. No provider was called.
+
+| Overlay | Fixed read | Evidence |
+| --- | --- | --- |
+| [Google Tasks v1, crud-causality v2](APIs/googleapis.com/tasks/v1/crud-causality-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | v1 (#378) plus envelopes (with `emptyWhenAbsent`, as pagination v2's), the task-list read and descriptions; task lists and tasks, read only; the `tasks` collection fixes `showCompleted=true` and `showHidden=true`. Deleted tasks stay excluded, and so do tasks assigned to the user (`showAssigned`, default false, is not in the pinned OAD). | The pinned OAD's parameter descriptions; [tasks.list](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
+| [Google Calendar v3 app v2](APIs/googleapis.com/calendar/v3/app-crud-causality-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | v1's resources and operations; the `events` collection fixes `showDeleted=true` and `singleEvents=false` (hidden invitations stay out: `showHiddenInvitations` defaults to false), and the event update declares `mode: patch` with `patchFormat: jsonMergePatch` (v1 declares no `mode`, against CRUD Causality rule 5). | The pinned OAD's parameter descriptions; [events.list](https://developers.google.com/workspace/calendar/api/v3/reference/events/list); [patch semantics](https://developers.google.com/workspace/calendar/api/guides/performance) |
+
+## Collection completeness
+
+Two standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
+`x-completeness`, which syncables reads (`absent`, `notFound`, `gone`,
+`parentAbsent`). No dated catalog selects them yet.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [Google Tasks v1 completeness](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks `absent: removed`, `notFound: unavailable`; tasks `parentAbsent: unavailable`; the task read tombstone `deleted: true`. Needs crud-causality v2 (the fixed read that returns hidden tasks). | The pinned OAD (tasklists.list "Returns all the authenticated user's task lists"; Task.deleted "Flag indicating whether the task has been deleted"); what a 404 means is not documented |
+| [GitHub Issues completeness](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | Issues `absent: removed`, `notFound: unavailable`, no `gone`; comments the same plus `parentAbsent: unavailable`. Page-number paging can skip an issue deleted or transferred during a read; it stays unconfirmed until its GET settles it. | [Get an issue](https://docs.github.com/en/rest/issues/issues#get-an-issue): 301 when transferred, 404 when transferred or deleted out of the caller's reach, 410 when deleted where the caller can read, and 410 for every issue when issues are turned off, so neither a 404 nor a 410 is declared a deletion |
+
+A Todoist overlay drafted with these is left out: Todoist's API reference
+could not be read for the task fields and single-task read it relies on,
+and its pinned OAD is an authored subset without descriptions.
+`tests/test_completeness_overlays.py` and
+`tests/test_github_issues_completeness.py` compose each overlay with the
+overlays it needs, run the Collection Completeness and CRUD Causality
+validators, and classify synthetic reads with the spec's `classify_read`.
+No provider was called.
 
 ## Directory layout and OAD revisions
 
@@ -169,22 +605,15 @@ because a historical catalog's order is not recorded here (Clockify's
 `dc7b2bdb` auth and pagination overlays target paths its `crud-causality`
 sibling adds). A revision that a higher `-vN-` file of the same kind and pin
 supersedes is not checked on its own, since it usually exists because the
-old one does not compose; a catalog that still selects it is told. Three
-pinned OADs do not parse with libyaml ([#307](https://github.com/ontola/atomic-plugins/issues/307)):
-bunq.com 1.0 at `dec74da7` has two U+2028 (line separator) characters inside
-a block scalar on line 1141, which libyaml
-treats as YAML 1.1 line breaks, so the text after them is dedented out of the scalar
-("did not find expected key", libyaml line 1143); codat.io accounting 2.1.0
-at `41b90944` has a line holding only a tab inside two `|-` block scalars
-(lines 43982 and 44484); sendgrid.com 1.0.0 at `bdea260b` has raw C1
-control characters (U+0090, U+0091, U+009C, U+009F) in three example `city`
-strings (lines 13002, 13169 and 27059). The proxy's serde_yaml 0.9.34
-(unsafe-libyaml) refuses all three with the same errors, so the proxy cannot
-load them either. No later revision parses: each pin is the last upstream
-change to its file (checked against `ontola/openapi-directory` `main` at
-`845f81fffbea9a2c4b49fb7364cce967eea3203a`), so these overlays cannot be
-re-pinned until the documents are fixed upstream. The script warns and
-cannot check their overlays.
+old one does not compose; a catalog that still selects it is told. The
+bunq.com 1.0, codat.io accounting 2.1.0 and sendgrid.com 1.0.0 documents did
+not parse with libyaml (or the proxy's serde_yaml) until
+ontola/openapi-directory#179 fixed them
+([#307](https://github.com/ontola/atomic-plugins/issues/307)); their overlays
+now have `pagination-dc4bd462cdef2a11865274027de251b5b1f3d854-overlay.yaml`
+revisions at the fixed commit, which the script checks. No catalog selects
+them. The old revisions stay published; the script warns that it cannot read
+their pinned documents.
 
 Overlays are applied in the order a catalog lists them, and an action
 whose target does not exist yet fails the whole catalog load. Clockify's
@@ -230,15 +659,20 @@ place.
 
 Checks:
 
-- `.github/workflows/overlays-ci.yml` (PRs): all overlay paths, revision
+- `.github/workflows/overlays-ci.yml` (PRs and pushes to main): all overlay paths, revision
   filenames and `extends` commits pass the full-history check, and every
   action target exists in its pinned OAD or in the catalog composition up to
   it; every catalog overlay URL, and
-  every OAD URL under the Pages base, maps to a file in this folder, and the
-  tests below pass (`tests/test_identity_overlays.py` also checks the pets
+  every OAD URL under the Pages base, maps to a file in this folder, and
+  every `tests/test_*.py` passes, discovered rather than listed; a test whose
+  source declares a `"--directory"` option gets the openapi-directory clone
+  (`tests/test_identity_overlays.py` also checks the pets
   demo's document and data). It reads the
   Pages-published sources from the checkout, so it validates a change before
-  Pages serves it.
+  Pages serves it. Its `reads` job runs every `tests/*.test.ts` (syncables
+  reads through the catalogs, with vitest from `syncables/`) when an overlay
+  or syncables' source changes; the composer reads each pinned OAD from the
+  same openapi-directory clone (`OPENAPI_DIRECTORY_REPO`).
 - `integration-proxy`'s `default_catalog_*` tests (PRs touching this folder):
   compose the selected dated catalog with the proxy's runtime loader, reading
   overlays from this folder. Its
@@ -288,8 +722,11 @@ directly.
 | [Gmail v1](APIs/googleapis.com/gmail/v1/pagination-f34c235dd04bee41b091108dd52c07d1415a54b9-overlay.yaml) | Five mailbox/CSE collections with operation-specific envelopes and page-size inputs. | [Provider documentation](https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list) |
 | [Google People v1](APIs/googleapis.com/people/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml) | Five full-list contact and directory collections; sync checkpoints remain separate. | [Provider documentation](https://developers.google.com/people/api/rest/v1/people.connections/list) |
 | [Google Tasks v1](APIs/googleapis.com/tasks/v1/pagination-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks, preserving completion, hidden/deleted and date filters. | [Provider documentation](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list) |
+| [Google Tasks v1 v2](APIs/googleapis.com/tasks/v1/pagination-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | v1 plus [Pagination Schemes 0.7.0](../openapi-extensions/spec/pagination-schemes/README.md#442-envelope-object) `emptyWhenAbsent` on both envelopes: an empty list answered without `items` is a page with no items. Declared, not verified against a live empty list. | [tasks.list](https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list), [ProtoJSON format](https://protobuf.dev/programming-guides/json/) |
 | [YouTube v3](APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | Six playlist, subscription, comment and search collections; comment ID batches and streams excluded. | [Provider documentation](https://developers.google.com/youtube/v3/docs/playlistItems/list) |
 | [Google Cloud Storage v1](APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml) | Four bucket, flat-object, operation and HMAC-key collections; directory prefixes excluded. | [Provider documentation](https://docs.cloud.google.com/storage/docs/json_api/v1/objects/list) |
+| [Box 2.0.0 v2](APIs/box.com/2.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | 41 GET lists, each applied explicitly: 13 offset lists (`offset`, `limit`, `total_count`; folder items, trash and users too, whose marker paging needs `usemarker=true`) and 28 marker lists (`marker`, `next_marker`), all with the `entries` envelope. Replaces v1, whose `type: offset` and roles `currentOffset` and `pageTokenMode` the spec does not define. | [Offset-based](https://developer.box.com/guides/api-calls/pagination/offset-based), [Marker-based](https://developer.box.com/guides/api-calls/pagination/marker-based) |
+| [Box 2.0.0 v3](APIs/box.com/2.0.0/pagination-v3-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml) | v2 plus [Pagination Schemes 0.7.0](../openapi-extensions/spec/pagination-schemes/README.md#432-offset-advance) `advance: pageSize` on the offset lists: the next offset adds the reported `limit`, and the list ends at `total_count`. | [Offset-based](https://developer.box.com/guides/api-calls/pagination/offset-based) |
 | [Box 2026.0](APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml) | GET workflows and read-POST item query, with separate query/body markers and entries envelopes. | [Provider documentation](https://developer.box.com/guides/api-calls/pagination/marker-based) |
 | [GitHub REST 2022-11-28](APIs/github.com/api.github.com.2022-11-28/1.1.4/pagination-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml) | Eight issue, pull-request, comment, label, milestone and repository lists, using Link headers and root arrays. | [Provider documentation](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api) |
 | [Twilio Conversations](APIs/twilio.com/twilio_conversations_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml) | 22 GET collections, including conversations, messages, participants, services and users. | [Provider documentation](https://www.twilio.com/docs/conversations-classic/api/conversation-resource) |
@@ -465,7 +902,6 @@ account or status IDs. Unpaged batch reads, directory offsets and instance
 peer reads are excluded. Server selection and dynamic OAuth registration
 remain separate from this pagination metadata.
 
-
 The six Google variants use opaque `nextPageToken` values as `pageToken`,
 with `pageSize` or `maxResults` only as declared on that operation. A short
 or empty page is not terminal while a token remains. Keep filters, masks,
@@ -623,6 +1059,32 @@ fixes the older validator's rejection of required properties defined inside
 Notion body-schema cases check optional first-page requests, preserved extra
 fields, page-size bounds, and opaque cursor types.
 
+## Stripe pagination v2: a cursor from the last item
+
+[`pagination-v2-dec74da7…`](APIs/stripe.com/2022-11-15/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
+declares [Pagination Schemes 0.9.0](../openapi-extensions/spec/pagination-schemes/README.md)
+`fromLastItem` under rule (a) of §4.3.3: Stripe's
+[pagination reference](https://docs.stripe.com/api/pagination) says every v1
+list method takes `starting_after`, "an object ID that defines your place in
+the list" (receive objects "ending with `obj_foo`" and send
+`starting_after=obj_foo`), and that `has_more` false means "this set
+comprises the end of the list". Objects come newest first; rule (a) needs no
+ascending order. v1 declared the `cursor` scheme but applied it to no
+operation and had no way to find the next cursor; v2 redefines it
+(`starting_after` from the last item's `id`, items in `data`, `has_more` as
+`hasMore`) and applies it to all 99 list operations of the pinned document
+that take `starting_after`. 97 of them describe it in the words above;
+exchange rates say "the currency that defines your place in the list" (an
+exchange rate's id is its currency code); treasury financial accounts say
+only "An object ID cursor for use in pagination", covered by the reference
+page's statement about all list methods. Not declared: `ending_before` (it
+pages backwards) and the `/v2` APIs. It needs a 0.9.0 reader. Of the
+catalog and overlay platforms, Stripe is the only one whose docs describe a
+rule (a) cursor; Discord's two lists use rule (b) (#586). No dated catalog
+selects it. `tests/test_stripe_pagination_v2.py` validates it, checks the
+operation set and the pinned wording, and reads synthetic pages with the
+reference `read_item_cursor`. No provider was called.
+
 ## Swagger 2.0 documents
 
 The 2026-10-02 collection audit behind
@@ -758,3 +1220,74 @@ and selects the same read-only Google Tasks entry as the combined GitLab/Tasks
 catalog. This twelve-entry option allows Tasks deployment independently when
 its OAuth client is ready and GitLab registration is still pending. It changes
 no existing pins or API metadata and does not activate itself.
+
+## Box onboarding catalogs
+
+`catalog/2026-10-11-box.json` preserves all twelve entries from the Google Tasks
+deployment catalog and adds Box 2.0.0 with its existing revision-pinned
+pagination overlay and `OAuth2Security` scheme. The combined
+`catalog/2026-10-11-gitlab-box.json` additionally preserves the GitLab entry
+from its published onboarding catalog. These options let either registration
+finish first without dropping an existing platform or changing its pins.
+
+Box's selected document describes the full API, including write operations;
+it is not a read-only authentication profile. Its OAuth scope list is empty.
+Box's [authorization reference](https://developer.box.com/reference/get-authorize)
+documents that an omitted scope parameter defaults to the permissions
+configured on the application. The current proxy sends an empty `scope`
+parameter for this document; verify that behavior against the registered
+client before activation. Configure the Local Thought application for
+the minimum useful read permissions and register the exact callback
+`https://localthought.io/oauth/box/callback`. Provider permissions must enforce
+that limit; this catalog does not restrict the proxy to GET requests.
+
+Publishing these catalogs does not create a Box account or OAuth client,
+configure `OAUTH_BOX_CLIENT_ID` / `OAUTH_BOX_CLIENT_SECRET`, or switch
+localthought.io. Client authentication and the document's default PKCE
+behavior still require registration and live verification before activation.
+Catalog composition and credential-scheme resolution do not certify a
+real-account OAuth grant, API read, or complete import.
+
+`catalog/2026-10-12-box-pagination-v2.json` is `catalog/2026-10-11-gitlab-box.json`
+with Box's v1 pagination overlay replaced by
+[v2](APIs/box.com/2.0.0/pagination-v2-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml);
+every other entry is unchanged. The v1 composition fails the Pagination
+Schemes validator (`type: offset`, roles `currentOffset` and
+`pageTokenMode`). v1 applies its schemes by auto-detection only, and
+syncables leaves an invalid scheme out of auto-detection, so a syncables
+reader reads each Box list as one page and takes it as the whole list; v2
+applies its schemes explicitly and uses `pageNumber` with the `offset` role and
+`pageToken` with `cursor`/`nextCursor`. Box documents a maximum `offset` of
+9999, so an offset list longer than 10,000 entries ends with an error
+rather than early. Box also documents the next offset as
+`previous_offset + previous_limit`, "and not by the size of the entries in
+the response array, as this may be less than the limit", while syncables
+(0.21.0 and 0.22.0) advances by the entries returned and stops at the
+first empty page. So with syncables, an offset list whose page holds fewer
+entries than the limit before its end is read again from inside that page
+(the repeated entries fail the read: a collection read, and from syncables 0.22.0 any offset read), and an empty page before
+`total_count` ends the read as if complete, missing the entries after it
+without an error. Whether Box answers such pages is not verified. The
+marker lists do not have this risk. `GET /files/{file_id}/collaborations`
+is read by marker, as Box's reference says, although the pinned response
+schema shows offset fields; if Box answered it with offset fields and no
+`next_marker`, the read would end after one page and look complete. `tests/test_box_pagination_v2.py` checks the catalog
+against its base, and validates v2 and the Box platform composed from the
+catalog. Declared from Box's documentation and the pinned OAD; no Box
+request was made.
+
+A standalone [throttling overlay](APIs/box.com/2.0.0/throttling-dec74da7a6785d5d5b83bc6a4cebc07336d67ec9-overlay.yaml)
+declares Box's documented [rate limits](https://developer.box.com/guides/api-calls/permissions-and-errors/rate-limits)
+(Throttling 0.2.0-draft or later, `limits` and `headers`): 1000 requests per
+minute per user on every operation, plus 240 per minute per user on the two
+direct uploads, 6 per second and 60 per minute per user and 12 per second per
+enterprise on search, and Box Sign's 100 (create, resend) and 1000 (get, and
+also the list) per minute per user; and the `retry-after` header in seconds.
+Box does not say whether upload, search and Sign requests also count against
+the general 1000 per minute; keeping that bucket on them is the conservative
+choice, not a documented one, and makes the Sign read bucket duplicate it.
+No dated catalog selects the overlay. `tests/test_box_throttling.py` composes
+it with its pinned OAD, in either order with each Box pagination overlay a
+dated catalog selects (v3 in the newest, `catalog/2026-10-12-tasks-box-pages.json`;
+v2 and v1 in older ones), checks the buckets and their operations, and classifies
+a synthetic `429`. No provider was called.

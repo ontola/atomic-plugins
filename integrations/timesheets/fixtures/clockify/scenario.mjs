@@ -610,10 +610,33 @@ export function clockifyEntry(id, description, start, end, extra = {}) {
   };
 }
 
-/** Entries relative to `now`, so a 7-day window always finds some: two
- * completed entries yesterday, one older completed entry, a running timer
- * and a break (both skipped by the lens). */
-export function clockifyEntries(now = Date.now()) {
+/**
+ * Yesterday (the calendar day before `now`'s in `timeZone`) at `hours` o'clock
+ * wall-clock there, as an instant.
+ */
+export function yesterdayAt(now, hours, timeZone = DEFAULT_TIME_ZONE) {
+  const today = new Date(now + zoneOffsetMs(now, timeZone));
+  const wall = Date.UTC(
+    today.getUTCFullYear(),
+    today.getUTCMonth(),
+    today.getUTCDate() - 1,
+    hours,
+  );
+
+  return wallClockToInstant(wall, timeZone);
+}
+
+/** Entries a 7-day window always finds some of: two completed entries
+ * yesterday, one older completed entry, a running timer and a break (both
+ * skipped by the lens). The three of yesterday sit at fixed wall-clock hours
+ * in `timeZone` (10:00–12:00, 13:00–14:00 and the break 15:00–16:00), so
+ * they are on yesterday's date, and in one week, whatever hour the fixture
+ * is made at; at 14:00 there they are the instants that `now − 28 h …`
+ * offsets used to give. */
+export function clockifyEntries(
+  now = Date.now(),
+  timeZone = DEFAULT_TIME_ZONE,
+) {
   const day = 24 * hour;
   const entry = clockifyEntry;
 
@@ -621,12 +644,16 @@ export function clockifyEntries(now = Date.now()) {
     entry(
       'entry-1',
       'Fix plugin source loading',
-      now - day - 4 * hour,
-      now - day - 2 * hour,
+      yesterdayAt(now, 10, timeZone),
+      yesterdayAt(now, 12, timeZone),
     ),
-    entry('entry-2', 'Weekly sync', now - day - hour, now - day, {
-      billable: false,
-    }),
+    entry(
+      'entry-2',
+      'Weekly sync',
+      yesterdayAt(now, 13, timeZone),
+      yesterdayAt(now, 14, timeZone),
+      { billable: false },
+    ),
     entry(
       'entry-3',
       'Plugin catalog evidence',
@@ -634,9 +661,13 @@ export function clockifyEntries(now = Date.now()) {
       now - 20 * day + 3 * hour,
     ),
     entry('entry-4', 'Still running', now - hour, null),
-    entry('entry-5', 'Lunch', now - day + hour, now - day + 2 * hour, {
-      type: 'BREAK',
-    }),
+    entry(
+      'entry-5',
+      'Lunch',
+      yesterdayAt(now, 15, timeZone),
+      yesterdayAt(now, 16, timeZone),
+      { type: 'BREAK' },
+    ),
   ];
 }
 
@@ -754,7 +785,7 @@ export function clockifyFixture({
   forceProjects = false,
 } = {}) {
   const fresh = () => ({
-    entries: clockifyEntries(),
+    entries: clockifyEntries(Date.now(), timeZone),
     timeZone,
     forceProjects,
     /** Every provider request, as `METHOD /path?query`. */

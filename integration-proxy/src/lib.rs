@@ -4,8 +4,9 @@
 //! Clients authenticate with their Atomic agent key (issue #54): every
 //! request that matters carries an Atomic v2 request signature, a connection
 //! is owned by the agent that redeemed it, and apps use it through
-//! owner-signed delegations. There are no accounts, logins, tenants or
-//! rotating codes.
+//! owner-signed delegations. Opt-in RFC 8628 device sessions provide scoped
+//! bearer authentication to the same canonical owner; they do not create
+//! another account identity or revive provider connection codes.
 //!
 //! This crate is the whole service; the `integration-proxy` binary in this
 //! package, and any deployment wrapper (e.g. the Heroku app that serves
@@ -46,9 +47,11 @@ mod client_addr;
 mod config;
 mod connect;
 mod connections;
+mod device;
 #[cfg(test)]
 mod identity_catalog_tests;
 mod oauth;
+mod pacing;
 mod providers;
 mod proxy;
 mod security;
@@ -56,9 +59,7 @@ mod signature;
 mod templates;
 #[cfg(test)]
 mod test_support;
-// Step 2 of #369: the store's operations have no caller outside the tests
-// until step 3 mounts the routes.
-#[cfg_attr(not(test), allow(dead_code))]
+mod transfer;
 mod webhooks;
 
 use std::sync::Arc;
@@ -80,6 +81,7 @@ pub use config::{
     Config, TrustForwardedFor, WebhookConfig, DEFAULT_CATALOG_PATH,
     DEFAULT_KEY_CHECK_LIMIT_PER_HOUR, DEFAULT_OPERATOR_NAME, DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
 };
+pub use device::DeviceConfig;
 
 #[derive(Clone)]
 struct AppState {
@@ -91,6 +93,7 @@ struct AppState {
     /// accepted on the consent form.
     public_origin: String,
     catalog: catalog::Catalog,
+    device: DeviceConfig,
     security: Option<security::Security>,
     access: Arc<dyn AccessPolicy>,
     /// `OPERATOR_NAME`, `OPERATOR_URL` and the `BASE_URL` host, for the pages.
@@ -101,6 +104,11 @@ struct AppState {
     key_check_window: std::time::Duration,
     /// `TRUST_FORWARDED_FOR`: where that limit finds the client address.
     trust_forwarded_for: config::TrustForwardedFor,
+    /// The webhook inbox and its routes, only with `WEBHOOKS_ENABLED=true`.
+    webhooks: Option<Arc<webhooks::Webhooks>>,
+    /// The sliding logs pacing this instance's requests under providers'
+    /// `x-throttling` quotas on the proxy's own address (pieces.md P4).
+    pacer: Arc<pacing::Pacer>,
     #[cfg(test)]
     test_upstream: Option<String>,
 }
@@ -128,11 +136,22 @@ pub(crate) fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// Asks the access policy about `owner`.
+/// Asks whether `owner` may own and use connections: refused when a key
+/// transfer retired it (#410), then the access policy. Every signed route
+/// asks this about the connection owner (or the signer that will become
+/// one), so a retired owner is refused everywhere: management, redeem,
+/// transfers, proxied requests by any caller, and the webhook routes.
 pub(crate) async fn check_access(
     state: &AppState,
     owner: &AgentId,
 ) -> Result<(), api_error::ApiError> {
+    if let Some(security) = &state.security {
+        match security.is_retired(owner.as_str()).await {
+            Ok(false) => {}
+            Ok(true) => return Err(api_error::ApiError::AgentRetired),
+            Err(_) => return Err(api_error::ApiError::Unavailable),
+        }
+    }
     match state.access.check(owner).await {
         Access::Allowed => Ok(()),
         Access::Denied(reason) => Err(api_error::ApiError::AccessDenied(reason)),
@@ -217,6 +236,7 @@ pub async fn build_app_with_access(
     access: Arc<dyn AccessPolicy>,
 ) -> Result<Router, Error> {
     let base_url = config::validate_base_url(&config.base_url).map_err(Error::Config)?;
+    config.device.validate().map_err(Error::Config)?;
     let key = match &config.session_secret {
         Some(secret) => Key::from(&Sha512::digest(secret.as_bytes())),
         None => {
@@ -236,7 +256,7 @@ pub async fn build_app_with_access(
         .map_err(Error::Security)?;
     // Off by default: with WEBHOOKS_ENABLED unset there are no inbox tables,
     // no sweeper and no webhook route.
-    webhooks::start(&config.webhooks, &config.database_url, &security)
+    let webhooks = webhooks::start(&config.webhooks, &config.database_url, &security, &catalog)
         .await
         .map_err(Error::Security)?;
     if config.key_check_limit_per_hour > 0
@@ -256,15 +276,26 @@ pub async fn build_app_with_access(
         base_url,
         public_origin: config.public_origin(),
         catalog,
+        device: config.device.clone(),
         security: Some(security),
         access,
         operator: templates::Operator::from_config(config),
         key_check_limit: config.key_check_limit_per_hour,
         key_check_window: KEY_CHECK_WINDOW,
         trust_forwarded_for: config.trust_forwarded_for,
+        webhooks,
+        pacer: Arc::default(),
         #[cfg(test)]
         test_upstream: None,
     };
+    if let Some(webhooks) = &state.webhooks {
+        webhooks::sweeper::spawn(
+            webhooks.store.clone(),
+            webhooks::provider::ProviderHookDeleter {
+                state: state.clone(),
+            },
+        );
+    }
 
     Ok(router(state))
 }
@@ -335,28 +366,33 @@ fn browser_cors() -> tower_http::cors::CorsLayer {
             Method::DELETE,
             Method::OPTIONS,
         ])
-        .allow_headers([
-            header::AUTHORIZATION,
-            header::CONTENT_TYPE,
-            header::IF_MATCH,
-            HeaderName::from_static(signature::AGENT_HEADER),
-            HeaderName::from_static(signature::PUBLIC_KEY_HEADER),
-            HeaderName::from_static(signature::TIMESTAMP_HEADER),
-            HeaderName::from_static(signature::SIGNATURE_HEADER),
-            HeaderName::from_static(signature::VERSION_HEADER),
-        ])
-        .expose_headers([
-            header::CONTENT_TYPE,
-            header::LINK,
-            header::RETRY_AFTER,
-            header::ETAG,
-            HeaderName::from_static("x-total-count"),
-            HeaderName::from_static("x-next-page"),
-        ])
+        .allow_headers(
+            [
+                header::AUTHORIZATION,
+                HeaderName::from_static(proxy::IDEMPOTENCY_KEY),
+                HeaderName::from_static(signature::AGENT_HEADER),
+                HeaderName::from_static(signature::PUBLIC_KEY_HEADER),
+                HeaderName::from_static(signature::TIMESTAMP_HEADER),
+                HeaderName::from_static(signature::SIGNATURE_HEADER),
+                HeaderName::from_static(signature::VERSION_HEADER),
+            ]
+            .into_iter()
+            .chain(proxy::CALLER_HEADERS)
+            .collect::<Vec<_>>(),
+        )
+        // The same list the proxy forwards from, so they cannot drift.
+        .expose_headers(proxy::forwarded_response_headers().collect::<Vec<_>>())
 }
 
 fn router(state: AppState) -> Router {
+    // The webhook routes exist only while the inbox is on.
+    let webhook_routes = match &state.webhooks {
+        Some(_) => webhooks::routes::router(),
+        None => Router::new(),
+    };
     Router::new()
+        .merge(webhook_routes)
+        .merge(device::router())
         .route("/", get(home))
         .route("/healthz", get(healthz))
         .route("/logo.png", get(logo))
@@ -374,6 +410,7 @@ fn router(state: AppState) -> Router {
             delete(connections::remove_agent),
         )
         .route("/runtimes", post(connections::add_runtime))
+        .route("/agents/transfer", post(transfer::transfer))
         .route("/runtimes/:agent", delete(connections::remove_runtime))
         .route(
             "/proxy/:connection_id/:platform/*path",
@@ -383,7 +420,9 @@ fn router(state: AppState) -> Router {
         .route("/catalog", get(catalog::list))
         .route("/catalog/:file", get(catalog::document))
         .layer(browser_cors())
-        .layer(TraceLayer::new_for_http())
+        .layer(TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {
+            tracing::info_span!("http_request", method = %request.method(), path = request.uri().path())
+        }))
         .with_state(state)
 }
 
@@ -436,7 +475,7 @@ mod browser_tests {
                     .header("access-control-request-method", "PATCH")
                     .header(
                         "access-control-request-headers",
-                        "authorization,content-type,if-match,x-atomic-agent,x-atomic-public-key,x-atomic-timestamp,x-atomic-signature,x-atomic-signature-version",
+                        "authorization,content-type,if-match,if-none-match,if-modified-since,idempotency-key,x-atomic-agent,x-atomic-public-key,x-atomic-timestamp,x-atomic-signature,x-atomic-signature-version",
                     )
                     .body(Body::empty())
                     .unwrap(),
@@ -453,6 +492,9 @@ mod browser_tests {
             "authorization",
             "content-type",
             "if-match",
+            "if-none-match",
+            "if-modified-since",
+            "idempotency-key",
             "x-atomic-agent",
             "x-atomic-public-key",
             "x-atomic-timestamp",
@@ -477,9 +519,22 @@ mod browser_tests {
         let exposed = response.headers()["access-control-expose-headers"]
             .to_str()
             .unwrap();
-        for name in ["link", "retry-after", "etag", "content-type"] {
-            assert!(exposed.contains(name), "{name} not in {exposed}");
+        let exposed: Vec<&str> = exposed.split(',').map(str::trim).collect();
+        for name in [
+            "link",
+            "retry-after",
+            "etag",
+            "content-type",
+            "last-modified",
+            "x-total-count",
+            "x-next-page",
+        ]
+        .into_iter()
+        .chain(proxy::RATE_LIMIT_HEADERS)
+        {
+            assert!(exposed.contains(&name), "{name} not in {exposed:?}");
         }
-        assert!(!exposed.contains("x-connection-code"));
+        assert!(!exposed.contains(&"x-connection-code"));
+        assert!(!exposed.contains(&"set-cookie"));
     }
 }

@@ -1,0 +1,72 @@
+openapi: 3.0.3
+info:
+  title: Illustrative envelope whose array is left out when empty
+  version: 1.0.0
+  description: >
+    Synthetic, shaped like Google's Tasks API: a page holds its tasks under
+    `items`, with `nextPageToken` when more follow. An empty list answers
+    `{ "kind": "tasks#tasks", "etag": "..." }` with no `items` at all, as
+    JSON serialized with the Protocol Buffers JSON mapping leaves empty
+    repeated fields out, so the envelope declares emptyWhenAbsent.
+servers:
+  - url: https://tasks.example.com/tasks/v1
+paths:
+  /lists/{tasklist}/tasks:
+    get:
+      operationId: listTasks
+      parameters:
+        - name: tasklist
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: pageToken
+          in: query
+          schema:
+            type: string
+        - name: maxResults
+          in: query
+          schema:
+            type: integer
+            maximum: 100
+      x-pagination:
+        - scheme: googleTasks
+      responses:
+        '200':
+          description: One page of tasks.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  kind:
+                    type: string
+                  etag:
+                    type: string
+                  nextPageToken:
+                    type: string
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: string
+components:
+  paginationSchemes:
+    googleTasks:
+      type: pageToken
+      autoDetect: false
+      request:
+        queryParameters:
+          pageToken:
+            role: pageToken
+          maxResults:
+            role: pageSize
+      response:
+        envelope:
+          itemsField: items
+          emptyWhenAbsent: true
+        bodyFields:
+          nextPageToken:
+            role: nextPageToken

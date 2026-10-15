@@ -192,7 +192,7 @@ pub fn test_headers(
         (AGENT_HEADER, agent.id()),
         (PUBLIC_KEY_HEADER, agent.public_key()),
         (TIMESTAMP_HEADER, timestamp_ms.to_string()),
-        (SIGNATURE_HEADER, agent.sign(message.as_bytes())),
+        (SIGNATURE_HEADER, agent.sign_v2(message.as_bytes())),
         (VERSION_HEADER, "2".to_string()),
     ]
 }
@@ -395,15 +395,52 @@ mod tests {
         }
     }
 
-    /// Golden vectors shared with atomic-server (`lib/src/authentication_v2_vectors.json`
-    /// on its `claude/atomic-signature-v2` branch, copied verbatim), so the
-    /// signer and this verifier cannot drift apart unnoticed.
+    const VECTORS: &str = include_str!("../tests/fixtures/atomic-request-v2-vectors.json");
+    const VECTORS_SOURCE: &str =
+        include_str!("../tests/fixtures/atomic-request-v2-vectors.source.json");
+
+    /// The vendored vectors are atomic-server's file at the commit
+    /// `tests/fixtures/atomic-request-v2-vectors.source.json` names, byte for
+    /// byte (its SHA-256), and, where an atomic-server checkout is at hand
+    /// (`ATOMIC_SERVER_CHECKOUT`, as the lanes set it), still equal to that
+    /// checkout's copy. A set `ATOMIC_SERVER_CHECKOUT` without that file is a
+    /// failure, not a skip: a checkout that moved or lost the file would
+    /// otherwise pass silently. Not tied to `.atomic-server-ref`: a pin bump
+    /// does not run this suite, and the vectors rarely change.
+    #[test]
+    fn the_vendored_v2_vectors_are_atomic_servers_recorded_file() {
+        let source: serde_json::Value = serde_json::from_str(VECTORS_SOURCE).unwrap();
+        assert_eq!(
+            sha256_hex(VECTORS.as_bytes()),
+            source["sha256"].as_str().unwrap(),
+            "the vendored copy was edited; refresh it from the pin together with its source note"
+        );
+        let checkout = std::env::var("ATOMIC_SERVER_CHECKOUT").unwrap_or_default();
+        if !checkout.trim().is_empty() {
+            let path = std::path::Path::new(&checkout).join(source["path"].as_str().unwrap());
+            let upstream = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+                panic!(
+                    "ATOMIC_SERVER_CHECKOUT is set, but {} cannot be read ({error}); unset it or point it at an atomic-server checkout",
+                    path.display()
+                )
+            });
+            assert_eq!(
+                upstream,
+                VECTORS,
+                "{} differs from the vendored copy",
+                path.display()
+            );
+        }
+    }
+
+    /// Golden vectors shared with atomic-server, which signs with
+    /// `lib/src/authentication.rs` and `browser/lib/src/authentication.ts`:
+    /// every one verifies here, the message is built byte for byte the same,
+    /// and signing it again with the vector's key gives the same signature,
+    /// so signer and verifier cannot drift apart unnoticed.
     #[test]
     fn atomic_server_v2_vectors_verify_here() {
-        let vectors: serde_json::Value = serde_json::from_str(include_str!(
-            "../tests/fixtures/atomic-request-v2-vectors.json"
-        ))
-        .unwrap();
+        let vectors: serde_json::Value = serde_json::from_str(VECTORS).unwrap();
         let vectors = vectors["vectors"].as_array().unwrap();
         assert!(!vectors.is_empty());
         for vector in vectors {
@@ -431,9 +468,57 @@ mod tests {
                 ),
                 (VERSION_HEADER, "2".to_owned()),
             ];
-            let verified = verify(&headers(pairs), method, url, body, timestamp)
+            let verified = verify(&headers(pairs.clone()), method, url, body, timestamp)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
             assert_eq!(verified.agent.as_str(), vector["agent"], "{name}");
+
+            // The signing side: the vector's seed gives its public key, and
+            // Ed25519 is deterministic, so `test_headers`, the helper every
+            // signed test request goes through, gives exactly the headers
+            // atomic-server's signer gave: the test signer cannot drift from
+            // the real one unnoticed.
+            let seed: [u8; 32] = agent_id::decode_base64(vector["private_key"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let signer = Agent(ed25519_dalek::SigningKey::from_bytes(&seed));
+            assert_eq!(signer.public_key(), vector["public_key"], "{name}");
+            assert_eq!(
+                test_headers(&signer, method, url, timestamp, body),
+                pairs,
+                "{name}"
+            );
+            // The verifier also takes the standard alphabet, padded, which
+            // older clients sent; `test_headers` no longer exercises it.
+            let mut standard = pairs.clone();
+            standard[3].1 = base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                agent_id::decode_base64(&pairs[3].1).unwrap(),
+            );
+            assert_ne!(standard[3].1, pairs[3].1, "{name}");
+            verify(&headers(standard), method, url, body, timestamp)
+                .unwrap_or_else(|e| panic!("{name}, standard alphabet: {e:?}"));
+
+            // And the signature covers what it should: another body, method
+            // or URL does not verify.
+            for (other_method, other_url, other_body) in [
+                (method, url, b"x".as_slice()),
+                ("PUT", url, body),
+                (method, "https://proxy.example/other", body),
+            ] {
+                assert_eq!(
+                    verify(
+                        &headers(pairs.clone()),
+                        other_method,
+                        other_url,
+                        other_body,
+                        timestamp
+                    )
+                    .unwrap_err(),
+                    ApiError::BadSignature,
+                    "{name}"
+                );
+            }
         }
     }
 

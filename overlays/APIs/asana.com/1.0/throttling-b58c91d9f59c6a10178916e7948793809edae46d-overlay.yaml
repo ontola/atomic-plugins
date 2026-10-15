@@ -1,0 +1,63 @@
+# Reviewed 2026-10-12 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://developers.asana.com/docs/rate-limits
+#   Standard limits, requests per minute: "150" (free) and "1,500" (paid); "Limits are based on
+#   minute-long windows and differ depending on whether the domain is free or paid"; "Limits
+#   are allocated per authorization token. Different tokens have independent limits."; over the
+#   limit the API answers "429 Too Many Requests" with "the standard Retry-After header
+#   indicating how many seconds the client should wait before retrying"; "The quota is
+#   evaluated more frequently than once per minute"; "Calls to the search API are limited to
+#   60 requests per minute"; concurrent requests are limited (GET "50"; "POST, PUT, PATCH,
+#   DELETE" "15"), and a cost-based limit also answers 429 with Retry-After.
+# The pinned OAD: "You may receive a 429 Too Many Requests response if you hit any of our rate
+# limits", and its 429 response: "You have exceeded one of the enforced rate limits in the API."
+# Needs Throttling 0.2.0-draft (openapi-extensions/spec/throttling: limits, headers, signals).
+# Not declared: the standard limit's number (it depends on whether the domain is free or paid,
+# which a document cannot select), the concurrency and cost-based limits (outside this version
+# of the extension), and the 5 concurrent jobs per user.
+overlay: 1.0.0
+info:
+  title: Asana API throttling
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/b58c91d9f59c6a10178916e7948793809edae46d/APIs/asana.com/1.0/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        limits:
+          perToken:
+            window: { seconds: 60, kind: unspecified }
+            partitionBy: [credential]
+            description: >-
+              The standard limit: "150" requests per minute on a free domain,
+              "1,500" on a paid one, "allocated per authorization token", so
+              the number is left out. "minute-long windows", "evaluated more
+              frequently than once per minute"; the algorithm is not
+              documented.
+          searchPerToken:
+            requests: 60
+            window: { seconds: 60, kind: unspecified }
+            partitionBy: [credential]
+            description: >-
+              "Calls to the search API are limited to 60 requests per minute",
+              per authorization token like every limit on the page. Assigned
+              to the task search, which Asana calls its search API; the page
+              does not say whether the project search counts, so it keeps the
+              standard limit only.
+        applies: [perToken]
+        headers:
+          Retry-After:
+            role: retryAfter
+            unit: deltaSeconds
+            description: >-
+              Sent with a 429: "how many seconds the client should wait before
+              retrying".
+        signals:
+          - status: [429]
+            meaning: throttled
+            description: >-
+              Any of the standard, search, concurrency or cost-based limits
+              answers 429 with Retry-After; the page does not say how to tell
+              them apart, so no bucket is named.
+  - target: $.paths['/workspaces/{workspace_gid}/tasks/search'].get
+    update:
+      x-throttling: [perToken, searchPerToken]

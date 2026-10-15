@@ -15,11 +15,14 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import { dirname, join } from 'node:path';
 import {
   binaryIn,
+  BUILD_OUTPUT_PATHS,
   buildSteps,
   ensureRoutesBinary,
+  restoreBuildOutputs,
   ROUTES_FEATURES,
   routesBuildDir,
   withBuildLock,
@@ -44,7 +47,7 @@ test('the build is the shared recipe with the plugin-routes feature added', () =
     dir: '/d',
     wasmPack: ['cargo', 'bin', 'wasm-pack'],
   });
-  const cargo = steps.at(-1);
+  const cargo = steps.find(s => s.what.startsWith('build atomic-server'));
   assert.equal(ROUTES_FEATURES, 'wasm-plugins,plugin-routes');
   assert.deepEqual(cargo.args, [
     'build',
@@ -66,6 +69,45 @@ test('the build is the shared recipe with the plugin-routes feature added', () =
   assert.ok(
     ci.includes('--no-default-features --features wasm-plugins,plugin-routes'),
   );
+
+  // The build ends by restoring the tracked files it regenerates, so the
+  // checkout stays clean (link-atomic-server.mjs).
+  assert.equal(steps.at(-1).restore, '/d');
+});
+
+test('restoreBuildOutputs restores the build outputs HEAD tracks, nothing else', () => {
+  const dir = scratch();
+  const git = (...args) =>
+    execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8' }).trim();
+
+  try {
+    const [tracked, untracked] = BUILD_OUTPUT_PATHS;
+    git('init', '--quiet');
+    mkdirSync(join(dir, dirname(tracked)), { recursive: true });
+    writeFileSync(join(dir, tracked), 'committed\n');
+    writeFileSync(join(dir, 'other.txt'), 'committed\n');
+    git('add', '.');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.invalid',
+      'commit',
+      '--quiet',
+      '-m',
+      'x',
+    );
+    writeFileSync(join(dir, tracked), 'rebuilt\n');
+    writeFileSync(join(dir, 'other.txt'), 'edited\n');
+
+    // The second path isn't in this HEAD: skipped, not an error.
+    assert.deepEqual(restoreBuildOutputs(dir), [tracked]);
+    assert.equal(readFileSync(join(dir, tracked), 'utf8'), 'committed\n');
+    assert.equal(existsSync(join(dir, untracked)), false);
+    assert.equal(git('status', '--porcelain'), 'M other.txt');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('an existing directory gets no worktree; a missing commit is fetched first', () => {

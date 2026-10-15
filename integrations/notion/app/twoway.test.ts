@@ -135,10 +135,11 @@ describe('compare on open', () => {
       version: 1,
       fields: { [POINTS]: 3, [DONE]: false, [TITLE]: 'Launch plan' },
     });
-    // Formatted text was never read, so it has no baseline value.
+    // Formatted text is read as plain text (usertest-findings#19), so its
+    // baseline is those words.
     expect(
       parseBaseline(rowOf(RETRO)[1][column(BASELINE_SHORTNAME)])!.fields,
-    ).not.toHaveProperty(NOTES);
+    ).toMatchObject({ [NOTES]: 'Keep this bold' });
     expect(changesOf(controller.state())).toEqual([]);
   });
 
@@ -392,6 +393,71 @@ describe('review and send', () => {
     // Nothing left that Send would send: a third press is a no-op.
     expect(await controller.send()).toBe(again);
     expect(base.calls.filter(c => c.method === 'PATCH')).toHaveLength(2);
+  });
+
+  it("a PATCH answered 429 public_api_request_blocked fails and says retrying won't help", async () => {
+    const base = fixtureProxy();
+    const blocked = {
+      status: 429,
+      headers: { 'retry-after': '120' },
+      body: {
+        object: 'error',
+        status: 429,
+        code: 'rate_limited',
+        message: 'This request was blocked.',
+        additional_data: { rate_limit_reason: 'public_api_request_blocked' },
+      },
+    };
+    const { controller, edit } = await synced({
+      request: async request =>
+        request.method === 'PATCH' ? blocked : base.request(request),
+    });
+    edit(LAUNCH, POINTS, 5);
+    await controller.refreshRows();
+    const state = await controller.send();
+    expect('outcomes' in state && state.outcomes).toMatchObject([
+      {
+        status: 'failed',
+        message:
+          "Notion answered 429: This request was blocked. Notion answered that this integration's requests are blocked, not just limited for a while. Retrying won't help. Contact Notion support.",
+      },
+    ]);
+  });
+
+  it('the GET before a PATCH answered 429 blocked fails the same way, and sends nothing (0.5.5)', async () => {
+    const base = fixtureProxy();
+    const blocked = {
+      status: 429,
+      headers: { 'retry-after': '120' },
+      body: {
+        object: 'error',
+        status: 429,
+        code: 'rate_limited',
+        message: 'This request was blocked.',
+        additional_data: { rate_limit_reason: 'public_api_request_blocked' },
+      },
+    };
+    let block = false;
+    const { controller, edit, patches } = await synced({
+      request: async request =>
+        block &&
+        request.method === 'GET' &&
+        request.path.startsWith('/v1/pages/')
+          ? blocked
+          : base.request(request),
+    });
+    edit(LAUNCH, POINTS, 5);
+    await controller.refreshRows();
+    block = true;
+    const state = await controller.send();
+    expect('outcomes' in state && state.outcomes).toMatchObject([
+      {
+        status: 'failed',
+        message:
+          "Notion answered 429: This request was blocked. Notion answered that this integration's requests are blocked, not just limited for a while. Retrying won't help. Contact Notion support.",
+      },
+    ]);
+    expect(patches()).toEqual([]);
   });
 
   it('a 5xx answer to a PATCH is unknown, not "nothing was written"', async () => {

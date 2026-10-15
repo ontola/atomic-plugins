@@ -30,9 +30,13 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
+import { appVersion } from '../../tooling/apps.mjs';
 
-/** The catalog's version of the Pets app (integrations/catalog.json). */
-const VERSION = '0.1.3';
+/**
+ * The catalog's version of the Pets app (integrations/catalog.json), read at
+ * load by `appVersion`, so a version bump needs no edit here.
+ */
+const VERSION = appVersion('pets');
 
 test.describe('pets integration', () => {
   test.beforeEach(before);
