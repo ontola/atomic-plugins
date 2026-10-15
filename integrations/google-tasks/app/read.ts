@@ -436,14 +436,18 @@ export async function lookupTasks(
       const response = await get(
         `/tasks/v1/lists/${encodeURIComponent(listId)}/tasks/${encodeURIComponent(id)}`,
       );
-      if (isRateLimit(response)) page(response, `task ${id}`, now);
+      // A rate limit, a used-up daily quota or the API turned off stops the
+      // lookups (and the pass): every remaining lookup would be refused too.
+      if (isRateLimit(response) || googleRefusal(response))
+        page(response, `task ${id}`, now);
       out.push({
         id,
         status: response.status,
         body: response.body as JSONValue,
       });
     } catch (error) {
-      if (error instanceof GoogleRateLimited) throw error;
+      if (error instanceof GoogleRateLimited || error instanceof GoogleRefused)
+        throw error;
       out.push({
         id,
         error: error instanceof Error ? error.message : String(error),

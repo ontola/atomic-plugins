@@ -16,7 +16,7 @@ describe('Google Tasks drive-app bundle', async () => {
     );
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
-    // Measured 42,893 bytes minified on 2026-10-15 for 0.1.1 (+1,422: the
+    // Measured 42,918 bytes minified on 2026-10-15 for 0.1.1 (+1,447: the
     // daily-quota and API-disabled refusals, read.ts googleRefusal, and
     // their card wording). 0.1.0 measured 41,471 bytes on 2026-10-06, at the
     // a12b74a6783b pin: ontology-kit's terms and resolver, the issue-v1

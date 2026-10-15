@@ -400,6 +400,22 @@ describe('lookupTasks', () => {
     ).rejects.toBeInstanceOf(GoogleRateLimited);
   });
 
+  it('stops the lookups at a used-up daily quota: the rest are not requested (0.1.1)', async () => {
+    const { raw, calls } = fake([
+      ok(),
+      { status: 403, body: DAILY_LIMIT_403 },
+      ok(),
+    ]);
+    const refs = ['a', 'b', 'c'].map(id => ({ id, listId: 'l' }));
+    const error = await lookupTasks(raw, refs).catch(e => e);
+    expect(error).toBeInstanceOf(GoogleRefused);
+    expect(error).toMatchObject({ refusal: 'daily-quota' });
+    expect(calls.map(c => c.path)).toEqual([
+      '/tasks/v1/lists/l/tasks/a',
+      '/tasks/v1/lists/l/tasks/b',
+    ]);
+  });
+
   it('records a failed check as the error it was, and caps the checks per pass', async () => {
     const get: GoogleGet = async () => {
       throw new Error('host offline');

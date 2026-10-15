@@ -159,6 +159,10 @@ Two refusals are neither a wait nor a lost grant (0.1.1, `read.ts`
   `SERVICE_DISABLED`. The next step is "Ask whoever runs the integration
   proxy to turn on the Google Tasks API for its Google project."
 
+Either one also stops the by-id lookups of a pass at the first such answer,
+like a rate limit: the remaining lookups would be refused too, so they are
+not sent.
+
 Taken from Google's documented error reasons; the bodies in
 `app/fakeStore.ts` (`DAILY_LIMIT_403`, `API_DISABLED_403`) are written from
 that reference, not recorded from Google.
@@ -194,7 +198,7 @@ Moneybird apps made the same choice.
 
 ## What is verified
 
-- Unit (`app/*.test.ts`, 79 tests): the mapping, the reader and its rate
+- Unit (`app/*.test.ts`, 80 tests): the mapping, the reader and its rate
   limits, the daily-quota and API-disabled refusals (0.1.1), every card
   state, the import pass and the controller, with the clock pinned (`vi.useFakeTimers({ toFake: ['Date'] })`).
 - Host E2E (`e2e/google-tasks.spec.ts`, the `google-tasks` lane): catalog
