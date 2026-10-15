@@ -543,6 +543,22 @@ def response_incomplete(scheme, body):
     return any(_json_equal(value, v) for v in marker.get("in", []))
 
 
+_ABSENT = object()
+
+
+def _present_role_value(body, scheme, role):
+    """The value of the body field with this role, _ABSENT when the field is not in the body (None when it is null)."""
+    for name, field in scheme.get("response", {}).get("bodyFields", {}).items():
+        if isinstance(field, dict) and field.get("role") == role:
+            value = body
+            for segment in name.split("."):
+                if not isinstance(value, dict) or segment not in value:
+                    return _ABSENT
+                value = value[segment]
+            return value
+    return _ABSENT
+
+
 def _count(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
@@ -755,7 +771,9 @@ def read_item_cursor(scheme, request, *, page_size=None, identity=_default_ident
         seen.update(ids)
         items.extend(page)
         marked = marked or response_incomplete(scheme, body)
-        has_more = _role_value(body, scheme, "hasMore")
+        has_more = _present_role_value(body, scheme, "hasMore")
+        if has_more is not _ABSENT and not isinstance(has_more, bool):
+            raise PageReadError(f"the page after {cursor!r} has a hasMore that is not a boolean: {has_more!r}")
         if not page and has_more is True:
             raise PageReadError(f"the page after {cursor!r} is empty but says hasMore true; the read is not complete")
         if not page or has_more is False:
