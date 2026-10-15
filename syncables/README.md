@@ -28,7 +28,7 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.9.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore`) ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.9.1 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore`) ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), and Reference Objects resolved to a path (`resolveReference`, §4.1.3). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft, plan tiers from 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. Not yet 0.4.0's `blocked` meaning (#533): a signal that declares it is not read, so such a refusal is retried. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
@@ -1901,7 +1901,7 @@ const { records, ontology, errors } = await readPlatform(document, {
   spec allows, because this client does not implement it.
   An `outcome` passed to `paginate` again starts clean: an earlier walk's
   mark does not carry over.
-- **A cursor read from the last item** (Pagination Schemes 0.9.0
+- **A cursor read from the last item** (Pagination Schemes 0.9.1
   §4.3.3): a `pageToken` scheme whose one `pageToken` or `cursor` field
   declares `fromLastItem` (a dot-path into an item, as Stripe's
   `starting_after` takes the last object's `id`) is read by sending that
@@ -2093,17 +2093,17 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **Unreleased**: Pagination Schemes 0.9.0: a cursor read from the last
+- **Unreleased**: Pagination Schemes 0.9.1: a cursor read from the last
   item (`fromLastItem`, Stripe's `starting_after`) with the `hasMore`
-  response role. The validator accepts them under rules 27 to 29 (no
-  scheme in this repository's overlays changes verdict: those that
-  declare a `hasMore` role beside a next token were refused before, for
-  the unknown role, and still are, by rule 29). The read follows the
-  spec's `read_item_cursor`, and, as 0.9.1 says, refuses a `hasMore`
-  that is present but not a boolean, `null` included. The cursor goes in
-  the `fromLastItem` field only, never in another cursor-role field beside
-  it, and an integer cursor value must be a safe integer. Additive for
-  documents without these fields.
+  response role, after the spec's `read_item_cursor`. The cursor goes in
+  the `fromLastItem` field only, never in another cursor-role field
+  beside it, and an integer cursor value must be a safe integer; a
+  `hasMore` that is present but not a boolean, `null` included, ends the
+  read with an error (0.9.1). The validator accepts these fields under
+  rules 27 to 29; no scheme in this repository's overlays changes
+  verdict (those that declare a `hasMore` role beside a next token were
+  refused before, for the unknown role, and still are, by rule 29).
+  Additive for documents without these fields.
 - **Unreleased**: `generateFromSchema`, which the mock server seeds
   records and answers responses with, keeps to the schema it generates
   from: an OpenAPI 3.1 type list (`['string', 'null']` gave `null`, now a
