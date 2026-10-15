@@ -65,8 +65,25 @@ const SYNTHETIC_PAGE_SIZE = 3;
  */
 const ASSUMED_COMPLETED = { recorded: false, status: 200, checked: true };
 
-export const recorded = (apiDir = API_DIR) =>
-  existsSync(new URL('meta.json', apiDir));
+/**
+ * Whether api/ holds a recording. A recording that record.mjs stopped (an
+ * error page or an error lookup answer, `stopped` in meta.json) is never
+ * used: it would replay as a complete one, with too few rows and the
+ * assumed completed-task answer, so this throws instead.
+ */
+export function recorded(apiDir = API_DIR) {
+  const meta = new URL('meta.json', apiDir);
+  if (!existsSync(meta)) return false;
+  const { stopped } = JSON.parse(readFileSync(meta, 'utf8'));
+  if (stopped)
+    throw new Error(
+      `${apiDir.pathname}: the recording stopped at ${stopped.path} (${stopped.status}${
+        stopped.reason ? `, ${stopped.reason}` : ''
+      }); re-record before using it`,
+    );
+
+  return true;
+}
 
 function loadJson(file) {
   return JSON.parse(readFileSync(file, 'utf8'));
@@ -78,7 +95,11 @@ function loadPages(collection, apiDir) {
   for (let n = 1; ; n++) {
     const file = new URL(`GET__api__v1__${collection}__page-${n}.json`, apiDir);
     if (!existsSync(file)) break;
-    pages.push(loadJson(file));
+    const page = loadJson(file);
+    // A page that answered with an error ends the pages; recorded() has
+    // already refused a recording that record.mjs stopped on one.
+    if (page.status !== 200 || !Array.isArray(page.body?.results)) break;
+    pages.push(page);
   }
 
   return pages;
