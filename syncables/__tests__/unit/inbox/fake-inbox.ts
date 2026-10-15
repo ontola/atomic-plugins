@@ -41,6 +41,8 @@ export class FakeInbox {
   now = Date.parse('2026-10-09T12:00:00Z');
   /** Pending events a subscription keeps; more evict the oldest (a gap). */
   maxPending = 100;
+  /** Ignore `maxBytes`, as a receiver before Webhook Subscriptions 0.2.0-draft does. */
+  ignoreMaxBytes = false;
   /** Requests to fail once, by `METHOD path-suffix`, e.g. `POST /ack`. */
   failOnce = new Set<string>();
   /** Canned answers, once each, by `METHOD path-suffix`. */
@@ -241,7 +243,7 @@ export class FakeInbox {
         // comes back alone without its body.
         const maxBytes = /[?&]maxBytes=(\d+)/.exec(request.url.search)?.[1];
         let cut = false;
-        if (maxBytes !== undefined) {
+        if (maxBytes !== undefined && !this.ignoreMaxBytes) {
           let room = Number(maxBytes);
           const kept: InboxEvent[] = [];
           for (const event of events) {

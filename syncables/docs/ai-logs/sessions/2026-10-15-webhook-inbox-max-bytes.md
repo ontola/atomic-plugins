@@ -29,3 +29,13 @@ TypeScript), `scopedReads` names no reads for an event without its body, and
 the fake receiver applies the same rule as the proxy. Tests cover the
 query, an omitted event reaching the journal and being acknowledged, and
 the refused values.
+
+## Turn 2
+
+**Human (relayed by the coordinator):** Once the inbox plugin is on main,
+merge main in and adapt it in the same branch: send `maxBytes`, and store
+an omitted event without a payload.
+
+**Assistant:** The fake receiver gets `ignoreMaxBytes`, standing for a
+receiver before 0.2.0-draft, so the plugin's tests can still exercise its
+own byte budget against one.
