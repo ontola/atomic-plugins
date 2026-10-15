@@ -227,9 +227,8 @@ read incomplete; under an earlier pagination revision a query over 10,000
 results looks complete (the test asserts this pairing). Not declared:
 `gone` (no 410 documented), anything on `data_sources`, and so
 `parentAbsent`, which needs a parent collection with a Completeness Object
-(§4.4). The pinned
-OAD is an authored subset without descriptions, so the evidence is Notion's
-reference. No dated catalog selects it yet.
+(§4.4). The pinned OAD is an authored subset without descriptions, so the
+evidence is Notion's reference. No dated catalog selects it yet.
 `tests/test_notion_pages_completeness.py` composes it with the catalog's
 auth, pagination and crud-causality overlays (and with pagination-v3), in
 either order, runs both validators, and checks the outcomes `classify_read`
@@ -295,26 +294,41 @@ raw [projects reference](https://docs.gitlab.com/api/projects/)): the catalog
 narrows the list with a `membership=true` selection override ("Limit by
 projects that the current user is a member of."), and a consumer drops a
 completeness declaration that a selection narrows. A crud-causality revision
-could fix `membership=true` as a `listQuery`, as the Moneybird revision does,
-but the read would still narrow by default: `include_pending_delete` ("Include
-projects pending deletion. (administrators only)") and `include_hidden`
-("Include hidden projects. (administrators only)") leave those projects out
-unless an administrator asks for them. Collection Completeness §4.2 says
+could fix `membership=true` as a `listQuery` (as Google Tasks'
+crud-causality v2 and Google Calendar's app-crud-causality v2 fix their reads,
+and as
+`APIs/moneybird.com/v2-readonly/all-records-selection.json` widens
+Moneybird's), but the read would still narrow by default: parameters exist
+that would widen it, `include_pending_delete` ("Include projects pending
+deletion. (administrators only)") and `include_hidden` ("Include hidden
+projects. (administrators only) Premium and Ultimate only."), and a caller
+that is not an administrator cannot send them. In this repository a list
+filters by default when such a parameter exists (Moneybird's
+`include_archived`, GitHub's `state`), and Collection Completeness §4.2 says
 `absent: removed` "still tells a consumer that the list does not filter by
-default", which this list does, so no completeness is declared on it.
+default", so no completeness is declared on it.
 
-## Todoist projects completeness: not declared
+## Todoist projects completeness
 
-Todoist's [`completeness-ac07532b…`](APIs/todoist.com/1/completeness-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml)
-(#99) declares only the tasks collection. The `projects` collection is
-undeclared (checked 2026-10-15, quotes curl'd from the raw
-[API v1 reference](https://developer.todoist.com/api/v1/)): Get Projects
-says "Get all active user projects, optionally filtered by folder or
-workspace.", and archived projects come from a separate endpoint, Get
-Archived ("Get the user's archived projects."), which the catalog's
-crud-causality overlay does not list. The list therefore leaves archived
-projects out by default, and Collection Completeness §4.2 reserves
-`absent: removed` for a list that does not filter by default.
+[`completeness-v2-ac07532b…`](APIs/todoist.com/1/completeness-v2-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml)
+keeps v1's tasks declaration (#99) and adds the `projects` collection:
+`absent: removed`, `notFound: unavailable` (quotes curl'd from the raw
+[API v1 reference](https://developer.todoist.com/api/v1/) on 2026-10-15). Get
+Projects says "Get all active user projects, optionally filtered by folder or
+workspace."; its `folder_id` and `workspace_id` only narrow it and are not
+sent, and no parameter widens it to archived projects (those come from a
+separate endpoint, Get Archived: "Get the user's archived projects."). As for
+the tasks list ("all active tasks"), the list therefore does not filter by
+default in the sense this repository applies (a parameter that would widen
+it), and an archived project ("removing it from view") or a deleted one is an
+absence its own read settles: §4.2's `removed` "MAY still exist, for example
+archived". The reference lists a 404 among the read's responses without
+saying which case gives it, so a 404 is `unavailable`. Not verified: what a
+project's read answers once it is archived or deleted. It states
+`info.x-requires` (the catalog's crud-causality overlay). No dated catalog
+selects it. `tests/test_todoist_completeness_v2.py` checks that v2 is v1 plus
+the projects declaration, composes it in either order, and checks the
+outcomes `classify_read` gives. No provider was called.
 
 ## Google Calendar deletion feed
 
