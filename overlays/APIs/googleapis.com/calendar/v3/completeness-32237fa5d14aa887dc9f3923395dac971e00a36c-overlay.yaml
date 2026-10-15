@@ -1,8 +1,9 @@
 # Reviewed 2026-10-14 against the pinned OAD and official provider documentation; no live calls.
 # Source: https://developers.google.com/workspace/calendar/api/guides/errors: 404 "The
 #   specified resource was not found. This can happen in several cases. Here are some
-#   examples: when the requested resource (with the provided ID) has never existed; when
-#   accessing a calendar that the user can not access". 410: the syncToken or updatedMin is
+#   examples:", followed by two list items, quoted separately: "when the requested resource
+#   (with the provided ID) has never existed" and "when accessing a calendar that the user can
+#   not access". 410: the syncToken or updatedMin is
 #   no longer valid, or "a request attempts to delete an event that has already been
 #   deleted".
 # Source: the pinned OAD's Event.status: cancelled events are returned by the list with
@@ -20,13 +21,14 @@
 # read-tombstone overlays declare. So a 404 from an event's read is not a deletion: the guide
 # gives "never existed" and a calendar "the user can not access" as its causes. Without this
 # overlay a consumer takes that 404 as a deletion (the notFound default); with it, a 404 is
-# unavailable. An event can also leave a calendar's list without being deleted (the user's
-# access to the calendar changing), so absence is removed and settled by the event's own
-# read. A move (events.move) can leave behind a cancelled event in the source calendar:
-# where a read or list tombstone overlay with the recurringEventId exception
-# (read-tombstone-v2, list-tombstone) is selected, that remnant reads as a deletion from the
-# source calendar, which it is for that calendar; under the catalogs' read without them, a
-# deletion or a move is an absence. Either way `removed` claims nothing more than that.
+# unavailable. An event may also leave a calendar's list without being deleted when the
+# user's access to the calendar changes (assumed, not documented), so absence is removed and
+# settled by the event's own read. A move (events.move) can leave behind a cancelled event in
+# the source calendar: where a read or list tombstone overlay with the recurringEventId
+# exception (read-tombstone-v2, list-tombstone) is selected, that remnant reads as a deletion
+# from the source calendar, which it is for that calendar; the dated catalogs select
+# neither, so there a deletion or a move is an absence. Either way `removed` claims nothing
+# more than that.
 # Not declared: `gone` (the guide's 410 is about sync tokens and repeated deletes, not reads;
 # a 410 on a read is then classified like a 404, unavailable); `parentAbsent` (the calendar
 # has no collection with a Completeness Object).
@@ -51,6 +53,6 @@ actions:
                   A calendar's events, every page. A deleted event stays
                   readable (its get answers with status cancelled), so a 404
                   from its read means it never existed or the calendar is out
-                  of the user's reach: unavailable. An event can leave the list
-                  without being deleted (access changed; a move can leave a
-                  cancelled remnant behind), so absence is removed.
+                  of the user's reach: unavailable. An event may leave the list
+                  without being deleted (a changed access, assumed; a move can
+                  leave a cancelled remnant behind), so absence is removed.
