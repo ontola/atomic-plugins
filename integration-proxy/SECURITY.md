@@ -452,6 +452,69 @@ provider. What it changes for safety:
 - **Fails open.** A malformed or unknown declaration paces nothing; the
   provider's own limit still applies.
 
+## Key rotation (#410, unreleased)
+
+`POST /agents/transfer` moves an owner's connections and runtimes to a new
+agent id and retires the old one (README, routes).
+
+- **Scope: planned rotation only.** The user holds both keys: the old one
+  signs the request, the new one signs the proof. **A lost or compromised
+  key is out of scope.** If the old key is lost, nothing can sign a
+  transfer; if it is compromised, its holder can already use, delegate and
+  delete its connections, and could transfer them first. In both cases:
+  delete the connections (while the key still works) and connect again with
+  the new key. Recovery without the old key is to go through the SaaS
+  account (atomic-saas#138), not through this route.
+- **Both keys agree.** The proof binds the old id, the new id, this proxy's
+  origin and the outer request's timestamp. The outer request is v2 signed,
+  accepted once and within five minutes, so a proof cannot be replayed,
+  used at another proxy, or attached to another request.
+- **Admission.** The old agent passes the access policy as any signer
+  does, and so must the new one before anything moves.
+- **All or nothing, and serialized.** One transaction retires the old id
+  and moves its connections and runtimes; a collision (the new agent already
+  has a runtime with the same agent) undoes all of it, the retirement
+  included. The transaction holds a transaction-scoped advisory lock per
+  owner (`hashtextextended(id, 0)`, both ids, in sorted order) and checks
+  retirement under them. Every write that adds to what an owner holds
+  (a connection at redeem, a runtime, a delegation, which is also bound to
+  the connection's owner) takes the same lock and the same check. So two
+  transfers sharing an id (A→B and B→C on two instances) run one after the
+  other, and a write by the old key either lands before the move, and moves
+  with it, or is refused as retired.
+- **Afterwards.** The old id is refused as an owner everywhere: the access
+  check every signed route makes about the connection owner (or the signer
+  about to become one) refuses a retired id first (`403 agent_retired`).
+  That covers management calls, `/connect/redeem`, transfers (from or to
+  it), `/proxy` requests by any caller of a connection that still names it,
+  and the webhook routes. Capabilities it signed fail at once for moved
+  connections, because the owner key changed. Delegated app agents keep
+  working: delegations name the connection and the app, not the owner.
+- **Webhooks.** While the old agent has a webhook subscription that is not
+  yet closed (live or in cleanup; subscriptions, receipts and usage are
+  keyed by owner), the transfer is refused with `409 transfer_blocked`. The
+  check runs inside the transfer's transaction, after it has taken the old
+  owner's connection rows `FOR UPDATE`; a subscription takes its connection
+  row `FOR SHARE` first, so it either committed before the check or finds
+  the connection moved. The table is checked whenever it exists, so a
+  deployment that turned `WEBHOOKS_ENABLED` off keeps its old subscriptions
+  in mind.
+- **Device sessions** (RFC 8628 CLI logins, DEVICE_AUTH.md) belong to the
+  owner that approved them and do not move with a transfer. Every use of
+  one asks the access check about that owner, so after the transfer they
+  answer `403 agent_retired`; the user approves the CLI again with the new
+  key. Neither key can revoke the old sessions (the owner-signed session
+  routes refuse the retired id, and the new id does not own them), so they
+  stay inert until they expire, at most 30 days after approval; the CLI that
+  holds one can still end it with `/oauth/device/revoke`.
+- **Stranded rows.** With the locks above, no connection should end up
+  owned by a retired id. One that does anyway (written by an older binary
+  during a rolling deploy, which knows nothing of `retired_agents`) is
+  inert: every use is refused, so nothing refreshes its `last_used_at`, and
+  it is deleted after 90 idle days like any other.
+- **Audit.** The `retired_agents` row (old id, successor, time) and a log
+  line with the counts moved, not the ids.
+
 ## Release gate
 
 Provider callback URLs and credential variable names are now deterministic

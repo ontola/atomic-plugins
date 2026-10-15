@@ -363,6 +363,13 @@ export interface ApiClientOptions {
    */
   paceFraction?: number;
   /**
+   * Throttling 0.5.0 plan tiers: the account's plan, as the provider names
+   * it in a tier's `plans`. A Limit Object with `tiers` is then read
+   * through the tier that names it; without one, or with a plan no tier
+   * names, every tier is kept within at once.
+   */
+  throttlingPlan?: string;
+  /**
    * Record property that holds a resource's identity — the value used as the
    * local storage key, read back from a create response to reconcile the
    * server-assigned id, and substituted into the item URL's path variable.
@@ -1773,7 +1780,7 @@ export function createApiClient(
   const upstream = upstreamOf(doc);
   // The root x-throttling (draft Throttling extension): header roles and
   // the signals that make a response a rate-limit refusal.
-  const throttling = declaredThrottling(doc);
+  const throttling = declaredThrottling(doc, options.throttlingPlan);
   /** Buckets a quotaExhausted answer declared exhausted, by identifier ('*' when unnamed), until (ms). */
   const pausedBuckets = new Map<string, number>();
   /** The running sync's read budget, for what is left of its time while a read waits out a pause. */
@@ -1787,8 +1794,13 @@ export function createApiClient(
   // get here (with their own limits); a wait here covers only a request
   // that another one took the room of meanwhile.
   const pacer =
-    throttling?.quotas.size && options.pace !== false
-      ? new Pacer(throttling.quotas, options.paceFraction ?? 0.8)
+    (throttling?.quotas.size || throttling?.tieredQuotas?.size) &&
+    options.pace !== false
+      ? new Pacer(
+          throttling.quotas,
+          options.paceFraction ?? 0.8,
+          throttling.tieredQuotas ?? new Map(),
+        )
       : undefined;
   /**
    * The end of the latest pacing sleep, shared by the read's wait and the
@@ -4374,8 +4386,9 @@ export function createApiClient(
   const conditionalTransport: Transport = async (request) => {
     const operation = readOperation(request);
     // A paginated operation is not cached conditionally. An explicit
-    // x-pagination that cannot be applied counts as paginated here; the read
-    // itself fails on it (walkPages).
+    // x-pagination that cannot be applied counts as paginated here (the read
+    // itself fails on it, walkPages), and so does an invalid scheme that
+    // auto-detection would apply (the read is not complete).
     const cacheable = request.method === 'GET' && !paginated(operation);
     const key = request.url.href;
     const cached = cacheable ? conditionalCache.get(key) : undefined;
