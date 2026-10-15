@@ -500,8 +500,9 @@ Two standalone overlays declare [Collection Completeness](../openapi-extensions/
 A Todoist overlay drafted with these is left out: Todoist's API reference
 could not be read for the task fields and single-task read it relies on,
 and its pinned OAD is an authored subset without descriptions.
-`tests/test_completeness_overlays.py` and
-`tests/test_github_issues_completeness.py`, `tests/test_github_rest_completeness.py` compose each overlay with the
+`tests/test_completeness_overlays.py`,
+`tests/test_github_issues_completeness.py` and
+`tests/test_github_rest_completeness.py` compose each overlay with the
 overlays it needs, run the Collection Completeness and CRUD Causality
 validators, and classify synthetic reads with the spec's `classify_read`.
 No provider was called.
