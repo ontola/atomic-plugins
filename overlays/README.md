@@ -110,6 +110,21 @@ terms-of-service URL are limited to authorization by their developer account.
 Supply the operator’s actual policies before advertising general availability;
 a working developer connection does not establish public distribution.
 
+## Throttling response signals
+
+Four standalone overlays declare [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md#throttling-signals)
+`headers` and `signals`; no dated catalog selects them.
+`tests/test_throttling_overlays.py` composes each with its pinned OAD and
+classifies synthetic responses shaped as the provider documents them. No
+provider was called.
+
+| Overlay | Declares | Evidence |
+| --- | --- | --- |
+| [GitHub REST 2022-11-28](APIs/github.com/api.github.com.2022-11-28/1.1.4/throttling-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml) | `x-ratelimit-limit`, `-remaining`, `-used`, `-reset` (epoch seconds), `retry-after` (seconds); 403/429 with remaining `0` as `quotaExhausted`, with `retry-after` or a secondary-limit message as `throttled` (60 s minimum). | [Rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api). The secondary-limit message text is assumed from GitHub's description: not documented as an exact string and not recorded here (the issue-tracker app also matches "abuse detection", not declared). |
+| [GitHub Issues 1.1.4](APIs/github.com/github-issues/1.1.4/throttling-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | The same declarations as the GitHub REST 2022-11-28 row: the github-issues subset (the issue-tracker app's catalog platform) is served by the same API and limits. | As above |
+| [Google Tasks v1](APIs/googleapis.com/tasks/v1/throttling-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | 403/429 with `rateLimitExceeded` or `userRateLimitExceeded` in `error.errors[].reason` as `throttled`. No `Retry-After`: Google does not document sending it. | Inferred from the [Calendar error guide](https://developers.google.com/workspace/calendar/api/guides/errors); the [Tasks limits page](https://developers.google.com/workspace/tasks/limits) documents no error responses. |
+| [Moneybird v2-readonly v2](APIs/moneybird.com/v2-readonly/throttling-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml) | v1's 150-per-300-s source-IP bucket, standard `Retry-After`, and 429 as `quotaExhausted` on that bucket. `RateLimit-*` are not declared: no documented units. | [Introduction, Throttling](https://developer.moneybird.com/introduction) |
+
 ## Pagination Schemes 0.7.0 catalog: Google Tasks empty lists and Box offsets
 
 `catalog/2026-10-12-tasks-box-pages.json` is `catalog/2026-10-12-box-pagination-v2.json`
@@ -388,6 +403,30 @@ extends). No dated catalog selects
 it yet. `tests/test_spotify_throttling.py` composes it alone and after the
 catalog's Spotify overlays and classifies synthetic responses. No provider
 was called.
+
+## Airtable table records completeness
+
+[`completeness-1f5368e0…-overlay.yaml`](APIs/airtable.com/1.0-readonly/completeness-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Airtable `tableRecords` collection: `absent: removed` and
+`notFound: unavailable`. Airtable's
+[errors page](https://airtable.com/developers/web/api/errors) says a 404 is
+returned "if the resource doesn't exist (e.g. has been deleted)", but a
+record read's 404 answers just as well for a deleted or renamed table
+(`tableIdOrName` may be a name) or a deleted base, and the pinned OAD adds
+"or is not accessible"; the answer does not say which, so a 404 is not
+taken as the record's deletion. [List records](https://airtable.com/developers/web/api/list-records)
+returns every record when no view or `filterByFormula` is given, in
+arbitrary order; nothing is documented about records skipped during offset
+paging, so absence is `removed` and settled by the record's own read. Not
+declared: `gone` (no 410 documented), anything on bases or tables, and
+`parentAbsent` (no resource binds `tableIdOrName`). Not verified: whether a
+deleted record can be restored (the interface has a trash; the API reference
+does not mention it). No dated catalog selects it yet.
+`tests/test_airtable_records_completeness.py` composes it with the catalog's
+auth, pagination and crud-causality overlays, in either order, runs both
+validators, checks the pinned wording and the outcomes `classify_read` gives.
+No provider was called.
 
 ## Airtable throttling
 

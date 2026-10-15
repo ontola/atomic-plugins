@@ -84,7 +84,8 @@ export function isBlockedByNotion(body: unknown): boolean {
  * Thrown by `syncablesTransport` for a 429 Notion marks as blocked
  * (`isBlockedByNotion`), after the observer has seen it: syncables retries a
  * 429 whose `Retry-After` is short, and a blocked request must not be sent
- * again (0.5.5). The controller classifies the sync as blocked from the
+ * again (0.5.5). From 0.5.6 the same transport then refuses every later
+ * request without sending it, so the read stops at the first block. The controller classifies the sync as blocked from the
  * observed failure.
  */
 export class NotionBlocked extends Error {
@@ -187,8 +188,15 @@ export function syncablesTransport(
   observe?: RelayObserver,
 ): Transport {
   const base = upstream.pathname.replace(/\/$/, '');
+  /**
+   * Set at the first 429 Notion marks as blocked (0.5.6): from then on this
+   * transport sends nothing, so the read stops there instead of requesting
+   * every remaining data source once more (each would be blocked too).
+   */
+  let blocked: NotionBlocked | undefined;
 
   return async request => {
+    if (blocked) throw blocked;
     const { url } = request;
     if (
       url.origin !== upstream.origin ||
@@ -231,8 +239,11 @@ export function syncablesTransport(
       ...(refused ? { code: refused.code } : {}),
     });
     if (refused) throw refused;
-    if (response.status === 429 && isBlockedByNotion(response.body))
-      throw new NotionBlocked(path);
+
+    if (response.status === 429 && isBlockedByNotion(response.body)) {
+      blocked = new NotionBlocked(path);
+      throw blocked;
+    }
 
     return {
       status: response.status,

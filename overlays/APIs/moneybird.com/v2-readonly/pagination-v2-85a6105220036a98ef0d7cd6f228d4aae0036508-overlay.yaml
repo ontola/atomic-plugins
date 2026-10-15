@@ -1,0 +1,122 @@
+# Reviewed 2026-10-15 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://developer.moneybird.com/introduction.md ("Pagination": "Endpoints returning a
+#   list of entities are paginated to prevent large responses. To control the pagination, you
+#   can use the `page` and `per_page` parameters. `page` determines which page to return
+#   (default: 1), `per_page` controls the amount of entities to return (default: 50, maximum:
+#   100)"; "Each paginated response contains a `Link` header with information about the
+#   previous and next page", with the example
+#   `Link: <https://moneybird.com/api/v2/contacts.json?page=3>; rel="next",
+#   <https://moneybird.com/api/v2/contacts.json?page=1>; rel="prev"`).
+# Source: the pinned OAD: components.headers.link "Pagination links (next, prev)" (attached to
+#   downloads.json only), and page/per_page (maximum 100) on the 19 lists below.
+# Needs Pagination Schemes 0.4.0 or later (a nextLink in a response header, §4.4.3, followed
+# under the link rules of §4.4.4: the server's origin only).
+#
+# Revision 2 of pagination-85a61052...: v1 declared a pageNumber scheme with no response
+# field, so a reader could not tell the last page. This revision follows the documented
+# Link header's rel="next" on the same 19 lists; a page whose Link has no rel="next"
+# is the last one. It sends no per_page: the documented example link carries only `page`,
+# and whether a next link keeps a per_page the client sent is not documented, so asking for
+# 100 could make the second page overlap the first. With the default (50) the pages stay
+# consistent, at about twice the requests of 100 per page (count them against the 150 per
+# 5 minutes per IP of the throttling overlay).
+# Not verified until a live run: that every paginated answer carries a Link header (the
+# pinned OAD attaches it to downloads.json only), that a last page has none with
+# rel="next", and that its links stay on https://moneybird.com/api/v2 and the same list.
+# Moneybird also warns that "our API requests are cached for performance optimization"
+# and that GET "may result in an incomplete result" for verification; a read can be stale.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/85a6105220036a98ef0d7cd6f228d4aae0036508/APIs/moneybird.com/v2-readonly/openapi.yaml
+info:
+  title: Moneybird API Pagination Schemes (revision 2)
+  version: 2.0.0
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      linkHeader:
+        type: nextLink
+        autoDetect: false
+        description: Follow the Link header's rel="next" URL as given; a response without one is the last
+          page. Send no per_page (default 50).
+        response:
+          headers:
+            Link:
+              role: nextLink
+              description: RFC 8288 Link header; "Each paginated response contains a `Link` header".
+- target: $.paths['/{administration_id}/assets.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/contacts.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/documents/general_documents.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/documents/general_journal_documents.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/documents/purchase_invoices.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/documents/receipts.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/documents/typeless_documents.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/downloads.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/estimates.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/external_sales_invoices.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/products.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/projects.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/purchase_transactions.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/recurring_sales_invoices.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/sales_invoices.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/subscription_templates.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/task_lists.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/tax_rates.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader
+- target: $.paths['/{administration_id}/time_entries.json'].get
+  update:
+    x-pagination:
+    - scheme: linkHeader

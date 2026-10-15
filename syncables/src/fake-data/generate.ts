@@ -6,23 +6,49 @@ const finite = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
 /**
- * The most items or characters generated, whatever `minItems` or
- * `minLength` asks: past this a value is short of its minimum rather than
- * exhausting memory (`2 ** 30` would throw a `RangeError`).
+ * The most items or characters one array or string gets, whatever
+ * `minItems` or `minLength` asks: past this a value is short of its
+ * minimum rather than exhausting memory (`2 ** 30` would throw a
+ * `RangeError`).
  */
-export const GENERATED_LENGTH_CAP = 10_000;
+const LENGTH_CAP = 10_000;
+
+/**
+ * The most array items and padding characters one `generateFromSchema`
+ * call makes in all, so nested minimums (`minItems: 10000` inside
+ * `minItems: 10000`) cannot multiply to 1e8 values. Past it, arrays are
+ * empty and strings unpadded, short of their minimums.
+ */
+const SIZE_BUDGET = 100_000;
+
+/** What is left of `SIZE_BUDGET` in one call. */
+interface Budget {
+  left: number;
+}
+
+/** Takes up to `wanted` from `budget`; returns what was granted. */
+function take(budget: Budget, wanted: number): number {
+  const granted = Math.max(0, Math.min(wanted, budget.left));
+  budget.left -= granted;
+  return granted;
+}
 
 /** `-0` as `0`, so a generated number serializes and compares plainly. */
 const plain = (value: number): number => (value === 0 ? 0 : value);
 
-/** The next float above (`up`) or below `value`, for bounds past 2^53. */
+/**
+ * The next float above (`up`) or below `value`, for bounds past 2^53. At
+ * `±Number.MAX_VALUE`, where the next one is infinite, `value` itself: the
+ * bound is then not kept strictly, but the value stays a finite number.
+ */
 function nextFloat(value: number, up: boolean): number {
   if (value === 0) return up ? Number.MIN_VALUE : -Number.MIN_VALUE;
   const view = new DataView(new ArrayBuffer(8));
   view.setFloat64(0, value);
   const bits = view.getBigUint64(0);
   view.setBigUint64(0, value > 0 === up ? bits + 1n : bits - 1n);
-  return view.getFloat64(0);
+  const next = view.getFloat64(0);
+  return Number.isFinite(next) ? next : value;
 }
 
 /** `value + 1`, or the next float above it where `+ 1` rounds back. */
@@ -73,6 +99,10 @@ function typeOf(schema: SchemaObject): string | undefined {
  * `const`, then the first `enum` value.
  */
 export function generateFromSchema(schema: SchemaObject | undefined): unknown {
+  return generate(schema, { left: SIZE_BUDGET });
+}
+
+function generate(schema: SchemaObject | undefined, budget: Budget): unknown {
   if (!schema) {
     return null;
   }
@@ -91,22 +121,22 @@ export function generateFromSchema(schema: SchemaObject | undefined): unknown {
   }
   if (schema.allOf) {
     return schema.allOf.reduce<Record<string, unknown>>((merged, sub) => {
-      const value = generateFromSchema(sub);
+      const value = generate(sub, budget);
       return value && typeof value === 'object'
         ? { ...merged, ...(value as Record<string, unknown>) }
         : merged;
     }, {});
   }
   if (schema.oneOf && schema.oneOf.length > 0) {
-    return generateFromSchema(schema.oneOf[0]);
+    return generate(schema.oneOf[0], budget);
   }
   if (schema.anyOf && schema.anyOf.length > 0) {
-    return generateFromSchema(schema.anyOf[0]);
+    return generate(schema.anyOf[0], budget);
   }
 
   switch (typeOf(schema)) {
     case 'string':
-      return generateString(schema);
+      return generateString(schema, budget);
     case 'integer':
       return generateInteger(schema);
     case 'number':
@@ -114,37 +144,43 @@ export function generateFromSchema(schema: SchemaObject | undefined): unknown {
     case 'boolean':
       return true;
     case 'array':
-      return generateArray(schema);
+      return generateArray(schema, budget);
     case 'object':
     case undefined:
-      return generateObject(schema);
+      return generateObject(schema, budget);
     default:
       return null;
   }
 }
 
-function generateObject(schema: SchemaObject): Record<string, unknown> {
+function generateObject(
+  schema: SchemaObject,
+  budget: Budget,
+): Record<string, unknown> {
   const properties = schema.properties ?? {};
   const result: Record<string, unknown> = {};
   for (const [key, propertySchema] of Object.entries(properties)) {
-    result[key] = generateFromSchema(propertySchema);
+    result[key] = generate(propertySchema, budget);
   }
   return result;
 }
 
 /**
- * One item, or `minItems` of them (at most `GENERATED_LENGTH_CAP`), but
- * never more than `maxItems`. `uniqueItems` is not followed: the items
- * may be equal.
+ * One item, or `minItems` of them (at most `LENGTH_CAP`, and only what
+ * is left of the call's `SIZE_BUDGET`), but never more than `maxItems`.
+ * `uniqueItems` is not followed: the items may be equal.
  */
-function generateArray(schema: SchemaObject): unknown[] {
+function generateArray(schema: SchemaObject, budget: Budget): unknown[] {
   const least = Math.min(
-    GENERATED_LENGTH_CAP,
+    LENGTH_CAP,
     Math.max(1, count(schema['minItems']) ?? 0),
   );
   const most = count(schema['maxItems']);
-  const length = most === undefined ? least : Math.min(least, most);
-  return Array.from({ length }, () => generateFromSchema(schema.items));
+  const length = take(
+    budget,
+    most === undefined ? least : Math.min(least, most),
+  );
+  return Array.from({ length }, () => generate(schema.items, budget));
 }
 
 /**
@@ -244,7 +280,9 @@ function generateNumber(schema: SchemaObject): number {
   else if (low !== undefined) value = above(low);
   else value = below(high as number);
   const step = finite(schema['multipleOf']);
-  if (step !== undefined && step > 0) {
+  // A value that already divides evenly is kept: `ceil(1 / 1e-300) * 1e-300`
+  // is 0.9999999999999999, not 1.
+  if (step !== undefined && step > 0 && !Number.isInteger(value / step)) {
     const k = Math.ceil(value / step);
     const candidates = [k, k + 1, k - 1, k - 2].map((n) => n * step);
     const multiple = candidates.find(fits);
@@ -255,11 +293,12 @@ function generateNumber(schema: SchemaObject): number {
 
 /**
  * A string for its `format`, or `string-<n>` padded to `minLength` (at
- * most `GENERATED_LENGTH_CAP`) and cut at `maxLength`. `maxLength` is not
+ * most `LENGTH_CAP`, and only by what is left of the call's
+ * `SIZE_BUDGET`) and cut at `maxLength`. `maxLength` is not
  * followed for a formatted string (a `date-time` is 24 characters
  * whatever it says), and `pattern` is not followed at all.
  */
-function generateString(schema: SchemaObject): string {
+function generateString(schema: SchemaObject, budget: Budget): string {
   switch (schema.format) {
     case 'date-time':
       return new Date(0).toISOString();
@@ -277,13 +316,11 @@ function generateString(schema: SchemaObject): string {
       const value = `string-${stringCounter}`;
       const minimum = count(schema['minLength']);
       const least =
-        minimum === undefined
-          ? undefined
-          : Math.min(minimum, GENERATED_LENGTH_CAP);
+        minimum === undefined ? undefined : Math.min(minimum, LENGTH_CAP);
       const most = count(schema['maxLength']);
       const padded =
         least !== undefined && value.length < least
-          ? value.padEnd(least, 'x')
+          ? value.padEnd(value.length + take(budget, least - value.length), 'x')
           : value;
       return most !== undefined && padded.length > most
         ? padded.slice(0, most)
