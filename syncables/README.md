@@ -1776,7 +1776,11 @@ onto an object target; any other `update`, or one onto an array or a
 scalar, replaces the target, as the proxy does (Overlay 1.0 would append
 to an array). Objects missing along a target's path are created, where
 the proxy refuses the action. Every overlay under
-[`overlays/APIs/`](../overlays/APIs/) applies.
+[`overlays/APIs/`](../overlays/APIs/) applies. Nothing in a target is
+unescaped, as in the proxy: `$.paths['a\'b']` names `a\'b`, and a
+segment ends at the first `']`. Unlike the proxy, a `__proto__` segment
+is refused, and a document or `update` key named `__proto__` stays an
+ordinary own member: it never sets an object's prototype.
 
 ```ts
 import {
@@ -2072,6 +2076,12 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: `applyOverlay` refuses a `__proto__` target segment,
+  and sets every member it merges or creates as an own property, so a
+  document or `update` key named `__proto__` (an own key after
+  `JSON.parse`) no longer sets the prototype of the result or of an
+  object in it. Tests pin that target segments are not unescaped, as in
+  integration-proxy (#618's review).
 - **Unreleased**: `applyOverlay` (and so `prepareDocument`) reads
   `['name']` target segments, as integration-proxy does, and replaces an
   array or scalar target with the `update` instead of throwing. Before,
