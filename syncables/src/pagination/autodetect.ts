@@ -68,11 +68,23 @@ export function invalidAutoDetected(
   return undefined;
 }
 
+/**
+ * The operation's query parameter names. A malformed `parameters` (not an
+ * array) or entry (not an object) is skipped rather than thrown on, so a
+ * broken operation cannot make auto-detection, and every read that runs
+ * it, throw.
+ */
 function queryParamNames(operation: OperationObject): Set<string> {
+  const parameters: unknown = operation.parameters;
+  if (!Array.isArray(parameters)) return new Set();
   return new Set(
-    (operation.parameters ?? [])
-      .filter((parameter) => parameter.in === 'query')
-      .map((parameter) => parameter.name),
+    parameters
+      .filter(
+        (parameter): parameter is { in: unknown; name: unknown } =>
+          isPlainObject(parameter) && parameter['in'] === 'query',
+      )
+      .map((parameter) => parameter.name)
+      .filter((name): name is string => typeof name === 'string'),
   );
 }
 
@@ -143,6 +155,27 @@ function deepMerge<T>(base: T, overrides: Partial<T>): T {
   return result as T;
 }
 
+const APPLICATION_KEYS = new Set(['scheme', 'overrides', 'description']);
+
+/** What makes `entry` not a Pagination Application Object, if anything. */
+function applicationProblem(entry: unknown): string | undefined {
+  if (!isPlainObject(entry))
+    return 'must be a Pagination Application Object with a "scheme" name';
+  if (typeof entry['scheme'] !== 'string' || entry['scheme'] === '')
+    return 'must be a Pagination Application Object with a "scheme" name';
+  for (const key of Object.keys(entry))
+    if (!APPLICATION_KEYS.has(key) && !key.startsWith('x-'))
+      return `has a field the spec does not define: ${key}`;
+  if (entry['overrides'] !== undefined && !isPlainObject(entry['overrides']))
+    return 'overrides must be an object';
+  if (
+    entry['description'] !== undefined &&
+    typeof entry['description'] !== 'string'
+  )
+    return 'description must be a string';
+  return undefined;
+}
+
 /**
  * Resolves the pagination scheme that applies to an operation: an
  * explicit `x-pagination` application (with overrides merged in) takes
@@ -166,12 +199,16 @@ export function resolveEffectiveScheme(
     );
   }
   if (Array.isArray(explicit) && explicit.length > 0) {
-    const application = explicit[0] as PaginationApplicationObject | undefined;
-    if (!isPlainObject(application) || typeof application.scheme !== 'string') {
-      throw new PaginationSchemeError(
-        'x-pagination[0] must be a Pagination Application Object with a "scheme" name',
-      );
-    }
+    // The spec's schema.json for a Pagination Application Object: a
+    // nonempty `scheme`, an object `overrides`, a string `description`, no
+    // other field but `x-` ones. A typo such as `overide:` would otherwise
+    // drop the overrides without a word.
+    explicit.forEach((entry, index) => {
+      const problem = applicationProblem(entry);
+      if (problem)
+        throw new PaginationSchemeError(`x-pagination[${index}] ${problem}`);
+    });
+    const application = explicit[0] as PaginationApplicationObject;
     const name = application.scheme;
     const declared = document.components?.paginationSchemes?.[name];
     if (!declared) {

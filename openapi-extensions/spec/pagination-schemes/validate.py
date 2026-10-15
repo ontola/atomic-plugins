@@ -216,6 +216,8 @@ def validate(document):
         location = f"{root}.{name}"
         found = _errors(SCHEME_VALIDATOR, scheme, location)
         errors += found
+        if not found:
+            errors += [f"{location}.{problem}" for problem in _item_cursor_problems(scheme)]
         if not found and scheme.get("type") == "rangeWindow":
             problem = _window_carrier_problem(scheme)
             if problem:
@@ -265,6 +267,7 @@ def validate(document):
                 continue
             errors += [f"{where}(merged).{problem}" for problem in _short_page_problems(merged, applied=True)]
             errors += [f"{where}(merged).{problem}" for problem in _advance_problems(merged)]
+            errors += [f"{where}(merged).{problem}" for problem in _item_cursor_problems(merged)]
             if merged.get("type") == "rangeWindow":
                 problem = _window_carrier_problem(merged)
                 if problem:
@@ -439,6 +442,41 @@ def _advance_problems(scheme):
     return ["request: advance 'pageSize' needs a request or response field with role pageSize (rule 25)"]
 
 
+def _item_cursor_fields(scheme):
+    return [
+        (location, name, field["fromLastItem"])
+        for location in FIELD_LOCATIONS
+        for name, field in scheme.get("request", {}).get(location, {}).items()
+        if isinstance(field, dict) and "fromLastItem" in field
+    ]
+
+
+def _response_roles(scheme):
+    response = scheme.get("response", {})
+    return [field.get("role") for kind in ("bodyFields", "headers")
+            for field in response.get(kind, {}).values() if isinstance(field, dict)]
+
+
+def _item_cursor_problems(scheme):
+    """Rules 28 and 29 (0.9.0)."""
+    problems = []
+    fields = _item_cursor_fields(scheme)
+    roles = _response_roles(scheme)
+    if fields:
+        if scheme.get("type") != "pageToken":
+            problems.append("request: fromLastItem only in a pageToken scheme (rule 28)")
+        if len(fields) != 1:
+            problems.append("request: exactly one fromLastItem field (rule 28)")
+        if {"nextPageToken", "nextCursor", "nextLink"} & set(roles):
+            problems.append("response: no nextPageToken, nextCursor or nextLink beside a fromLastItem field (rule 28)")
+    headers = scheme.get("response", {}).get("headers", {})
+    if any(isinstance(field, dict) and field.get("role") == "hasMore" for field in headers.values()):
+        problems.append("response.headers: role hasMore only in bodyFields (rule 29)")
+    if "hasMore" in roles and not fields:
+        problems.append("response: role hasMore only in a scheme with a fromLastItem field (rule 29)")
+    return problems
+
+
 class PageReadError(RuntimeError):
     """A page-number read that ended with an error (§4.4.5 step 3)."""
 
@@ -503,6 +541,22 @@ def response_incomplete(scheme, body):
     if "equals" in marker:
         return _json_equal(value, marker["equals"])
     return any(_json_equal(value, v) for v in marker.get("in", []))
+
+
+_ABSENT = object()
+
+
+def _present_role_value(body, scheme, role):
+    """The value of the body field with this role, _ABSENT when the field is not in the body (None when it is null)."""
+    for name, field in scheme.get("response", {}).get("bodyFields", {}).items():
+        if isinstance(field, dict) and field.get("role") == role:
+            value = body
+            for segment in name.split("."):
+                if not isinstance(value, dict) or segment not in value:
+                    return _ABSENT
+                value = value[segment]
+            return value
+    return _ABSENT
 
 
 def _count(value):
@@ -672,6 +726,67 @@ def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item[
                 return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links,
                         "complete": not marked}
         offset = following
+
+
+def _default_identity(item):
+    """An item's identity for the repeat check: its `id` when it has one, else the whole item."""
+    if isinstance(item, dict) and "id" in item:
+        return ("id", repr(item["id"]))
+    return ("item", json.dumps(item, sort_keys=True, default=repr))
+
+
+def read_item_cursor(scheme, request, *, page_size=None, identity=_default_identity, max_pages=None):
+    """A read whose cursor is a field of the previous page's last item (§4.3.3, 0.9.0).
+
+    `request(values)` sends one page, with `values` mapping (location, name)
+    of the cursor field (absent on the first request) and of the `pageSize`
+    field (when `page_size` is given) to their values, and returns the
+    response body. Returns {"items", "pages", "cursors", "complete"}; a read
+    in which any response was marked (§4.4.6) is not complete. Raises
+    PageReadError when the last item gives no usable cursor, the cursor does
+    not move, a page repeats an item, an empty page says hasMore true, or
+    `max_pages` pages were requested without reaching the end; such a read is
+    not complete.
+    """
+    fields = _item_cursor_fields(scheme)
+    if len(fields) != 1:
+        raise ValueError("an item-cursor read has exactly one fromLastItem field (rule 28)")
+    [(location, name, path)] = fields
+    size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
+    items, seen, cursors = [], set(), []
+    marked = False
+    cursor = None
+    while True:
+        if max_pages is not None and len(cursors) >= max_pages:
+            raise PageReadError(f"requested {max_pages} pages without reaching the end; the read is not complete")
+        values = {field: page_size for field in size_fields}
+        if cursor is not None:
+            values[(location, name)] = cursor
+        body = request(values)
+        cursors.append(cursor)
+        page = page_items(body, scheme)
+        ids = [identity(item) for item in page]
+        if any(i in seen for i in ids):
+            raise PageReadError(f"the page after {cursor!r} holds an item an earlier page returned")
+        seen.update(ids)
+        items.extend(page)
+        marked = marked or response_incomplete(scheme, body)
+        has_more = _present_role_value(body, scheme, "hasMore")
+        if has_more is not _ABSENT and not isinstance(has_more, bool):
+            raise PageReadError(f"the page after {cursor!r} has a hasMore that is not a boolean: {has_more!r}")
+        if not page and has_more is True:
+            raise PageReadError(f"the page after {cursor!r} is empty but says hasMore true; the read is not complete")
+        if not page or has_more is False:
+            return {"items": items, "pages": len(cursors), "cursors": cursors, "complete": not marked}
+        value = page[-1]
+        for segment in path.split("."):
+            value = value.get(segment) if isinstance(value, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (str, int)):
+            raise PageReadError(f"the last item has no usable {path} to continue from")
+        following = str(value) if isinstance(value, int) else value
+        if following == cursor:
+            raise PageReadError(f"the cursor {following!r} did not move; the read is not complete")
+        cursor = following
 
 
 def read_range(scheme, start, end, request, *, identity=lambda item: item["id"], max_requests=None):
