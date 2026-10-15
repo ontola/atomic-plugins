@@ -50,6 +50,23 @@ export type {
 export { InMemoryStorageAdapter } from './client/storage.js';
 export type { StorageAdapter } from './client/storage.js';
 export { mergePatch } from './client/merge-patch.js';
+export { fingerprint } from './client/fingerprint.js';
+export { replaceOf, replaceBlock } from './client/replace.js';
+export type { BlockObject, ReplaceDeclaration } from './client/replace.js';
+export {
+  unkeyedListsOf,
+  flattenList,
+  nestList,
+  pairItems,
+  mergeUnkeyedList,
+} from './client/unkeyed-lists.js';
+export type {
+  UnkeyedList,
+  FlatListItem,
+  LocalListItem,
+  MergedListItem,
+  UnkeyedListMerge,
+} from './client/unkeyed-lists.js';
 
 // The read path (also available without Node built-ins as `syncables/browser`).
 export {
@@ -126,8 +143,11 @@ export type { LinkResolutionObject } from './pagination/types.js';
 export {
   classifyThrottling,
   declaredThrottling,
+  fallbackWindow,
   headerTime,
+  limitsInForce,
   operationBuckets,
+  parseTiers,
 } from './throttling/throttling.js';
 export type {
   BodyPredicate,
@@ -136,6 +156,7 @@ export type {
   HeaderRoleObject,
   SignalObject,
   ThrottlingDeclaration,
+  Tier,
   ThrottlingMeaning,
   ThrottlingResponse,
   ThrottlingVerdict,

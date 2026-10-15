@@ -1,4 +1,4 @@
-"""Validate CRUD Causality 0.6.0 documents: every rule of §8 (1-26).
+"""Validate CRUD Causality 0.7.0 documents: every rule of §8 (1-29).
 
 `validate(document, warnings)` raises ValueError listing every violation it
 finds and returns None for a valid document; the SHOULD rules (6, 10, 13
@@ -11,6 +11,9 @@ validation is separate.
 read's first page sends (§4.2.1, steps 1-3), as a reference for consumers.
 `compound_create(document, crud, planned, send_create, send_follow_up, ...)` makes a
 compound create as §4.7.2 says (`continue_compound_create` resumes one), and `validate` checks its `followUps`.
+`replace_block(replace, obj)` is the Block Object a replacement stops on (§4.8),
+and `pair_items(unkeyed, baseline, now)` pairs the items of a list without
+item identity (§4.9.2).
 """
 import copy
 import json
@@ -482,8 +485,175 @@ def validate(document, warnings=None):
             expected = str(effective(collection)[0]).lower()
             if isinstance(template, str) and (template != path or expected != method):
                 errors.append(f"{where}: collection {crud['collection']} is read at {expected.upper()} {template}")
+    errors += _replace_errors(document, resources)
     if errors:
         raise ValueError("\n".join(errors))
+
+
+BLOCK_WHEN = ("present", "nonEmpty")
+
+
+def _crud_actions(document):
+    """{resource name: set of x-crud actions naming it}."""
+    found = {}
+    for item in (document.get("paths") or {}).values():
+        item = _resolve(document, item)
+        if not isinstance(item, dict):
+            continue
+        for method in METHODS:
+            operation = item.get(method)
+            crud = operation.get("x-crud") if isinstance(operation, dict) else None
+            if isinstance(crud, dict) and isinstance(crud.get("resource"), str):
+                found.setdefault(crud["resource"], set()).add(crud.get("action"))
+    return found
+
+
+def _replace_errors(document, resources):
+    """Rules 27-29: `replace` (§4.8) and `unkeyedLists` (§4.9)."""
+    errors = []
+    actions = _crud_actions(document)
+    for name, resource in resources.items():
+        if not isinstance(resource, dict):
+            continue
+        where = f"crudResources.{name}"
+        if "replace" in resource:
+            replace = resource["replace"]
+            named = actions.get(name, set())
+            if "create" not in named or "delete" not in named:
+                errors.append(f"{where}.replace: needs an x-crud create and delete of {name} (rule 27)")
+            if "update" in named:
+                errors.append(f"{where}.replace: {name} has an x-crud update (rule 27)")
+            if not isinstance(replace, dict):
+                errors.append(f"{where}.replace: expected an object (§4.8.1)")
+                replace = {}
+            blocks = replace.get("blockedBy", [])
+            if not isinstance(blocks, list):
+                errors.append(f"{where}.replace.blockedBy: expected an array (rule 28)")
+                blocks = []
+            for index, block in enumerate(blocks):
+                at = f"{where}.replace.blockedBy[{index}]"
+                if not isinstance(block, dict):
+                    errors.append(f"{at}: expected an object (rule 28)")
+                    continue
+                if not _well_formed_path(block.get("field")):
+                    errors.append(f"{at}.field: expected a dot-path (rule 28)")
+                if "when" in block and block["when"] not in BLOCK_WHEN:
+                    errors.append(f"{at}.when: expected present or nonEmpty (rule 28)")
+                if "moreThan" in block:
+                    count = block["moreThan"]
+                    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                        errors.append(f"{at}.moreThan: expected an integer >= 0 (rule 28)")
+                    if "when" in block:
+                        errors.append(f"{at}: moreThan is not given with when (rule 28)")
+                if "except" in block:
+                    if not isinstance(block["except"], dict):
+                        errors.append(f"{at}.except: expected an object (rule 28)")
+                    if "moreThan" not in block:
+                        errors.append(f"{at}.except: only with moreThan (rule 28)")
+        if "unkeyedLists" in resource:
+            lists = resource["unkeyedLists"]
+            if not isinstance(lists, dict):
+                errors.append(f"{where}.unkeyedLists: expected an object (rule 29)")
+                continue
+            for key, spec in lists.items():
+                at = f"{where}.unkeyedLists.{key}"
+                if not _well_formed_path(key):
+                    errors.append(f"{at}: the key is not a dot-path (rule 29)")
+                if not isinstance(spec, dict):
+                    errors.append(f"{at}: expected an object (rule 29)")
+                    continue
+                match = spec.get("match")
+                if (not isinstance(match, list) or not match
+                        or not all(_well_formed_path(m) for m in match) or len(set(match)) != len(match)):
+                    errors.append(f"{at}.match: expected a nonempty array of distinct dot-paths (rule 29)")
+                    match = []
+                if "children" in spec:
+                    if not _well_formed_path(spec["children"]):
+                        errors.append(f"{at}.children: expected a dot-path (rule 29)")
+                    elif spec["children"] in match:
+                        errors.append(f"{at}.children: is also a match field (rule 29)")
+    return errors
+
+
+_ABSENT = object()
+
+
+def _at(value, path):
+    for segment in dot_path(path):
+        if not isinstance(value, dict) or segment not in value:
+            return _ABSENT
+        value = value[segment]
+    return value
+
+
+def replace_block(replace, obj):
+    """The first Block Object of a Replace Object (§4.8.2) that matches `obj`, or None: replace only on None."""
+    for block in (replace or {}).get("blockedBy", []):
+        value = _at(obj, block["field"])
+        if "moreThan" in block:
+            if not isinstance(value, list):
+                continue
+            skip = block.get("except") or {}
+            counted = [item for item in value
+                       if not (skip and isinstance(item, dict) and all(item.get(k) == v for k, v in skip.items()))]
+            if len(counted) > block["moreThan"]:
+                return block
+            continue
+        if value is _ABSENT or value is None:
+            continue
+        if block.get("when", "present") == "present":
+            return block
+        if isinstance(value, (list, dict, str)) and len(value):
+            return block
+    return None
+
+
+def _flatten(items, children):
+    out = []
+    for item in items or []:
+        out.append(item)
+        if children:
+            kids = _at(item, children)
+            out.extend(kids if isinstance(kids, list) else [])
+    return out
+
+
+def pair_items(unkeyed, baseline, now):
+    """§4.9.2: for each item of `now`, flattened, the index of its baseline item (flattened), or None."""
+    match, children = unkeyed["match"], unkeyed.get("children")
+    base, current = _flatten(baseline, children), _flatten(now, children)
+    out = [None] * len(current)
+    taken = set()
+
+    def same(fields):
+        def test(b, n):
+            return all(_at(b, f) == _at(n, f) for f in fields)
+        return test
+
+    for test in (same(match), same(match[:1])):
+        for ni, item in enumerate(current):
+            if out[ni] is not None:
+                continue
+            best = None
+            for bi, candidate in enumerate(base):
+                if bi in taken or not test(candidate, item):
+                    continue
+                if best is None or abs(bi - ni) < abs(best - ni):
+                    best = bi
+            if best is not None:
+                out[ni] = best
+                taken.add(best)
+    for ni in range(len(current)):
+        if out[ni] is not None:
+            continue
+        before = next((out[p] for p in range(ni - 1, -1, -1) if out[p] is not None), -1)
+        after = next((out[n] for n in range(ni + 1, len(current)) if out[n] is not None), len(base))
+        for bi in range(before + 1, after):
+            if bi not in taken:
+                out[ni] = bi
+                taken.add(bi)
+                break
+    return out
 
 
 FOLLOW_UP_FIELDS = {"field", "create", "itemKey", "operation", "bind", "description"}
