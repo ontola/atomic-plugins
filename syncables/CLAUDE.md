@@ -81,7 +81,17 @@ Data flows through four stages, each its own directory under `src/`:
    a finished windowed read keeps its spans with reason `incomplete`,
    while any other read that is not complete (failed, or an undocumented
    short-page end) gets `spans: null`.
-   `read/read.ts` adds ontology/type projection.
+   `read/read.ts` adds ontology/type projection. `read/references.ts`
+   (`resolveReference`) resolves a CRUD Causality §4.1.3 Reference Object
+   to the target's identity path (bound fields from the object, unbound
+   variables from the request context; `required: false` and an absent or
+   null field give undefined, checked in a first pass so the template's
+   variable order does not matter; `''` is a value and throws; anything
+   else unfillable throws, as do a `.`, `..`, whitespace-padded, NUL or
+   lone-surrogate value, an unsafe integer, and a target template that
+   is not a `/` path or holds a backslash, control character, space or
+   DEL); nothing is fetched
+   (`unit/read/references.test.ts`, the spec's §7.6 example).
    `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
@@ -538,8 +548,17 @@ Data flows through four stages, each its own directory under `src/`:
 
 `fake-data/generate.ts` (`generateFromSchema`) is shared by both the mock
 server (seeding + example responses) and is the only place schema-to-value
-synthesis logic lives — it prefers a schema's own `example`, then `enum`,
-then handles `allOf`/`oneOf`/`anyOf`/type-based generation recursively. A
+synthesis logic lives — it prefers a schema's own `example`, then
+`examples[0]`, `const`, `enum`, then handles `allOf`/`oneOf`/`anyOf`/
+type-based generation recursively. It keeps to the schema's numeric bounds
+(3.0 boolean and 3.1 numeric exclusive bounds, kept strictly past 2^53
+by stepping to the next float; `multipleOf`, on an integer through its
+smallest integer multiple), `minLength`/`maxLength` on unformatted
+strings, `minItems`/`maxItems` (minimums capped at
+`GENERATED_LENGTH_CAP`, 10,000), never `-0`, and reads a 3.1 type list
+(`['string', 'null']`: the first non-null type). Not followed: `pattern`,
+`uniqueItems`, `maxLength` on a formatted string, and string formats
+beyond the listed ones. A
 schema's own fixed `example` is reused verbatim on every call, so callers
 generating more than one item from the same schema (resource seeding,
 paginated list generation) must inject their own unique `id` afterward
@@ -551,8 +570,12 @@ Implements the [OpenAPI Pagination Schemes Extension](../openapi-extensions/spec
 (`components.paginationSchemes`), applied to third-party documents via
 [OpenAPI Overlays](https://spec.openapis.org/overlay/v1.0.0.html)
 (`src/openapi/overlay.ts`, `applyOverlay`/`loadOverlay` — an intentionally
-minimal Overlay implementation: `update`/`remove` actions with plain
-dot-path targets like `$.components`, not the full JSONPath grammar).
+minimal Overlay implementation: `update`/`remove` actions with the target
+grammar of integration-proxy's `catalog.rs` `parse_target`, `$` then
+`.name` or `['name']` segments (`parseOverlayTarget`), not the full
+JSONPath grammar; a non-object `update`, or one onto a non-object target,
+replaces it, as the proxy does; `overlay-targets.test.ts` applies every
+overlay under `overlays/APIs/`).
 
 - `types.ts` mirrors the extension's spec objects verbatim.
 - `validate.ts` checks a scheme against the spec's own rules (§9); an
@@ -588,10 +611,15 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   first, else auto-detection by matching the scheme's declared query
   parameter/body field names against the operation's own (§6.2 default
   rules — a dimension with zero declared fields never vacuously matches).
-  An explicit entry that cannot be applied (not an array of application
-  objects, an undeclared or invalid scheme, or one its overrides make
-  invalid) throws `PaginationSchemeError` instead of being dropped: a read
-  that ignored it would return one page as the whole collection (#384). The
+  An explicit entry that cannot be applied throws `PaginationSchemeError`
+  instead of being dropped, because a read that ignored it would return
+  one page as the whole collection (#384). It cannot be applied when
+  `x-pagination` is not an array; when `applicationProblem` refuses an
+  entry (every entry is checked against the spec's `schema.json` for a
+  Pagination Application Object: a nonempty `scheme`, an object
+  `overrides`, a string `description`, no other field but `x-` ones);
+  when it names an undeclared or invalid scheme; or when its overrides
+  make the scheme invalid. The
   client's conditional-cache check treats such an operation as paginated,
   and the mock server answers 500.
   Only the query-parameter and body-field dimensions are actually
@@ -689,8 +717,11 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   the `hasMore` response role. `checkItemCursor` (validator) ports rules
   27–29 (`_item_cursor_problems`). `walkAllPages` hands a scheme with such
   a field (`itemCursorField`) to `walkItemCursor` in `read/pages.ts`,
-  after the spec's `read_item_cursor`: the cursor goes as `PageCursor.
-  pageToken` through `buildQuery`/`buildBody`, `itemValue` reads the last
+  after the spec's `read_item_cursor`: `buildQuery`/`buildBody` get no
+  token (they would write it into every pageToken- or cursor-role field,
+  and rule 28 allows another beside it), and the cursor is set in the
+  `fromLastItem` field alone; an integer value must be
+  `Number.isSafeInteger`. `itemValue` reads the last
   item's dot-path (own properties, split on `.`), the repeat check keys
   items by `identity`, else the whole item, the incomplete mark goes on
   `outcome.marked`; a present non-boolean `hasMore`, `null` included, is
