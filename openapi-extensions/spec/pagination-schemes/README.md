@@ -403,10 +403,11 @@ an item re-reads.
 Added in 0.8.0. Some APIs stop serving a result at a cap and say so in the
 response rather than through the next-page signals. Notion's
 [Query a data source](https://developers.notion.com/reference/query-a-data-source)
-pages through "up to **10,000 results** per query"; past that, "`has_more`
-becomes `false`, and every response page served from the capped result
-includes a `request_status` marking the result as incomplete", with
-"`type: incomplete` and `incomplete_reason: query_result_limit_reached`". A
+pages through "up to **10,000 results** per query"; past that, "pagination
+stops at the 10,000th result: `has_more` becomes `false`, and every response
+page served from the capped result includes a `request_status` marking the
+result as incomplete", with the example
+`{ "request_status": { "type": "incomplete", "incomplete_reason": "query_result_limit_reached" } }`. A
 reader that trusts `has_more` alone takes such a read as complete. The
 Incomplete Object names the body value that says otherwise.
 

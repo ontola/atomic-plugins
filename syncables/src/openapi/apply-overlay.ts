@@ -27,11 +27,32 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** An own property's value, never an inherited one (`__proto__` included). */
+const own = (object: Record<string, unknown>, key: string): unknown =>
+  Object.hasOwn(object, key) ? object[key] : undefined;
+
+/**
+ * Sets an own, enumerable property, as `JSON.parse` does. Plain assignment
+ * of a key named `__proto__` would set the object's prototype instead.
+ */
+function define(
+  object: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void {
+  Object.defineProperty(object, key, {
+    value,
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+}
+
 function deepMergeValue(existing: unknown, incoming: unknown): unknown {
   if (isPlainObject(existing) && isPlainObject(incoming)) {
     const merged: Record<string, unknown> = { ...existing };
     for (const [key, value] of Object.entries(incoming)) {
-      merged[key] = deepMergeValue(merged[key], value);
+      define(merged, key, deepMergeValue(own(merged, key), value));
     }
     return merged;
   }
@@ -49,7 +70,10 @@ function deepClone<T>(value: T): T {
  * segments (up to the next `.` or `[`) or `['name']` segments (up to the
  * next `']`, so a name may hold `/`, `.`, `{` or `[`). Anything else,
  * wildcards, filters, array indexes, `["name"]` and `..` included, is
- * refused rather than read as something else.
+ * refused rather than read as something else. Nothing is unescaped, as in
+ * the proxy: `['a\'b']` names `a\'b`, and `['a']b']` is refused. Unlike
+ * the proxy, a `__proto__` segment is refused too, so that no target can
+ * reach an object's prototype.
  */
 export function parseOverlayTarget(target: string): string[] {
   const refuse = (): Error =>
@@ -75,6 +99,10 @@ export function parseOverlayTarget(target: string): string[] {
       rest = after.slice(end + 2);
     } else throw refuse();
   }
+  if (keys.includes('__proto__'))
+    throw new Error(
+      `Unsupported overlay target ${JSON.stringify(target)}: a __proto__ segment is refused`,
+    );
   return keys;
 }
 
@@ -85,13 +113,13 @@ function navigate(
 ): Record<string, unknown> | undefined {
   let node = root;
   for (const segment of segments) {
-    let child = Object.hasOwn(node, segment) ? node[segment] : undefined;
+    let child = own(node, segment);
     if (child === undefined) {
       if (!createMissing) {
         return undefined;
       }
       child = {};
-      node[segment] = child;
+      define(node, segment, child);
     }
     if (!isPlainObject(child)) {
       throw new Error(
@@ -135,8 +163,8 @@ export function applyOverlay<T extends Record<string, unknown>>(
       if (segments.length === 0) {
         if (!isPlainObject(update))
           throw new Error('Overlay cannot replace the document root');
-        for (const [key, value] of Object.entries(update))
-          result[key] = deepMergeValue(result[key], value);
+        for (const [key, value] of Object.entries(deepClone(update)))
+          define(result, key, deepMergeValue(own(result, key), value));
         continue;
       }
       const key = segments[segments.length - 1] as string;
@@ -144,10 +172,11 @@ export function applyOverlay<T extends Record<string, unknown>>(
         string,
         unknown
       >;
-      const current = Object.hasOwn(parent, key) ? parent[key] : undefined;
-      parent[key] = deepMergeValue(
-        current === undefined ? {} : current,
-        deepClone(update),
+      const current = own(parent, key);
+      define(
+        parent,
+        key,
+        deepMergeValue(current === undefined ? {} : current, deepClone(update)),
       );
     }
   }

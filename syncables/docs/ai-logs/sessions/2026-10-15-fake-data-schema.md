@@ -38,3 +38,20 @@ takes the nearest multiple of `multipleOf` the bounds allow. `above` and
 through the IEEE 754 bits). Results go through `plain`, so `-0` is `0`.
 `GENERATED_LENGTH_CAP` (10,000) caps `minItems` and `minLength`.
 14 new tests; 12 fail on the code before, and the cap test crashes it.
+
+## Turn 3
+
+**Human (via the coordinator session):** #623's second review: a total
+item budget per call, so nested `minItems` cannot multiply; the bound
+instead of an infinity from `nextFloat`; keep a starting value that is
+already a multiple of `multipleOf`; and stop naming the length cap as
+public, since the package does not export it.
+
+**Assistant:** `generateFromSchema` now starts an internal `generate`
+with a `SIZE_BUDGET` of 100,000 array items and padding characters that
+every nested array and string draws on (`take`). `nextFloat` returns its
+input where the next float is infinite. A number whose value already
+divides by `multipleOf` is kept (`ceil(1 / 1e-300) * 1e-300` was
+0.9999999999999999). The cap is `LENGTH_CAP`, unexported, and the docs
+give the numbers instead of the name. Nine new tests; eight fail on the
+code before (the ninth checks that each call starts with a full budget).

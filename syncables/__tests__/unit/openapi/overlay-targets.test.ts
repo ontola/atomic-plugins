@@ -59,6 +59,60 @@ describe('parseOverlayTarget', () => {
   });
 });
 
+describe('parseOverlayTarget unescapes nothing, as the proxy does', () => {
+  it('reads a backslash before a quote as two literal characters', () => {
+    expect(parseOverlayTarget("$.paths['a\\'b']")).toEqual(['paths', "a\\'b"]);
+  });
+
+  it("ends a bracket segment at the first ']", () => {
+    expect(() => parseOverlayTarget("$.paths['a']b']")).toThrow(
+      /Unsupported overlay target/,
+    );
+  });
+});
+
+describe('__proto__', () => {
+  it.each(['$.__proto__', "$.paths['__proto__']", '$.a.__proto__.b'])(
+    'refuses the target %s',
+    (target) => {
+      expect(() => parseOverlayTarget(target)).toThrow(
+        /a __proto__ segment is refused/,
+      );
+    },
+  );
+
+  it('keeps a __proto__ key in a document and an update as an own member', () => {
+    // JSON.parse makes "__proto__" an own key; plain assignment of it
+    // would set the prototype instead.
+    const document = JSON.parse('{"paths": {"__proto__": {"x": 1}}}') as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const update = JSON.parse('{"__proto__": {"y": 2}, "polluted": true}');
+    const result = applyOverlay(
+      document,
+      overlay([
+        { target: '$.paths', update },
+        { target: '$', update: JSON.parse('{"__proto__": {"z": 3}}') },
+      ]),
+    ) as Record<string, Record<string, unknown>>;
+    const paths = result['paths']!;
+    expect(Object.getPrototypeOf(paths)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+    expect(Object.hasOwn(paths, '__proto__')).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(paths, '__proto__')?.value).toEqual({
+      x: 1,
+      y: 2,
+    });
+    expect(Object.getOwnPropertyDescriptor(result, '__proto__')?.value).toEqual(
+      { z: 3 },
+    );
+    expect((paths as { y?: unknown }).y).toBeUndefined();
+    expect(({} as { y?: unknown; z?: unknown }).y).toBeUndefined();
+    expect(({} as { y?: unknown; z?: unknown }).z).toBeUndefined();
+  });
+});
+
 describe('applyOverlay with bracket targets', () => {
   const document = {
     paths: {
@@ -98,6 +152,27 @@ describe('applyOverlay with bracket targets', () => {
     // The result holds a copy: changing it leaves the overlay alone.
     (result.paths['/oauth/token'].post.security as unknown[]).push('x');
     expect(update).toEqual([{ notionOAuthClient: [] }]);
+  });
+
+  it('copies a root update, so a later action leaves the overlay alone', () => {
+    const root = overlay([
+      { target: '$', update: { x: { a: 1 } } },
+      { target: '$.x.y', update: { b: 2 } },
+      { target: '$.x.z.w', update: { c: 3 } },
+    ]);
+    const result = applyOverlay({}, root);
+    expect(result).toEqual({ x: { a: 1, y: { b: 2 }, z: { w: { c: 3 } } } });
+    expect(root.actions[0]!.update).toEqual({ x: { a: 1 } });
+    // A second application starts from the same overlay.
+    expect(applyOverlay({}, root)).toEqual(result);
+  });
+
+  it('takes a root update with an undefined member, as JSON would drop it', () => {
+    const result = applyOverlay(
+      { x: 'kept' },
+      overlay([{ target: '$', update: { x: undefined, y: { a: 1 } } }]),
+    );
+    expect(result).toEqual({ x: 'kept', y: { a: 1 } });
   });
 
   it('refuses a root update that is not an object', () => {
