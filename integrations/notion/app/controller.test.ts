@@ -477,6 +477,46 @@ describe('controller (N2)', () => {
     expect(queries).toHaveLength(1);
   });
 
+  it('still retries an ordinary 429 with a short Retry-After, then syncs (#596 review)', async () => {
+    const base = fixtureProxy('conn-1');
+    const queries: string[] = [];
+    let limited = true;
+    const { controller } = setup('default', {
+      request: async request => {
+        if (request.method === 'POST' && request.path.includes('/query')) {
+          queries.push(
+            `${request.path} ${JSON.stringify(request.body ?? null)}`,
+          );
+
+          if (limited) {
+            limited = false;
+
+            // An ordinary rate limit: no additional_data, so not blocked.
+            return {
+              status: 429,
+              headers: { 'retry-after': '1' },
+              body: {
+                object: 'error',
+                status: 429,
+                code: 'rate_limited',
+                message: 'Rate limited',
+              },
+            };
+          }
+        }
+
+        return base.request(request);
+      },
+    });
+    await controller.load();
+    const state = await controller.sync();
+    expect(state).toMatchObject({ kind: 'ready' });
+    // The limited request (the first page) was sent again after the wait,
+    // once; the next page followed as usual.
+    expect(queries[1]).toBe(queries[0]);
+    expect(queries.filter(q => q === queries[0])).toHaveLength(2);
+  });
+
   it('keeps the previous sync record when a sync fails, so it is not counted as fresh', async () => {
     const { controller, proxy, advance } = setup();
     await controller.load();
