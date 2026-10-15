@@ -53,6 +53,9 @@ overlay: 1.0.0
 info:
   title: Asana collection completeness
   version: 1.0.0
+  x-requires:
+    - anyOf:
+        - crud-causality-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml
 extends: https://raw.githubusercontent.com/ontola/openapi-directory/b58c91d9f59c6a10178916e7948793809edae46d/APIs/asana.com/1.0/openapi.yaml
 actions:
   - target: $.components
