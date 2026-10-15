@@ -5,7 +5,9 @@
 #   limit "number of users to return (up to maximum 1000)", default 1000).
 # Source: https://docs.discord.com/developers/resources/guild-scheduled-event ("Get Guild
 #   Scheduled Event Users": "Users will always be returned in ascending order by `user_id`.";
-#   after "Consider only users after given user id"; limit up to 100, default 100).
+#   after "consider only users after given user id"; limit "number of users to return (up
+#   to maximum 100)", default 100).
+# Quotes checked word for word against the raw pages with curl on 2026-10-15.
 # Needs Pagination Schemes 0.9.0 (openapi-extensions/spec/pagination-schemes, fromLastItem,
 # §4.3.3). A 0.8.0 consumer reads the scheme as a pageToken scheme without a next token and
 # stops after one page, so do not use this revision with one.
