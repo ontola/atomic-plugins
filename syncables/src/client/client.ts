@@ -94,6 +94,7 @@ import {
   lowerCaseHeaders,
   type ListMethod,
   type Transport,
+  type PurposedRequest,
   type TransportRequest,
   type TransportResponse,
 } from '../read/transport.js';
@@ -1808,6 +1809,23 @@ export function createApiClient(
    * `sleep` option may return early, in tests).
    */
   let pacingSleptUntil = 0;
+  /** A cache's answer (`fromCache`) gives the pacer its counted request back. */
+  const released = (
+    pacing: Pacer,
+    buckets: string[],
+    at: number,
+    sent: Promise<TransportResponse>,
+  ): Promise<TransportResponse> => {
+    // Watched beside the caller, not chained before it: the caller sees the
+    // response in the same turn as without pacing.
+    void sent.then(
+      (response) => {
+        if (response.fromCache === true) pacing.release(buckets, at);
+      },
+      () => {},
+    );
+    return sent;
+  };
   const pacedSend = async (
     pacing: Pacer,
     buckets: string[],
@@ -1820,8 +1838,9 @@ export function createApiClient(
       await (options.sleep ?? defaultSleep)(wait);
       pacingSleptUntil = Math.max(pacingSleptUntil, now + wait);
     }
-    pacing.take(buckets, Date.now());
-    return unpacedTransport(request);
+    const at = Date.now();
+    pacing.take(buckets, at);
+    return released(pacing, buckets, at, unpacedTransport(request));
   };
   // Not async: a request with room is counted and sent in the same turn,
   // with no wait added before it.
@@ -1830,8 +1849,9 @@ export function createApiClient(
         const buckets = requestBuckets(request);
         if (pacer.delay(buckets, Date.now()) > 0)
           return pacedSend(pacer, buckets, request);
-        pacer.take(buckets, Date.now());
-        return unpacedTransport(request);
+        const at = Date.now();
+        pacer.take(buckets, at);
+        return released(pacer, buckets, at, unpacedTransport(request));
       }
     : unpacedTransport;
   const transport = authenticatedTransport(
@@ -2689,7 +2709,7 @@ export function createApiClient(
    * `lenient`, a 2xx body that is not JSON reads as no body.
    */
   async function requestJson(
-    request: TransportRequest,
+    request: PurposedRequest,
     received?: { headers?: Record<string, string>; lenient?: boolean },
   ): Promise<unknown> {
     // Tells an error raised before the request left (an authenticate adapter
@@ -2850,6 +2870,7 @@ export function createApiClient(
           }),
           method: 'GET',
           headers: { accept: 'application/json' },
+          purpose: 'precondition',
         },
         received,
       );
@@ -2948,6 +2969,7 @@ export function createApiClient(
         url,
         method: 'GET',
         headers: { accept: 'application/json' },
+        purpose: 'precondition',
       });
     } catch (error) {
       value = null;
@@ -3279,7 +3301,7 @@ export function createApiClient(
     // answer, or what a later read showed), so one that already applied is
     // settled without a request.
     let followUp:
-      | { declared: FollowUp; url: URL; init: TransportRequest }
+      | { declared: FollowUp; url: URL; init: PurposedRequest }
       | undefined;
     if (write.followUp) {
       const declared = route.create?.followUps?.find(
@@ -3325,6 +3347,7 @@ export function createApiClient(
         url,
         init: {
           url,
+          purpose: 'write',
           method: declared.method,
           headers: {
             ...(request.body !== undefined
@@ -3378,6 +3401,7 @@ export function createApiClient(
           }),
           method: 'DELETE',
           headers: { ...preconditionHeaders },
+          purpose: 'write',
         });
         remote(write.scope).delete(write.id);
       } else {
@@ -3414,6 +3438,7 @@ export function createApiClient(
               : data;
         const result = await requestJson(
           {
+            purpose: 'write',
             url:
               write.type === 'create'
                 ? target(route.createPath as string, write.context)
@@ -4968,6 +4993,7 @@ export function createApiClient(
         upstream,
         path: bindPath(feed.path, context),
         method: 'GET',
+        purpose: 'feed',
         query:
           cursor !== undefined && feed.cursor
             ? { [feed.cursor.parameter]: cursor }
@@ -5129,7 +5155,12 @@ export function createApiClient(
         [route.collection.itemParam ?? 'id']: id,
       });
       path = url.pathname;
-      response = await budget.send({ url, method: 'GET', headers: {} });
+      response = await budget.send({
+        url,
+        method: 'GET',
+        headers: {},
+        purpose: 'item',
+      });
     } catch (error) {
       // The budget is spent, or a 429 asks to wait past its deadline.
       if (

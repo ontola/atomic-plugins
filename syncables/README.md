@@ -1731,6 +1731,19 @@ credentials alone does not log a user in. Credentials without an authentication
 adapter are rejected. Keep confidential client credentials in server-side
 configuration. Authentication happens after the data-read capture boundary.
 
+Every request syncables makes says why, in `TransportRequest.purpose`
+(`RequestPurpose`): `list` (a page of a collection read, `paginate` or a
+range window), `feed` (a deletion feed page), `item` (a record's own GET
+when a list lacks it), `describer`, `zone`, `precondition` (a read a
+write depends on, which must be fresh), `write` (a create, update, delete
+or follow-up) and `inbox`. A transport may ignore it; it is optional on the
+type, so a transport written before it still works. A caching transport
+uses it to answer only what it may: a `list` read, say, but never a
+`precondition` read or a `write`. A transport that answers without asking
+the provider sets `fromCache: true` on its response: the client then gives
+back the request it counted against a pacing quota, and the read's
+`maxRequests` does not count it.
+
 ## Optional raw read-response storage
 
 ```ts
@@ -2048,6 +2061,12 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: `TransportRequest.purpose` (`list`, `feed`, `item`,
+  `describer`, `zone`, `precondition`, `write`, `inbox`) on every request
+  syncables makes, and `TransportResponse.fromCache`, which gives back the
+  request's pacing count and does not count against `maxRequests`. Both
+  optional; the `PurposedRequest` and `RequestPurpose` types are exported.
+  #566's "smallest backward-compatible extension" for a caching transport.
 - **Unreleased**: Pagination Schemes 0.9.0: a cursor read from the last
   item (`fromLastItem`, Stripe's `starting_after`) with the `hasMore`
   response role. The validator accepts them under rules 27 to 29 (no
