@@ -2029,9 +2029,11 @@ const { records, ontology, errors } = await readPlatform(document, {
   (`authBlocked()`). Writes and value
   conversion are not covered.
 - **Records and ontology**: `deriveOntology` makes one class per resource and
-  one property per field, typed with Atomic Data datatype URLs. Each record's
-  `values` are keyed by property shortname, and `date-time` strings are
-  converted to epoch milliseconds.
+  one property per field, typed with Atomic Data datatype URLs; an
+  OpenAPI 3.1 type list such as `['string', 'null']` is typed by its one
+  non-null type, and a field whose name has no letter or digit (`_`) gets
+  no property. Each record's `values` are keyed by property shortname, and
+  `date-time` strings are converted to epoch milliseconds.
 - **Limits** (`DEFAULT_READ_LIMITS`): 10,000 requests, 5,000 records and 30
   minutes per read, plus at most 3 retries per request of a 429 or a
   response a declared throttling signal matches, each after the earliest
@@ -2120,6 +2122,14 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: `deriveOntology`, and so `readPlatform`, reads an
+  OpenAPI 3.1 type list: a field typed `['string', 'null']` with format
+  `date-time` was given the `json` datatype and its values were not
+  converted to timestamps; it is now a timestamp, and a list with one
+  other non-null type takes that type. A title without a letter or digit
+  (`日本語`) gives the default base `ontology` instead of term paths
+  starting with `/`; a field name without one (`_`) gets no term instead
+  of a path ending in `/`; and such a resource name throws.
 - **Unreleased**: Pagination Schemes 0.10.0 `order` beside
   `fromLastItem`: the read checks that the cursor values of all its items
   are strictly ascending or descending, comparing digit strings and
