@@ -101,15 +101,16 @@ free domain and 1,500 on a paid one
 ([rate limits](https://developers.asana.com/docs/rate-limits)); Notion 600
 per minute per connection on Business and Enterprise plans and 180 on all
 others ([request limits](https://developers.notion.com/reference/request-limits));
-Clockify, per workspace with an API key, "30 requests per hour" on FREE, "20
-requests per second" on TRIAL, BASIC, STANDARD and PRO, and "50 requests per
-second" on ENTERPRISE ([API documentation](https://docs.clockify.me/)). A
-Limit Object with `tiers` declares each of them, instead of `requests` and
+Clockify, per workspace: "Newly created workspaces on the Free plan are
+restricted to 30 API requests per hour for the entire workspace. Workspaces
+on any paid plan maintain the standard limit of 50 requests per second"
+([webhook and API limitations](https://clockify.me/help/getting-started/webhook-and-api-limitations)).
+A Limit Object with `tiers` declares each of them, instead of `requests` and
 `window`:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `plans` | nonempty array of strings, required | The provider's plans this tier applies to, as it names them. A plan appears in at most one tier of the limit. |
+| `plans` | nonempty array of strings, required | The provider's plans this tier applies to, as it names them. A plan appears in at most one tier of the limit. Plan names are compared exactly, case included. |
 | `requests` | positive integer, required | Announced maximum number of counted requests in the window, on this tier. |
 | `window` | Window Object, required | Duration and known window semantics, on this tier. |
 | `description` | string, optional | Qualifications, such as the source of the claim. |
@@ -118,35 +119,35 @@ The limit's `partitionBy` and `description` apply to every tier, and so does
 the bucket's identity: one bucket, whose amount and window depend on the
 account's plan. A consumer that knows the account's plan (from its own
 configuration; this extension does not say how to find out) uses the tier
-whose `plans` name it. One that does not, or whose plan no tier names, MUST
-keep within every tier at once, each tier's `requests` in its own `window`
+whose `plans` name it, and uses a tier only for the plans it names. One
+that does not know the plan, or whose plan no tier names, MUST keep within
+every tier at once, each tier's `requests` in its own `window`
 as a separate count over the same requests. No single tier is safe on its
 own: a lower average rate over a longer window can still allow a burst that
-a shorter tier forbids (30 per hour permits 30 requests in one second, which
-breaks 20 per second). Where the provider gives a tier no number, leave it
+a shorter tier forbids (a tier of 100 per hour permits 100 requests in one
+second, which breaks a tier of 50 per second). Where the provider gives a tier no number, leave it
 out; with no numbered tier, declare no `tiers` and no `requests`.
 
 When a `quotaExhausted` response names such a bucket and gives no time, the
-bucket window it falls back to (Earliest retry time) is the configured tier's
-window, or, without one, the longest window among the tiers.
+bucket window it falls back to ([Earliest retry time](#throttling-signals),
+step 3) is the configured tier's window, or, without one, the longest window
+among the tiers.
 
 ```yaml
 x-throttling:
   limits:
     workspace:
       partitionBy: [account]
-      description: Counted per workspace for requests with an API key.
+      description: Counted for the entire workspace (Clockify-shaped).
       tiers:
-        - { plans: [FREE], requests: 30, window: { seconds: 3600, kind: unspecified } }
-        - { plans: [TRIAL, BASIC, STANDARD, PRO], requests: 20, window: { seconds: 1, kind: unspecified } }
-        - { plans: [ENTERPRISE], requests: 50, window: { seconds: 1, kind: unspecified } }
+        - { plans: [Free], requests: 30, window: { seconds: 3600, kind: unspecified } }
+        - { plans: [Paid], requests: 50, window: { seconds: 1, kind: unspecified } }
   applies: [workspace]
 ```
 
-A consumer told that the workspace is on PRO keeps to 20 per second. One
-without a configured plan keeps to 30 per hour, 20 per second and 50 per
-second together; the last adds nothing beside 20 per second, but each is
-counted. A 0.4.0 validator rejects a Limit Object with `tiers`, and one
+A consumer told that the workspace is on a paid plan keeps to 50 per second.
+One without a configured plan, or with a plan no tier names, keeps to 30 per
+hour and 50 per second together. A 0.4.0 validator rejects a Limit Object with `tiers`, and one
 without `window`.
 
 ### Windows

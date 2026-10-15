@@ -1,6 +1,6 @@
 # OpenAPI CRUD Causality Extension
 
-**Spec version:** 0.7.0
+**Spec version:** 0.8.0
 
 ---
 
@@ -289,6 +289,7 @@ Placed under the `crud` field of an OAS Operation Object. States the CRUD action
 | `patchFormat` | `PatchFormat` (§4.6) | No | For `update` with `mode: patch`: the patch document format. |
 | `removesFrom` | array of string \| `"*"` | No | For `delete`: collection names the object is removed from. Default: `"*"` (every collection listed in that resource's `memberOf` history). |
 | `followUps` | array of `FollowUpObject` (§4.7.1) | No | For `create` only: fields that may need a follow-up update after the create, in the order they are sent. Added in 0.5.0. |
+| `committedErrors` | array of `CommittedErrorObject` (§4.3.3) | No | For `create` only, and not with `followUps`: `5xx` responses the provider documents as sent only after this request created the object, with where that object's identity is. Added in 0.8.0. |
 | `x-*` | any | No | Extension fields. |
 
 \* Required when `action` is `create`.
@@ -320,6 +321,64 @@ When `source: template`, the URL is derived by substituting the created object's
 _Informative:_ some consumers read the `Location` header when a `source: header` object names none (the reference `created_identity` and syncables do), for documents written before 0.6.0 required `name` (rule 26).
 
 Regardless of `source`, once the object's URL is known, `identity.bindings` MAY also be read in reverse: match the URL against `identity.urlTemplate` and treat the captured value for each bound `{variable}` as authoritative for the corresponding object field, even if that field isn't otherwise listed in `addedFields`.
+
+#### 4.3.3 Committed Error Object
+
+Added in 0.8.0. A create answered with a `5xx`, or with no response, has an
+unknown outcome: the object may exist, and without an idempotency key a
+client neither sends the create again nor knows which object to bind. Some
+providers document that a particular error response follows a create that was
+applied, and say where the new object's id is. Notion's request limits
+([Retry a write that returns 503](https://developers.notion.com/reference/request-limits)):
+"A write can save its change and still return 503 when Notion runs out of
+time building the response. Repeating that write applies the change twice,
+so read `additional_data.retry_guidance` before you retry. When the change
+was already saved, the guidance tells you to read the object instead." and
+"When the request created a page or a database,
+`additional_data.committed_resource_id` holds the ID of the new object."
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `status` | array of integer HTTP status codes | **Yes** | Nonempty, unique, each 500–599. |
+| `identity` | `Record<string, string>` | **Yes** | Nonempty. Each key is a `{variable}` of the resource's `identity.urlTemplate`; each value is a dot-path (as `url.name`, §4.3.2) into the JSON error body that holds that variable's value. |
+| `description` | string | No | Human-readable description, such as the source of the claim. |
+| `x-*` | any | No | Extension fields. |
+
+A document MUST declare a Committed Error Object only where the provider
+documents both (a) that a response with that status carrying that field is
+sent only after this request created the object, and (b) that the field holds
+the created object's identity. Notion's page and database creates qualify.
+Its block-children append does not: there `committed_resource_id` holds the
+parent block's id, not a created object's. A field that is present whether or
+not the create was applied is not such evidence. A conflict or duplicate
+answer (a `409` "already exists", say) never qualifies; the statuses are
+`5xx` only.
+
+A response matches a Committed Error Object when its status is listed, its
+body is JSON, and every path in `identity` resolves to a usable value: a
+non-empty string with no leading or trailing whitespace, no `/`, `?` or `#`,
+no control character (Unicode category Cc), and not `.` or `..` (which a URL
+resolver would read as a path step), or a non-negative integer, which is used
+in decimal form. A client substitutes a string value into the identity
+template percent-encoded, as any path segment ([RFC 3986 §2.1](https://www.rfc-editor.org/rfc/rfc3986#section-2.1)):
+a `%` or a space in it is encoded, never sent raw. A response with a listed status that
+does not match (the field is absent, blank, or not such a value; a body with
+only `retry_guidance`, say) says nothing: the outcome stays unknown, as
+without this object. The objects are tested in order; the first that matches
+decides.
+
+A client that receives a matching response to a create treats the create as
+applied, not unknown: it MUST NOT send it again. It binds the object to the
+identity the values give. The template's other variables come from the
+create request, its path parameters and body, as §4.3.2 says for
+`source: template`, and from the request context (§4.1.2); when one cannot be
+filled, the create is still applied and not sent again, but the object stays
+unbound.
+
+A create with `followUps` (§4.7) MUST NOT also have `committedErrors` (rule
+32): §4.7.2 treats any `5xx` as an unknown outcome and resumes from a read,
+and this version does not define how a committed match would continue a
+compound create.
 
 ### 4.4 Added Field Object
 
@@ -923,6 +982,9 @@ A conforming implementation MUST enforce:
 27. A CRUD Resource Object with `replace` MUST be named by an `x-crud` create and an `x-crud` delete, and MUST NOT be named by an `x-crud` update (§4.8.1).
 28. Every Block Object has a dot-path `field`; `when` is `present` or `nonEmpty`; `moreThan` is an integer ≥ 0 and is not given with `when`; `except` is an object and only given with `moreThan` (§4.8.2).
 29. Every key of `unkeyedLists` is a dot-path. Every Unkeyed List Object has `match`, a nonempty array of distinct dot-paths, and `children`, where present, is a dot-path that is not one of them (§4.9.1).
+30. `committedErrors` MUST NOT be present unless `action` is `create`, and MUST be a nonempty array (§4.3.3).
+31. Every Committed Error Object has a nonempty `status` of unique integers 500–599 and a nonempty `identity` whose keys are `{variable}`s of the resource's `identity.urlTemplate` and whose values are dot-paths.
+32. An Operation CRUD Object MUST NOT have both `committedErrors` and `followUps` (§4.3.3).
 
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paths./widgets.post.x-crud.url`).
@@ -946,7 +1008,9 @@ first request of a read (§4.2.1 steps 1–3, with the `x-list-*` fallback),
 and `compound_create` and `continue_compound_create`, a reference
 implementation of §4.7.2 over caller-supplied request functions, with
 `created_identity` reading the created object's identity back as §4.3.2
-says. [`examples/widget-lifecycle.yaml`](examples/widget-lifecycle.yaml) is
+says, and `committed_identity`, which reads it from a matching error
+response (§4.3.3) as {template variable: value}, where `created_identity`
+returns {object field: value}. [`examples/widget-lifecycle.yaml`](examples/widget-lifecycle.yaml) is
 §7.1, §7.3, §7.4 and §7.6 as one synthetic document.
 [`examples/compound-create.yaml`](examples/compound-create.yaml) is a
 synthetic document with a compound create.
@@ -966,6 +1030,7 @@ python3 validate.py examples/*.yaml
 
 ## Changes
 
+- **0.8.0** (2026-10-15): adds `committedErrors` to a `create` Operation CRUD Object (§4.3.3): `5xx` responses a provider documents as sent only after this request created the object, each naming where the new object's identity is in the error body, as Notion does for a `503` with `additional_data.committed_resource_id`. A matching response makes the create applied, not unknown, and binds the object. Not with `followUps` (rule 32). Validation rules 30–32, `committed_identity` in the validator, an example operation and tests. A document valid under 0.7.0 stays valid and means the same. A 0.7.0 consumer ignores the field and keeps such a create unknown.
 - **0.7.0** (2026-10-15): adds `replace` (§4.8), for a resource the API cannot update: a change is made by creating a new object and deleting the old one, never for an object a Block Object matches. Adds `unkeyedLists` (§4.9), for array fields whose items have no id, with the fields items are paired on and how. Validation rules 27-29, `replace_block` and `pair_items` in the validator, an example (§7.8, `examples/replaced-notes.yaml`) and tests. For Google Keep API v1 (ontola/atomic-plugins#593). A 0.6.0 document stays valid and means the same.
 - **0.6.0** (2026-10-13): `identity` is optional on a resource that nothing addresses one object of (§4.1): no `x-crud` create, read, update or delete names it and no Reference Object targets it. Such a list-only resource is read-only for a consumer, with no record identity beyond what its list items carry. Validation rule 25 states when `identity` is required. A Url Source Object with `source: header` now names its header (rule 26); no published overlay omitted it. The reference validator now checks every rule of §8. A 0.5.0 document stays valid and means the same, with one exception: a Url Source Object with `source: header` and no `name`, which 0.5.0 allowed, now breaks rule 26 (no published overlay in ontola/atomic-plugins has one).
 - **0.5.0** (2026-10-08): adds compound creates (§4.7): `followUps` on a `create` Operation CRUD Object, each naming a field, whether the create body carries it (`include`, possibly silently dropped, or `omit`), the follow-up update that sets it, and how its request is filled (`bind`); the steps of a compound create and its partly-applied state; validation rules 20–24, `compound_create` in the validator, an example and tests. For ontola/atomic-plugins pieces.md K8 (GitHub's issue create and label add). A 0.4.0 document stays valid and means the same.
