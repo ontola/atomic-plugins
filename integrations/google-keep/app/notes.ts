@@ -90,7 +90,7 @@ export const noteId = (note: Row): string | undefined =>
     ? note.name
     : undefined;
 
-interface Item {
+export interface Item {
   text: string;
   checked: boolean;
   children: { text: string; checked: boolean }[];
@@ -120,6 +120,16 @@ export function renderList(items: Item[]): string {
   return items
     .flatMap(item => [line('', item), ...item.children.map(c => line('  ', c))])
     .join('\n');
+}
+
+/** A list note's items (none for a text note). */
+export function itemsOf(note: Row): Item[] {
+  const body = isRow(note.body) ? note.body : {};
+  if (!isRow(body.list)) return [];
+
+  return (Array.isArray(body.list.listItems) ? body.list.listItems : [])
+    .map(itemOf)
+    .filter((i): i is Item => !!i);
 }
 
 /** The note as the row's Name and Description. */
@@ -375,6 +385,8 @@ export type Action =
   | { kind: 'import'; note: Row }
   /** Keep changed, the row did not: the row takes Keep's version. */
   | { kind: 'pull'; subject: string; note: Row }
+  /** A list note on both sides: merged item by item (`lists.ts`) by the pass. */
+  | { kind: 'list'; subject: string; note: Row }
   /** Both sides changed to the same: only the baseline moves on. */
   | { kind: 'rebase'; subject: string; note: Row }
   /** The row changed, Keep did not: the note is replaced by the row's version. */
@@ -499,6 +511,18 @@ export function plan({
 
     const current = byId.get(row.id)!;
     const now = noteFields(current);
+
+    // A list note is merged item by item; one that became a text note in
+    // Keep takes Keep's version (its items here are dropped).
+    if (row.kind === 'list') {
+      actions.push(
+        now.kind === 'list'
+          ? { kind: 'list', subject: row.subject, note: current }
+          : { kind: 'pull', subject: row.subject, note: current },
+      );
+      continue;
+    }
+
     const remote = fingerprint(now, now.kind) !== row.synced;
     const local = fingerprint(row.local, row.kind) !== row.synced;
 

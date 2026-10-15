@@ -12,6 +12,7 @@ import {
 } from './drive.js';
 import { fakeStore, OTHER_TABLE, TABLE, type FakeStore } from './fakeStore.js';
 import { acquire, LEASE_MS } from './lease.js';
+import type { JSONValue } from './store.js';
 import {
   AccountMismatch,
   CONFLICT,
@@ -49,10 +50,30 @@ const rowFor = (store: FakeStore, drive: Drive, id: string) => {
   throw new Error(`no row for ${id}`);
 };
 
+/** A note row's item rows as `[x] text` lines in order, a child indented. */
+const itemLines = (store: FakeStore, drive: Drive, note: string) =>
+  [...store.resources.entries()]
+    .filter(([, props]) => props[drive.properties.note] === note)
+    .sort(
+      ([, a], [, b]) =>
+        (a[drive.properties.position] as number) -
+        (b[drive.properties.position] as number),
+    )
+    .map(
+      ([, props]) =>
+        `${props[drive.properties.under] ? '  ' : ''}${props[drive.properties.done] ? '[x]' : '[ ]'} ${props[NAME]}`,
+    );
+
+const itemRow = (store: FakeStore, drive: Drive, note: string, name: string) =>
+  [...store.resources.entries()].find(
+    ([, props]) =>
+      props[drive.properties.note] === note && props[NAME] === name,
+  )![0];
+
 const edit = async (
   store: FakeStore,
   subject: string,
-  values: Record<string, string>,
+  values: Record<string, JSONValue>,
 ) => {
   const row = await store.getResource(subject);
   for (const [k, v] of Object.entries(values)) row.set(k, v);
@@ -87,10 +108,19 @@ describe('syncNotes', () => {
     });
     const list = rowFor(store, drive, 'notes/synthetic-note-2').props;
     expect(list[NAME]).toBe('Synthetic packing list');
-    expect(list[DESCRIPTION]).toBe(
-      '- [x] Imaginary passport\n- [ ] Made-up charger\n  - [ ] Fictional adapter',
-    );
+    expect(list[DESCRIPTION]).toBe('');
     expect(list[drive.properties.kind]).toBe('list');
+    expect(
+      itemLines(
+        store,
+        drive,
+        rowFor(store, drive, 'notes/synthetic-note-2').subject,
+      ),
+    ).toEqual([
+      '[x] Imaginary passport',
+      '[ ] Made-up charger',
+      '  [ ] Fictional adapter',
+    ]);
 
     const before = store.writes.length;
     const second = await sync();
@@ -119,9 +149,14 @@ describe('syncNotes', () => {
     const { store, drive, sync } = await setup();
     await sync();
     const { subject } = rowFor(store, drive, 'notes/synthetic-note-2');
-    await edit(store, subject, {
-      [DESCRIPTION]: '- [x] Imaginary passport\n- [x] Made-up charger',
+    await edit(store, itemRow(store, drive, subject, 'Made-up charger'), {
+      [drive.properties.done]: true,
     });
+    await (
+      await store.getResource(
+        itemRow(store, drive, subject, 'Fictional adapter'),
+      )
+    ).destroy();
     const summary = await sync();
     expect(summary).toMatchObject({ replaced: 1, retiring: 0 });
     const row = store.resources.get(subject)!;
@@ -144,6 +179,120 @@ describe('syncNotes', () => {
       created: 0,
       unchanged: 5,
     });
+  });
+
+  it('merges a move in Keep with a tick here, item by item', async () => {
+    const { store, drive, sync } = await setup();
+    await sync();
+    const { subject } = rowFor(store, drive, 'notes/synthetic-note-2');
+    store.google.moveItem('synthetic-note-2', 1, 0);
+    store.google.addItem('synthetic-note-2', 'Invented socks');
+    await edit(store, itemRow(store, drive, subject, 'Fictional adapter'), {
+      [drive.properties.done]: true,
+    });
+    expect(await sync()).toMatchObject({ replaced: 1, itemConflicts: 0 });
+    expect(itemLines(store, drive, subject)).toEqual([
+      '[ ] Made-up charger',
+      '  [x] Fictional adapter',
+      '[x] Imaginary passport',
+      '[ ] Invented socks',
+    ]);
+    const id = store.resources.get(subject)![drive.properties.noteId];
+    expect(
+      store.google.snapshot().notes.find(n => n.name === id)?.body.list
+        .listItems,
+    ).toEqual([
+      {
+        text: { text: 'Made-up charger' },
+        checked: false,
+        childListItems: [
+          { text: { text: 'Fictional adapter' }, checked: true },
+        ],
+      },
+      { text: { text: 'Imaginary passport' }, checked: true },
+      { text: { text: 'Invented socks' }, checked: false },
+    ]);
+    expect(await sync()).toMatchObject({ replaced: 0, updated: 0 });
+  });
+
+  it('takes Keep’s list changes alone without replacing the note', async () => {
+    const { store, drive, sync } = await setup();
+    await sync();
+    const { subject } = rowFor(store, drive, 'notes/synthetic-note-2');
+    const items = store.resources.size;
+    store.google.checkItem('synthetic-note-2', 1);
+    store.google.addItem('synthetic-note-2', 'Invented socks', 0);
+    expect(await sync()).toMatchObject({ replaced: 0, updated: 1 });
+    expect(itemLines(store, drive, subject)).toEqual([
+      '[ ] Invented socks',
+      '[x] Imaginary passport',
+      '[x] Made-up charger',
+      '  [ ] Fictional adapter',
+    ]);
+    expect(store.resources.size).toBe(items + 1);
+  });
+
+  it('keeps the drive’s text when an item changed on both sides', async () => {
+    const { store, drive, sync } = await setup();
+    await sync();
+    const { subject } = rowFor(store, drive, 'notes/synthetic-note-2');
+    await edit(store, itemRow(store, drive, subject, 'Made-up charger'), {
+      [NAME]: 'Pretend charger',
+    });
+    store.google.editItem('synthetic-note-2', 1, 'Fake charger');
+    expect(await sync()).toMatchObject({ replaced: 1, itemConflicts: 1 });
+    expect(itemLines(store, drive, subject)).toEqual([
+      '[x] Imaginary passport',
+      '[ ] Pretend charger',
+      '  [ ] Fictional adapter',
+    ]);
+  });
+
+  it('creates a list note from item rows made here', async () => {
+    const { store, drive, sync } = await setup();
+    await sync();
+    const note = await store.newResource({
+      parent: TABLE,
+      isA: [drive.rowClass],
+      propVals: { [NAME]: 'Made here', [drive.properties.kind]: 'list' },
+    });
+    for (const [i, name] of ['Pretend tent', 'Invented stove'].entries())
+      await store.newResource({
+        parent: drive.itemsTable,
+        isA: [drive.itemClass],
+        propVals: {
+          [NAME]: name,
+          [drive.properties.note]: note.subject,
+          [drive.properties.position]: i,
+          [drive.properties.done]: false,
+        },
+      });
+    expect(await sync()).toMatchObject({ created: 1 });
+    const id = store.resources.get(note.subject)![drive.properties.noteId];
+    expect(
+      store.google.snapshot().notes.find(n => n.name === id)?.body,
+    ).toEqual({
+      list: {
+        listItems: [
+          { text: { text: 'Pretend tent' }, checked: false },
+          { text: { text: 'Invented stove' }, checked: false },
+        ],
+      },
+    });
+    expect(itemLines(store, drive, note.subject)).toEqual([
+      '[ ] Pretend tent',
+      '[ ] Invented stove',
+    ]);
+    expect(await sync()).toMatchObject({ created: 0, replaced: 0, updated: 0 });
+  });
+
+  it('drops a deleted note row’s items', async () => {
+    const { store, drive, sync } = await setup();
+    await sync();
+    const { subject } = rowFor(store, drive, 'notes/synthetic-note-2');
+    await (await store.getResource(subject)).destroy();
+    await sync();
+    expect(itemLines(store, drive, subject)).toEqual([]);
   });
 
   it('holds back an edit to a shared note or a note with an attachment', async () => {

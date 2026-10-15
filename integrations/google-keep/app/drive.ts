@@ -10,12 +10,17 @@
  *   title), Atomic's `description` (its body, as Markdown; see notes.ts)
  *   and the app's own properties below. It requires nothing: a Keep note
  *   may have no title, and an empty row is simply not sent.
- * - Row properties, all strings: the note's resource name (the row's
+ * - Note row properties, all strings: the note's resource name (the row's
  *   identity), its kind (text or list), its presence, why an edit here is
  *   held back (a conflict, or a note the app may not replace), Keep's
  *   `updateTime`, a short fingerprint of what both sides had at the last
- *   sync (the baseline a pass compares with; `fingerprint` in notes.ts) and
- *   when a note that left the list was last seen.
+ *   sync (the baseline a pass compares with; `fingerprint` in notes.ts),
+ *   a list note's last-synced list (Markdown) and when a note that left the
+ *   list was last seen.
+ * - `google-keep-item`, the class of the App's second table, "Google Keep
+ *   list items": one row per item of a list note (`lists.ts`), with its
+ *   text as Name, whether it is done, its note row, the item it is under,
+ *   its position and which last-synced item it is.
  * - App properties: the last complete read and the last pass (ISO 8601
  *   UTC), every note id the table has held (JSON array; a note whose row is
  *   deleted here is then not imported again), the old notes of
@@ -43,13 +48,20 @@ export const PROPERTIES = `${A}/properties/properties`;
 export const CLASSES = `${A}/properties/classes`;
 export const CLASSTYPE = `${A}/properties/classtype`;
 export const PROPERTY_CLASS = `${A}/classes/Property`;
+export const TABLE_CLASS = `${A}/classes/Table`;
 export const CLASS_CLASS = `${A}/classes/Class`;
 export const DEFAULT_ONTOLOGY = `${A}/ontology/server/property/default-ontology`;
 
 export const TABLE_NAME = 'Google Keep';
+export const ITEMS_TABLE_NAME = 'Google Keep list items';
 export const CLASS_SHORTNAME = 'google-keep-note';
+export const ITEM_CLASS_SHORTNAME = 'google-keep-item';
 
 const STRING = `${A}/datatypes/string`;
+const BOOLEAN = `${A}/datatypes/boolean`;
+const ATOMIC_URL = `${A}/datatypes/atomicURL`;
+const FLOAT = `${A}/datatypes/float`;
+const INTEGER = `${A}/datatypes/integer`;
 
 export type OwnProperty =
   | 'noteId'
@@ -58,6 +70,12 @@ export type OwnProperty =
   | 'hold'
   | 'updated'
   | 'synced'
+  | 'list'
+  | 'done'
+  | 'note'
+  | 'under'
+  | 'position'
+  | 'base'
   | 'lastSeen'
   | 'lastSync'
   | 'lastPass'
@@ -71,6 +89,8 @@ interface PropertySpec {
   shortname: string;
   name: string;
   description: string;
+  /** String unless given. */
+  datatype?: string;
 }
 
 export const PROPERTY_SPECS: PropertySpec[] = [
@@ -114,6 +134,50 @@ export const PROPERTY_SPECS: PropertySpec[] = [
     name: 'Keep sync fingerprint',
     description:
       'Written by the Google Keep app: a short digest of the title and text both sides had at the last sync. The next sync compares the row and Google Keep with it to tell which one changed.',
+  },
+  {
+    key: 'list',
+    shortname: 'google-keep-list',
+    name: 'Keep list at last sync',
+    description:
+      'Written by the Google Keep app: a list note’s items as both sides had them at the last sync, as a Markdown checklist. The next sync merges each side’s changes since then, item by item.',
+  },
+  {
+    key: 'done',
+    shortname: 'google-keep-done',
+    name: 'Done',
+    description: 'Whether the list item is ticked.',
+    datatype: BOOLEAN,
+  },
+  {
+    key: 'note',
+    shortname: 'google-keep-item-note',
+    name: 'Note',
+    description: 'The note this item is on: a row of the Google Keep table.',
+    datatype: ATOMIC_URL,
+  },
+  {
+    key: 'under',
+    shortname: 'google-keep-under',
+    name: 'Under',
+    description:
+      'The item this one is indented under, on the same note. Google Keep allows one level.',
+    datatype: ATOMIC_URL,
+  },
+  {
+    key: 'position',
+    shortname: 'google-keep-position',
+    name: 'Position',
+    description: 'The item’s place in its note’s list, lowest first.',
+    datatype: FLOAT,
+  },
+  {
+    key: 'base',
+    shortname: 'google-keep-base',
+    name: 'Keep item at last sync',
+    description:
+      'Written by the Google Keep app: which item of the note’s last-synced list this one is, counting from 0. Empty for an item added here since.',
+    datatype: INTEGER,
   },
   {
     key: 'lastSeen',
@@ -175,6 +239,16 @@ export const ROW_PROPERTIES: OwnProperty[] = [
   'updated',
   'lastSeen',
   'synced',
+  'list',
+];
+
+/** The item properties, in the item class's `recommends` after Name. */
+export const ITEM_PROPERTIES: OwnProperty[] = [
+  'done',
+  'note',
+  'under',
+  'position',
+  'base',
 ];
 
 export const asList = (value: JSONValue): string[] =>
@@ -219,7 +293,7 @@ async function ensureProperties(
             [SHORTNAME]: spec.shortname,
             [NAME]: spec.name,
             [DESCRIPTION]: spec.description,
-            [DATATYPE]: STRING,
+            [DATATYPE]: spec.datatype ?? STRING,
           },
         })
       ).subject;
@@ -235,30 +309,32 @@ async function ensureProperties(
   return out;
 }
 
+interface ClassSpec {
+  shortname: string;
+  name: string;
+  description: string;
+  recommends: string[];
+}
+
 async function ensureClass(
   store: PluginStore,
   ontology: string,
-  properties: Record<OwnProperty, string>,
+  spec: ClassSpec,
 ): Promise<string> {
   const resource = await store.getResource(ontology);
   const listed = asList(resource.get(CLASSES));
-  const existing = (await byShortname(store, listed)).get(CLASS_SHORTNAME);
+  const existing = (await byShortname(store, listed)).get(spec.shortname);
   if (existing) return existing;
 
   const created = await store.newResource({
     parent: ontology,
     isA: [CLASS_CLASS],
     propVals: {
-      [SHORTNAME]: CLASS_SHORTNAME,
-      [NAME]: 'Google Keep note',
-      [DESCRIPTION]:
-        'A note synced with Google Keep by the Google Keep app: its title as Name, its text or checklist as Description.',
+      [SHORTNAME]: spec.shortname,
+      [NAME]: spec.name,
+      [DESCRIPTION]: spec.description,
       [REQUIRES]: [],
-      [RECOMMENDS]: [
-        NAME,
-        DESCRIPTION,
-        ...ROW_PROPERTIES.map(key => properties[key]),
-      ],
+      [RECOMMENDS]: spec.recommends,
     },
   });
   const again = await store.getResource(ontology);
@@ -267,6 +343,35 @@ async function ensureClass(
     .save();
 
   return created.subject;
+}
+
+/** The App's own child table of class `klass`, made when missing. */
+async function ensureTable(
+  store: PluginStore,
+  app: string,
+  klass: string,
+  name: string,
+  description: string,
+): Promise<string> {
+  for (const subject of await store.query({
+    property: CLASSTYPE,
+    value: klass,
+  })) {
+    const table = await store.getResource(subject).catch(() => undefined);
+    if (table?.get(PARENT) === app) return subject;
+  }
+
+  return (
+    await store.newResource({
+      parent: app,
+      isA: [TABLE_CLASS],
+      propVals: {
+        [NAME]: name,
+        [CLASSTYPE]: klass,
+        [DESCRIPTION]: description,
+      },
+    })
+  ).subject;
 }
 
 async function appOntology(
@@ -310,6 +415,9 @@ export interface Drive {
   app: string;
   table: string;
   rowClass: string;
+  /** The table of list items, and its row class. */
+  itemsTable: string;
+  itemClass: string;
   properties: Record<OwnProperty, string>;
 }
 
@@ -320,7 +428,24 @@ export async function provision(store: PluginStore): Promise<Drive> {
   if (!data?.table) throw new Error('This app has no table to sync into.');
   const ontology = await appOntology(store, app);
   const properties = await ensureProperties(store, ontology);
-  const rowClass = await ensureClass(store, ontology.subject, properties);
+  const rowClass = await ensureClass(store, ontology.subject, {
+    shortname: CLASS_SHORTNAME,
+    name: 'Google Keep note',
+    description:
+      'A note synced with Google Keep by the Google Keep app: its title as Name, a text note’s text as Description. A list note’s items are rows of the Google Keep list items table.',
+    recommends: [
+      NAME,
+      DESCRIPTION,
+      ...ROW_PROPERTIES.map(key => properties[key]),
+    ],
+  });
+  const itemClass = await ensureClass(store, ontology.subject, {
+    shortname: ITEM_CLASS_SHORTNAME,
+    name: 'Google Keep list item',
+    description:
+      'An item of a Google Keep list note, synced by the Google Keep app: its text as Name.',
+    recommends: [NAME, ...ITEM_PROPERTIES.map(key => properties[key])],
+  });
 
   const resource = await store.getResource(app);
   const renders = await appProperty(store, resource, 'renders');
@@ -338,8 +463,22 @@ export async function provision(store: PluginStore): Promise<Drive> {
   if (retype) table.set(CLASSTYPE, rowClass);
   if (rename) table.set(NAME, TABLE_NAME);
   if (retype || rename) await table.save();
+  const itemsTable = await ensureTable(
+    store,
+    app,
+    itemClass,
+    ITEMS_TABLE_NAME,
+    'The items of the Google Keep list notes, one row per item, synced item by item by the Google Keep app.',
+  );
 
-  return { app, table: data.table, rowClass, properties };
+  return {
+    app,
+    table: data.table,
+    rowClass,
+    itemsTable,
+    itemClass,
+    properties,
+  };
 }
 
 const SYNC_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;

@@ -22,6 +22,11 @@
  * for Google failing:
  *   editNote(id, title, text)  a text note's title and text edited in Keep.
  *   checkItem(id, index)       a list note's item checked in Keep.
+ *   moveItem(id, from, to)     a list note's top item moved in Keep (its
+ *                              child items move with it).
+ *   editItem(id, index, text)  a list note's top item's text edited in Keep.
+ *   addItem(id, text, at)      an item added to a list note in Keep, at
+ *                              top-level index `at` (the end by default).
  *   trashNote(id)              moved to the trash: gone from the list, by id
  *                              `trashed: true`.
  *   restoreNote(id)            out of the trash again.
@@ -279,6 +284,33 @@ export function googleKeepFixture() {
 
       return structuredClone(found);
     },
+    moveItem(id, from, to) {
+      const found = must(id);
+      const items = found.body.list.listItems;
+      const [moved] = items.splice(from, 1);
+      items.splice(to, 0, moved);
+      found.updateTime = stamp();
+
+      return structuredClone(found);
+    },
+    editItem(id, index, text) {
+      const found = must(id);
+      found.body.list.listItems[index].text = { text };
+      found.updateTime = stamp();
+
+      return structuredClone(found);
+    },
+    addItem(id, text, at) {
+      const found = must(id);
+      const items = found.body.list.listItems;
+      items.splice(at ?? items.length, 0, {
+        text: { text },
+        checked: false,
+      });
+      found.updateTime = stamp();
+
+      return structuredClone(found);
+    },
     trashNote(id) {
       const found = must(id);
       found.trashed = true;
@@ -333,6 +365,9 @@ export default {
   drivers: [
     'editNote',
     'checkItem',
+    'moveItem',
+    'editItem',
+    'addItem',
     'trashNote',
     'restoreNote',
     'removeNote',

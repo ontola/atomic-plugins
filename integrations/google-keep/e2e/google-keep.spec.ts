@@ -11,11 +11,14 @@
  *
  * Journey:
  * 1. Install and connect: the five notes become rows of the app's own
- *    `google-keep-note` class, a list note as a Markdown checklist.
+ *    `google-keep-note` class, a list note's items rows of the app's
+ *    `google-keep-item` table.
  * 2. Reload: nothing changed, no row is written, nothing is sent.
  * 3. A note edited in Keep (`editNote`): its row takes the edit.
- * 4. A list row edited here: sent to Keep as a replacement note; the old
- *    note is deleted there, the row follows the new one.
+ * 4. A list edited on both sides, item by item: an item moved in Keep
+ *    (`moveItem`) and another ticked here come out moved and ticked, sent
+ *    to Keep as a replacement note; the old note is deleted there, the row
+ *    follows the new one.
  * 5. A shared note's row edited here: held back, nothing sent.
  * 6. A note edited on both sides: a conflict; "Keep mine" sends the row's
  *    version.
@@ -127,9 +130,12 @@ test.describe('Google Keep drive app', () => {
       },
     );
     expect(typed.isA).toEqual([typed.classtype]);
-    expect(typed.body).toBe(
-      '- [x] Imaginary passport\n- [ ] Made-up charger\n  - [ ] Fictional adapter',
-    );
+    expect(typed.body).toBe('');
+    expect(await itemLines(page, packingSubject)).toEqual([
+      '[x] Imaginary passport',
+      '[ ] Made-up charger',
+      '  [ ] Fictional adapter',
+    ]);
 
     // 2. Reload: nothing changed, nothing written.
     const first = await propsOf(page, subjects);
@@ -156,11 +162,9 @@ test.describe('Google Keep drive app', () => {
       (await propsOf(page, [shoppingSubject]))[shoppingSubject][DESCRIPTION],
     ).toBe('Invented cheese\nPretend bread\nMade-up jam');
 
-    // 4. A list row edited here: replaced in Keep.
-    await setProps(page, packingSubject, {
-      [DESCRIPTION]:
-        '- [x] Imaginary passport\n- [x] Made-up charger\n  - [ ] Fictional adapter',
-    });
+    // 4. A list edited on both sides: moved in Keep, ticked here.
+    await fixture('moveItem', ['synthetic-note-2', 1, 0]);
+    await tickItem(page, packingSubject, 'Made-up charger');
     await sync.click();
     await expect(synced).toContainText('1 sent to Google Keep', {
       timeout: 60_000,
@@ -178,7 +182,6 @@ test.describe('Google Keep drive app', () => {
       body: {
         list: {
           listItems: [
-            { text: { text: 'Imaginary passport' }, checked: true },
             {
               text: { text: 'Made-up charger' },
               checked: true,
@@ -186,6 +189,7 @@ test.describe('Google Keep drive app', () => {
                 { text: { text: 'Fictional adapter' }, checked: false },
               ],
             },
+            { text: { text: 'Imaginary passport' }, checked: true },
           ],
         },
       },
@@ -328,6 +332,91 @@ async function setProps(
       await row.save();
     },
     { subject, values },
+  );
+}
+
+/** The items of a list note's row, in order: `[x] text`, a child indented. */
+async function itemLines(page: Page, note: string): Promise<string[]> {
+  return page.evaluate(async noteSubject => {
+    const store = window.store!;
+    const P = 'https://atomicdata.dev/properties/';
+    const short = async (property: string) =>
+      (await store.getResource(property)).get(`${P}shortname`);
+    const row = await store.getResource(noteSubject);
+    const table = await store.getResource(row.get(`${P}parent`) as string);
+    const app = await store.getResource(table.get(`${P}parent`) as string);
+    const children = await (
+      await app.getChildrenCollection(500)
+    ).getAllMembers();
+    const out: { position: number; line: string }[] = [];
+
+    for (const child of children) {
+      const items = await store.fetchResourceFromServer(child, {
+        noWebSocket: true,
+      });
+      if (items.get(`${P}name`) !== 'Google Keep list items') continue;
+
+      for (const member of await (
+        await items.getChildrenCollection(500)
+      ).getAllMembers()) {
+        const item = await store.fetchResourceFromServer(member, {
+          noWebSocket: true,
+        });
+        const named: Record<string, unknown> = {};
+        for (const [property, value] of Object.entries(item.getPropVals()))
+          named[String((await short(property)) ?? property)] = value;
+        if (named['google-keep-item-note'] !== noteSubject) continue;
+        out.push({
+          position: named['google-keep-position'] as number,
+          line: `${named['google-keep-under'] ? '  ' : ''}${named['google-keep-done'] ? '[x]' : '[ ]'} ${named.name as string}`,
+        });
+      }
+    }
+
+    return out.sort((a, b) => a.position - b.position).map(o => o.line);
+  }, note);
+}
+
+/** An item of a list note ticked in the drive, as a person would. */
+async function tickItem(page: Page, note: string, text: string) {
+  await page.evaluate(
+    async a => {
+      const store = window.store!;
+      const P = 'https://atomicdata.dev/properties/';
+      const row = await store.getResource(a.note);
+      const table = await store.getResource(row.get(`${P}parent`) as string);
+      const app = await store.getResource(table.get(`${P}parent`) as string);
+
+      for (const child of await (
+        await app.getChildrenCollection(500)
+      ).getAllMembers()) {
+        const items = await store.getResource(child);
+        if (items.get(`${P}name`) !== 'Google Keep list items') continue;
+
+        for (const member of await (
+          await items.getChildrenCollection(500)
+        ).getAllMembers()) {
+          const item = await store.getResource(member);
+          if (item.get(`${P}name`) !== a.text) continue;
+          const props = Object.keys(item.getPropVals());
+          if (!props.some(p => item.get(p) === a.note)) continue;
+
+          for (const property of props)
+            if (
+              (await store.getResource(property)).get(`${P}shortname`) ===
+              'google-keep-done'
+            ) {
+              await item.set(property, true);
+              await item.save();
+
+              return;
+            }
+        }
+      }
+
+      throw new Error(`No item ${a.text}`);
+    },
+    { note, text },
   );
 }
 

@@ -15,10 +15,10 @@ describe('Google Keep drive-app bundle', async () => {
     );
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
-    // Measured 38,984 bytes minified on 2026-10-14 for 0.1.0 at the
-    // 7dab1ce49a91 pin, the shared sync-status card included; the limit is
-    // that plus about 10%, rounded up.
-    expect(bytes).toBeLessThan(43_000);
+    // Measured 49,667 bytes minified on 2026-10-15 for 0.1.0 with list
+    // items merged item by item (lists.ts), the shared sync-status card
+    // included; the limit is that plus about 10%, rounded up.
+    expect(bytes).toBeLessThan(55_000);
   });
 
   it('bundles the shared sync-status card and its minified stylesheet', () => {

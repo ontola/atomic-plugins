@@ -64,6 +64,7 @@ const summary: SyncSummary = {
   checked: 0,
   complete: true,
   retiring: 0,
+  itemConflicts: 0,
 };
 const connection = { connectionId: 'c1', platform: 'google-keep' };
 

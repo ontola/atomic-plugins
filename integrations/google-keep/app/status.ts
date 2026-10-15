@@ -169,6 +169,11 @@ export function syncStatusFor(input: StatusInput): SyncStatus | undefined {
               }
             : {}),
         });
+      if (s.itemConflicts)
+        problems.push({
+          lead: `${s.itemConflicts} list ${is(s.itemConflicts, 'item was', 'items were')} changed both here and in Google Keep.`,
+          text: 'The version here was kept and sent to Google Keep.',
+        });
       if (s.waiting)
         problems.push({
           lead: `${s.waiting} ${is(s.waiting, 'edit waits', 'edits wait')} for the next sync.`,

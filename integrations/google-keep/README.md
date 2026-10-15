@@ -9,7 +9,8 @@ rate-limit handling, in its own folder with nothing imported from it.
 - `app/`: the drive app. `main.ts` (the view), `controller.ts` (the state
   machine and the one-minute timer), `lease.ts` (one open browser syncs at a
   time), `sync.ts` (one pass), `notes.ts` (the pure mapping and the plan of
-  a pass), `read.ts` (the four Keep calls and the rate-limit handling),
+  a pass), `lists.ts` (the item-by-item merge of a list note), `read.ts`
+  (the four Keep calls and the rate-limit handling),
   `drive.ts` (the app's own class and properties), `status.ts` (the card
   mapping), `store.ts` (the host's types), `build.mjs`. Version in
   `app/package.json`; the built module is `apps/google-keep/<version>/ui.js`.
@@ -34,21 +35,34 @@ connected yet.
 ## What a row is
 
 There is no shared note class in `ontology/`, so on first open the app
-creates a `google-keep-note` Class in the App's own ontology and makes its
-table of that class. A row is one note:
+creates two Classes in the App's own ontology: `google-keep-note`, the
+class of its table, and `google-keep-item`, the class of a second table it
+makes under the App, "Google Keep list items". A note row:
 
-| Column                | Holds                                                                                |
-| --------------------- | ------------------------------------------------------------------------------------ |
-| Name                  | The note's title (may be empty)                                                      |
-| Description           | A text note's text, or a list note as a Markdown checklist (below)                   |
-| Keep note             | The note's resource name, `notes/<id>`: the row's identity                           |
-| Keep note kind        | `text` or `list`                                                                     |
-| Keep presence         | `present`, `trashed`, `deleted` or `unconfirmed`                                     |
-| Keep sync held        | Why an edit here is not sent: `conflict`, or a reason (shared, attachment, too long) |
-| Keep sync fingerprint | A short digest of the title and text both sides had at the last sync (the baseline)  |
+| Column                 | Holds                                                                                        |
+| ---------------------- | -------------------------------------------------------------------------------------------- |
+| Name                   | The note's title (may be empty)                                                              |
+| Description            | A text note's text (empty for a list note)                                                   |
+| Keep note              | The note's resource name, `notes/<id>`: the row's identity                                   |
+| Keep note kind         | `text` or `list`                                                                             |
+| Keep presence          | `present`, `trashed`, `deleted` or `unconfirmed`                                             |
+| Keep sync held         | Why an edit here is not sent: `conflict`, or a reason (shared, attachment, too long)         |
+| Keep sync fingerprint  | A short digest of the title (and a text note's text) both sides had at the last sync         |
+| Keep list at last sync | A list note's items as both sides had them at the last sync, as a Markdown checklist (below) |
 
-A list note's checklist, one line per item, a child item (Keep allows one
-level) indented by two spaces:
+An item row, one per item of a list note:
+
+| Column                 | Holds                                                                   |
+| ---------------------- | ----------------------------------------------------------------------- |
+| Name                   | The item's text                                                         |
+| Done                   | Whether it is ticked                                                    |
+| Note                   | The note row it is on                                                   |
+| Under                  | The item it is indented under (Keep allows one level)                   |
+| Position               | Its place in the list, lowest first                                     |
+| Keep item at last sync | Which item of "Keep list at last sync" it is; empty if added here since |
+
+The last-synced list, one line per item, a child item indented by two
+spaces:
 
 ```markdown
 - [x] Imaginary passport
@@ -56,8 +70,9 @@ level) indented by two spaces:
   - [ ] Fictional adapter
 ```
 
-A row made here becomes a list note when every non-empty line of its
-Description is a checkbox line, a text note otherwise.
+A note row made here becomes a list note when its kind is `list` and it
+has item rows, or when every non-empty line of its Description is a
+checkbox line (the items then become item rows); a text note otherwise.
 
 ## A pass
 
@@ -80,6 +95,19 @@ row. A row deleted here is not imported again, and is not deleted in Keep:
 the view lists it under "Deleted here, still in Google Keep" with "Bring
 back" and "Delete in Keep" (which asks first). At most 25 notes are created
 or replaced per pass; the rest wait for the next.
+
+**A list note** is merged item by item (`app/lists.ts`). Keep's items have
+no ids, so they are paired with the last-synced list by text and tick,
+then by text, then by place between two paired neighbours (an item whose
+text was edited in Keep). Then each item's text, tick and indent take the
+side that changed it, and the order takes each side's moves: an item moved
+in Keep and ticked here comes out moved and ticked. An item deleted on one
+side and edited on the other stays. When both sides changed the same field
+of an item (or the title) differently, the drive's value is kept and the
+card counts it. If the merged list differs from Keep's, the note is
+replaced by it, as below. Two items with the same text, or an item edited
+and moved in Keep in one sync, can pair wrongly; the result is then an
+item deleted and another added.
 
 **Replacing a note.** The Keep API has create, get, list and delete, and no
 update. An edit made here is sent as a new note with the row's title and
@@ -113,11 +141,13 @@ rule them out on a drive slower than the wait.
 
 ## Evidence
 
-Declared, unit-tested (49 tests: the mapping, the plan, a pass against the
-fixture through a fake host store, the lease and the controller, the card)
+Declared, unit-tested (66 tests: the mapping, the plan, the item merge, a
+pass against the fixture through a fake host store, the lease and the
+controller, the card)
 and **Host E2E** on the synthetic fixture: catalog install, connect, the five
 notes imported, a reload that writes nothing, an edit made in Keep pulled, a
-list edited here replacing its note, a shared note held back, a conflict
+list moved in Keep and ticked here coming out moved and ticked (its note
+replaced), a shared note held back, a conflict
 settled for the row's version, a row created in Keep, a trashed note marked.
 Nothing verified against Google: what Keep returns for shared notes, the
 permissions of a Workspace account's notes, and what `GET` answers for a
