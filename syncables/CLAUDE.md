@@ -1028,6 +1028,41 @@ retention limit and leases on a simulated clock.
 - Node engine is pinned to `>= 22.11 < 23` (see `package.json`
   `engines`/`volta`).
 
+## Changelog fragments
+
+A change records its changelog text in its own file,
+`changes/<name>.<kind>.md`, not as an `**Unreleased**` bullet in
+`README.md`: every PR used to add its bullet at the same spot under
+`## Changelog`, so each merge conflicted with the next. Separate files
+never conflict. (Like towncrier's news fragments.)
+
+- `<name>`: the branch or PR, lowercase letters, digits and hyphens
+  (`syncables-item-order`, `630`); one file per change, two if a change
+  has two kinds. `<kind>`: `behaviour` (a change a user must check before
+  upgrading), `added`, `fixed` or `other`.
+- The text is one Markdown paragraph, wrapped at about 76 columns like
+  the README, with no line starting as a list item (`- `, `* `, `1. `) or
+  a heading (`# `): what changed for a user of the
+  package, and for `behaviour` what to check. A review fix to the same
+  change edits the same file.
+- `npm run changelog -- --check` validates the directory (the unit test
+  `changelog.test.ts` runs the same check); `npm run changelog` prints the
+  entry the fragments make.
+- Release: `npm run changelog -- --release <version> [--summary "…"]`
+  writes `- **<version>**: <summary>` first under `## Changelog`, with one
+  sub-bullet per fragment, behaviour changes first, then `added`, `fixed`
+  and `other`, each sorted by name, and deletes the fragments. Every
+  check runs first; the README is replaced in one rename, and the
+  fragments are deleted only after it. It refuses a version the README
+  already has. Edit the
+  entry by hand afterwards if it needs a lead or reordering, then bump
+  `package.json` and `package-lock.json` as before. It refuses while the
+  README still holds `**Unreleased**` bullets written before this
+  convention: the release that first uses it folds those in by hand (or
+  turns them into fragments) first.
+- Open PRs written before the convention keep their README bullet; new
+  work, and a PR rebased for other reasons, uses a fragment.
+
 ## Generative AI disclosure (NLnet policy)
 
 This project is NLnet-funded and follows [NLnet's Generative AI policy](https://nlnet.nl/foundation/policies/generativeAI/). If you (an AI coding assistant) make a commit here, keep it compliant:
