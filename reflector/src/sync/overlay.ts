@@ -293,8 +293,18 @@ export function pinItemsFields(document: OpenApiDocument): OpenApiDocument {
   const schemes = document.components?.paginationSchemes ?? {};
   for (const [path, item] of Object.entries(document.paths)) {
     const get = item.get;
-    const application = get?.['x-pagination'];
-    if (!Array.isArray(application) || application.length === 0) {
+    const application: unknown = get?.['x-pagination'];
+    if (application === undefined) {
+      continue;
+    }
+    // As syncables' resolveEffectiveScheme: an x-pagination that is not an
+    // array cannot be applied, and is refused rather than skipped.
+    if (!Array.isArray(application)) {
+      throw new Error(
+        `paths['${path}'].get: x-pagination must be an array of Pagination Application Objects`,
+      );
+    }
+    if (application.length === 0) {
       continue;
     }
     application.forEach((entry: unknown, index: number) => {
@@ -305,9 +315,15 @@ export function pinItemsFields(document: OpenApiDocument): OpenApiDocument {
         );
       }
     });
-    const schemeName = (application[0] as { scheme: string }).scheme;
+    // The first application, with its overrides merged onto the named
+    // scheme, as syncables' resolveEffectiveScheme merges them: an
+    // override of response.envelope.itemsField names the items array.
+    const first = application[0] as { scheme: string; overrides?: unknown };
+    const scheme: unknown = schemes[first.scheme];
     const itemsField = schemeItemsField(
-      schemeName ? schemes[schemeName] : undefined,
+      first.overrides === undefined
+        ? scheme
+        : deepMerge(scheme, first.overrides),
     );
     const schema =
       get?.responses?.['200']?.content?.['application/json']?.schema;
