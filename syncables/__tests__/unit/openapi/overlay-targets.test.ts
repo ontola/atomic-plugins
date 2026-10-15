@@ -59,6 +59,60 @@ describe('parseOverlayTarget', () => {
   });
 });
 
+describe('parseOverlayTarget unescapes nothing, as the proxy does', () => {
+  it('reads a backslash before a quote as two literal characters', () => {
+    expect(parseOverlayTarget("$.paths['a\\'b']")).toEqual(['paths', "a\\'b"]);
+  });
+
+  it("ends a bracket segment at the first ']", () => {
+    expect(() => parseOverlayTarget("$.paths['a']b']")).toThrow(
+      /Unsupported overlay target/,
+    );
+  });
+});
+
+describe('__proto__', () => {
+  it.each(['$.__proto__', "$.paths['__proto__']", '$.a.__proto__.b'])(
+    'refuses the target %s',
+    (target) => {
+      expect(() => parseOverlayTarget(target)).toThrow(
+        /a __proto__ segment is refused/,
+      );
+    },
+  );
+
+  it('keeps a __proto__ key in a document and an update as an own member', () => {
+    // JSON.parse makes "__proto__" an own key; plain assignment of it
+    // would set the prototype instead.
+    const document = JSON.parse('{"paths": {"__proto__": {"x": 1}}}') as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const update = JSON.parse('{"__proto__": {"y": 2}, "polluted": true}');
+    const result = applyOverlay(
+      document,
+      overlay([
+        { target: '$.paths', update },
+        { target: '$', update: JSON.parse('{"__proto__": {"z": 3}}') },
+      ]),
+    ) as Record<string, Record<string, unknown>>;
+    const paths = result['paths']!;
+    expect(Object.getPrototypeOf(paths)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(result)).toBe(Object.prototype);
+    expect(Object.hasOwn(paths, '__proto__')).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(paths, '__proto__')?.value).toEqual({
+      x: 1,
+      y: 2,
+    });
+    expect(Object.getOwnPropertyDescriptor(result, '__proto__')?.value).toEqual(
+      { z: 3 },
+    );
+    expect((paths as { y?: unknown }).y).toBeUndefined();
+    expect(({} as { y?: unknown; z?: unknown }).y).toBeUndefined();
+    expect(({} as { y?: unknown; z?: unknown }).z).toBeUndefined();
+  });
+});
+
 describe('applyOverlay with bracket targets', () => {
   const document = {
     paths: {
