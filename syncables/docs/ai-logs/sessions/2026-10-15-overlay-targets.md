@@ -23,3 +23,18 @@ still created and `remove` is kept. A new test applies every overlay in
 the repository; 11 of its 20 tests fail on the code before. Not
 exported from the package entries, to stay clear of `index.ts` and
 `browser.ts`, which open PRs change.
+
+## Turn 2
+
+**Human (via the coordinator session):** #618's review: refuse a
+`__proto__` target segment, make `navigate` and the final assignment
+use own-property definitions, and pin with tests that nothing is
+unescaped, as in the proxy (`['a\'b']` is literal, `['a']b']` refused).
+
+**Assistant:** `parseOverlayTarget` refuses `__proto__`. `define`
+(`Object.defineProperty`, enumerable, as `JSON.parse` does) sets every
+member in `deepMergeValue`, `navigate`, the root merge and the target,
+and `own` reads only own members. Before, a root `update` with a
+`__proto__` key (own after `JSON.parse`) set the result's prototype. Six
+new tests; the four on `__proto__` fail on the code before, and the two
+escape tests pin behaviour that was already right.
