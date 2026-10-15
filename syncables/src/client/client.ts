@@ -4436,7 +4436,19 @@ export function createApiClient(
     const raw = await readTransport({ ...request, headers });
     const response = { ...raw, headers: lowerCaseHeaders(raw.headers) };
     await noteReadThrottling(response, Date.now());
-    if (response.status === 304 && cached) return cached;
+    // The cached body, but this answer's fromCache: a stored response
+    // keeps the fromCache of the request that filled it, and a 304 from
+    // the network is a counted request, not a cache's answer.
+    if (response.status === 304 && cached) {
+      const answer = {
+        status: cached.status,
+        headers: cached.headers,
+        body: cached.body,
+      };
+      return raw.fromCache === undefined
+        ? answer
+        : { ...answer, fromCache: raw.fromCache };
+    }
     if (cacheable && response.status === 200)
       conditionalCache.set(key, response);
     return response;

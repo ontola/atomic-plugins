@@ -1737,14 +1737,23 @@ Every request syncables makes says why, in `TransportRequest.purpose`
 (`RequestPurpose`): `list` (a page of a collection read, `paginate` or a
 range window), `feed` (a deletion feed page), `item` (a record's own GET
 when a list lacks it), `describer`, `zone`, `precondition` (a read a
-write depends on, which must be fresh), `write` (a create, update, delete
-or follow-up) and `inbox`. A transport may ignore it; it is optional on the
-type, so a transport written before it still works. A caching transport
-uses it to answer only what it may: a `list` read, say, but never a
-`precondition` read or a `write`. A transport that answers without asking
-the provider sets `fromCache: true` on its response: the client then gives
-back the request it counted against a pacing quota, and the read's
-`maxRequests` does not count it.
+write depends on), `write` (a create, update, delete or follow-up) and
+`inbox`. A transport may ignore it; it is optional on the type, so a
+transport written before it still works. A caching transport uses it to
+answer only what it may: a `list` read, say. An `item` read must be
+fresh, like a `precondition` read: it decides whether a record a list
+left out still exists. A `write` is never answered from a cache, and a
+request without a `purpose` (from code that predates it) must be taken
+as not cacheable. An authentication adapter that builds a new request
+must keep the `purpose` of the one it was given. A transport that answers
+without asking the provider sets `fromCache: true` on its response: the
+client then gives back the request it counted against a pacing quota,
+and the read's `maxRequests` does not count it. Everything else about
+the response still applies: a cached `429`, or a declared throttling
+signal in a cached body, pauses its buckets as a live one does, so a
+cache should not keep such answers. A `304` that the conditional cache
+answers with a stored body carries the `fromCache` of that `304`, not
+of the stored response.
 
 ## Optional raw read-response storage
 

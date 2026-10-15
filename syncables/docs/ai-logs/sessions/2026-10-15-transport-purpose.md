@@ -29,3 +29,20 @@ without `purpose` (it fails when one is removed, as does `tsc`), the type
 pin, purposes through a sync, an update and a paginate, `Pacer.release`,
 the client not waiting under a quota for cached answers, and `maxRequests`.
 README, CLAUDE.md, changelog.
+
+## Review fixes
+
+**Human (via the coordinator session):** #606's should-fixes: the
+conditional cache stored the whole response, so a 304 returned the
+stored `fromCache`; README notes (a missing `purpose` is not cacheable,
+authentication adapters keep `purpose`, `item` reads must be fresh, a
+cached 429 still pauses buckets); pin the scan test's sites.
+
+**Assistant:** A 304 answered from the conditional cache now carries
+that 304's `fromCache`, not the stored one; a test with two collections
+under `maxRequests: 1` fails on the code before (both 304s went
+uncounted). The README section says the four points. The scan test pins
+the request literals per file (`client/client.ts` 6, `read/pages.ts` 3,
+`inbox/client.ts`, `read/runtime-schemas.ts` and `read/time-zone.ts` 1)
+and exempts only the stored response record in `read/responses.ts`, by
+its `status` and `receivedAt` keys.

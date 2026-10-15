@@ -25,7 +25,11 @@ import { throttledPets } from '../../fixtures/throttling.js';
 const src = new URL('../../../src/', import.meta.url).pathname;
 
 /** Every object literal under src/ with `url`, `method` and `headers`: a request. */
-function requestLiterals(): { at: string; purpose: boolean }[] {
+function requestLiterals(): {
+  at: string;
+  purpose: boolean;
+  names: string[];
+}[] {
   const files: string[] = [];
   const walk = (dir: string): void => {
     for (const name of readdirSync(dir)) {
@@ -35,7 +39,7 @@ function requestLiterals(): { at: string; purpose: boolean }[] {
     }
   };
   walk(src);
-  const found: { at: string; purpose: boolean }[] = [];
+  const found: { at: string; purpose: boolean; names: string[] }[] = [];
   for (const file of files) {
     // The mock server answers requests; it makes none.
     if (file.includes('/mock-server/')) continue;
@@ -56,6 +60,7 @@ function requestLiterals(): { at: string; purpose: boolean }[] {
           found.push({
             at: `${relative(src, file)}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}`,
             purpose: names.includes('purpose'),
+            names,
           });
       }
       ts.forEachChild(node, visit);
@@ -67,17 +72,31 @@ function requestLiterals(): { at: string; purpose: boolean }[] {
 
 describe('every request syncables makes sets a purpose', () => {
   it('in every request literal under src/ (a new one without it fails here)', () => {
-    const literals = requestLiterals();
-    // A stored response record (`storeResponse`), not a request.
-    const notRequests = new Set(['read/responses.ts']);
-    const missing = literals
-      .filter((l) => !notRequests.has(l.at.split(':')[0]!))
-      .filter((l) => !l.purpose)
-      .map((l) => l.at);
+    // The one literal that is not a request: the stored response record
+    // that `storeResponse` receives, with its `status` and `receivedAt`.
+    const isStoredResponse = (l: { at: string; names: string[] }): boolean =>
+      l.at.startsWith('read/responses.ts:') &&
+      l.names.includes('status') &&
+      l.names.includes('receivedAt');
+    const all = requestLiterals();
+    expect(all.filter(isStoredResponse)).toHaveLength(1);
+    const literals = all.filter((l) => !isStoredResponse(l));
+    const missing = literals.filter((l) => !l.purpose).map((l) => l.at);
     expect(missing).toEqual([]);
-    // The scan finds the senders it should: pages, describers, zones,
-    // records, writes, preconditions and the inbox.
-    expect(literals.length).toBeGreaterThanOrEqual(10);
+    // The senders the scan finds, per file: a new request literal (with or
+    // without a purpose) changes this, so it is looked at.
+    const perFile: Record<string, number> = {};
+    for (const l of literals) {
+      const file = l.at.split(':')[0]!;
+      perFile[file] = (perFile[file] ?? 0) + 1;
+    }
+    expect(perFile).toEqual({
+      'client/client.ts': 6,
+      'inbox/client.ts': 1,
+      'read/pages.ts': 3,
+      'read/runtime-schemas.ts': 1,
+      'read/time-zone.ts': 1,
+    });
   });
 
   it('and the internal senders require one (a type error otherwise)', async () => {
@@ -199,5 +218,50 @@ describe('a response a cache answered', () => {
     await expect(counted.send(request)).rejects.toThrow(/2 requests/);
     const cached = budget(true);
     for (let i = 0; i < 5; i++) await cached.send(request);
+  });
+
+  it('is not taken for a 304 from the network, which the conditional cache answers', async () => {
+    // Two collections, so one sync makes two requests against
+    // maxRequests: 1, which only answers a cache gave back can pass.
+    const pets = petsDocument as unknown as {
+      paths: Record<string, unknown>;
+    };
+    const doc = prepareDocument({
+      ...petsDocument,
+      paths: {
+        ...pets.paths,
+        '/cats': pets.paths['/pets'],
+        '/cats/{catId}': JSON.parse(
+          JSON.stringify(pets.paths['/pets/{petId}']).replaceAll(
+            'petId',
+            'catId',
+          ),
+        ),
+      },
+      servers: [{ url: 'https://api.example.com' }],
+    } as unknown as OpenApiDocument);
+    let sent = 0;
+    const transport: Transport = async (request) => {
+      sent += 1;
+      // A caching transport answered the first read; the second is a real
+      // conditional request the server answers 304.
+      return request.headers['if-none-match']
+        ? { status: 304, headers: {}, body: '' }
+        : {
+            status: 200,
+            headers: { etag: '"1"' },
+            body: JSON.stringify([{ id: '1', name: 'Rex' }]),
+            fromCache: true,
+          };
+    };
+    const client = createApiClient(doc, {
+      transport,
+      limits: { maxRequests: 1 },
+    });
+    await client.sync();
+    expect(sent).toBe(2);
+    // Before, the 304 came back with the stored fromCache: true, so
+    // neither request was counted.
+    await expect(client.sync()).rejects.toThrow(/exceeds 1 requests/);
   });
 });
