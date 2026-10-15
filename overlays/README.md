@@ -687,7 +687,13 @@ Checks:
   Pages serves it. Its `reads` job runs every `tests/*.test.ts` (syncables
   reads through the catalogs, with vitest from `syncables/`) when an overlay
   or syncables' source changes; the composer reads each pinned OAD from the
-  same openapi-directory clone (`OPENAPI_DIRECTORY_REPO`).
+  same openapi-directory clone (`OPENAPI_DIRECTORY_REPO`). With that
+  variable set, a pinned OAD the clone cannot show is an error naming the
+  pin and the path, never a silent read from raw.githubusercontent.com
+  (`scripts/pinned_oad.py`, used by `tests/compose_gitlab_platform.py`,
+  `tests/test_asana_airtable_readonly.py` and
+  `tests/test_google_tasks_readonly.py`); without it, the default clones
+  next to this repository and then the network are tried, as before.
 - `integration-proxy`'s `default_catalog_*` tests (PRs touching this folder):
   compose the selected dated catalog with the proxy's runtime loader, reading
   overlays from this folder. Its
