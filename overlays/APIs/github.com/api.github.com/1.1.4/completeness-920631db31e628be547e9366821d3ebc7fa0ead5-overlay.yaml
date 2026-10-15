@@ -26,6 +26,10 @@ overlay: 1.0.0
 info:
   title: GitHub REST API issues collection completeness
   version: 1.0.0
+  x-requires:
+    - anyOf:
+        - crud-causality-920631db31e628be547e9366821d3ebc7fa0ead5-overlay.yaml
+        - crud-causality-v2-920631db31e628be547e9366821d3ebc7fa0ead5-overlay.yaml
 extends: https://raw.githubusercontent.com/ontola/openapi-directory/920631db31e628be547e9366821d3ebc7fa0ead5/APIs/github.com/api.github.com/1.1.4/openapi.yaml
 actions:
   - target: $.components
