@@ -17,7 +17,9 @@ not to hand-write it; a synthetic fixture from the docs already exists
 not checked against the spec's `schema.json`. `applicationProblem` in
 `autodetect.ts` checks every entry (a nonempty `scheme`, an object
 `overrides`, a string `description`, no other field but `x-`); one that
-fails throws `PaginationSchemeError`. All 1,092 entries in the
-repository's overlays and fixtures pass. Tests in
+fails throws `PaginationSchemeError`. Every `x-pagination` entry in the
+repository's YAML and JSON files passes (1,275, counted by walking every
+file for `x-pagination` arrays; an earlier count of 1,092 covered only
+`overlays/**/*.yaml` and the syncables fixtures). Tests in
 `unit/pagination/application-shape.test.ts`; six fail on the code before.
 README, CLAUDE.md, changelog.

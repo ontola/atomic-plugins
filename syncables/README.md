@@ -1878,7 +1878,8 @@ const { records, ontology, errors } = await readPlatform(document, {
   entry. An explicit entry naming the invalid scheme makes the read fail
   instead, as does one that is not a Pagination Application Object (an
   empty `scheme`, `overrides` that are not an object, a `description`
-  that is not a string, or a field other than those and `x-` ones). `x-pagination: []` applies nothing and does not opt out: the
+  that is not a string, or a field other than those and `x-` ones).
+  `x-pagination: []` applies nothing and does not opt out: the
   operation is still matched by auto-detection. A scheme whose
   `autoDetect` is neither a boolean nor an object (`null`) is invalid
   too, and auto-detection reads it as the default options. The validator
@@ -2037,9 +2038,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   `scheme`, an object `overrides`, a string `description`, and no other
   field but `x-` ones, on every entry. One that is not fails the read
   with a `PaginationSchemeError`, as an undeclared scheme does; before, a
-  typo such as `overide:` dropped the overrides without a word. All
-  1,092 `x-pagination` entries in this repository's overlays and fixtures
-  pass.
+  typo such as `overide:` dropped the overrides without a word. Every
+  `x-pagination` entry in this repository's YAML and JSON files passes
+  (1,275 entries, counted on 2026-10-15 by walking every file for
+  `x-pagination` arrays).
 - **0.24.0**: CRUD Causality 0.7.0's `replace` and `unkeyedLists` for
   APIs that cannot update an object or give list items no id (see "APIs
   that cannot update"): `replaceOf`, `replaceBlock`, `unkeyedListsOf`,
