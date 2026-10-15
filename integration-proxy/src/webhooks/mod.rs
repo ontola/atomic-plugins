@@ -43,7 +43,7 @@ pub struct IngressGate {
     /// deliveries.
     pub lookups: tokio::sync::Semaphore,
     /// Requests from networks over their refusal limit that may wait for
-    /// the lookup slot at once (re-review of the rate-limits PR); any
+    /// or hold the lookup slot at once (re-review of the rate-limits PR); any
     /// beyond that get `429` at once, so such networks cannot crowd out
     /// the others, while a real delivery from a blocked network that shares
     /// its addresses with junk (a provider's) can still queue.
@@ -71,7 +71,7 @@ pub const INGRESS_DATABASE: usize = 2;
 pub const INGRESS_LOOKUPS: usize = 1;
 /// Bodies read at once per endpoint.
 pub const INGRESS_READS_PER_ENDPOINT: usize = 4;
-/// Requests from blocked networks waiting for the lookup slot at once.
+/// Requests from blocked networks waiting for or holding the lookup slot at once.
 pub const INGRESS_BLOCKED_WAITERS: usize = 2;
 
 impl Default for IngressGate {
