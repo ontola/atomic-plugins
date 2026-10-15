@@ -14,8 +14,11 @@
 #   - the next_page object: "Note that an offset token will expire after some time, as data
 #     may have changed."
 # Needs Collection Completeness 0.2.0-draft (notFound). Compose after
-# crud-causality-b58c91d9...-overlay.yaml, in either order: it deep-merges into its `task`
-# resource.
+# crud-causality-v2-b58c91d9...-overlay.yaml, in either order: it deep-merges into its `task`
+# resource. Not with v1: v1's read sends no `limit`, and Asana's pagination guide says an
+# unpaginated query "will be truncated at about 1,000 objects", so a large project would read
+# as complete while missing tasks, and with `removed` those would all go unconfirmed. v2 fixes
+# `limit: '100'` on the read (CRUD Causality listQuery), so it pages through every task.
 #
 # Without a declaration a consumer takes a 404 from a task's own read as a deletion (the
 # notFound default). Asana's 404 says the object "does not exist", but a deleted task can be

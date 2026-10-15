@@ -1,6 +1,6 @@
 """Check the Asana project tasks Collection Completeness overlay against its exact source OAD.
 
-It composes with the catalog's auth, pagination and crud-causality overlays of
+It composes with the catalog's auth and pagination overlays and crud-causality v2 of
 the same pin, in either order; the result must pass the completeness and
 collection-read validators, a missing task is classified as declared, and the
 pinned document still says what the overlay quotes. No provider is called.
@@ -41,7 +41,8 @@ DIRECTORY = None
 PIN = "b58c91d9f59c6a10178916e7948793809edae46d"
 FOLDER = "APIs/asana.com/1.0/"
 OVERLAYS = [FOLDER + f"auth-{PIN}-overlay.yaml", FOLDER + f"pagination-{PIN}-overlay.yaml",
-            FOLDER + f"crud-causality-{PIN}-overlay.yaml", FOLDER + f"completeness-{PIN}-overlay.yaml"]
+            FOLDER + f"crud-causality-v2-{PIN}-overlay.yaml", FOLDER + f"completeness-{PIN}-overlay.yaml"]
+CRUD_V1 = FOLDER + f"crud-causality-{PIN}-overlay.yaml"
 
 
 class AsanaTasksCompletenessTests(unittest.TestCase):
@@ -78,6 +79,40 @@ class AsanaTasksCompletenessTests(unittest.TestCase):
                       "Note that an offset token will expire after some time, as data may have changed."):
             with self.subTest(words=words):
                 self.assertIn(words, " ".join(text.split()))
+
+    def test_the_read_pages_with_limit_100_instead_of_being_truncated(self):
+        # "Alternatively, your query will be truncated at about 1,000 objects."
+        tasks = self.composed["components"]["crudResources"]["task"]["collections"]["projectTasks"]
+        self.assertEqual(tasks["listQuery"], {"limit": "100"})
+        item = self.original["paths"]["/projects/{project_gid}/tasks"]
+        limit = next(p for p in map(self.resolve, item.get("parameters", []) + item["get"].get("parameters", []))
+                     if p["name"] == "limit")
+        self.assertEqual((limit["in"], limit["schema"]["maximum"]), ("query", 100))
+        # limit is the pagination scheme's pageSize field, which a listQuery may set (§4.2.1).
+        scheme = self.composed["components"]["paginationSchemes"]["cursorData"]
+        self.assertEqual(scheme["request"]["queryParameters"]["limit"]["role"], "pageSize")
+        self.assertEqual(self.composed["paths"]["/projects/{project_gid}/tasks"]["get"]["x-pagination"],
+                         [{"scheme": "cursorData"}])
+
+    def test_crud_v2_is_v1_plus_a_limit_on_each_list(self):
+        v1 = yaml.safe_load((ROOT / CRUD_V1).read_text())
+        v2 = copy.deepcopy(self.overlays[2])
+        resources = next(a["update"]["crudResources"] for a in v2["actions"] if "crudResources" in a.get("update", {}))
+        dropped = []
+        for name, resource in resources.items():
+            for collection_name, collection in resource.get("collections", {}).items():
+                self.assertEqual(collection.pop("listQuery"), {"limit": "100"}, collection_name)
+                dropped.append(collection_name)
+        self.assertEqual(sorted(dropped), ["projectTasks", "users", "workspaceProjects", "workspaces"])
+        self.assertEqual(v2["actions"], v1["actions"])
+
+    def resolve(self, node):
+        while isinstance(node, dict) and "$ref" in node:
+            target = self.original
+            for part in node["$ref"][2:].split("/"):
+                target = target[part]
+            node = target
+        return node
 
     def test_task_outcomes(self):
         task = self.composed["components"]["crudResources"]["task"]

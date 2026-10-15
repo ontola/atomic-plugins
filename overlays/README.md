@@ -424,9 +424,21 @@ returns completed tasks (the parameter's text implies it), and whether
 subtasks not added to the project are listed. An expired offset token ("an
 offset token will expire after some time") fails the read, which is then not
 complete. No dated catalog selects it yet.
-`tests/test_asana_tasks_completeness.py` composes it with the catalog's auth,
-pagination and crud-causality overlays, in either order, runs both
-validators, checks the pinned wording and the outcomes `classify_read` gives.
+
+It composes only after
+[`crud-causality-v2-b58c91d9…`](APIs/asana.com/1.0/crud-causality-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml),
+also new: v1 plus `listQuery: {limit: '100'}` on each of the four Asana
+lists. v1's read sends no `limit`, and Asana's
+[pagination guide](https://developers.asana.com/docs/pagination) says "When
+making paginated requests, you are able to "page through" all objects for a
+particular query up to 100 objects at a time. Alternatively, your query will
+be truncated at about 1,000 objects." A large project would then read as
+complete while missing tasks. With the fixed `limit` (the pagination scheme's
+`pageSize` field, which CRUD Causality §4.2.1 lets a `listQuery` set) the read
+pages through every task. `tests/test_asana_tasks_completeness.py` composes
+the completeness overlay with the catalog's auth and pagination overlays and
+crud-causality v2, in either order, runs both validators, checks that v2 is v1
+plus the `limit`, the pinned wording and the outcomes `classify_read` gives.
 No provider was called.
 
 ## Asana throttling
