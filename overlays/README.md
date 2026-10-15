@@ -890,9 +890,13 @@ info:
     - anyOf: [crud-causality-v2-<pin>-overlay.yaml]
 ```
 
-Published completeness overlays cannot change, so
-`tests/test_completeness_requirements.py` holds the same groups for them in a
-table (and for those still in review when it was written). For every dated
+`x-requires` is a convention of this repository, not part of an
+openapi-extensions specification: it names files by this folder's revision
+filenames (`<kind>[-vN]-<pin>-overlay.yaml`) and is checked against this
+repository's dated catalogs, so it means nothing to a consumer that composes
+documents from elsewhere; a consumer may ignore it. Published completeness
+overlays cannot change, so `tests/test_completeness_requirements.py` holds the
+same groups for them in a table (and for those still in review when it was written). For every dated
 catalog it checks that each completeness overlay it selects has every group
 met, and that no other revision of a group's kinds is selected for that
 platform; it also fails on a completeness overlay that states no

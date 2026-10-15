@@ -42,19 +42,19 @@ REQUIRES = {
         ["crud-causality-2914e6bed4db4389921b36e4ed79e645c2085668-overlay.yaml"]],
     "APIs/todoist.com/1/completeness-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml": [
         ["crud-causality-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml"]],
+    # Its header names only crud-causality v1; v2 is allowed too, since v2 keeps v1's
+    # collections and also fixes the issues read's `state: all` the declaration relies on.
     "APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml": [
         ["crud-causality-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml",
          "crud-causality-v2-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml"]],
     "APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml": [
         ["crud-causality-v2-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml"]],
-    # In review when this was written (#579, #585 and its v2, #586, #604).
+    # In review when this was written (#579, #585, #586, #604). Moneybird's v1 names only
+    # crud-causality v1; a later revision states its own info.x-requires.
     "APIs/asana.com/1.0/completeness-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml": [
         ["crud-causality-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml"]],
     "APIs/moneybird.com/v2-readonly/completeness-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml": [
-        ["crud-causality-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml",
-         "crud-causality-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml"]],
-    "APIs/moneybird.com/v2-readonly/completeness-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml": [
-        ["crud-causality-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml"]],
+        ["crud-causality-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml"]],
     "APIs/googleapis.com/calendar/v3/completeness-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml": [
         ["app-crud-causality-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
          "app-crud-causality-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
