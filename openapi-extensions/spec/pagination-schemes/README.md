@@ -1,6 +1,6 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.9.0
+**Spec version:** 0.9.1
 
 ---
 
@@ -204,7 +204,9 @@ with it:
    fraction, a boolean, `null`, an array or an object), when the value equals
    the one it sent for this page, when a page holds an item (by its CRUD
    Causality identity, else the whole item) that an earlier page of the read
-   returned, or when a page with no items says `hasMore: true`.
+   returned, when a page with no items says `hasMore: true`, or when a
+   response has a `hasMore` value that is not a boolean (`"false"`, `0`,
+   `null`): a value the client cannot read is not taken as "ask again".
 
 A `hasMore` of `true` on a page with items, or no `hasMore`, decides nothing:
 the client asks again, and an empty page ends the list. Without `hasMore` a
@@ -378,10 +380,11 @@ an item re-reads.
 Added in 0.8.0. Some APIs stop serving a result at a cap and say so in the
 response rather than through the next-page signals. Notion's
 [Query a data source](https://developers.notion.com/reference/query-a-data-source)
-pages through "up to **10,000 results** per query"; past that, "`has_more`
-becomes `false`, and every response page served from the capped result
-includes a `request_status` marking the result as incomplete", with
-"`type: incomplete` and `incomplete_reason: query_result_limit_reached`". A
+pages through "up to **10,000 results** per query"; past that, "pagination
+stops at the 10,000th result: `has_more` becomes `false`, and every response
+page served from the capped result includes a `request_status` marking the
+result as incomplete", with the example
+`{ "request_status": { "type": "incomplete", "incomplete_reason": "query_result_limit_reached" } }`. A
 reader that trusts `has_more` alone takes such a read as complete. The
 Incomplete Object names the body value that says otherwise.
 
@@ -1094,6 +1097,7 @@ cd openapi-extensions/spec/pagination-schemes
 
 ## Changes
 
+- **0.9.1** (2026-10-15): a `hasMore` field that is present but not a boolean (`"false"`, `0`, `null`) ends an item-cursor read with an error (§4.3.3 step 4); 0.9.0 read it as absent, so `"false"` asked for another page and an empty page then ended the read as complete. `read_item_cursor` and a test. No document changes meaning.
 - **0.9.0** (2026-10-14): adds `fromLastItem` to the Request Field Object (§4.3.3): a cursor the client reads from a field of the previous page's last item, as Stripe's `starting_after` and Discord's `after` take; and the response role `hasMore`, whose `false` ends the list. Validation rules 27–29, `read_item_cursor` in the validator, an example and tests. A document valid under 0.8.0 stays valid and means the same. A 0.8.0 validator rejects `fromLastItem` and the `hasMore` role. A 0.8.0 consumer that does not validate reads such a scheme as a `pageToken` scheme without a next token: it stops after one page and takes that page as the complete list, so a document that needs `fromLastItem` should not be used with one.
 - **0.8.0** (2026-10-13): adds `incomplete` to the Response Pagination Fields Object (§4.4.6), the Incomplete Object: a response body value (`field` with `equals` or `in`) that marks the result as cut short by the server, as Notion's query does past 10,000 results with `has_more: false`. A read in which any response is marked is not complete; paging is unchanged. Validation rule 26, `response_incomplete` in the validator, and `complete` in `read_pages` and `read_offsets` honour it; an example and tests. Allowed on `pageNumber`, `pageToken` and `nextLink` schemes only. Collection Completeness 0.4.0-draft §3 states that such a read is not complete. A document valid under 0.7.1 stays valid and means the same. A 0.7.1 validator rejects a scheme with `incomplete`; a consumer that does not validate ignores it and takes a marked read as complete. The Notion overlay revision that declares it follows separately.
 - **0.7.1** (2026-10-12): a clarification of §4.3.2: in a scheme that declares both an `offset` field and a `nextLink` response field, the link leads under either `advance`, an absent, `null` or empty link ends the read, and such a read is not complete when the last response's `totalCount` exceeds the items read. 0.7.0 did not say. No document changes meaning, but consumers that stepped the offset after following links change behaviour: such a consumer could ask again for a page it had. `read_offsets` takes `follow` for such schemes and returns `complete`.
