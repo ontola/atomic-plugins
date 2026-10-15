@@ -203,6 +203,31 @@ export const todoistThrottling = {
   ],
 };
 
+/**
+ * Throttling 0.4.0: Notion's request limits (the spec's `blocked` snippet).
+ * A 429 with `rate_limit_reason: public_api_request_blocked` is a refusal
+ * Notion documents as not worth retrying; other 429s with the code
+ * `rate_limited` are throttled.
+ */
+export const notionThrottling = {
+  headers: { 'Retry-After': { role: 'retryAfter', unit: 'deltaSeconds' } },
+  signals: [
+    {
+      status: [429],
+      body: {
+        pointer: '/additional_data/rate_limit_reason',
+        equals: 'public_api_request_blocked',
+      },
+      meaning: 'blocked',
+    },
+    {
+      status: [429],
+      body: { pointer: '/code', equals: 'rate_limited' },
+      meaning: 'throttled',
+    },
+  ],
+};
+
 /** The pets fixture with a root `x-throttling`. */
 export function throttledPets(throttling: unknown): Record<string, unknown> {
   return {
