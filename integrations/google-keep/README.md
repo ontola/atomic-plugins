@@ -14,6 +14,11 @@ rate-limit handling, in its own folder with nothing imported from it.
   `drive.ts` (the app's own class and properties), `status.ts` (the card
   mapping), `store.ts` (the host's types), `build.mjs`. Version in
   `app/package.json`; the built module is `apps/google-keep/<version>/ui.js`.
+  It bundles the npm `syncables` package pinned in `app/package.json` and
+  `app/pnpm-lock.yaml` (install with `pnpm install` in `app/`): its list
+  merge (`mergeUnkeyedList`), replace check (`replaceBlock`) and
+  `fingerprint`, which CRUD Causality 0.7.0's `unkeyedLists` and `replace`
+  describe for Keep (§7.8 of the spec).
 - `fixtures/google-keep/`: the SYNTHETIC mock-proxy fixture (no recording).
 - `e2e/google-keep.spec.ts`: the host journey against the mock proxy.
 
@@ -96,7 +101,7 @@ the view lists it under "Deleted here, still in Google Keep" with "Bring
 back" and "Delete in Keep" (which asks first). At most 25 notes are created
 or replaced per pass; the rest wait for the next.
 
-**A list note** is merged item by item (`app/lists.ts`). Keep's items have
+**A list note** is merged item by item (`app/lists.ts`, over syncables' `mergeUnkeyedList`). Keep's items have
 no ids, so they are paired with the last-synced list by text and tick,
 then by text, then by place between two paired neighbours (an item whose
 text was edited in Keep). Then each item's text, tick and indent take the

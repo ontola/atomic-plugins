@@ -16,6 +16,9 @@
  * The drive's items carry their identity. Keep's do not: the API gives an
  * item no id (`ListItem` is text, checked and child items only), so
  * `matchKeep` pairs Keep's items with the baseline's by text and position.
+ * The pairing and the merge are syncables' (`pairItems`,
+ * `mergeUnkeyedList`, CRUD Causality 0.7.0 §4.9); this file adapts the
+ * drive's rows and Keep's items to them.
  * Then every item is merged field by field (text, done, the item it is
  * under) and the order is merged as moves:
  *
@@ -28,6 +31,12 @@
  *
  * So an item moved in Keep and ticked here comes out moved and ticked.
  */
+import {
+  mergeUnkeyedList,
+  pairItems,
+  type FlatListItem,
+  type UnkeyedList,
+} from 'syncables/browser';
 import { renderList, type Item } from './notes.js';
 
 /** An item in list order; `depth` 1 is under the nearest depth-0 item before it. */
@@ -94,142 +103,44 @@ export function nest(items: FlatItem[]): Item[] {
 /** The list as the Markdown checklist the baseline is kept in. */
 export const listText = (items: FlatItem[]): string => renderList(nest(items));
 
-/** Each item's parent index (top items: -1). */
-const parents = (items: FlatItem[]): number[] => {
-  let top = -1;
+/**
+ * Keep's list items as CRUD Causality 0.7.0 `unkeyedLists` declares them
+ * (§7.8 of the spec): paired on text and tick, children one level down.
+ */
+export const KEEP_LIST: UnkeyedList = {
+  match: ['text.text', 'checked'],
+  children: 'childListItems',
+};
 
-  return items.map((item, i) => {
-    if (item.depth === 0 || top === -1) {
-      top = i;
+const toValue = (item: FlatItem): FlatListItem => ({
+  value: { text: { text: item.text }, checked: item.done },
+  depth: item.depth,
+});
 
-      return -1;
-    }
+const fromValue = (value: Record<string, unknown>) => {
+  const text = value.text as { text?: unknown } | undefined;
 
-    return top;
-  });
+  return {
+    text: typeof text?.text === 'string' ? text.text : '',
+    done: value.checked === true,
+  };
 };
 
 /**
  * Keep's items paired with the baseline's: `out[k]` is the baseline index of
- * Keep's item `k`, or undefined for an item added in Keep. Same text and
- * tick first, then same text (among equal candidates the nearest index
- * wins), then an unpaired item between the same two paired neighbours (its
- * text edited in Keep). An item deleted and another added in the same gap
- * pair as an edit.
+ * Keep's item `k`, or undefined for an item added in Keep (syncables'
+ * `pairItems`).
  */
-export function matchKeep(
+export const matchKeep = (
   base: FlatItem[],
   keep: FlatItem[],
-): (number | undefined)[] {
-  const out: (number | undefined)[] = keep.map(() => undefined);
-  const taken = new Set<number>();
-
-  const pass = (same: (b: FlatItem, k: FlatItem) => boolean) => {
-    keep.forEach((k, ki) => {
-      if (out[ki] !== undefined) return;
-      let best: number | undefined;
-
-      base.forEach((b, bi) => {
-        if (taken.has(bi) || !same(b, k)) return;
-        if (best === undefined || Math.abs(bi - ki) < Math.abs(best - ki))
-          best = bi;
-      });
-
-      if (best !== undefined) {
-        out[ki] = best;
-        taken.add(best);
-      }
-    });
-  };
-
-  pass((b, k) => b.text === k.text && b.done === k.done);
-  pass((b, k) => b.text === k.text);
-  // An unpaired item between two paired neighbours takes the first
-  // unpaired baseline item between theirs: its text was edited in Keep.
-  keep.forEach((_, ki) => {
-    if (out[ki] !== undefined) return;
-    let before = -1;
-    let after = base.length;
-
-    for (let p = ki - 1; p >= 0; p--)
-      if (out[p] !== undefined) {
-        before = out[p]!;
-        break;
-      }
-
-    for (let n = ki + 1; n < keep.length; n++)
-      if (out[n] !== undefined) {
-        after = out[n]!;
-        break;
-      }
-
-    for (let bi = before + 1; bi < after; bi++)
-      if (!taken.has(bi)) {
-        out[ki] = bi;
-        taken.add(bi);
-        break;
-      }
-  });
-
-  return out;
-}
-
-/** The indexes of `seq` on a longest common subsequence with `other`. */
-function stayed(seq: string[], other: string[]): Set<string> {
-  const common = new Set(other);
-  const a = seq.filter(id => common.has(id));
-  const inA = new Set(a);
-  const b = other.filter(id => inA.has(id));
-  const table = Array.from({ length: a.length + 1 }, () =>
-    new Array<number>(b.length + 1).fill(0),
-  );
-
-  for (let i = a.length - 1; i >= 0; i--)
-    for (let j = b.length - 1; j >= 0; j--)
-      table[i][j] =
-        a[i] === b[j]
-          ? table[i + 1][j + 1] + 1
-          : Math.max(table[i + 1][j], table[i][j + 1]);
-
-  const out = new Set<string>();
-  let i = 0;
-  let j = 0;
-
-  while (i < a.length && j < b.length) {
-    if (a[i] === b[j]) {
-      out.add(a[i]);
-      i++;
-      j++;
-    } else if (table[i + 1][j] >= table[i][j + 1]) i++;
-    else j++;
-  }
-
-  return out;
-}
-
-interface Entry {
-  id: string;
-  subject?: string;
-  text: string;
-  done: boolean;
-  /** The entry this one is under, by id. */
-  under?: string;
-  keep?: number;
-}
-
-/** Three-way on one value: the side that changed wins; both changed, the drive's. */
-function pick<T>(base: T, mine: T, theirs: T, conflict: () => void): T {
-  if (mine === base) return theirs;
-  if (theirs === base || theirs === mine) return mine;
-  conflict();
-
-  return mine;
-}
+): (number | undefined)[] =>
+  pairItems(KEEP_LIST, base.map(toValue), keep.map(toValue));
 
 /**
- * The merge of one list note. `base` is the baseline list (empty for a note
- * that was never a list here), `rows` the drive's item rows of the note,
- * `keep` Keep's items now.
+ * The merge of one list note (syncables' `mergeUnkeyedList`). `base` is the
+ * baseline list (empty for a note that was never a list here), `rows` the
+ * drive's item rows of the note, `keep` Keep's items now.
  */
 export function mergeList({
   base,
@@ -240,210 +151,29 @@ export function mergeList({
   rows: ItemRow[];
   keep: FlatItem[];
 }): ListMerge {
-  let conflicts = 0;
-
-  const conflict = () => {
-    conflicts++;
-  };
-
-  // The drive's rows by baseline index; a row whose index is out of range
-  // or claimed twice counts as added here.
-  const local = new Map<number, ItemRow>();
-  const added: ItemRow[] = [];
-
-  for (const row of [...rows].sort(
-    (a, b) => a.position - b.position || a.subject.localeCompare(b.subject),
-  )) {
-    if (
-      row.base !== undefined &&
-      Number.isInteger(row.base) &&
-      row.base >= 0 &&
-      row.base < base.length &&
-      !local.has(row.base)
-    )
-      local.set(row.base, row);
-    else added.push(row);
-  }
-
-  const paired = matchKeep(base, keep);
-  const keepOf = new Map<number, number>();
-  paired.forEach((bi, ki) => {
-    if (bi !== undefined) keepOf.set(bi, ki);
+  const merge = mergeUnkeyedList({
+    spec: KEEP_LIST,
+    base: base.map(toValue),
+    local: rows.map(row => ({
+      id: row.subject,
+      value: toValue({ text: row.text, done: row.done, depth: 0 }).value,
+      position: row.position,
+      ...(row.under ? { under: row.under } : {}),
+      ...(row.base === undefined ? {} : { base: row.base }),
+    })),
+    remote: keep.map(toValue),
   });
-
-  const baseParent = parents(base);
-  const keepParent = parents(keep);
-  const idOfBase = (bi: number) => `b${bi}`;
-  const idOfKeep = (ki: number) =>
-    paired[ki] === undefined ? `k${ki}` : idOfBase(paired[ki]!);
-  const idOfRow = new Map<string, string>();
-  for (const [bi, row] of local) idOfRow.set(row.subject, idOfBase(bi));
-  for (const row of added) idOfRow.set(row.subject, `r${row.subject}`);
-
-  const entries = new Map<string, Entry>();
-
-  // Items of the baseline.
-  base.forEach((b, bi) => {
-    const row = local.get(bi);
-    const ki = keepOf.get(bi);
-    const k = ki === undefined ? undefined : keep[ki];
-    const bUnder = baseParent[bi] === -1 ? undefined : idOfBase(baseParent[bi]);
-    const rowUnder = row?.under ? idOfRow.get(row.under) : undefined;
-    const kUnder =
-      ki === undefined || keepParent[ki] === -1
-        ? undefined
-        : idOfKeep(keepParent[ki]);
-
-    if (!row && !k) return;
-
-    if (!row) {
-      // Deleted here: gone, unless Keep edited it meanwhile.
-      if (k!.text === b.text && k!.done === b.done) return;
-
-      entries.set(idOfBase(bi), {
-        id: idOfBase(bi),
-        text: k!.text,
-        done: k!.done,
-        under: kUnder,
-        keep: ki,
-      });
-
-      return;
-    }
-
-    if (!k) {
-      // Deleted in Keep: gone, unless edited here meanwhile.
-      if (row.text === b.text && row.done === b.done) return;
-      entries.set(idOfBase(bi), {
-        id: idOfBase(bi),
-        subject: row.subject,
-        text: row.text,
-        done: row.done,
-        under: rowUnder,
-      });
-
-      return;
-    }
-
-    entries.set(idOfBase(bi), {
-      id: idOfBase(bi),
-      subject: row.subject,
-      text: pick(b.text, row.text, k.text, conflict),
-      done: pick(b.done, row.done, k.done, conflict),
-      under: pick(bUnder, rowUnder, kUnder, conflict),
-      keep: ki,
-    });
-  });
-
-  // Items added here, and items added in Keep.
-  for (const row of added)
-    entries.set(`r${row.subject}`, {
-      id: `r${row.subject}`,
-      subject: row.subject,
-      text: row.text,
-      done: row.done,
-      under: row.under ? idOfRow.get(row.under) : undefined,
-    });
-
-  keep.forEach((k, ki) => {
-    if (paired[ki] !== undefined) return;
-    entries.set(`k${ki}`, {
-      id: `k${ki}`,
-      text: k.text,
-      done: k.done,
-      under: keepParent[ki] === -1 ? undefined : idOfKeep(keepParent[ki]),
-      keep: ki,
-    });
-  });
-
-  // Order: the drive's, with Keep's moves and additions put in after the
-  // item they follow in Keep.
-  const baseSeq = base.map((_, bi) => idOfBase(bi));
-  const localSeq = [...rows]
-    .sort(
-      (a, b) => a.position - b.position || a.subject.localeCompare(b.subject),
-    )
-    .map(row => idOfRow.get(row.subject)!);
-  const keepSeq = keep.map((_, ki) => idOfKeep(ki));
-  const keepStayed = stayed(
-    baseSeq.filter(id => keepSeq.includes(id)),
-    keepSeq,
-  );
-  const localStayed = stayed(
-    baseSeq.filter(id => localSeq.includes(id)),
-    localSeq,
-  );
-  const movedInKeep = (id: string) =>
-    id.startsWith('k') ||
-    !localSeq.includes(id) ||
-    (!keepStayed.has(id) && localStayed.has(id));
-
-  const order = localSeq.filter(id => entries.has(id));
-
-  for (const [at, id] of keepSeq.entries()) {
-    if (!entries.has(id) || !movedInKeep(id)) continue;
-    const was = order.indexOf(id);
-    if (was !== -1) order.splice(was, 1);
-    let after = -1;
-
-    for (let p = at - 1; p >= 0; p--) {
-      const found = order.indexOf(keepSeq[p]);
-
-      if (found !== -1) {
-        after = found;
-        break;
-      }
-    }
-
-    order.splice(after + 1, 0, id);
-  }
-
-  for (const id of entries.keys()) if (!order.includes(id)) order.push(id);
-
-  // Nesting: one level, a child right after its parent's other children.
-  const tops = order.filter(id => {
-    const under = entries.get(id)!.under;
-
-    return (
-      !under || !entries.has(under) || entries.get(under)!.under !== undefined
-    );
-  });
-  const flat: Entry[] = [];
-
-  for (const id of tops) {
-    flat.push(entries.get(id)!);
-
-    for (const child of order)
-      if (
-        child !== id &&
-        entries.get(child)!.under === id &&
-        !tops.includes(child)
-      )
-        flat.push(entries.get(child)!);
-  }
-
-  const items: MergedItem[] = flat.map(e => ({
-    text: e.text,
-    done: e.done,
-    depth: tops.includes(e.id) ? 0 : 1,
-    ...(e.subject ? { subject: e.subject } : {}),
-    ...(e.keep === undefined ? {} : { keep: e.keep }),
-  }));
-  const kept = new Set(items.map(i => i.subject).filter(Boolean));
-  const send =
-    items.length !== keep.length ||
-    items.some(
-      (item, i) =>
-        item.text !== keep[i].text ||
-        item.done !== keep[i].done ||
-        item.depth !== keep[i].depth,
-    );
 
   return {
-    items,
-    removed: rows.map(r => r.subject).filter(s => !kept.has(s)),
-    send,
-    conflicts,
+    items: merge.items.map(item => ({
+      ...fromValue(item.value),
+      depth: item.depth,
+      ...(item.id === undefined ? {} : { subject: item.id }),
+      ...(item.remote === undefined ? {} : { keep: item.remote }),
+    })),
+    removed: merge.removed,
+    send: merge.send,
+    conflicts: merge.conflicts,
   };
 }
 

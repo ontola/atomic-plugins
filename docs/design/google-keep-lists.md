@@ -1,6 +1,6 @@
 # Google Keep lists: item-level sync and a checklist view
 
-Status: proposed, nothing built. Follows the Google Keep drive app 0.1.0
+Status: the sync app is built (#593); its merge and replace check moved to syncables 0.24.0 (CRUD Causality 0.7.0 `unkeyedLists` and `replace`, #595). Follows the Google Keep drive app 0.1.0
 (`integrations/google-keep/`, #593), which syncs a list note as one Markdown
 checklist and treats any change on both sides as a conflict.
 

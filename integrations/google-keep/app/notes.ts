@@ -48,6 +48,11 @@
  * A row whose note is not `present` is not sent to Keep, whatever is edited
  * in it.
  */
+import {
+  fingerprint as digest,
+  replaceBlock as replaceBlockOf,
+  type ReplaceDeclaration,
+} from 'syncables/browser';
 import type { JSONValue } from './store.js';
 
 export type Row = Record<string, JSONValue>;
@@ -221,31 +226,17 @@ export function sameNote(
  * trimmed title and its body as compared (`canonicalBody`). Two versions
  * with the same fingerprint say the same (`sameNote`). Not a security
  * measure: it only tells a pass which side changed since the last sync.
+ * syncables' `fingerprint` (cyrb53 over the canonical JSON).
  */
-export function fingerprint(
+export const fingerprint = (
   fields: { title: string; body: string },
   kind: Kind,
-): string {
-  const input = `${kind}\n${fields.title.trim()}\n${canonicalBody(fields.body, kind)}`;
-  // cyrb53: two 32-bit FNV-like lanes, 53 bits together.
-  let h1 = 0xdeadbeef;
-  let h2 = 0x41c6ce57;
-
-  for (let i = 0; i < input.length; i++) {
-    const c = input.charCodeAt(i);
-    h1 = Math.imul(h1 ^ c, 2654435761);
-    h2 = Math.imul(h2 ^ c, 1597334677);
-  }
-
-  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507);
-  h1 ^= Math.imul(h2 ^ (h2 >>> 13), 3266489909);
-  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507);
-  h2 ^= Math.imul(h1 ^ (h1 >>> 13), 3266489909);
-
-  return (4294967296 * (2097151 & h2) + (h1 >>> 0))
-    .toString(16)
-    .padStart(14, '0');
-}
+): string =>
+  digest({
+    kind,
+    title: fields.title.trim(),
+    body: canonicalBody(fields.body, kind),
+  });
 
 /** The request body of `POST /v1/notes` for a row's title and body. */
 export function keepNote(fields: {
@@ -308,17 +299,37 @@ const permissions = (note: Row): Row[] =>
     .filter(p => p.deleted !== true);
 
 /**
+ * What may not be replaced, as CRUD Causality 0.7.0 `replace` declares it
+ * for a Keep note (§7.8 of the spec).
+ */
+export const KEEP_REPLACE: ReplaceDeclaration = {
+  blockedBy: [
+    {
+      field: 'attachments',
+      when: 'nonEmpty',
+      description:
+        'It has an attachment, which the Keep API cannot copy to a new note.',
+    },
+    {
+      field: 'permissions',
+      moreThan: 1,
+      except: { deleted: true },
+      description: 'It is shared, and a new note would lose its collaborators.',
+    },
+  ],
+};
+
+/**
  * Why a push may not replace this note, or undefined when it may: a note
- * with an attachment (the API cannot copy one), shared with anyone (the
- * new note would not be), or that the connected account does not own (it
- * could not delete the old one).
+ * with an attachment (the API cannot copy one) or shared with anyone (the
+ * new note would not be), as syncables' `replaceBlock` reads
+ * `KEEP_REPLACE`; or that the connected account does not own (it could not
+ * delete the old one).
  */
 export function replaceBlock(note: Row, account?: string): string | undefined {
-  if (Array.isArray(note.attachments) && note.attachments.length)
-    return 'It has an attachment, which the Keep API cannot copy to a new note.';
+  const blocked = replaceBlockOf(KEEP_REPLACE, note);
+  if (blocked) return blocked.description;
   const live = permissions(note);
-  if (live.length > 1)
-    return 'It is shared, and a new note would lose its collaborators.';
   const owner = live.find(p => p.role === 'OWNER');
   if (live.length === 1 && !owner)
     return 'The connected Google account does not own it.';
