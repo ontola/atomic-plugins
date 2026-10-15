@@ -225,8 +225,12 @@ export class FakeInbox {
         const start = after ? Number(after.split(':')[1]) : sub.ack;
         const pending = sub.refs.filter((ref) => ref.seq > start);
         const generation = pending[0]?.generation ?? sub.generation;
+        const limit = Number(
+          /[?&]limit=([0-9]+)/.exec(request.url.search)?.[1] ?? Infinity,
+        );
         let events: InboxEvent[] = pending
           .filter((ref) => ref.generation === generation)
+          .slice(0, limit)
           .map((ref) => ({
             ...ref.event,
             cursor: `${ref.generation}:${ref.seq}`,
