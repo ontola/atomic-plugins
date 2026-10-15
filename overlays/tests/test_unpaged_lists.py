@@ -22,10 +22,6 @@ import yaml
 
 from generate_identity_catalog_fixtures import ROOT, fetch
 
-MONEYBIRD_PIN = "85a6105220036a98ef0d7cd6f228d4aae0036508"
-DISCORD_PIN = "9d0d73c6b23cb07ca2d225fb8b3848fede322b21"
-MONEYBIRD = f"https://raw.githubusercontent.com/ontola/openapi-directory/{MONEYBIRD_PIN}/APIs/moneybird.com/v2-readonly/openapi.yaml"
-DISCORD = f"https://raw.githubusercontent.com/ontola/openapi-directory/{DISCORD_PIN}/APIs/discord.com/10/openapi.yaml"
 
 # Path -> words of its description the README quotes, or None.
 UNPAGED = {
@@ -59,6 +55,27 @@ def query_names(document, path):
     return names
 
 
+def catalog_openapi(platform):
+    """The one OAD URL the dated catalogs give `platform` (the pin this evidence is about)."""
+    urls = set()
+    for catalog in sorted((ROOT / "catalog").glob("*.json")):
+        for entry in json.loads(catalog.read_text(encoding="utf-8"))["platforms"]:
+            if entry["name"] == platform:
+                urls.add(entry["openapi"])
+    if len(urls) != 1:
+        raise AssertionError(f"{platform}: the dated catalogs pin {sorted(urls)}; check the evidence for each")
+    return urls.pop()
+
+
+def crud_resources(overlay):
+    """The crudResources an overlay's `$.components` action adds, wherever that action sits."""
+    for action in overlay["actions"]:
+        resources = (action.get("update") or {}).get("crudResources")
+        if action["target"] == "$.components" and resources:
+            return resources
+    raise AssertionError("no $.components action with crudResources")
+
+
 def overlays_for(platform):
     names = set()
     for catalog in sorted((ROOT / "catalog").glob("*.json")):
@@ -72,8 +89,8 @@ class UnpagedListsTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         with tempfile.TemporaryDirectory() as cache:
-            cls.moneybird = yaml.safe_load(fetch(MONEYBIRD, Path(cache))[0])
-            cls.discord = yaml.safe_load(fetch(DISCORD, Path(cache))[0])
+            cls.moneybird = yaml.safe_load(fetch(catalog_openapi("moneybird"), Path(cache))[0])
+            cls.discord = yaml.safe_load(fetch(catalog_openapi("discord"), Path(cache))[0])
 
     def test_moneybird_paginated_lists_have_page_parameters(self):
         # The contrast the evidence rests on: a list the document paginates says so.
@@ -108,7 +125,7 @@ class UnpagedListsTests(unittest.TestCase):
                 continue
             with self.subTest(overlay=name):
                 crud = yaml.safe_load((ROOT / name).read_text(encoding="utf-8"))
-                guilds = crud["actions"][0]["update"]["crudResources"]["guild"]["collections"]["myGuilds"]
+                guilds = crud_resources(crud)["guild"]["collections"]["myGuilds"]
                 self.assertEqual(guilds["x-list-query"], {"limit": 200})
 
 
