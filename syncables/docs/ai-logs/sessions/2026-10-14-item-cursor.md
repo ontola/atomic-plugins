@@ -45,3 +45,22 @@ is no information. Match it, with a test.
 **Assistant:** `null` is no longer read as absent; tests for `null` (an
 error) and for an absent `hasMore` (decides nothing). README, CLAUDE.md
 and the changelog say so.
+
+## Review fix: the cursor in one field only
+
+**Human (via the coordinator session):** #600's review found data loss:
+`walkItemCursor` passed `{ pageToken: cursor }` to `buildQuery`/
+`buildBody`, which write it into every `pageToken`- or `cursor`-role
+field. Rule 28 allows another beside `fromLastItem`; with
+`ending_before` added to the example, the second request was
+`?ending_before=b&starting_after=b`, came back empty, and the read
+returned 2 of 5 as complete. Also use `Number.isSafeInteger` for an
+integer cursor.
+
+**Assistant:** `buildQuery`/`buildBody` now get no token, and the cursor
+is set in the `fromLastItem` field alone (query parameter or body
+field), as in the spec's `read_item_cursor`. An integer cursor value
+beyond `Number.MAX_SAFE_INTEGER` ends the read with a `PageReadError`.
+Four new tests (a second cursor field in the query and in a POST body,
+2^53 and 1e21); all four fail on the code before, the first two with
+the reviewer's 2 of 5.

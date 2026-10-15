@@ -1,0 +1,452 @@
+# Reviewed 2026-10-14 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://docs.stripe.com/api/pagination: "All top-level API resources have support
+#   for bulk fetches through “list” API methods. ... These list API methods share a common
+#   structure and accept, at a minimum, the following three parameters: `limit`,
+#   `starting_after`, and `ending_before`."; starting_after "is an object ID that defines
+#   your place in the list. For example, if you make a list request and receive 100 objects,
+#   ending with `obj_foo`, your subsequent call can include `starting_after=obj_foo` to fetch
+#   the next page of the list."; has_more: "If `false`, this set comprises the end of the
+#   list."; objects come "in reverse chronological order".
+# Source: the pinned OAD: 99 GET operations take starting_after and answer
+#   {"data": [...], "has_more": ...}; 97 describe starting_after in the words above, exchange
+#   rates as "the currency that defines your place in the list" (an exchange rate's id is its
+#   currency code), and treasury financial accounts as "An object ID cursor for use in
+#   pagination."
+# Needs Pagination Schemes 0.9.0 (openapi-extensions/spec/pagination-schemes, fromLastItem
+# and hasMore, §4.3.3). A 0.8.0 consumer reads the scheme as a pageToken scheme without a
+# next token and stops after one page, so do not use this revision with one.
+#
+# Revision 2 of pagination-dec74da7...: v1 declared the `cursor` scheme but applied it to no
+# operation and gave no way to find the next cursor. This revision redefines `cursor` as
+# §4.3.3 rule (a) describes it, Stripe's own example: starting_after takes the id of the last
+# object of the previous page, a position in Stripe's list order (newest first; rule (a)
+# needs no ascending order), and has_more false ends the list. It applies the scheme to
+# every list operation of the pinned document that takes starting_after.
+# Not declared: ending_before (it pages backwards); Stripe's /v2 APIs (another pagination
+# interface). Invoices: an invoice's id "is always present unless the invoice is an upcoming
+# invoice", which the list does not return. External accounts and customer sources list
+# several object types, each with an id. An item without an id ends the read with an error
+# (§4.3.3 step 4).
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dec74da7a6785d5d5b83bc6a4cebc07336d67ec9/APIs/stripe.com/2022-11-15/openapi.yaml
+info:
+  title: Stripe API Pagination Schemes (revision 2)
+  version: 2.0.0
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      cursor:
+        type: pageToken
+        autoDetect: false
+        description: Send no starting_after first, then the id of the previous page's last object; has_more
+          false ends the list. Objects come newest first.
+        request:
+          queryParameters:
+            starting_after:
+              role: cursor
+              fromLastItem: id
+            limit:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: data
+          bodyFields:
+            has_more:
+              role: hasMore
+- target: $.paths['/v1/accounts'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/accounts/{account}/external_accounts'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/accounts/{account}/people'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/accounts/{account}/persons'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/apple_pay/domains'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/application_fees'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/application_fees/{id}/refunds'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/apps/secrets'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/balance/history'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/balance_transactions'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/billing_portal/configurations'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/charges'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/charges/{charge}/refunds'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/checkout/sessions'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/checkout/sessions/{session}/line_items'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/country_specs'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/coupons'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/credit_notes'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/credit_notes/preview/lines'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/credit_notes/{credit_note}/lines'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/customers'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/customers/{customer}/balance_transactions'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/customers/{customer}/bank_accounts'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/customers/{customer}/cards'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/customers/{customer}/cash_balance_transactions'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/customers/{customer}/payment_methods'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/customers/{customer}/sources'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/customers/{customer}/subscriptions'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/customers/{customer}/tax_ids'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/disputes'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/events'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/exchange_rates'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/file_links'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/files'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/financial_connections/accounts'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/financial_connections/accounts/{account}/owners'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/identity/verification_reports'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/identity/verification_sessions'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/invoiceitems'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/invoices'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/invoices/upcoming/lines'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/invoices/{invoice}/lines'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/issuing/authorizations'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/issuing/cardholders'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/issuing/cards'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/issuing/disputes'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/issuing/settlements'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/issuing/transactions'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/linked_accounts'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/linked_accounts/{account}/owners'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/payment_intents'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/payment_links'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/payment_links/{payment_link}/line_items'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/payment_methods'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/payouts'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/plans'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/prices'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/products'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/promotion_codes'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/quotes'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/quotes/{quote}/computed_upfront_line_items'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/quotes/{quote}/line_items'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/radar/early_fraud_warnings'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/radar/value_list_items'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/radar/value_lists'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/refunds'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/reporting/report_runs'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/reviews'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/setup_attempts'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/setup_intents'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/shipping_rates'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/sigma/scheduled_query_runs'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/sources/{source}/source_transactions'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/subscription_items'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/subscription_items/{subscription_item}/usage_record_summaries'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/subscription_schedules'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/subscriptions'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/tax/calculations/{calculation}/line_items'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/tax/transactions/{transaction}/line_items'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/tax_codes'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/tax_rates'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/terminal/configurations'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/terminal/locations'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/terminal/readers'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/test_helpers/test_clocks'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/topups'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/transfers'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/transfers/{id}/reversals'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/treasury/credit_reversals'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/treasury/debit_reversals'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/treasury/financial_accounts'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/treasury/inbound_transfers'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/treasury/outbound_payments'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/treasury/outbound_transfers'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/treasury/received_credits'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/treasury/received_debits'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/treasury/transaction_entries'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/treasury/transactions'].get
+  update:
+    x-pagination:
+    - scheme: cursor
+- target: $.paths['/v1/webhook_endpoints'].get
+  update:
+    x-pagination:
+    - scheme: cursor
