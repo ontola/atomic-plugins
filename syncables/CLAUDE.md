@@ -583,8 +583,11 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   parameter/body field names against the operation's own (§6.2 default
   rules — a dimension with zero declared fields never vacuously matches).
   An explicit entry that cannot be applied (not an array of application
-  objects, an undeclared or invalid scheme, or one its overrides make
-  invalid) throws `PaginationSchemeError` instead of being dropped: a read
+  objects, an entry that is not a Pagination Application Object as the
+  spec's `schema.json` gives it, `applicationProblem`: a nonempty
+  `scheme`, an object `overrides`, a string `description`, no other field
+  but `x-`, checked on every entry; an undeclared or invalid scheme, or
+  one its overrides make invalid) throws `PaginationSchemeError` instead of being dropped: a read
   that ignored it would return one page as the whole collection (#384). The
   client's conditional-cache check treats such an operation as paginated,
   and the mock server answers 500.
