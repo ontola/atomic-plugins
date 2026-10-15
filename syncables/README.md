@@ -2082,6 +2082,24 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   `JSON.parse`) no longer sets the prototype of the result or of an
   object in it. Tests pin that target segments are not unescaped, as in
   integration-proxy (#618's review).
+- **Unreleased**: `generateFromSchema`, which the mock server seeds
+  records and answers responses with, keeps to the schema it generates
+  from: an OpenAPI 3.1 type list (`['string', 'null']` gave `null`, now a
+  string), `examples` and `const`, numeric bounds (`maximum`, 3.0 and 3.1
+  exclusive bounds, a fractional `minimum` on an integer, an integer
+  `multipleOf`), `minLength` and `maxLength` on an unformatted string,
+  and `minItems` and `maxItems`. An inclusive `minimum` is still the value
+  generated. A fractional `multipleOf` on an integer gives its smallest
+  integer multiple (5 for 2.5), `multipleOf` on a number is followed
+  where the bounds allow (a value that already divides evenly is kept),
+  a bound past 2^53 or 1e17 is kept strictly by stepping to the next
+  float (at `±Number.MAX_VALUE` the bound itself, not an infinity), and
+  `-0` is generated as `0`. `minItems` and `minLength` are capped at
+  10,000 per array or string, and one call makes at most 100,000 array
+  items and padding characters in all, so nested minimums cannot
+  multiply; past those limits a value is short of its minimum instead of
+  throwing a `RangeError` or exhausting memory. Not followed: `pattern`,
+  `uniqueItems`, and `maxLength` on a formatted string.
 - **Unreleased**: `applyOverlay` (and so `prepareDocument`) reads
   `['name']` target segments, as integration-proxy does, and replaces an
   array or scalar target with the `update` instead of throwing. Before,
