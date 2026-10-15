@@ -569,6 +569,11 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
     yield* walkWindows(walk, scheme, responseSchema);
     return;
   }
+  const itemCursor = scheme ? itemCursorField(scheme) : undefined;
+  if (scheme && itemCursor) {
+    yield* walkItemCursor(walk, scheme, itemCursor, responseSchema);
+    return;
+  }
   const seen = new Set<string>();
   let cursor: PageCursor = {};
   let next: URL | undefined;
@@ -923,6 +928,191 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
       next = undefined;
     }
   }
+}
+
+/** The request field a scheme reads from the last item (0.9.0 §4.3.3), if any. */
+function itemCursorField(
+  scheme: PaginationSchemeObject,
+): { location: string; name: string; path: string } | undefined {
+  for (const location of [
+    'queryParameters',
+    'bodyFields',
+    'headerFields',
+  ] as const)
+    for (const [name, field] of Object.entries(
+      scheme.request?.[location] ?? {},
+    ))
+      if (typeof field.fromLastItem === 'string')
+        return { location, name, path: field.fromLastItem };
+  return undefined;
+}
+
+/**
+ * Pagination Schemes 0.9.0 §4.3.3, after the spec's `read_item_cursor`: a
+ * cursor read from the previous page's last item (Stripe's
+ * `starting_after`, Discord's `after`). The first request goes without the
+ * field; the read ends at an empty page or at `hasMore: false`, complete
+ * unless a response of the read was marked (§4.4.6; the mark is kept
+ * across pages on `outcome.marked`). Otherwise the next request sends the
+ * value at `fromLastItem` in the last item, in that field only (never in
+ * another `pageToken`- or `cursor`-role field, which rule 28 allows): a
+ * string as it is, a safe integer in decimal. `PageReadError` ends the
+ * read, not complete, when that value is missing or neither a string nor
+ * a safe integer (`Number.isSafeInteger`), when it equals the one
+ * sent for this page, when a page holds an item an earlier page returned
+ * (`identity`, else the whole item), when an empty page says `hasMore:
+ * true`, and when `hasMore` is present and not a boolean (stricter than
+ * the 0.9.0 reference, which lets a non-boolean decide nothing; 0.9.1
+ * makes `null` an error too, so only an absent `hasMore` is no
+ * information). A short page does not end it.
+ */
+async function* walkItemCursor(
+  walk: PageWalk,
+  scheme: PaginationSchemeObject,
+  field: { location: string; name: string; path: string },
+  responseSchema: SchemaObject | undefined,
+): AsyncGenerator<Page> {
+  const { document, operation, budget, upstream } = walk;
+  if (
+    field.location === 'headerFields' ||
+    (field.location === 'bodyFields' && walk.method !== 'POST')
+  )
+    throw new PageReadError(
+      `The cursor field ${field.name} is a ${field.location === 'headerFields' ? 'request header' : 'body field of a request without a body'}, which this client does not send; the read is not complete`,
+    );
+  const limits = pageSizeLimits(document, scheme, operation);
+  let pageSize = walk.pageSize;
+  if (pageSize !== undefined && limits.maximum !== undefined)
+    pageSize = Math.min(pageSize, limits.maximum);
+  const hasMoreField = Object.entries(scheme.response?.bodyFields ?? {}).find(
+    ([, f]) => f.role === 'hasMore',
+  )?.[0];
+  const basePath = upstream.pathname.replace(/\/$/, '');
+  const seenItems = new Set<string>();
+  let cursor: string | undefined;
+  for (;;) {
+    // The page size, but no token: buildQuery and buildBody would write a
+    // token into every pageToken- or cursor-role field, and rule 28 allows
+    // another one (an `ending_before` beside `starting_after`), which would
+    // then bound the read from the other side and end it early, as if
+    // complete. Only the fromLastItem field carries the cursor, as in the
+    // spec's read_item_cursor.
+    const page: PageCursor = {};
+    const url = new URL(upstream.href);
+    url.pathname = basePath + walk.path;
+    for (const [key, value] of Object.entries({
+      ...walk.query,
+      ...buildQuery(scheme, page, pageSize),
+    }))
+      url.searchParams.set(key, value);
+    if (cursor !== undefined && field.location === 'queryParameters')
+      url.searchParams.set(field.name, cursor);
+    const request: TransportRequest = {
+      url,
+      method: walk.method,
+      headers: { accept: 'application/json' },
+    };
+    if (walk.method === 'POST') {
+      request.headers['content-type'] = 'application/json';
+      const fields = buildBody(scheme, page, pageSize);
+      if (cursor !== undefined && field.location === 'bodyFields')
+        setNestedField(fields, field.name, cursor);
+      request.body = JSON.stringify(withBody(walk.body, fields));
+    }
+    const response = await budget.send(request);
+    if (response.status < 200 || response.status >= 300)
+      throw new PageStatusError(
+        `${request.method} ${url.pathname} responded ${response.status} (failed with status ${response.status})`,
+        response.status,
+        response.body,
+      );
+    let body: unknown;
+    try {
+      body = JSON.parse(response.body);
+    } catch {
+      throw new Error(`${request.method} ${url.pathname} did not return JSON`);
+    }
+    const marker = scheme.response?.incomplete;
+    if (
+      marker &&
+      walk.outcome &&
+      walk.outcome.marked === undefined &&
+      responseIncomplete(marker, body)
+    )
+      walk.outcome.marked = `the server marked the result incomplete (${request.method} ${url.pathname}: ${marker.field} ${JSON.stringify('equals' in marker ? marker.equals : marker.in)}): not a complete read (Pagination Schemes 0.8.0 §4.4.6)`;
+    const envelope = declaredEnvelope(walk, scheme);
+    const items =
+      envelope === undefined
+        ? pageItems(body, responseSchema, scheme)
+        : itemsAt(
+            body,
+            envelope.path,
+            walk.skipNonObjects,
+            envelope.emptyWhenAbsent,
+          );
+    const after =
+      cursor === undefined
+        ? 'the first page'
+        : `the page after ${JSON.stringify(cursor)}`;
+    for (const item of items) {
+      const id = walk.identity?.(item);
+      const key = id ? `id:${id}` : `item:${JSON.stringify(item)}`;
+      if (seenItems.has(key))
+        throw new PageReadError(
+          `${after} holds an item an earlier page returned; the read is not complete`,
+        );
+      seenItems.add(key);
+    }
+    yield { url, items, body };
+    let hasMore: unknown;
+    if (hasMoreField !== undefined) {
+      hasMore = isRecord(body) ? itemValue(body, hasMoreField) : undefined;
+      if (hasMore !== undefined && typeof hasMore !== 'boolean')
+        throw new PageReadError(
+          `${after} has a ${hasMoreField} of ${JSON.stringify(hasMore)}, not a boolean; the read is not complete`,
+        );
+    }
+    if (items.length === 0 && hasMore === true)
+      throw new PageReadError(
+        `${after} is empty but says hasMore true; the read is not complete`,
+      );
+    if (items.length === 0 || hasMore === false) return;
+    const value = itemValue(items[items.length - 1], field.path);
+    if (
+      typeof value === 'number' &&
+      Number.isInteger(value) &&
+      !Number.isSafeInteger(value)
+    )
+      // Past 2^53 the parsed number was already rounded, so it may not be
+      // the id the API sent, and from 1e21 String() writes `1e+21`.
+      throw new PageReadError(
+        `the last item of ${after} has a ${field.path} of ${String(value)}, not a safe integer to continue from; the read is not complete`,
+      );
+    if (
+      typeof value !== 'string' &&
+      !(typeof value === 'number' && Number.isSafeInteger(value))
+    )
+      throw new PageReadError(
+        `the last item of ${after} has no usable ${field.path} to continue from; the read is not complete`,
+      );
+    const following = typeof value === 'number' ? String(value) : value;
+    if (following === cursor)
+      throw new PageReadError(
+        `the cursor ${JSON.stringify(following)} did not move; the read is not complete`,
+      );
+    cursor = following;
+  }
+}
+
+/** A dot-path's value in an object: own properties, names split on `.`. */
+function itemValue(value: unknown, path: string): unknown {
+  let current: unknown = value;
+  for (const name of path.split('.'))
+    current =
+      isRecord(current) && Object.hasOwn(current, name)
+        ? current[name]
+        : undefined;
+  return current;
 }
 
 /**

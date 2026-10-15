@@ -715,6 +715,22 @@ unescaped; `overlay-targets.test.ts` applies every overlay under
   validator checks rule 26 (`checkIncomplete`, with the type restriction
   to pageNumber/pageToken/nextLink). Tests:
   `unit/read/incomplete-marker.test.ts`.
+- Pagination Schemes 0.9.0: a request field's `fromLastItem` (§4.3.3) and
+  the `hasMore` response role. `checkItemCursor` (validator) ports rules
+  27–29 (`_item_cursor_problems`). `walkAllPages` hands a scheme with such
+  a field (`itemCursorField`) to `walkItemCursor` in `read/pages.ts`,
+  after the spec's `read_item_cursor`: `buildQuery`/`buildBody` get no
+  token (they would write it into every pageToken- or cursor-role field,
+  and rule 28 allows another beside it), and the cursor is set in the
+  `fromLastItem` field alone; an integer value must be
+  `Number.isSafeInteger`. `itemValue` reads the last
+  item's dot-path (own properties, split on `.`), the repeat check keys
+  items by `identity`, else the whole item, the incomplete mark goes on
+  `outcome.marked`; a present non-boolean `hasMore`, `null` included, is
+  an error (Pagination Schemes 0.9.1; only an absent one decides
+  nothing). A header cursor field, or a body
+  field on a GET, fails the read. Tests: `unit/read/item-cursor.test.ts`
+  (the spec's `ItemCursorTests` and more).
 - `links.ts` is `resolveLink`, the consumer side of Pagination Schemes
   0.4.0 §4.4.3–§4.4.4 (the spec's `resolve_link()` in its `validate.py`):
   `null`/`""` means no next page; a non-string, whitespace, a control

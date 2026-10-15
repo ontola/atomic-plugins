@@ -69,7 +69,9 @@ export type ResponseRole =
   | 'totalPages'
   | 'pageSize'
   | 'currentPage'
-  | 'offset';
+  | 'offset'
+  /** 0.9.0: `false` ends a read whose cursor is read from the last item. */
+  | 'hasMore';
 
 /**
  * Link Resolution Object (spec 0.4.0 §4.4.3): the base a relative
@@ -101,6 +103,12 @@ export interface RequestFieldObject {
    * page size and ends only at `totalCount`.
    */
   advance?: 'itemCount' | 'pageSize';
+  /**
+   * `pageToken` or `cursor` only (spec 0.9.0 §4.3.3, rule 27): a dot-path
+   * into an item; the next request sends that value of the previous
+   * page's last item.
+   */
+  fromLastItem?: string;
   [key: `x-${string}`]: unknown;
 }
 
