@@ -321,7 +321,8 @@ export function createController(
    * table as listed now (#572): the host's `query` can answer `[]`, or skip
    * a page of 500 that failed, with no error, and a refresh is suppressed
    * while an import writes. So a row once seen or written stays known;
-   * one deleted elsewhere reads as already imported until the next load.
+   * one deleted elsewhere reads as already imported until the app is opened
+   * again: `load()` (also "Try again") clears `seen`, never `written`.
    */
   const seen = new Map<string, Txn>();
   const written = new Map<string, Txn>();
