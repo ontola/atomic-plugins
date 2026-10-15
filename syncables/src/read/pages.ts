@@ -964,7 +964,9 @@ function itemCursorField(scheme: PaginationSchemeObject):
  * snowflakes), is a number, compared exactly as a `BigInt` (leading zeros
  * do not count). Any other string is text, compared by code point. Any
  * other value (a negative or fractional number, a boolean, `null`, an
- * object) cannot be ordered: undefined.
+ * object) cannot be ordered: undefined. Unlike the Python reference, which
+ * refuses a float, a JSON `2.0` is accepted: `JSON.parse` gives the
+ * integer 2, and the client cannot tell them apart.
  */
 function orderKey(
   value: unknown,

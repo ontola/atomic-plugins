@@ -24,3 +24,15 @@ The check runs on every item before its page is yielded. Rule 30 is in
 2^53, a digit string with leading zeros against a JSON integer, and an
 astral character; 19 of the 20 fail on the code before. #621 is
 dropping its evidence rule (c); nothing here depends on that text.
+
+## Review nits (#630)
+
+**Human (via the coordinator session):** the tests still describe the
+example as Discord's Get Channel Messages, which #621 replaced with List
+Joined Private Archived Threads; and note that a JSON `2.0` reaches
+JavaScript as the integer 2 and is accepted, where the Python reference
+refuses floats.
+
+**Assistant:** The test comment and name now say descending id order
+and List Joined Private Archived Threads. `orderKey`'s docstring notes
+the `2.0` difference, and a test pins it on a raw response body.

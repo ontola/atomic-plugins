@@ -459,8 +459,9 @@ describe('a cursor in a POST body', () => {
 
 // Pagination Schemes 0.10.0 §4.3.3: `order` beside `fromLastItem`. Ports
 // the spec's ItemOrderTests (test_validate.py) on its example
-// (examples/item-order.yaml, shaped like Discord's Get Channel Messages:
-// newest first, snowflake ids as strings, `before` the last id).
+// (examples/item-order.yaml, shaped like Discord's List Joined Private
+// Archived Threads: items in descending id order, snowflake ids as
+// strings, `before` the last id).
 describe('order beside fromLastItem (0.10.0)', () => {
   const orderExample = (): OpenApiDocument =>
     yaml.load(
@@ -543,7 +544,7 @@ describe('order beside fromLastItem (0.10.0)', () => {
     });
   });
 
-  it('reads 19-digit snowflakes newest to oldest, comparing them exactly', async () => {
+  it('reads 19-digit snowflakes in descending order, comparing them exactly', async () => {
     const fake = pagesOf(
       ['1300000000000000010', '1300000000000000009'],
       // fewer digits, still smaller as a number
@@ -628,6 +629,23 @@ describe('order beside fromLastItem (0.10.0)', () => {
       (await readOrdered(pagesOf(['～', '\u{1f600}']).transport, astral))
         .outcome.complete,
     ).toBe(true);
+  });
+
+  it('accepts a JSON 2.0, which JSON.parse gives as the integer 2', async () => {
+    // The Python reference refuses a float; the client cannot see one.
+    let call = 0;
+    const raw: Transport = async () => {
+      call += 1;
+      return {
+        status: 200,
+        headers: {},
+        body:
+          call === 1 ? '[{"id": 3.0, "n": "x"}, {"id": 2.0, "n": "y"}]' : '[]',
+      };
+    };
+    const { items, outcome } = await readOrdered(raw);
+    expect(items.map((item) => item['id'])).toEqual([3, 2]);
+    expect(outcome.complete).toBe(true);
   });
 
   it('checks nothing without order', async () => {
