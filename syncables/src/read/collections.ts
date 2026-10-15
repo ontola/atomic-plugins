@@ -48,6 +48,13 @@ import { isListTombstone } from './list-tombstones.js';
 export interface CollectionReadOptions {
   transport: Transport;
   constants?: Record<string, string>;
+  /**
+   * Throttling 0.5.0 plan tiers: the account's plan, as the provider names
+   * it in a tier's `plans`. A Limit Object with `tiers` is then read
+   * through the tier that names it; without one, or with a plan no tier
+   * names, every tier is kept within at once.
+   */
+  throttlingPlan?: string;
   selection?: QuerySelection;
   limits?: Partial<ReadLimits>;
   sleep?: (ms: number) => Promise<void>;
@@ -219,7 +226,7 @@ export async function readCollections(
       captureReadResponses(options.transport, options.storeResponse),
       options.limits,
       options.sleep,
-      declaredThrottling(doc),
+      declaredThrottling(doc, options.throttlingPlan),
     );
   const upstream = upstreamOf(doc);
   // Zones are read once per read and again after it (Filtering 0.2.0-draft).
