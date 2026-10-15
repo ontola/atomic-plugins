@@ -202,7 +202,11 @@ describe('record.mjs against a fake Todoist', () => {
             body: {
               error: 'Too many requests',
               error_tag: 'LIMITS_REACHED',
-              retry_after: 5,
+              error_extra: {
+                retry_after: 5,
+                workspace_id: 98765,
+                'Secret project name': 1,
+              },
             },
           }
         : ok(url);
@@ -216,7 +220,12 @@ describe('record.mjs against a fake Todoist', () => {
       lookups: { completed: ['t9raw'], deleted: ['t8raw'] },
     });
 
-    expect(stopped).toEqual({ path: '/tasks', page: 2, status: 429 });
+    expect(stopped).toEqual({
+      path: '/tasks',
+      page: 2,
+      status: 429,
+      reason: 'an error status',
+    });
     expect(meta.stopped).toEqual(stopped);
     const page = read(dir, 'GET__api__v1__tasks__page-2.json');
     expect(page.status).toBe(429);
@@ -224,16 +233,131 @@ describe('record.mjs against a fake Todoist', () => {
       'content-type': 'application/json',
       'retry-after': '5',
     });
+    // Strings and id numbers scrubbed; an undocumented error_extra key replaced.
     expect(page.body).toEqual({
       error: 'redacted',
       error_tag: 'redacted',
-      retry_after: 5,
+      error_extra: { retry_after: 5, workspace_id: 'redacted', 'key-1': 1 },
     });
+    expect(everything(dir)).not.toContain('Secret project name');
     // No lookup was requested after the stop.
     expect(seen.some(r => r.path.startsWith('/api/v1/tasks/'))).toBe(false);
     expect(meta.completed_task_statuses).toEqual([]);
-    // The fixture replays the rows before the error page.
-    expect(source({ apiDir: new URL('api/', dir) }).tasks).toHaveLength(2);
+    // A stopped recording is never replayed: it would look complete.
+    expect(() => source({ apiDir: new URL('api/', dir) })).toThrow(
+      /the recording stopped at \/tasks \(429, an error status\)/,
+    );
+  });
+
+  it('stops on a 200 page without a results array, and says so', async () => {
+    route = () => ({ status: 200, body: { items: [] } });
+    const dir = tempDir();
+    const { stopped } = await recordApi({
+      dir,
+      api: base,
+      token: TOKEN,
+      limit: 2,
+      maxPages: 3,
+    });
+
+    expect(stopped).toEqual({
+      path: '/projects',
+      page: 1,
+      status: 200,
+      reason: 'no results array',
+    });
+    expect(() => source({ apiDir: new URL('api/', dir) })).toThrow(
+      /no results array/,
+    );
+  });
+
+  it('stops on a lookup that says nothing about the task (401, 429, 5xx)', async () => {
+    const ok = lists([project(1)], [task(1)]);
+
+    for (const status of [401, 429, 500, 503]) {
+      seen.length = 0;
+      route = url =>
+        url.pathname.endsWith('/tasks/first')
+          ? { status, headers: { 'retry-after': '7' }, body: { error: 'Busy' } }
+          : ok(url);
+      const dir = tempDir();
+      const { meta, stopped } = await recordApi({
+        dir,
+        api: base,
+        token: TOKEN,
+        limit: 2,
+        maxPages: 3,
+        lookups: { deleted: ['first', 'second'], inaccessible: ['third'] },
+      });
+
+      expect(stopped).toEqual({
+        path: '/tasks/{id}',
+        lookup: 'deleted-1',
+        status,
+        reason: 'not an answer about the task',
+      });
+      expect(meta.deleted_task_statuses).toEqual([status]);
+      expect(meta.inaccessible_task_statuses).toEqual([]);
+      expect(read(dir, 'GET__api__v1__tasks__deleted-1.json').status).toBe(
+        status,
+      );
+      // Nothing after it was requested.
+      expect(
+        seen.map(r => r.path).filter(p => p.startsWith('/api/v1/tasks/')),
+      ).toEqual(['/api/v1/tasks/first']);
+      expect(() => source({ apiDir: new URL('api/', dir) })).toThrow(
+        /not an answer about the task/,
+      );
+    }
+  });
+
+  it('refuses a task id that is not one before anything is fetched', async () => {
+    route = lists([project(1)], [task(1)]);
+
+    for (const id of ['..', '.', 'a/b', '', 'a b', '%2e%2e', 'a?b']) {
+      seen.length = 0;
+      await expect(
+        recordApi({
+          dir: tempDir(),
+          api: base,
+          token: TOKEN,
+          limit: 2,
+          maxPages: 3,
+          lookups: { deleted: [id] },
+        }),
+      ).rejects.toThrow(/is no Todoist task id/);
+      expect(seen).toEqual([]);
+    }
+  });
+
+  it('maps numeric ids, redacts due.timezone, and keeps no userinfo in meta.json', async () => {
+    route = lists(
+      [{ ...project(1), workspace_id: 4242 }],
+      [task(1, { due: { date: '2026-10-15', timezone: 'Europe/Amsterdam' } })],
+    );
+    const dir = tempDir();
+    const { meta } = await recordApi({
+      dir,
+      api: base,
+      token: TOKEN,
+      limit: 2,
+      maxPages: 3,
+      proxy: 'https://user:secret@proxy.example',
+    });
+
+    const projectPage = read(dir, 'GET__api__v1__projects__page-1.json');
+    expect(projectPage.body.results[0].workspace_id).toBe('workspace-1');
+    const taskPage = read(dir, 'GET__api__v1__tasks__page-1.json');
+    expect(taskPage.body.results[0].due).toEqual({
+      date: '2026-10-15',
+      timezone: 'redacted',
+    });
+    expect(meta.document_source).toBe(
+      'https://proxy.example/catalog/todoist.yaml',
+    );
+    const files = everything(dir);
+    for (const secret of ['4242', 'Europe/Amsterdam', 'secret@'])
+      expect(files).not.toContain(secret);
   });
 
   it('records completed, deleted and inaccessible tasks by id, whatever their status', async () => {
