@@ -30,7 +30,7 @@ paths:
           - status: [503]
             identity:
               page_id: additional_data.committed_resource_id
-            description: The provider documents that this 503 can follow a saved create.
+            description: The provider documents that this 503, with this field, is sent only after the page was created.
       responses:
         '200': { description: The new page. }
         '503': { description: Unavailable, or the page was saved but the response could not be built in time. }

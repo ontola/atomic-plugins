@@ -81,7 +81,15 @@ Data flows through four stages, each its own directory under `src/`:
    a finished windowed read keeps its spans with reason `incomplete`,
    while any other read that is not complete (failed, or an undocumented
    short-page end) gets `spans: null`.
-   `read/read.ts` adds ontology/type projection.
+   `read/read.ts` adds ontology/type projection. `read/references.ts`
+   (`resolveReference`) resolves a CRUD Causality §4.1.3 Reference Object
+   to the target's identity path (bound fields from the object, unbound
+   variables from the request context; `required: false` and an absent or
+   null field give undefined, checked in a first pass so the template's
+   variable order does not matter; `''` is a value and throws; anything
+   else unfillable throws, as do a `.`, `..`, whitespace-padded, NUL or
+   lone-surrogate value, an unsafe integer, and a target template that
+   is not a `/` path); nothing is fetched (`unit/read/references.test.ts`, the spec's §7.6 example).
    `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
@@ -347,6 +355,19 @@ Data flows through four stages, each its own directory under `src/`:
    `pauseForOperation`, `operationBuckets`; the read transport waits within
    `limits.timeoutMs`), until the answer's time or else the write's backoff;
    `mayHaveApplied` ignores the verdict, so a 5xx create stays uncertain.
+   Plan tiers (Throttling 0.5.0): `declaredThrottling(document, plan)`
+   reads a Limit Object with `tiers` through `parseTiers` (the spec
+   validator's checks that decide which tier binds: nonempty `plans` of
+   nonempty strings, no plan twice, positive integer `requests` and
+   `window.seconds`; lenient elsewhere, as a plain limit; any failure leaves the limit
+   out) and `limitsInForce` (the tier naming `plan`, else every tier, after
+   the reference `limits_in_force`): one in force goes into `quotas`,
+   several into `tieredQuotas`; `windows` gets `fallbackWindow` (the
+   plan's tier's, else the longest). `Pacer`'s third argument takes
+   `tieredQuotas`: one request log per bucket, checked against every
+   quota, pruned at the longest window. The `throttlingPlan` option
+   reaches it from the client, `readCollections`/`readPlatform` and
+   `paginate` (`unit/throttling/plan-tiers.test.ts`).
    Pacing (K2, `throttling/pacing.ts`): `declaredThrottling`'s `quotas`
    (Limit Objects with `requests`) feed a `Pacer` (`pace`, `paceFraction`,
    default 0.8). The `baseTransport` wrapper counts every request when it
@@ -569,10 +590,15 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   first, else auto-detection by matching the scheme's declared query
   parameter/body field names against the operation's own (§6.2 default
   rules — a dimension with zero declared fields never vacuously matches).
-  An explicit entry that cannot be applied (not an array of application
-  objects, an undeclared or invalid scheme, or one its overrides make
-  invalid) throws `PaginationSchemeError` instead of being dropped: a read
-  that ignored it would return one page as the whole collection (#384). The
+  An explicit entry that cannot be applied throws `PaginationSchemeError`
+  instead of being dropped, because a read that ignored it would return
+  one page as the whole collection (#384). It cannot be applied when
+  `x-pagination` is not an array; when `applicationProblem` refuses an
+  entry (every entry is checked against the spec's `schema.json` for a
+  Pagination Application Object: a nonempty `scheme`, an object
+  `overrides`, a string `description`, no other field but `x-` ones);
+  when it names an undeclared or invalid scheme; or when its overrides
+  make the scheme invalid. The
   client's conditional-cache check treats such an operation as paginated,
   and the mock server answers 500.
   Only the query-parameter and body-field dimensions are actually

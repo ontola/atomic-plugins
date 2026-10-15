@@ -93,14 +93,14 @@ proxy. No credential ever reaches the frame.
   (0.4.0; see the limits below for the shape), and the translation between
   option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
   at the host boundary.
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 145,070 bytes for
-  0.5.3 (144,024 for 0.5.2, with syncables 0.21.0; 125,914 for 0.5.1 with devonian 0.9.0 and
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 179,723 bytes for
+  0.5.5 (179,518 for 0.5.4) with syncables 0.23.0 (145,070 for 0.5.3; 144,024 for 0.5.2, with syncables 0.21.0; 125,914 for 0.5.1 with devonian 0.9.0 and
   syncables 0.19.0; 125,712 for 0.5.0; 115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
   document, syncables' read path, devonian's Atomic Data API and the shared
   sync-status card with its `card.css` (through `cssRawPlugin` from
   `integrations/sync-status/build.mjs`). `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
   `validateDatatype` only; `build.test.ts` pins both to the real library).
-- Dependencies: `syncables@0.21.0` and `devonian@0.9.0` from npm, exact
+- Dependencies: `syncables@0.23.0` and `devonian@0.9.0` from npm, exact
   versions in `package.json`, locked in `pnpm-lock.yaml`, installed into this
   folder's `node_modules/` (`pnpm install --frozen-lockfile` here; CI's
   "Install plugin npm dependencies" step does it for every
@@ -244,8 +244,17 @@ verified against live Notion or the real integration proxy.
   reported as "Unknown whether Notion applied it" and the batch stops; the
   next sync shows what Notion has, and the card lists the row as sent
   without an answer, not as waiting, until a sync succeeds (a failed sync
-  keeps that outcome). A proxy refusal or a 429 also stops
-  the batch; those wrote nothing. Nothing
+  keeps that outcome). A proxy refusal or a 429 also stops the batch;
+  those wrote nothing. A 429 whose body says Notion blocked the integration
+  (`additional_data.rate_limit_reason: public_api_request_blocked`, 0.5.4)
+  is permanent: a sync then fails with "Notion has blocked this integration
+  … Retrying won't help. Contact Notion support." and schedules no retry,
+  and a send says the same, whether the PATCH or the GET before it was
+  refused (0.5.5). From 0.5.5 the read transport throws on such an answer,
+  so syncables does not send the request again (it retries a 429 with a
+  short `Retry-After`). `isBlockedByNotion` (`transport.ts`) reads the
+  response body, so it holds whatever syncables makes of the status;
+  fixture scenario `blocked`. Nothing
   is sent while the app is closed (no `afterCommit` hook at the pin).
   Conflicts are kept in memory until the next sync finds them again from
   the baselines. The Notion integration needs Notion's "Update content"

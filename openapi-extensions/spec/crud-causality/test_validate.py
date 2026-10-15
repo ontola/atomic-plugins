@@ -1,4 +1,4 @@
-"""CRUD Causality 0.6.0: every rule of §8, collection reads (listMethod, listQuery, listBody) and compound creates."""
+"""CRUD Causality 0.7.0: every rule of §8, collection reads (listMethod, listQuery, listBody), compound creates, replacements and lists without item identity."""
 import copy
 import pathlib
 import unittest
@@ -6,9 +6,8 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import (committed_identity, compound_create, continue_compound_create, created_identity,
-                      path_template_problem,
-                      read_request, validate)
+from validate import (committed_identity, compound_create, continue_compound_create, created_identity, pair_items,
+                      path_template_problem, read_request, replace_block, validate)
 
 ROOT = pathlib.Path(__file__).parent
 
@@ -656,7 +655,7 @@ class StructureRuleTests(unittest.TestCase):
 
 
 class CommittedErrorTests(unittest.TestCase):
-    """0.7.0: an error response that says the create was applied (§4.3.3, rules 27-28)."""
+    """0.8.0: an error response that says the create was applied (§4.3.3, rules 30-32)."""
 
     def document(self):
         return yaml.safe_load((ROOT / "examples" / "committed-error.yaml").read_text(encoding="utf-8"))
@@ -667,17 +666,19 @@ class CommittedErrorTests(unittest.TestCase):
     def test_example_is_valid(self):
         validate(self.document())
 
-    def test_rules_27_and_28(self):
+    def test_rules_30_to_32(self):
         cases = (
-            (lambda c: c.update(committedErrors=[]), "rule 27"),
-            (lambda c: c["committedErrors"][0].update(status=[200]), "rule 28"),
-            (lambda c: c["committedErrors"][0].update(status=[409]), "rule 28"),
-            (lambda c: c["committedErrors"][0].update(status=[503, 503]), "rule 28"),
-            (lambda c: c["committedErrors"][0].update(status=[]), "rule 28"),
-            (lambda c: c["committedErrors"][0].update(identity={}), "rule 28"),
-            (lambda c: c["committedErrors"][0].update(identity={"other": "a.b"}), "rule 28"),
-            (lambda c: c["committedErrors"][0].update(identity={"page_id": "a..b"}), "rule 28"),
-            (lambda c: c["committedErrors"][0].update(extra=1), "rule 28"),
+            (lambda c: c.update(committedErrors=[]), "rule 30"),
+            (lambda c: c.update(followUps=[{"field": "labels", "create": "omit", "operation": "x", "bind": {}}]),
+             "rule 32"),
+            (lambda c: c["committedErrors"][0].update(status=[200]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(status=[409]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(status=[503, 503]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(status=[]), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(identity={}), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(identity={"other": "a.b"}), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(identity={"page_id": "a..b"}), "rule 31"),
+            (lambda c: c["committedErrors"][0].update(extra=1), "rule 31"),
         )
         for mutate, fragment in cases:
             document = self.document()
@@ -689,7 +690,7 @@ class CommittedErrorTests(unittest.TestCase):
         document["paths"]["/pages/{page_id}"]["get"]["x-crud"]["committedErrors"] = self.crud(document)["committedErrors"]
         with self.assertRaises(ValueError) as raised:
             validate(document)
-        self.assertIn("allowed only on action create (rule 27)", str(raised.exception))
+        self.assertIn("allowed only on action create (rule 30)", str(raised.exception))
 
     def test_committed_identity(self):
         document = self.document()
@@ -701,7 +702,7 @@ class CommittedErrorTests(unittest.TestCase):
                          {"page_id": "59833787-2cf9-4fdf-8782-e53db20768a5"})
         # Another status, no id, an empty or unusable id, or no JSON: unknown, as before.
         self.assertIsNone(committed_identity(document, crud, 502, body))
-        for value in (None, "", "  ", True, {"id": "x"}, "a/b", "a?b", "a#b", -1, 1.5):
+        for value in (None, "", "  ", " a", "a ", ".", "..", True, {"id": "x"}, "a/b", "a?b", "a#b", -1, 1.5):
             changed = copy.deepcopy(body)
             changed["additional_data"]["committed_resource_id"] = value
             with self.subTest(value=value):
@@ -718,9 +719,110 @@ class CommittedErrorTests(unittest.TestCase):
         self.assertIsNone(committed_identity(document, {"action": "update"}, 503,
                                              {"additional_data": {"committed_resource_id": "x"}}))
 
-    def test_0_6_documents_stay_valid(self):
+    def test_0_7_documents_stay_valid(self):
         validate(example())
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def notes():
+    return yaml.safe_load((ROOT / "examples" / "replaced-notes.yaml").read_text(encoding="utf-8"))
+
+
+def note(document):
+    return document["components"]["crudResources"]["note"]
+
+
+def item(text, checked=False, children=None):
+    out = {"text": {"text": text}, "checked": checked}
+    if children:
+        out["childListItems"] = children
+    return out
+
+
+class ReplaceTests(unittest.TestCase):
+    """§4.8, §4.9 and rules 27-29, on §7.8's example."""
+
+    def invalid(self, mutate, fragment):
+        document = notes()
+        mutate(document)
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_example_is_valid(self):
+        validate(notes())
+
+    def test_example_is_valid_openapi_without_the_extension_members(self):
+        document = notes()
+        document["components"].pop("crudResources")
+        for item_ in document["paths"].values():
+            for operation in item_.values():
+                if isinstance(operation, dict):
+                    operation.pop("x-crud", None)
+        validate_openapi(document)
+
+    def test_rule_27_needs_create_and_delete_and_no_update(self):
+        self.invalid(lambda d: d["paths"]["/v1/{name}"].pop("delete"), "needs an x-crud create and delete of note (rule 27)")
+        self.invalid(lambda d: d["paths"]["/v1/notes"].pop("post"), "(rule 27)")
+        self.invalid(lambda d: d["paths"]["/v1/{name}"].update(patch={
+            "x-crud": {"action": "update", "resource": "note", "mode": "replace"},
+            "responses": {"200": {"description": "ok"}}}), "note has an x-crud update (rule 27)")
+
+    def test_rule_28_block_objects(self):
+        blocks = lambda d: note(d)["replace"]["blockedBy"]
+        self.invalid(lambda d: blocks(d)[0].pop("field"), "field: expected a dot-path (rule 28)")
+        self.invalid(lambda d: blocks(d)[0].update(when="many"), "when: expected present or nonEmpty")
+        self.invalid(lambda d: blocks(d)[1].update(moreThan=-1), "moreThan: expected an integer >= 0")
+        self.invalid(lambda d: blocks(d)[1].update(moreThan=True), "moreThan: expected an integer >= 0")
+        self.invalid(lambda d: blocks(d)[1].update(when="present"), "moreThan is not given with when")
+        self.invalid(lambda d: blocks(d)[0].update(**{"except": {"a": 1}}), "except: only with moreThan")
+        self.invalid(lambda d: note(d)["replace"].update(blockedBy={}), "blockedBy: expected an array")
+
+    def test_rule_29_unkeyed_lists(self):
+        spec = lambda d: note(d)["unkeyedLists"]["body.list.listItems"]
+        self.invalid(lambda d: spec(d).pop("match"), "match: expected a nonempty array of distinct dot-paths")
+        self.invalid(lambda d: spec(d).update(match=[]), "(rule 29)")
+        self.invalid(lambda d: spec(d).update(match=["checked", "checked"]), "(rule 29)")
+        self.invalid(lambda d: spec(d).update(children="checked"), "children: is also a match field")
+        self.invalid(lambda d: note(d)["unkeyedLists"].update({"a..b": {"match": ["x"]}}), "the key is not a dot-path")
+
+    def test_0_7_documents_stay_valid(self):
+        document = notes()
+        del note(document)["replace"], note(document)["unkeyedLists"]
+        validate(document)
+
+    def test_replace_block(self):
+        replace = note(notes())["replace"]
+        self.assertIsNone(replace_block(replace, {"name": "notes/1"}))
+        self.assertIsNone(replace_block(replace, {"attachments": []}))
+        self.assertEqual(replace_block(replace, {"attachments": [{}]})["field"], "attachments")
+        owner = {"role": "OWNER", "email": "a@example.com"}
+        self.assertIsNone(replace_block(replace, {"permissions": [owner]}))
+        self.assertIsNone(replace_block(replace, {"permissions": [owner, {"role": "WRITER", "deleted": True}]}))
+        self.assertEqual(replace_block(replace, {"permissions": [owner, {"role": "WRITER"}]})["field"], "permissions")
+        self.assertEqual(replace_block({"blockedBy": [{"field": "a.b"}]}, {"a": {"b": 0}})["field"], "a.b")
+        self.assertIsNone(replace_block({"blockedBy": [{"field": "a.b"}]}, {"a": {"b": None}}))
+        self.assertIsNone(replace_block(None, {}))
+
+    def test_pairing_a_moved_item(self):
+        unkeyed = note(notes())["unkeyedLists"]["body.list.listItems"]
+        self.assertEqual(pair_items(unkeyed, [item("Milk"), item("Eggs", True)], [item("Eggs", True), item("Milk")]), [1, 0])
+
+    def test_pairing_passes(self):
+        unkeyed = note(notes())["unkeyedLists"]["body.list.listItems"]
+        base = [item("Milk"), item("Eggs"), item("Bread")]
+        # Eggs ticked: paired on text in the second pass; Bread edited: by position.
+        self.assertEqual(pair_items(unkeyed, base, [item("Milk"), item("Eggs", True), item("Rye bread")]), [0, 1, 2])
+        # The nearest of two equal candidates.
+        self.assertEqual(pair_items(unkeyed, [item("A"), item("B"), item("A")], [item("B"), item("A")]), [1, 0])
+        # An item added at the end has no baseline item left between its neighbours.
+        self.assertEqual(pair_items(unkeyed, [item("A")], [item("A"), item("New")]), [0, None])
+
+    def test_children_are_flattened_after_their_parent(self):
+        unkeyed = note(notes())["unkeyedLists"]["body.list.listItems"]
+        base = [item("Trip", children=[item("Charger"), item("Adapter")])]
+        now = [item("Adapter"), item("Trip", children=[item("Charger", True)])]
+        self.assertEqual(pair_items(unkeyed, base, now), [2, 0, 1])
