@@ -3,6 +3,29 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
+## Unreleased
+
+- Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
+  paced at the tier whose `plans` name the plan the catalog selection's
+  `throttlingPlans` gives for it, else within every tier at once (each its
+  own count). Unknown entries are logged at load and ignored.
+- Key rotation (#410): `POST /agents/transfer`, signed by the old agent with
+  a proof by the new one, moves the old agent's connections and runtimes to
+  the new id in one transaction and retires the old id (new `retired_agents`
+  table). Planned rotation only; a lost or compromised key is out of scope
+  (SECURITY.md, "Key rotation"). New errors `invalid_transfer_proof`,
+  `agent_retired`, `transfer_blocked`, `transfer_conflict`. The transfer, and
+  every write that adds a connection, runtime or delegation, run in a
+  transaction under per-owner advisory locks; the access check refuses a
+  retired owner on every route. Device sessions (0.4.0) are not moved: they
+  answer `agent_retired` until they expire, and the user approves the CLI
+  again with the new key. **Rolling deploys and downgrades:** a binary
+  older than this one ignores `retired_agents` and takes no owner lock, so
+  while one runs it serves a retired owner and can race a transfer. Finish a
+  rolling deploy before relying on transfers, and expect a downgrade to
+  re-admit retired ids (the table is left in place and is honoured again on
+  upgrade).
+
 ## 0.4.0 (2026-10-13)
 
 - Opt-in OAuth device authorization for public CLI clients (#565), with Atomic

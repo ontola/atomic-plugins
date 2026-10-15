@@ -38,7 +38,7 @@
   "sideEffects": false,
   "files": [
     "docs",
-    "build",
+    "build/src",
     "vocab",
     "src"
   ],
@@ -78,7 +78,8 @@
     "test": "vitest run --config __tests__/vitest.config.ts",
     "test:unit": "vitest run unit --config __tests__/vitest.config.ts",
     "test:examples": "vitest run examples --config __tests__/vitest.config.ts",
-    "test:browser-build": "DEVONIAN_TEST_BUILD=1 vitest run browser --config __tests__/vitest.config.ts",
+    "test:browser-build": "DEVONIAN_TEST_BUILD=1 vitest run browser packaged --config __tests__/vitest.config.ts",
+    "test:packaged": "DEVONIAN_TEST_BUILD=1 vitest run packaged --config __tests__/vitest.config.ts",
     "test:real-browser": "DEVONIAN_TEST_BUILD=1 playwright test -c __tests__/real-browser/playwright.config.ts",
     "test:coverage": "vitest run --config __tests__/vitest.config.ts --coverage.enabled --coverage.all",
     "prettier": "prettier \"{src,__{tests}__}/**/*.{ts,mts}\" --config .prettierrc --write",

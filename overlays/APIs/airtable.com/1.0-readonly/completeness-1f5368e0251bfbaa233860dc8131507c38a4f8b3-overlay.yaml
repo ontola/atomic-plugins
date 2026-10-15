@@ -1,0 +1,51 @@
+# Reviewed 2026-10-14 against the pinned OAD and official provider documentation; no live calls.
+# Source: the pinned OAD (an authored read-only subset): GET /v0/{baseId}/{tableIdOrName}/{recordId}
+#   404 "The base, table, or record does not exist or is not accessible."; the list's 404 "The
+#   base or table does not exist or is not accessible."
+# Source: https://airtable.com/developers/web/api/errors: 404 "Route or resource is not found.
+#   This error is returned when the request hits an undefined route, or if the resource
+#   doesn't exist (e.g. has been deleted)."; 403 INVALID_PERMISSIONS_OR_MODEL_NOT_FOUND
+#   "Invalid permissions, or the requested model was not found."
+# Source: https://airtable.com/developers/web/api/list-records: without a view or
+#   filterByFormula every record of the table is returned, "the order of records is
+#   arbitrary"; an iteration can time out (422) and must start again from the beginning.
+# Source: https://airtable.com/developers/web/api/delete-record ("Deletes a single record";
+#   nothing about a trash or a restore).
+# Needs Collection Completeness 0.2.0-draft (notFound). Compose after
+# crud-causality-1f5368e0...-overlay.yaml, in either order: it deep-merges into its `record`
+# resource.
+#
+# Without a declaration a consumer takes a 404 from a record's own read as a deletion (the
+# notFound default). Airtable's error page allows that reading for a record, but the record
+# read's 404 answers just as well for a deleted or renamed table (tableIdOrName may be a name
+# the consumer holds) or a deleted base, and the pinned OAD adds "or is not accessible"; the
+# answer does not say which. So a 404 is unavailable. Absence is removed, not deleted: the
+# list's order is arbitrary and the reference says nothing about records skipped or moved
+# during offset paging, so an absent record is settled by its own read.
+# Not declared: `gone` (no 410 documented); nothing on bases or tables, and no
+# `parentAbsent` (no resource binds tableIdOrName, so the collection has no parent).
+# Not verified: whether a deleted record can be restored (Airtable's interface has a trash;
+# the API reference does not mention it) and what its read answers meanwhile.
+overlay: 1.0.0
+info:
+  title: Airtable table records collection completeness
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/1f5368e0251bfbaa233860dc8131507c38a4f8b3/APIs/airtable.com/1.0-readonly/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        record:
+          collections:
+            tableRecords:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                description: >-
+                  A table's records, every page, read without a view or
+                  filterByFormula (then every record is returned, in
+                  arbitrary order). A record leaves the list when deleted, so
+                  absence is removed and settled by the record's own read.
+                  That read answers 404 for a deleted record, but also for a
+                  deleted or renamed table or a deleted base ("does not exist
+                  or is not accessible"), so a 404 is unavailable.

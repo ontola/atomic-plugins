@@ -340,7 +340,7 @@ function checkEnvelope(
   errors: string[],
 ): void {
   if (envelope === undefined) return;
-  if (typeof envelope !== 'object' || envelope === null) {
+  if (!isObject(envelope)) {
     errors.push(`${path}.envelope must be an object`);
     return;
   }
@@ -417,6 +417,231 @@ function checkIncomplete(
     errors.push(`${at}.description must be a string`);
 }
 
+const SCHEME_KEYS = new Set([
+  'type',
+  'description',
+  'autoDetect',
+  'window',
+  'request',
+  'response',
+]);
+const AUTO_DETECT_KEYS = new Set([
+  'matchQueryParams',
+  'matchBodyFields',
+  'matchResponseFields',
+  'matchHeaders',
+  'requireAll',
+]);
+const REQUEST_KEYS = new Set(REQUEST_LOCATIONS);
+const REQUEST_FIELD_KEYS = new Set([
+  'description',
+  'schema',
+  'role',
+  'required',
+  'start',
+  'advance',
+  'template',
+]);
+const RESPONSE_KEYS = new Set([
+  'envelope',
+  'bodyFields',
+  'headers',
+  'shortPage',
+  'incomplete',
+]);
+const RESPONSE_FIELD_KEYS = new Set([
+  'description',
+  'schema',
+  'role',
+  'linkResolution',
+]);
+const ENVELOPE_KEYS = new Set(['itemsField', 'emptyWhenAbsent']);
+const LINK_RESOLUTION_KEYS = new Set(['base', 'url', 'description']);
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Keys outside `allowed` that are not `x-` extensions. */
+function unknownKeys(
+  at: string,
+  value: Record<string, unknown>,
+  allowed: Set<string>,
+  kind: string,
+  errors: string[],
+): void {
+  for (const key of Object.keys(value))
+    if (!allowed.has(key) && !isExtensionKey(key))
+      errors.push(`${at}.${key} is not a ${kind} field`);
+}
+
+/** `description` a string and `schema` an object, where present. */
+function commonTypes(
+  at: string,
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (
+    value['description'] !== undefined &&
+    typeof value['description'] !== 'string'
+  )
+    errors.push(`${at}.description must be a string`);
+  if (value['schema'] !== undefined && !isObject(value['schema']))
+    errors.push(`${at}.schema must be an object`);
+}
+
+/**
+ * The structure the spec's `schema.json` gives a scheme, beyond the
+ * numbered rules: no fields but the spec's (and `x-` extensions) on the
+ * scheme and the objects in it, and the types it states. A typo such as
+ * `respnse:` would otherwise pass beside a valid `request`, and the read
+ * would page without a next cursor. Returns false when a value the rule
+ * checks below read is not an object, so they are skipped rather than
+ * thrown on.
+ */
+function checkStructure(
+  path: string,
+  scheme: unknown,
+  errors: string[],
+): boolean {
+  if (!isObject(scheme)) {
+    errors.push(`${path} must be an object`);
+    return false;
+  }
+  let usable = true;
+  unknownKeys(path, scheme, SCHEME_KEYS, 'Pagination Scheme Object', errors);
+  commonTypes(path, scheme, errors);
+  const autoDetect = scheme['autoDetect'];
+  if (isObject(autoDetect)) {
+    unknownKeys(
+      `${path}.autoDetect`,
+      autoDetect,
+      AUTO_DETECT_KEYS,
+      'Auto-Detect Object',
+      errors,
+    );
+    for (const [key, value] of Object.entries(autoDetect))
+      if (AUTO_DETECT_KEYS.has(key) && typeof value !== 'boolean')
+        errors.push(`${path}.autoDetect.${key} must be a boolean`);
+  }
+  const fieldMaps = (
+    at: string,
+    container: Record<string, unknown>,
+    locations: readonly string[],
+    keys: Set<string>,
+    kind: string,
+  ): void => {
+    for (const location of locations) {
+      const map = container[location];
+      if (map === undefined) continue;
+      if (!isObject(map)) {
+        errors.push(`${at}.${location} must be an object`);
+        usable = false;
+        continue;
+      }
+      for (const [name, field] of Object.entries(map)) {
+        const fieldAt = `${at}.${location}.${name}`;
+        if (!isObject(field)) {
+          errors.push(`${fieldAt} must be an object`);
+          usable = false;
+          continue;
+        }
+        unknownKeys(fieldAt, field, keys, kind, errors);
+        commonTypes(fieldAt, field, errors);
+        if (field['role'] !== undefined && typeof field['role'] !== 'string') {
+          errors.push(`${fieldAt}.role must be a string`);
+          usable = false;
+        }
+        if (
+          field['required'] !== undefined &&
+          typeof field['required'] !== 'boolean'
+        )
+          errors.push(`${fieldAt}.required must be a boolean`);
+        if (field['linkResolution'] !== undefined) {
+          const resolution = field['linkResolution'];
+          if (isObject(resolution)) {
+            unknownKeys(
+              `${fieldAt}.linkResolution`,
+              resolution,
+              LINK_RESOLUTION_KEYS,
+              'Link Resolution Object',
+              errors,
+            );
+            commonTypes(`${fieldAt}.linkResolution`, resolution, errors);
+          }
+        }
+      }
+    }
+  };
+  const request = scheme['request'];
+  if (request !== undefined) {
+    if (!isObject(request)) {
+      errors.push(`${path}.request must be an object`);
+      usable = false;
+    } else {
+      unknownKeys(
+        `${path}.request`,
+        request,
+        REQUEST_KEYS as Set<string>,
+        'Request Pagination Fields Object',
+        errors,
+      );
+      fieldMaps(
+        `${path}.request`,
+        request,
+        REQUEST_LOCATIONS,
+        REQUEST_FIELD_KEYS,
+        'Request Field Object',
+      );
+    }
+  }
+  const response = scheme['response'];
+  if (response !== undefined) {
+    if (!isObject(response)) {
+      errors.push(`${path}.response must be an object`);
+      usable = false;
+    } else {
+      unknownKeys(
+        `${path}.response`,
+        response,
+        RESPONSE_KEYS,
+        'Response Pagination Fields Object',
+        errors,
+      );
+      fieldMaps(
+        `${path}.response`,
+        response,
+        ['bodyFields', 'headers'],
+        RESPONSE_FIELD_KEYS,
+        'Response Field Object',
+      );
+      const envelope = response['envelope'];
+      if (isObject(envelope))
+        unknownKeys(
+          `${path}.response.envelope`,
+          envelope,
+          ENVELOPE_KEYS,
+          'Envelope Object',
+          errors,
+        );
+      const short = response['shortPage'];
+      if (
+        isObject(short) &&
+        short['description'] !== undefined &&
+        typeof short['description'] !== 'string'
+      )
+        errors.push(`${path}.response.shortPage.description must be a string`);
+    }
+  }
+  const window = scheme['window'];
+  if (
+    isObject(window) &&
+    window['description'] !== undefined &&
+    typeof window['description'] !== 'string'
+  )
+    errors.push(`${path}.window.description must be a string`);
+  return usable;
+}
+
 /**
  * Validates a single scheme against spec section 9. Returns a list of
  * human-readable errors (each naming the offending location), empty if
@@ -430,10 +655,25 @@ export function validatePaginationScheme(
 ): string[] {
   const errors: string[] = [];
   const path = `paginationSchemes.${name}`;
+  if (!checkStructure(path, scheme, errors)) return errors;
 
   if (!SCHEME_TYPES.has(scheme.type)) {
     errors.push(
       `${path}.type must be one of pageNumber, pageToken, nextLink, or rangeWindow (got "${String(scheme.type)}")`,
+    );
+  }
+  // The spec's schema.json: a boolean or an Auto-Detect Object. Anything
+  // else (`null`, a string) would break auto-detection of every operation.
+  const autoDetect: unknown = scheme.autoDetect;
+  if (
+    autoDetect !== undefined &&
+    typeof autoDetect !== 'boolean' &&
+    (typeof autoDetect !== 'object' ||
+      autoDetect === null ||
+      Array.isArray(autoDetect))
+  ) {
+    errors.push(
+      `${path}.autoDetect must be a boolean or an Auto-Detect Object (got ${JSON.stringify(autoDetect)})`,
     );
   }
   checkWindow(path, scheme, errors);
@@ -467,6 +707,20 @@ export function validatePaginationScheme(
     ) {
       errors.push(
         `${path}.request.bodyFields.${fieldName}.role is not a valid request role (got "${field.role}")`,
+      );
+    }
+  }
+
+  for (const [fieldName, field] of Object.entries(
+    scheme.request?.headerFields ?? {},
+  )) {
+    if (
+      field.role &&
+      !isExtensionKey(field.role) &&
+      !REQUEST_ROLES.has(field.role)
+    ) {
+      errors.push(
+        `${path}.request.headerFields.${fieldName}.role is not a valid request role (got "${field.role}")`,
       );
     }
   }

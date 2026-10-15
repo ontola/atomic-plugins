@@ -24,8 +24,102 @@ ruby scripts/generate_moneybird_metadata.rb /path/to/APIs/moneybird.com/v2-reado
 ruby scripts/validate_moneybird_metadata.rb /path/to/APIs/moneybird.com/v2-readonly
 ```
 
+## A bounded read-only import: what the overlays declare (#102)
+
+Checked on 2026-10-15 from documentation only, with no account and no token:
+the pinned OAD and Moneybird's
+[introduction](https://developer.moneybird.com/introduction.md) (static
+Markdown, listed in `/llms.txt`; the HTML site renders client-side).
+
+| Concern | Overlay | Declares | Status |
+| --- | --- | --- | --- |
+| Paging | `pagination-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` (new) | The 19 lists v1 pages follow the `Link` header's `rel="next"`; no `rel="next"` is the last page. No `per_page` is sent (default 50). | This PR; no catalog selects it |
+| Paging | `pagination-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` (v1) | `page`/`per_page` on the same lists, with no response field: a reader cannot tell the last page. | On `main`, in the catalogs |
+| Unpaged lists | none needed | Twelve lists have no page parameter: one answer is the list. | Evidence in #578 |
+| Financial mutations | `pagination-range-window-85a61052…` | "Limited to 100", no page parameter: read by period windows. | #614 |
+| Completeness | `completeness-85a61052…` | `absent: removed`, `notFound: unavailable` on 20 collections. | #585 |
+| Rate limits | `throttling-85a61052…` (v1) | 150 requests per 300 s per source IP. | On `main` |
+| Rate limits | `throttling-v2-85a61052…` | v1 plus `Retry-After` and a 429 as `quotaExhausted`. | #615 |
+
+Why the paging revision sends no `per_page`: the introduction gives
+`per_page` "default: 50, maximum: 100" and says "Each paginated response
+contains a `Link` header with information about the previous and next page",
+but its example link carries only `page=3`. Whether a next link keeps a
+`per_page` the client sent is not documented; a link that dropped it would
+make the second page overlap the first. With the default the pages stay
+consistent, at about twice the requests of 100 per page: 1,000 contacts take
+20 requests, against the 150 per 5 minutes per IP. (The Money drive app,
+`integrations/money/moneybird/read.ts`, sends `per_page=100` and follows the
+links; it is verified against its synthetic fixture only.)
+
+Stays unverified until a live run against a real administration:
+
+- that every paginated answer carries a `Link` header (the pinned OAD
+  attaches one to `downloads.json` only), that the last page's has no
+  `rel="next"`, and that its links stay on `https://moneybird.com/api/v2` and
+  the same list (the documented example link,
+  `https://moneybird.com/api/v2/contacts.json?page=3`, has no administration
+  id segment; taken literally it leaves the list's path, which §4.4.4's
+  same-origin rule would still follow);
+- whether a next link keeps `per_page`;
+- the caching Moneybird warns of: "our API requests are cached for
+  performance optimization. As a result, we strongly advise against using
+  GET methods for verification purposes as this may result in an incomplete
+  result". A list or an item read right after a change can be stale, so a
+  record that #585's `removed` settles by its own read can read as present
+  for a while;
+- what a 404 means beyond "Entity not found", and what any read answers for
+  a deleted record;
+- the units of `RateLimit-Remaining`, `RateLimit-Limit` and `RateLimit-Reset`
+  (the introduction calls `RateLimit-Remaining` "the time remaining"), and
+  whether the window is fixed or sliding; a 403 means "IP is blacklisted for
+  API usage";
+- `X-Total-Count`, documented in the pinned OAD for `downloads.json` only,
+  so not declared;
+- which administration fields and record fields a real administration
+  returns (the drive app's fixture is synthetic).
+
+`../../../tests/test_moneybird_pagination_v2.py` validates the paging
+revision alone and in the catalog's composition, checks it covers exactly
+v1's lists, and follows links of the documented shape with the reference
+`resolve_link` (another origin is refused). No provider was called.
+
 `throttling-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` describes the API's announced 150-request, 300-second
 source-IP quota using [`openapi-extensions/spec/throttling`](../../../../openapi-extensions/spec/throttling/README.md). The
 window algorithm is explicitly unspecified; pacing/retries remain consumer
 choices. The catalog excludes report endpoints, whose stricter quota is not
 modeled by this overlay. Source: https://developer.moneybird.com/#throttling
+
+`pagination-range-window-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml`
+declares `GET /{administration_id}/financial_mutations.json` as a
+[Pagination Schemes 0.5.0](../../../../openapi-extensions/spec/pagination-schemes/README.md#46-range-windows)
+`rangeWindow`: the list has no page parameter and its description says it is
+"Limited to 100 financial mutations" (the pinned document, and
+https://developer.moneybird.com/api/financial_mutations/), so a client reads
+a range of days as `filter=period:YYYYMMDD..YYYYMMDD` windows and halves a
+window whose answer holds 100 mutations, down to single days. A single day
+with 100 mutations ends the read with an error. The Money app's
+`integrations/money/moneybird/read.ts` splits windows the same way in code
+today, but asks its first window as the named `period:this_year`. Moneybird's
+financial mutations synchronization API, which the pinned read-only document
+does not include, is the documented alternative for reading more than 100. Declared, not
+verified against a live administration: that the period bounds are
+inclusive (inferred from the documented example `20130101..20130131`), that
+a one-day period is accepted, which mutation field the period compares
+(`date` is likely, so the overlay names no `field`), and whose time zone the
+days are in (so it names no `timeZone`), and that a `period:` filter
+alone still selects every state and mutation type (Moneybird says a passed
+filter "replaces the defaults below entirely", and those defaults are
+`state:all` and `mutation_type:all`). The overlay goes after the
+`pagination` overlay in a catalog. syncables reads `rangeWindow` schemes,
+and its `sync()` applies a windowed read from 0.22.0; no dated catalog
+selects it yet. Check it with
+`python3 overlays/tests/test_moneybird_range_window.py --directory <openapi-directory clone>`.
+
+`throttling-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` (#615) keeps
+v1's limits exactly and adds what the introduction's Throttling section
+documents for a 429: `Retry-After` ("the time after which a new request can
+be made") and a 429 as `quotaExhausted` on the `apiRequests` bucket.
+`RateLimit-Remaining`, `RateLimit-Limit` and `RateLimit-Reset` are not
+declared: the introduction gives them no units. No dated catalog selects it
+yet. `../../../tests/test_throttling_overlays.py` checks it.

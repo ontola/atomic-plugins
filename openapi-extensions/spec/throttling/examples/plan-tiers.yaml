@@ -1,0 +1,39 @@
+openapi: 3.0.3
+info:
+  title: Illustrative per-plan rate limit
+  version: 1.0.0
+  description: >-
+    Synthetic. One bucket per account whose amount and window depend on the
+    account's plan: 30 requests per hour on the basic plan, 20 per second on
+    the standard and plus plans, 50 per second on the premium plan. A consumer
+    without a configured plan keeps within every tier at once.
+servers:
+  - url: https://api.example.com
+x-throttling:
+  limits:
+    perAccount:
+      partitionBy: [account]
+      description: Counted per account.
+      tiers:
+        - plans: [basic]
+          requests: 30
+          window: { seconds: 3600, kind: unspecified }
+        - plans: [standard, plus]
+          requests: 20
+          window: { seconds: 1, kind: unspecified }
+        - plans: [premium]
+          requests: 50
+          window: { seconds: 1, kind: unspecified }
+  applies: [perAccount]
+  signals:
+    - status: [429]
+      bucket: perAccount
+      meaning: quotaExhausted
+paths:
+  /accounts/{accountId}/records:
+    get:
+      parameters:
+        - { name: accountId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Records }
+        '429': { description: Too many requests }
