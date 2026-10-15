@@ -582,10 +582,15 @@ dot-path targets like `$.components`, not the full JSONPath grammar).
   first, else auto-detection by matching the scheme's declared query
   parameter/body field names against the operation's own (§6.2 default
   rules — a dimension with zero declared fields never vacuously matches).
-  An explicit entry that cannot be applied (not an array of application
-  objects, an undeclared or invalid scheme, or one its overrides make
-  invalid) throws `PaginationSchemeError` instead of being dropped: a read
-  that ignored it would return one page as the whole collection (#384). The
+  An explicit entry that cannot be applied throws `PaginationSchemeError`
+  instead of being dropped, because a read that ignored it would return
+  one page as the whole collection (#384). It cannot be applied when
+  `x-pagination` is not an array; when `applicationProblem` refuses an
+  entry (every entry is checked against the spec's `schema.json` for a
+  Pagination Application Object: a nonempty `scheme`, an object
+  `overrides`, a string `description`, no other field but `x-` ones);
+  when it names an undeclared or invalid scheme; or when its overrides
+  make the scheme invalid. The
   client's conditional-cache check treats such an operation as paginated,
   and the mock server answers 500.
   Only the query-parameter and body-field dimensions are actually
