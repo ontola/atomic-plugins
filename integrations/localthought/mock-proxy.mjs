@@ -445,7 +445,9 @@ export function mockProxy({
     // The webhook inbox's consumer routes (mock-proxy-inbox.mjs, #369).
     const consumed = await inbox.route(req, url, readBody);
     if (consumed)
-      return json(consumed.status, consumed.body, { 'Cache-Control': 'no-store' });
+      return json(consumed.status, consumed.body, {
+        'Cache-Control': 'no-store',
+      });
 
     // Test-side inbox driver and view: a verified delivery for every
     // subscription on a connection, and the subscriptions' state.

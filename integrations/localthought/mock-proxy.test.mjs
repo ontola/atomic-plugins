@@ -795,6 +795,7 @@ test('webhook inbox: a runtime of the delegated app subscribes, fetches, acknowl
       body: JSON.stringify({ app: app.agent, agent: node.agent }),
     });
     assert.equal(runtime.status, 200);
+
     const call = async (signer, method, path, body) => {
       const response = await signed(signer, method, `${base}${path}`, {
         body: body === undefined ? undefined : JSON.stringify(body),
@@ -802,17 +803,29 @@ test('webhook inbox: a runtime of the delegated app subscribes, fetches, acknowl
 
       return [response.status, await response.json()];
     };
-    const request = { source: 'project', parameters: { id: '1' }, events: ['task'] };
+
+    const subscriptionRequest = {
+      source: 'project',
+      parameters: { id: '1' },
+      events: ['task'],
+    };
     // Nobody without standing on the connection.
     assert.deepEqual(
-      (await call(stranger, 'POST', `/connections/${id}/subscriptions`, request))[1],
+      (
+        await call(
+          stranger,
+          'POST',
+          `/connections/${id}/subscriptions`,
+          subscriptionRequest,
+        )
+      )[1],
       { status: 'error', code: 'access-denied' },
     );
     const [created, sub] = await call(
       node,
       'POST',
       `/connections/${id}/subscriptions`,
-      request,
+      subscriptionRequest,
     );
     assert.equal(created, 201);
     assert.equal(sub.state, 'needs-reconciliation');
@@ -831,32 +844,49 @@ test('webhook inbox: a runtime of the delegated app subscribes, fetches, acknowl
       }),
       { routed: 1 },
     );
-    const [, page] = await call(node, 'GET', `/subscriptions/${sub.id}/events?wait=0`);
+    const [, page] = await call(
+      node,
+      'GET',
+      `/subscriptions/${sub.id}/events?wait=0`,
+    );
     assert.deepEqual(
       page.events.map(e => [e.deliveryId, e.cursor, e.payload.body]),
       [['d-1', '1:1', Buffer.from('{"id":1}').toString('base64')]],
     );
     assert.equal(page.reconciliationRequired.barrier, '1:0');
     assert.deepEqual(
-      (await call(node, 'POST', `/subscriptions/${sub.id}/ack`, {
-        generation: 'g0',
-        cursor: '1:1',
-      }))[1],
+      (
+        await call(node, 'POST', `/subscriptions/${sub.id}/ack`, {
+          generation: 'g0',
+          cursor: '1:1',
+        })
+      )[1],
       { status: 'error', code: 'obsolete-generation' },
     );
     assert.equal(
-      (await call(node, 'POST', `/subscriptions/${sub.id}/ack`, {
-        generation: 'g1',
-        cursor: '1:1',
-      }))[0],
+      (
+        await call(node, 'POST', `/subscriptions/${sub.id}/ack`, {
+          generation: 'g1',
+          cursor: '1:1',
+        })
+      )[0],
       200,
     );
-    const [, done] = await call(node, 'POST', `/subscriptions/${sub.id}/reconciled`, {
-      generation: 'g1',
-      barrier: '1:0',
-    });
+    const [, done] = await call(
+      node,
+      'POST',
+      `/subscriptions/${sub.id}/reconciled`,
+      {
+        generation: 'g1',
+        barrier: '1:0',
+      },
+    );
     assert.equal(done.state, 'active');
-    const [, after] = await call(node, 'GET', `/subscriptions/${sub.id}/events`);
+    const [, after] = await call(
+      node,
+      'GET',
+      `/subscriptions/${sub.id}/events`,
+    );
     assert.deepEqual(after.events, []);
     // A removed delegation stops the runtime at once.
     await fetch(`${base}/__mock/revoke`, {

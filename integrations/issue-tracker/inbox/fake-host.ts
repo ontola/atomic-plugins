@@ -21,6 +21,7 @@ export { FakeInbox };
 
 const PARENT = 'https://atomicdata.dev/properties/parent';
 const IS_A = 'https://atomicdata.dev/properties/isA';
+
 export const DRIVE = 'https://drive.test';
 
 export function config(overrides: Partial<Config> = {}): Config {
@@ -30,6 +31,7 @@ export function config(overrides: Partial<Config> = {}): Config {
       `${DRIVE}/properties/${shortname}`,
     ]),
   );
+
   return {
     repository: 'fixture-owner/fixture-repo',
     table: `${DRIVE}/deliveries`,
@@ -90,16 +92,18 @@ export class FakeHost {
       trigger: { kind: 'manual', at: this.inbox.now },
       query: (property, value) => {
         if (property === this.failQuery) throw new Error('query failed');
+
         return [...this.rows]
           .filter(([, row]) => row[property] === value)
           .map(([subject]) => subject);
       },
-      read: (subject) => {
+      read: subject => {
         const row = this.rows.get(subject);
         if (!row) throw new Error(`no such resource ${subject}`);
+
         return row;
       },
-      http: async (request) => {
+      http: async request => {
         this.sent.push({
           operation: request.operation,
           method: request.method,
@@ -111,6 +115,7 @@ export class FakeHost {
           headers: request.headers,
           ...(request.body === undefined ? {} : { body: request.body }),
         });
+
         return { status: response.status, body: response.body };
       },
     };
@@ -119,6 +124,7 @@ export class FakeHost {
   async preview(): Promise<Session> {
     const output = (await run(this.ctx('preview'))) as Output;
     if (output.kind !== 'preview') throw new Error('preview expected');
+
     return {
       proposal: output.proposal,
       cursor: null,
@@ -136,19 +142,26 @@ export class FakeHost {
   ): Promise<Session> {
     for (let i = 0; i < 32; i++) {
       const output = (await run(this.ctx('step', session))) as Output;
+
       if (output.kind === 'complete') {
         if (!session.checkpointed) {
           throw new Error('completion requires an acknowledged checkpoint');
         }
+
         session.status = 'complete';
+
         return session;
       }
+
       if (output.kind !== 'effect') throw new Error('unexpected output');
       const { effect } = output;
+
       if (session.checkpointed || session.completed.has(effect.id)) {
         throw new Error('invalid or repeated effect identity');
       }
+
       this.effects.push(effect.kind);
+
       if (effect.kind === 'atomic') {
         session.result = { outcomes: this.apply(effect.verdict.intents) };
       } else {
@@ -156,10 +169,12 @@ export class FakeHost {
         session.checkpointed = true;
         session.result = this.connection;
       }
+
       session.cursor = output.cursor;
       session.completed.add(effect.id);
       if (stopAfterAtomic && effect.kind === 'atomic') return session;
     }
+
     throw new Error('too many steps');
   }
 
@@ -170,22 +185,28 @@ export class FakeHost {
 
   private apply(intents: Intent[]): { subject: string }[] {
     const bound = new Map<string, string>();
+
     for (const intent of intents) {
       bound.set(intent.localId, `${DRIVE}/rows/${++this.minted}`);
     }
+
     const resolve = (value: string) =>
       value.startsWith('local:') ? (bound.get(value.slice(6)) ?? value) : value;
+
     for (const intent of intents) {
       const row: Record<string, unknown> = {
         [PARENT]: resolve(intent.parent),
         [IS_A]: intent.isA,
       };
+
       for (const [property, value] of Object.entries(intent.set)) {
         row[property] = resolve(value);
       }
+
       this.rows.set(bound.get(intent.localId)!, row);
     }
-    return intents.map((intent) => ({ subject: bound.get(intent.localId)! }));
+
+    return intents.map(intent => ({ subject: bound.get(intent.localId)! }));
   }
 
   /** `connection_state::checkpoint_once`'s checks and write. */
@@ -201,27 +222,33 @@ export class FakeHost {
       if (!record.remote || !record.local) {
         throw new Error('record identities must be nonempty');
       }
+
       if (
         JSON.stringify(record.local_projection) !==
         JSON.stringify(record.remote_projection)
       ) {
         throw new Error('local and remote projections must agree');
       }
+
       if (
         record.local_projection === null ||
         typeof record.local_projection !== 'object'
       ) {
         throw new Error('a projection must be an object');
       }
+
       const old = this.connection.records[record.remote];
+
       if (old && old.local !== record.local) {
         throw new Error('a remote identity cannot be rebound');
       }
+
       this.connection.records[record.remote] = {
         local: record.local,
         baseline: record.local_projection,
       };
     }
+
     this.connection.revision += 1;
   }
 
@@ -230,9 +257,10 @@ export class FakeHost {
     const names = new Map(
       Object.entries(this.settings.properties).map(([k, v]) => [v, k]),
     );
+
     return [...this.rows.values()]
-      .filter((row) => row[PARENT] === table)
-      .map((row) =>
+      .filter(row => row[PARENT] === table)
+      .map(row =>
         Object.fromEntries(
           Object.entries(row)
             .filter(([property]) => names.has(property))
@@ -244,6 +272,7 @@ export class FakeHost {
   /** Marks the matching work items `done`, as the issue table's sync would. */
   finishWork(kind: string): void {
     const p = this.settings.properties;
+
     for (const row of this.rows.values()) {
       if (
         row[PARENT] === this.settings.tables.work.table &&

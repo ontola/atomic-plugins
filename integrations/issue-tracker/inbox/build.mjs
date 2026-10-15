@@ -16,7 +16,7 @@ import { writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
-const here = (path) => fileURLToPath(new URL(path, import.meta.url));
+const here = path => fileURLToPath(new URL(path, import.meta.url));
 const require = createRequire(here('../../../browser/package.json'));
 const { build } = require('esbuild');
 
@@ -34,14 +34,17 @@ export async function bundle({ proxyOrigin } = {}) {
       ? { __INBOX_PROXY_ORIGIN__: JSON.stringify(proxyOrigin) }
       : {},
   });
+
   return result.outputFiles[0].text;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const arg = (name) => {
+  const arg = name => {
     const index = process.argv.indexOf(name);
+
     return index < 0 ? undefined : process.argv[index + 1];
   };
+
   const text = await bundle({ proxyOrigin: arg('--proxy-origin') });
   const out = arg('--out');
   if (out) writeFileSync(out, text);

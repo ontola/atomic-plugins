@@ -18,15 +18,18 @@ import {
 } from './plugin.js';
 
 const paths = (host: FakeHost) =>
-  host.sent.map((s) => `${s.operation} ${s.method} ${new URL(s.url).pathname}`);
+  host.sent.map(s => `${s.operation} ${s.method} ${new URL(s.url).pathname}`);
+
 const since = (host: FakeHost) => {
   const out = paths(host);
   host.sent.length = 0;
+
   return out;
 };
+
 const state = (host: FakeHost) => readState(host.connection);
 const deliveries = (host: FakeHost) =>
-  host.table(config().table).map((row) => row['webhook-delivery-id']);
+  host.table(config().table).map(row => row['webhook-delivery-id']);
 
 describe('the webhook inbox plugin, run as a sync session', () => {
   it('subscribes, records the first gap and asks for a full read, acknowledging nothing', async () => {
@@ -207,7 +210,7 @@ describe('the webhook inbox plugin, run as a sync session', () => {
     expect(
       host
         .table(config().tables.work.table)
-        .filter((row) => row['webhook-work-kind'] === 'delivery'),
+        .filter(row => row['webhook-work-kind'] === 'delivery'),
     ).toHaveLength(3);
   });
 
@@ -234,7 +237,7 @@ describe('the webhook inbox plugin, run as a sync session', () => {
     await host.run();
     await host.run();
     expect(inbox.subs.get('sub-1')!.needsReconciliation).toBe(true);
-    expect(paths(host).some((p) => p.endsWith('/reconciled'))).toBe(false);
+    expect(paths(host).some(p => p.endsWith('/reconciled'))).toBe(false);
     host.finishWork('reconcile');
     await host.run();
     expect(state(host)?.unconfirmedReconciliation).toBeDefined();
@@ -341,14 +344,17 @@ describe('the declared operations', () => {
   const matches = (pattern: string, actual: string): boolean => {
     const p = pattern.split('/');
     const a = actual.split('/');
+
     if (p.at(-1) === '{*rest}') {
       const head = p.slice(0, -1);
+
       return (
         a.length > head.length &&
-        a.slice(head.length).every((s) => s && s !== '.' && s !== '..') &&
+        a.slice(head.length).every(s => s && s !== '.' && s !== '..') &&
         head.every((s, i) => s === a[i])
       );
     }
+
     return p.length === a.length && p.every((s, i) => s === a[i]);
   };
 
@@ -356,6 +362,7 @@ describe('the declared operations', () => {
     const declared = operations(PROXY_ORIGIN);
     expect(manifest.operations).toEqual(declared);
     expect(manifest.proxy).toEqual(['github-issues']);
+
     for (const [method, path] of [
       ['POST', '/connections/c-1/subscriptions'],
       ['GET', '/subscriptions/sub-1'],
@@ -366,12 +373,13 @@ describe('the declared operations', () => {
       ['DELETE', '/subscriptions/sub-1'],
     ] as const) {
       const id = operationOf(method, path);
-      const operation = declared.find((o) => o.id === id)!;
+      const operation = declared.find(o => o.id === id)!;
       expect(operation.method).toBe(method);
       expect(operation.effect).toBe('read');
       const pattern = operation.url.slice(PROXY_ORIGIN.length);
       expect(matches(pattern, path)).toBe(true);
     }
+
     expect(() => operationOf('GET', '/connections/c-1')).toThrow();
   });
 });

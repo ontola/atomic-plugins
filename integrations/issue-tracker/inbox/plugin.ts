@@ -68,6 +68,7 @@ import {
  * will resolve the proxy and the delegated connection itself.
  */
 declare const __INBOX_PROXY_ORIGIN__: string | undefined;
+
 export const PROXY_ORIGIN =
   typeof __INBOX_PROXY_ORIGIN__ === 'string'
     ? __INBOX_PROXY_ORIGIN__
@@ -281,11 +282,13 @@ export function operationOf(method: string, path: string): string {
   if (method === 'POST' && path.startsWith('/connections/')) {
     return 'inbox-subscribe';
   }
+
   if (path.startsWith('/subscriptions/')) {
     if (method === 'GET') return 'inbox-read';
     if (method === 'POST') return 'inbox-update';
     if (method === 'DELETE') return 'inbox-delete';
   }
+
   throw new Error(`webhook inbox: no operation for ${method} ${path}`);
 }
 
@@ -300,6 +303,7 @@ export function sandboxTransport(ctx: Pick<Ctx, 'http'>) {
       headers: request.headers,
       ...(request.body === undefined ? {} : { body: request.body }),
     });
+
     return { status: response.status, headers: {}, body: response.body };
   };
 }
@@ -314,29 +318,35 @@ const SHORTNAMES = [
 function readConfig(config: Config | undefined): Config {
   const missing = (
     ['repository', 'table', 'rowClass', 'properties', 'tables'] as const
-  ).filter((key) => !config?.[key]);
+  ).filter(key => !config?.[key]);
+
   if (!config || missing.length) {
     throw new Error(
       `Configure this plugin before running it: missing ${missing.join(', ')}`,
     );
   }
+
   if (!config.tables.work?.table || !config.tables.gaps?.table) {
     throw new Error(
       'Configure this plugin before running it: missing tables.work or tables.gaps',
     );
   }
+
   if (!/^[^/\s]+\/[^/\s]+$/.test(config.repository)) {
     throw new Error('repository must be owner/name');
   }
+
   // A missing property would drop that field silently; the work item's
   // would leave a delivery row without its work item, and that row would
   // then be found by its id and kept that way.
-  const unset = SHORTNAMES.filter((name) => !config.properties[name]);
+  const unset = SHORTNAMES.filter(name => !config.properties[name]);
+
   if (unset.length) {
     throw new Error(
       `Configure this plugin before running it: no property for ${unset.join(', ')}`,
     );
   }
+
   return config;
 }
 
@@ -364,14 +374,18 @@ export async function run(ctx: Ctx): Promise<Output> {
   if (ctx.phase === 'action') {
     throw new Error('The webhook inbox has no actions');
   }
+
   const config = readConfig(ctx.config);
   const connection = ctx.connections?.[PLATFORM];
+
   if (!connection) {
     throw new Error(
       `Delegate a ${PLATFORM} connection to this installation before running it`,
     );
   }
+
   const state = readState(ctx.connection);
+
   if (ctx.phase === 'preview') {
     return {
       kind: 'preview',
@@ -383,9 +397,11 @@ export async function run(ctx: Ctx): Promise<Output> {
       problems: [],
     };
   }
+
   if (ctx.proposal?.repository !== config.repository) {
     throw new Error('An approved proposal for this repository is required');
   }
+
   const checkpoint = (
     next: StoredSubscription | undefined,
     error?: { message: string; at: string },
@@ -400,6 +416,7 @@ export async function run(ctx: Ctx): Promise<Output> {
     cursor: { stage: 'done', state: next ?? null, ...(error ? { error } : {}) },
   });
   if (ctx.cursor?.stage === 'done') return { kind: 'complete' };
+
   // The rows landed (the host stops the run on a failed atomic effect).
   if (ctx.cursor?.stage === 'checkpoint') {
     // The receipt names the rows written, kept in the state so a person (or
@@ -407,8 +424,9 @@ export async function run(ctx: Ctx): Promise<Output> {
     const outcomes = (ctx.result as { outcomes?: { subject?: unknown }[] })
       ?.outcomes;
     const written = (outcomes ?? [])
-      .map((o) => o.subject)
+      .map(o => o.subject)
       .filter((s): s is string => typeof s === 'string');
+
     return checkpoint(ctx.cursor.state ?? undefined, ctx.cursor.error, written);
   }
 
@@ -454,6 +472,7 @@ export async function run(ctx: Ctx): Promise<Output> {
   // made, a subscription it created), and nothing is written: the next run
   // tries again.
   let error: { message: string; at: string } | undefined;
+
   try {
     await consumer.step();
   } catch (thrown) {
@@ -465,8 +484,10 @@ export async function run(ctx: Ctx): Promise<Output> {
       };
     }
   }
+
   const next = journal.current();
   if (journal.intents.length === 0) return checkpoint(next, error);
+
   // Rows the step collected are written even when it failed later: the
   // state may already name their cursor to acknowledge.
   return {

@@ -90,10 +90,13 @@ export function mockInbox({ authenticate, connections, standing, now }) {
    * `{ status, body }` either way, thrown refusals included.
    */
   async function route(req, url, readBody) {
-    const subscribe = url.pathname.match(/^\/connections\/([^/]+)\/subscriptions$/);
+    const subscribe = url.pathname.match(
+      /^\/connections\/([^/]+)\/subscriptions$/,
+    );
     const own = url.pathname.match(/^\/subscriptions\/([^/]+)(\/[a-z]+)?$/);
     if (!subscribe && !own) return undefined;
     const body = (await readBody(64 * 1024)) ?? Buffer.alloc(0);
+
     try {
       if (subscribe) {
         if (req.method !== 'POST') return { status: 405, body: {} };
@@ -132,9 +135,11 @@ export function mockInbox({ authenticate, connections, standing, now }) {
 
         return { status: 201, body: view(sub) };
       }
+
       const sub = consumerOf(req, body, decodeURIComponent(own[1]));
       const action = own[2] ?? '';
       const input = body.length ? JSON.parse(body.toString('utf8')) : {};
+
       switch (`${req.method} ${action}`) {
         case 'GET ':
           return { status: 200, body: view(sub) };
@@ -146,6 +151,7 @@ export function mockInbox({ authenticate, connections, standing, now }) {
           sub.expiresAt = now() + 7 * DAY;
 
           return { status: 200, body: view(sub) };
+
         case 'GET /events': {
           const limit = Number(url.searchParams.get('limit') ?? 100);
           const after = url.searchParams.get('after');
@@ -173,11 +179,13 @@ export function mockInbox({ authenticate, connections, standing, now }) {
             },
           };
         }
+
         case 'POST /ack': {
           if (input.generation !== `g${sub.generation}`)
             return error(409, 'obsolete-generation');
           const seq = Number(String(input.cursor).split(':')[1]);
           if (!(seq < sub.nextSeq)) return error(409, 'cursor-not-issued');
+
           if (seq > sub.ack) {
             sub.ack = seq;
             sub.refs = sub.refs.filter(ref => ref.seq > seq);
@@ -188,6 +196,7 @@ export function mockInbox({ authenticate, connections, standing, now }) {
             body: { generation: input.generation, cursor: input.cursor },
           };
         }
+
         case 'POST /reconciled': {
           if (
             input.generation !== `g${sub.generation}` ||
@@ -198,11 +207,16 @@ export function mockInbox({ authenticate, connections, standing, now }) {
 
           return { status: 200, body: view(sub) };
         }
+
         default:
-          return { status: 404, body: { status: 'error', code: 'unknown-subscription' } };
+          return {
+            status: 404,
+            body: { status: 'error', code: 'unknown-subscription' },
+          };
       }
     } catch (refusal) {
-      if (refusal instanceof InboxRefusal) return error(refusal.status, refusal.code);
+      if (refusal instanceof InboxRefusal)
+        return error(refusal.status, refusal.code);
       if (!(refusal instanceof ProxyRefusal)) throw refusal;
 
       return {
@@ -219,6 +233,7 @@ export function mockInbox({ authenticate, connections, standing, now }) {
   function deliver({ connection, deliveryId, eventType, action, body }) {
     const raw = Buffer.from(body, 'utf8');
     let routed = 0;
+
     for (const sub of subs.values()) {
       if (sub.connection !== connection) continue;
       sub.refs.push({

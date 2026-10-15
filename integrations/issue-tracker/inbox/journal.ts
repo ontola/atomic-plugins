@@ -59,7 +59,6 @@ export interface Intent {
   set: Record<string, string>;
 }
 
-
 /**
  * Base64 payload bytes one run collects at most. Its rows travel in the
  * saved sync session, which the host caps at 8 MiB (`sync_session::save`);
@@ -120,11 +119,13 @@ export function readState(
   const record = connection?.records?.[INBOX_RECORD];
   if (!record) return undefined;
   const state = record.baseline as Partial<StateBaseline> | null;
+
   if (state?.v !== STATE_VERSION) {
     throw new Error(
       `webhook inbox: unknown state version ${JSON.stringify(state?.v)}`,
     );
   }
+
   return state.subscription ?? undefined;
 }
 
@@ -135,6 +136,7 @@ export function lastError(
   const baseline = connection?.records?.[INBOX_RECORD]?.baseline as
     | Partial<StateBaseline>
     | undefined;
+
   return baseline?.lastError;
 }
 
@@ -147,15 +149,16 @@ export function lastError(
 export function stateRecord(
   subscription: StoredSubscription | undefined,
   local: string,
-  lastError?: { message: string; at: string },
+  error?: { message: string; at: string },
   lastWritten?: string[],
 ) {
   const baseline: StateBaseline = {
     v: STATE_VERSION,
     subscription: subscription ?? null,
-    ...(lastError ? { lastError } : {}),
+    ...(error ? { lastError: error } : {}),
     ...(lastWritten?.length ? { lastWritten } : {}),
   };
+
   return {
     remote: INBOX_RECORD,
     local,
@@ -193,19 +196,23 @@ export class SandboxInboxJournal implements InboxJournal {
 
   private property(shortname: string): string {
     const subject = this.config.properties[shortname];
+
     if (!subject) {
       throw new Error(
         `Configure this plugin: no property for ${shortname} in config.properties`,
       );
     }
+
     return subject;
   }
 
   /** Rows of `table` whose `shortname` property is exactly `value`. */
   private rows(table: string, shortname: string, value: string): string[] {
     const property = this.property(shortname);
-    return this.host.query(property, value).filter((subject) => {
+
+    return this.host.query(property, value).filter(subject => {
       const row = this.host.read(subject);
+
       return row[PARENT] === table && row[property] === value;
     });
   }
@@ -216,11 +223,13 @@ export class SandboxInboxJournal implements InboxJournal {
   ): string {
     const localId = `inbox-${this.next++}`;
     const set: Record<string, string> = {};
+
     for (const [shortname, value] of Object.entries(values)) {
       if (value !== null && value !== undefined && value !== '') {
         set[this.property(shortname)] = value;
       }
     }
+
     this.intents.push({
       op: 'create',
       localId,
@@ -228,6 +237,7 @@ export class SandboxInboxJournal implements InboxJournal {
       isA: [destination.rowClass],
       set,
     });
+
     return `local:${localId}`;
   }
 
@@ -243,6 +253,7 @@ export class SandboxInboxJournal implements InboxJournal {
 
   async append(event: InboxEvent): Promise<boolean> {
     const id = event.deliveryId;
+
     if (
       this.appended.has(id) ||
       this.rows(this.config.deliveries.table, 'webhook-delivery-id', id)
@@ -250,18 +261,22 @@ export class SandboxInboxJournal implements InboxJournal {
     ) {
       return false;
     }
+
     const size = event.payload.body.length;
+
     if (size > MAX_EVENT_PAYLOAD) {
       throw new Error(
         `webhook inbox: delivery ${id} is ${size} bytes in base64, over the ${MAX_EVENT_PAYLOAD} one run can save`,
       );
     }
+
     if (
       this.payloadBytes > 0 &&
       this.payloadBytes + size > RUN_PAYLOAD_BUDGET
     ) {
       throw new BudgetReached(this.payloadBytes);
     }
+
     this.payloadBytes += size;
     this.appended.add(id);
     const delivery = this.create(this.config.deliveries, {
@@ -284,17 +299,20 @@ export class SandboxInboxJournal implements InboxJournal {
       'webhook-work-status': 'pending',
       'webhook-delivery': delivery,
     });
+
     return true;
   }
 
   async recordGap(subscription: string, gap: GapMarker): Promise<void> {
     const key = gapKey(subscription, gap);
+
     if (
       this.gapsWritten.has(key) ||
       this.rows(this.config.gaps.table, 'webhook-gap-key', key).length > 0
     ) {
       return;
     }
+
     this.gapsWritten.add(key);
     this.create(this.config.gaps, {
       'webhook-gap-key': key,
@@ -320,9 +338,11 @@ export class SandboxInboxJournal implements InboxJournal {
     const key = gapKey(required.subscription, required.gap);
     const items = this.rows(this.config.work.table, 'webhook-gap-key', key);
     const status = this.property('webhook-work-status');
-    if (items.some((subject) => this.host.read(subject)[status] === 'done')) {
+
+    if (items.some(subject => this.host.read(subject)[status] === 'done')) {
       return undefined;
     }
+
     if (items.length === 0 && !this.reconcilesWritten.has(key)) {
       this.reconcilesWritten.add(key);
       this.create(this.config.work, {
@@ -331,6 +351,7 @@ export class SandboxInboxJournal implements InboxJournal {
         'webhook-gap-key': key,
       });
     }
+
     return 'pending';
   }
 

@@ -57,7 +57,11 @@ export const WORK_FIELDS = [
     'Work status',
     '`pending` until the sync has done what it asks, then `done` or `failed`.',
   ],
-  ['webhook-delivery', 'Delivery', 'The delivery row a `delivery` item is for.'],
+  [
+    'webhook-delivery',
+    'Delivery',
+    'The delivery row a `delivery` item is for.',
+  ],
   [
     'webhook-gap-key',
     'Gap key',
@@ -88,6 +92,7 @@ export const CLASSES = {
 
 export function inboxSchema(): SchemaSpec {
   const all = [...DELIVERY_FIELDS, ...WORK_FIELDS, ...GAP_FIELDS];
+
   return {
     properties: all.map(([shortname, name, description]) => ({
       shortname,
@@ -108,7 +113,7 @@ export function inboxSchema(): SchemaSpec {
           'webhook-cursor',
           'webhook-payload',
         ],
-        recommends: DELIVERY_FIELDS.map((f) => f[0]),
+        recommends: DELIVERY_FIELDS.map(f => f[0]),
       },
       {
         shortname: CLASSES.work,
@@ -116,7 +121,7 @@ export function inboxSchema(): SchemaSpec {
         description:
           'What a delivery or a gap still asks of the sync: scoped reads, or a full reconciliation.',
         requires: ['webhook-work-kind', 'webhook-work-status'],
-        recommends: WORK_FIELDS.map((f) => f[0]),
+        recommends: WORK_FIELDS.map(f => f[0]),
       },
       {
         shortname: CLASSES.gap,
@@ -127,7 +132,7 @@ export function inboxSchema(): SchemaSpec {
         recommends: [
           'webhook-subscription',
           'webhook-generation',
-          ...GAP_FIELDS.map((f) => f[0]),
+          ...GAP_FIELDS.map(f => f[0]),
         ],
       },
     ],

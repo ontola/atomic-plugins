@@ -42,7 +42,11 @@
 import { test, expect, type Page } from '@playwright/test';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { Agent, signedRequestInit, type provisionDestination } from '@tomic/lib';
+import {
+  Agent,
+  signedRequestInit,
+  type provisionDestination,
+} from '@tomic/lib';
 import {
   before,
   getDevDriveSecret,
@@ -127,21 +131,25 @@ test.describe('GitHub issues webhook inbox', () => {
         noWebSocket: true,
       });
       const children = await resource.getChildrenCollection(100);
-      let agent: unknown;
+      let runtimeAgent: unknown;
+
       for (const member of await children.getAllMembers()) {
         const child = await store.fetchResourceFromServer(member, {
           noWebSocket: true,
         });
-        if (child.hasClasses('https://atomicdata.dev/classes/InstallationRuntime'))
-          agent = child.get(
+        if (
+          child.hasClasses('https://atomicdata.dev/classes/InstallationRuntime')
+        )
+          runtimeAgent = child.get(
             'https://atomicdata.dev/properties/integrationRuntimeAgent',
           );
       }
+
       return {
         app: resource.get(
           'https://atomicdata.dev/properties/integrationAppAgent',
         ) as string,
-        runtime: agent as string,
+        runtime: runtimeAgent as string,
       };
     }, installation);
     expect(runtime, 'the node published its runtime agent').toBeTruthy();
@@ -156,14 +164,16 @@ test.describe('GitHub issues webhook inbox', () => {
       };
     const registered = async () =>
       (await proxyState()).runtimes.some(
-        (r) => r.app === app && r.agent === runtime,
+        r => r.app === app && r.agent === runtime,
       );
     let byPage = true;
+
     try {
       await expect.poll(registered, { timeout: 20_000 }).toBe(true);
     } catch {
       byPage = false;
     }
+
     if (!byPage) {
       test.info().annotations.push({
         type: 'host-gap',
@@ -182,11 +192,12 @@ test.describe('GitHub issues webhook inbox', () => {
       );
       expect(response.status, await response.clone().text()).toBe(200);
     }
+
     expect(await registered()).toBe(true);
     const connection = (await proxyState()).connections.findLast(
-      (c) =>
+      c =>
         c.platform === 'github-issues' &&
-        c.delegations.some((d) => d.agent === app),
+        c.delegations.some(d => d.agent === app),
     )!.connection_id;
 
     // 3. The destination, as the host would set up an importer's. Host gap
@@ -211,16 +222,21 @@ test.describe('GitHub issues webhook inbox', () => {
     await page.evaluate(
       async ({ subject, tables, property }) => {
         const store = window.store!;
-        const installation = await store.getResource(subject);
-        const pluginAgent = installation.get(
+        const installed = await store.getResource(subject);
+        const pluginAgent = installed.get(
           'https://atomicdata.dev/properties/pluginAgent',
         ) as string;
         const ontology = (await store.getResource(property)).get(
           'https://atomicdata.dev/properties/parent',
         ) as string;
+
         for (const target of [ontology, ...tables]) {
           const resource = await store.getResource(target);
-          resource.push('https://atomicdata.dev/properties/read', [pluginAgent], true);
+          resource.push(
+            'https://atomicdata.dev/properties/read',
+            [pluginAgent],
+            true,
+          );
           if (target !== ontology)
             resource.push(
               'https://atomicdata.dev/properties/write',
@@ -270,7 +286,7 @@ test.describe('GitHub issues webhook inbox', () => {
             refs: number;
           }[];
         }
-      ).subscriptions.filter((s) => s.connection === connection);
+      ).subscriptions.filter(s => s.connection === connection);
     expect(await inbox()).toHaveLength(1);
     const scheduled = await post(agent, '/plugin-sync-schedule', {
       ...target,
@@ -320,6 +336,7 @@ test.describe('GitHub issues webhook inbox', () => {
             'webhook-inbox:subscription'
           ]?.baseline?.lastWritten ?? [])
             written.add(subject);
+
           for (const subject of written) {
             const row = await page.evaluate(
               async (s: string) =>
@@ -337,7 +354,9 @@ test.describe('GitHub issues webhook inbox', () => {
                 ? 'stored whole'
                 : 'stored, but not as expected';
           }
+
           const subscription = (await inbox())[0];
+
           // Shown when the poll times out: where the scheduled runs stand.
           return `not stored; session ${session?.status} ${session?.error ?? ''}; inbox refs ${subscription?.refs} ack ${subscription?.ack}; rows written ${written.size}`;
         },
@@ -416,7 +435,7 @@ async function provision(
   await page.evaluate(bundled.outputFiles[0]!.text);
 
   return page.evaluate(
-    async (args) =>
+    async args =>
       (
         globalThis as unknown as {
           __inboxProvision: (...a: unknown[]) => Promise<Destination>;
