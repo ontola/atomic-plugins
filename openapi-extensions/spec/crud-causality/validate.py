@@ -19,6 +19,7 @@ import copy
 import json
 import re
 import sys
+import unicodedata
 from urllib.parse import quote, unquote
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
@@ -921,8 +922,8 @@ def committed_identity(document, crud, status, body):
     it is not JSON). Unlike `created_identity`, which returns {object field:
     value}, this returns {identity template variable: value}, the identity
     map's keys. Values are strings: a non-empty string without surrounding
-    whitespace, `/`, `?` or `#`, and not `.` or `..`, or a non-negative
-    integer in decimal form; anything else leaves the
+    whitespace, `/`, `?`, `#` or a control character, and not `.` or `..`, or
+    a non-negative integer in decimal form; anything else leaves the
     entry unmatched. None means the response matches no Committed Error
     Object: the outcome stays unknown.
     """
@@ -936,7 +937,8 @@ def committed_identity(document, crud, status, body):
             value = get_path(body, path)
             usable = (isinstance(value, int) and not isinstance(value, bool) and value >= 0) or (
                 isinstance(value, str) and value != "" and value == value.strip()
-                and value not in (".", "..") and not set(value) & set("/?#"))
+                and value not in (".", "..") and not set(value) & set("/?#")
+                and not any(unicodedata.category(c) == "Cc" for c in value))
             if not usable:
                 values = None
                 break

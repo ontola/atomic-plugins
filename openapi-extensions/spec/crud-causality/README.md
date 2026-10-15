@@ -357,8 +357,11 @@ answer (a `409` "already exists", say) never qualifies; the statuses are
 A response matches a Committed Error Object when its status is listed, its
 body is JSON, and every path in `identity` resolves to a usable value: a
 non-empty string with no leading or trailing whitespace, no `/`, `?` or `#`,
-and not `.` or `..` (which a URL resolver would read as a path step), or a
-non-negative integer, which is used in decimal form. A response with a listed status that
+no control character (Unicode category Cc), and not `.` or `..` (which a URL
+resolver would read as a path step), or a non-negative integer, which is used
+in decimal form. A client substitutes a string value into the identity
+template percent-encoded, as any path segment ([RFC 3986 §2.1](https://www.rfc-editor.org/rfc/rfc3986#section-2.1)):
+a `%` or a space in it is encoded, never sent raw. A response with a listed status that
 does not match (the field is absent, blank, or not such a value; a body with
 only `retry_guidance`, say) says nothing: the outcome stays unknown, as
 without this object. The objects are tested in order; the first that matches

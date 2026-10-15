@@ -702,11 +702,18 @@ class CommittedErrorTests(unittest.TestCase):
                          {"page_id": "59833787-2cf9-4fdf-8782-e53db20768a5"})
         # Another status, no id, an empty or unusable id, or no JSON: unknown, as before.
         self.assertIsNone(committed_identity(document, crud, 502, body))
-        for value in (None, "", "  ", " a", "a ", ".", "..", True, {"id": "x"}, "a/b", "a?b", "a#b", -1, 1.5):
+        for value in (None, "", "  ", " a", "a ", ".", "..", True, {"id": "x"}, "a/b", "a?b", "a#b", -1, 1.5,
+                      "a\nb", "a\x00b", "a\x7fb", "a\x85b"):
             changed = copy.deepcopy(body)
             changed["additional_data"]["committed_resource_id"] = value
             with self.subTest(value=value):
                 self.assertIsNone(committed_identity(document, crud, 503, changed))
+        # A `%` or a space inside is usable; a client percent-encodes it when substituting.
+        for value in ("50%", "a b"):
+            changed = copy.deepcopy(body)
+            changed["additional_data"]["committed_resource_id"] = value
+            with self.subTest(value=value):
+                self.assertEqual(committed_identity(document, crud, 503, changed), {"page_id": value})
         # A listed status whose body holds only retry_guidance stays unknown.
         del body["additional_data"]["committed_resource_id"]
         self.assertEqual(set(body["additional_data"]), {"retry_guidance"})
@@ -789,7 +796,7 @@ class ReplaceTests(unittest.TestCase):
         self.invalid(lambda d: spec(d).update(children="checked"), "children: is also a match field")
         self.invalid(lambda d: note(d)["unkeyedLists"].update({"a..b": {"match": ["x"]}}), "the key is not a dot-path")
 
-    def test_0_7_documents_stay_valid(self):
+    def test_0_6_documents_stay_valid(self):
         document = notes()
         del note(document)["replace"], note(document)["unkeyedLists"]
         validate(document)
