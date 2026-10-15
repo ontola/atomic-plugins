@@ -1989,7 +1989,13 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
   also refuses a base URL whose host is an IP literal other than a
   dotted-decimal IPv4 address without leading zeros or shorthand (no
   `127.1`, `0x7f.0.0.1`, `010.0.0.1`, no IPv6 literal), and, where `URL`
-  exists, one that `URL` would rewrite.
+  exists, one that `URL` would rewrite. Two of these are breaking:
+  - `StepResult` has a new kind, `reconciling`, which code that handles
+    every kind of `InboxConsumer.step()` result must now handle. It is
+    returned only when `reconcile` answers `'pending'`.
+  - A base URL with an IPv6 literal host (`http://[::1]:8080`), accepted
+    before, is now refused when the `InboxClient` is created. Use a host
+    name.
 - **0.23.0**: a data-loss fix for pagination schemes that auto-detection
   would apply but that are invalid; Pagination Schemes 0.8.0
   `response.incomplete`; Deletion Feeds 0.3.0-draft list tombstones and

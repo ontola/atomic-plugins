@@ -112,3 +112,15 @@ the gap is recorded, nothing is reported, and the receiver keeps asking on
 later steps (`StepResult` `reconciling`); `deferred.test.ts` covers it. The
 fake receiver honours `limit`, which the plugin's per-run cap relies on in
 its tests. The plugin itself lives in `integrations/issue-tracker/inbox/`.
+
+## Turn 6
+
+**Human (relayed by the coordinator, from the PR review):** The changelog
+should say that the new `reconciling` StepResult and the IPv6-literal
+refusal are breaking.
+
+**Assistant:** The Unreleased bullet now names both as breaking: code that
+handles every kind of `InboxConsumer.step()` result must handle
+`reconciling` (returned only when `reconcile` answers `'pending'`), and a
+base URL with an IPv6 literal host, accepted before, is now refused when
+the `InboxClient` is created.
