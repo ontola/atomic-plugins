@@ -1,0 +1,52 @@
+openapi: 3.0.3
+info:
+  title: Illustrative list paged by the last object's id
+  version: 1.0.0
+  description: >-
+    Synthetic, shaped like Stripe's v1 list methods: starting_after takes the
+    id of the last object of the previous page, and has_more false marks the
+    last page.
+servers:
+  - url: https://api.example.com
+components:
+  paginationSchemes:
+    afterLastObject:
+      type: pageToken
+      autoDetect: false
+      request:
+        queryParameters:
+          starting_after:
+            role: cursor
+            fromLastItem: id
+          limit:
+            role: pageSize
+      response:
+        envelope:
+          itemsField: data
+        bodyFields:
+          has_more:
+            role: hasMore
+paths:
+  /v1/customers:
+    get:
+      parameters:
+        - { name: starting_after, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100 } }
+      x-pagination:
+        - scheme: afterLastObject
+      responses:
+        '200':
+          description: A page of customers.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  object: { type: string }
+                  has_more: { type: boolean }
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }

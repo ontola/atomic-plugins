@@ -156,8 +156,17 @@ export interface State {
   limit: number;
   /** Subject of the row whose detail is open. */
   selected?: string;
-  /** Rows that arrived through the table subscription since the last load. */
-  arrived?: { count: number };
+  /**
+   * Rows that arrived in the latest refresh through the table subscription
+   * since the last load, and when (epoch ms, from `Options.now`). `source`
+   * is `import` for the refreshes just after an import this view applied
+   * (its own writes, or the host importer it ran), else `elsewhere`: any
+   * other writer to the table (the importer's review in another tab,
+   * another device). The pill and the card word the two apart.
+   */
+  arrived?: { count: number; at: number; source: 'import' | 'elsewhere' };
+  /** When the last load failed (epoch ms), while `view` is the error. */
+  failedAt?: number;
   /** Saves of the open row's annotations, by field. */
   edits: Partial<Record<NoteKey, Edit>>;
   /** What is typed but not yet saved, by field; kept across re-renders. */
@@ -229,6 +238,8 @@ export interface Options {
   importer?: ImportPort;
   /** Yields between check steps so each line can render; tests may pin it. */
   tick?: () => Promise<void>;
+  /** Epoch ms, for `arrived.at` and `failedAt`; `Date.now` by default. */
+  now?: () => number;
 }
 
 export function createController(
@@ -238,6 +249,7 @@ export function createController(
     today = localToday,
     importer,
     tick = () => new Promise(resolve => setTimeout(resolve, 0)),
+    now = Date.now,
   }: Options = {},
 ): Controller {
   let state: State = {
@@ -273,6 +285,11 @@ export function createController(
   let unsubscribe: (() => void) | undefined;
   let refreshing: Promise<void> | undefined;
   let again = false;
+  /**
+   * Until when (epoch ms) a refresh's new rows count as this view's import:
+   * `Infinity` while an import runs, then 15 s after it applied, else 0.
+   */
+  let importedUntil = 0;
 
   const update = (patch: Partial<State>) => {
     state = { ...state, ...patch };
@@ -323,7 +340,15 @@ export function createController(
       rows,
       incomplete,
       view: settled(rows, incomplete),
-      ...(arrived ? { arrived: { count: arrived } } : {}),
+      ...(arrived
+        ? {
+            arrived: {
+              count: arrived,
+              at: now(),
+              source: now() < importedUntil ? 'import' : 'elsewhere',
+            },
+          }
+        : {}),
       // A first import into an empty table opens where its rows are.
       ...(wasEmpty && rows.length
         ? { filters: noFilters(defaultPeriod(rows, today())) }
@@ -440,7 +465,7 @@ export function createController(
     update({ edits: { ...state.edits, [field]: edit } });
 
   const fail = (message: string) =>
-    update({ view: { kind: 'error', message } });
+    update({ view: { kind: 'error', message }, failedAt: now() });
 
   return {
     state: () => state,
@@ -536,6 +561,7 @@ export function createController(
           filters: noFilters(defaultPeriod(rows, today())),
           limit: WINDOW,
           arrived: undefined,
+          failedAt: undefined,
         });
         unsubscribe?.();
         unsubscribe = store.subscribe(table, queueRefresh);
@@ -735,6 +761,11 @@ export function createController(
         },
       });
 
+      // Rows that arrive while the run is under way are this view's import
+      // too: the host importer's writes can reach the subscription before
+      // its result does (#537 review).
+      importedUntil = Infinity;
+
       try {
         const outcome = await port.apply(
           pendingText,
@@ -746,6 +777,7 @@ export function createController(
               update({ importing: { ...current, progress } });
           },
         );
+        importedUntil = outcome.status === 'applied' ? now() + 15_000 : 0;
         if (mine !== run) return;
 
         if (outcome.status === 'applied' || outcome.status === 'nothing') {
@@ -778,6 +810,7 @@ export function createController(
             },
           });
       } catch (error) {
+        importedUntil = 0;
         if (mine === run)
           update({
             importing: {

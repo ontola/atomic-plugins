@@ -191,7 +191,10 @@ example target; and for each edit, in the edit's direction, PutGet
 (`get(put(v, s)) = v` on the fields the view holds, and, under `absent:
 "unset"`, a field the view leaves out reads back absent) and stable put
 (putting the same view twice changes nothing more). They hold on the
-examples, which is evidence, not a proof over all values. The backward
+examples, which is evidence, not a proof over all values. Backward, a
+one-way field has no inverse to read back through, so PutGet checks that
+the put wrote the target `get` gives for the view's source value (or
+nothing, when the view lacks it and the field removes). The backward
 limits are listed under "Mapping version 3".
 
 ### Mapping version 3 (pieces.md L2)
@@ -238,7 +241,8 @@ exact meaning, and published version 2 files are unchanged.
   A read-only field is never written forward, so there its `absent` only
   matters backward. Only an object member can be removed: `parseMapping`
   refuses `unset` or `default` on a field whose source or target ends in an
-  array index, which would shift every later index. An object that a
+  array index or in `-` (JSON Pointer's "after the last item"), which would
+  shift every later index. An object that a
   removal leaves empty is removed too (`/due/date` leaves no `due: {}`),
   but never the row itself or an array item. A `default` must be a source
   value the field's converter accepts, checked when the mapping is parsed.
@@ -262,7 +266,8 @@ Backward limits, stated plainly:
   GetPut is not claimed.
 - **A backward view built from a row can fall outside the guards**, because
   it lacks provider places no field maps (Raindrop's `_id`). `put` refuses
-  such a view, and the law check gives no GetPut verdict for it.
+  such a view, and the law check gives no GetPut verdict for it; PutGet and
+  stable put for the example's backward edits still run.
 
 ### Examples
 
@@ -320,6 +325,35 @@ difference from #2069's `lens.ts` at `bab52555`:
 `name`, `source`, `target`, `mapping`) plus `mappingVersion`. All four
 release 1 lenses are version 2 (they need pointers), so a v1-only host
 would skip all of them. Release 2's Clockify, Todoist and Raindrop lenses are version 3: a host that runs only version 2 would skip them, so it stays pinned to `lenses/v1` until it runs version 3.
+
+## Bundling a catalog lens
+
+A plugin can run a published lens without any host support: `build` also
+writes `ontology-kit/lenses.mjs` (with `lenses.d.mts`), one export per
+published lens (`todoistTaskIssueV2` for `todoist-task-issue-v2`) holding
+what a plugin runs: `@id`, `release`, `name`, `source`, `target` and
+`mapping`. Examples and limits stay in the published files. A plugin
+imports the one it uses, with `lens.mjs` to run it, by relative path, as it
+does `terms.mjs`:
+
+```ts
+import { lensPut } from '../../../ontology-kit/lens.mjs';
+import { todoistTaskIssueV2 } from '../../../ontology-kit/lenses.mjs';
+```
+
+- Each export is `/* @__PURE__ */ JSON.parse('…')`, so esbuild leaves out
+  the lenses a plugin does not import; `lenses`, all of them by name,
+  bundles every one.
+- The data is exactly the published file's, checked by `check` (freshness)
+  and by `lens-catalog.test.mjs`. A lens version is immutable, so a bundle
+  never runs a different mapping than the file at its `@id`; a new lens
+  version reaches a plugin only through a rebuild and a new app version.
+- The github.io gate still applies: the bundle carries the base, so the
+  plugin's catalog entry stays `enabled: false` (`ontology-kit/README.md`,
+  "Gate").
+- First use: the Todoist drive app, 0.3.0 (`integrations/issue-tracker/
+todoist-app/lens.ts`), writes its `issue-v1` rows through
+  `todoist-task-issue-v2`'s backward put.
 
 ## Trust and review (Q-089)
 

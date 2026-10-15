@@ -27,6 +27,7 @@ import {
   checkArgv,
   civilYear as recorderYear,
   nextLink,
+  positiveInteger,
   REDACTIONS,
   redactor,
   valueless,
@@ -82,6 +83,37 @@ function paged(get: ReturnType<typeof api>['get'], path: string): Row[] {
 }
 
 describe('moneybird fixture: always-on checks', () => {
+  it('meets its deliberate contacts outage per connection, whatever read before', () => {
+    const fixture = moneybirdFixture();
+    const call = (path: string, connection?: string) =>
+      fixture.request(
+        'GET',
+        new URL(`http://mock/proxy/moneybird/api/v2${path}`),
+        {},
+        {},
+        connection ? { connection } : undefined,
+      ) as Answer;
+    const [administration] = call('/administrations.json').body as Row[];
+    const contacts = `/${administration.id}/contacts.json?per_page=100`;
+    /** One full read of the contacts: page 1, then page 2. */
+    const read = (connection?: string) => [
+      call(contacts, connection).status,
+      call(`${contacts}&page=2`, connection).status,
+    ];
+
+    // A good read, then one that fails on page 2: on each connection alike,
+    // whatever the other read in between (a shared count would fail b's
+    // first read).
+    expect(read('a')).toEqual([200, 200]);
+    expect(read('b')).toEqual([200, 200]);
+    expect(read('b')).toEqual([200, 503]);
+    expect(read('a')).toEqual([200, 503]);
+    expect(read('a')).toEqual([200, 200]);
+    // Without a connection (a direct call), one shared counter as before.
+    expect(read()).toEqual([200, 200]);
+    expect(read()).toEqual([200, 503]);
+  });
+
   it('is registered with the mock proxy', () => {
     expect(fixtures.moneybird).toBe(scenario);
   });
@@ -632,9 +664,9 @@ describe('moneybird fixture: always-on checks', () => {
       state: 'Piet Jansen',
       type: 'NL02RABO0123456789',
       country: 'nl02rabo',
-      currency: 'Jansen',
-      language: 'a'.repeat(40),
-      time_zone: 'Jansen',
+      currency: 'JANSEN',
+      language: 'nld',
+      time_zone: 'Europe/Jansen',
       delivery_method: 'Jansen',
     });
     for (const [field, v] of Object.entries(wrong))
@@ -655,6 +687,50 @@ describe('moneybird fixture: always-on checks', () => {
         'updated_at',
       ].map(field => `financial_mutation.${field}`),
     );
+  });
+
+  it('keeps currency, country, language and time_zone only as real codes', () => {
+    const redact = redactor();
+    const good = {
+      currency: 'EUR',
+      country: 'NL',
+      language: 'nl',
+      time_zone: 'Europe/Amsterdam',
+    };
+    expect(redact.row('administration', { id: '1', ...good })).toMatchObject(
+      good,
+    );
+    const bad: Row = redact.row('administration', {
+      id: '2',
+      currency: 'EU',
+      country: 'NLD',
+      language: 'NL',
+      time_zone: 'Jansen/Amsterdam',
+    });
+    expect(bad).toMatchObject({
+      currency: 'redacted',
+      country: 'redacted',
+      language: 'redacted',
+      time_zone: 'redacted',
+    });
+    expect(redact.unknown()).toEqual([
+      'administration.country',
+      'administration.currency',
+      'administration.language',
+      'administration.time_zone',
+    ]);
+  });
+
+  it('takes --per-page (up to 100) and --max-pages only as integers of at least 1', () => {
+    expect(positiveInteger('per-page', '100', 100)).toBe(100);
+    expect(positiveInteger('max-pages', '7')).toBe(7);
+    expect(() => positiveInteger('per-page', '101', 100)).toThrow(
+      '--per-page must be an integer from 1 to 100, not 101',
+    );
+    for (const bad of ['0', '-1', '1.5', '2e1', 'abc', '', ' 3', '0x10'])
+      expect(() => positiveInteger('max-pages', bad), bad).toThrow(
+        `--max-pages must be an integer from 1 up, not ${bad}`,
+      );
   });
 
   it('reads options without taking the next flag as a value, and refuses --x=5', () => {

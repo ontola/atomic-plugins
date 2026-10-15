@@ -51,10 +51,14 @@
  */
 import { test, expect, type Page, type FrameLocator } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
+import { appVersion } from '../../tooling/apps.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
-/** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.4.1';
+/**
+ * The catalog's version of this app (integrations/catalog.json), read at
+ * load by `appVersion`, so a version bump needs no edit here.
+ */
+const VERSION = appVersion('issue-tracker');
 const REPOSITORY = 'atomic-fixture/tracker';
 /** Seeded by the item 14 test itself, through the fixture's createIssue driver. */
 const TEAM_REPOSITORY = 'atomic-fixture/team-board';
@@ -80,7 +84,7 @@ test.describe('GitHub issues drive app', () => {
   });
   test.beforeEach(before);
 
-  test('imports, refreshes, sends reviewed updates, moves a card, comments and recovers from a conflict', async ({
+  test('imports, refreshes, sends reviewed updates, moves a card, comments, recovers from a conflict and from a refused write', async ({
     page,
   }) => {
     test.skip(
@@ -256,10 +260,49 @@ test.describe('GitHub issues drive app', () => {
     await expect(review).toContainText(
       'Add a comment on #1: “Fixed in the app.”',
     );
+    // GitHub refuses this first send whole (#357): a 422 on the write only,
+    // and only on this test's repository (the other test runs in parallel).
+    await fixture('failNext', [
+      422,
+      1,
+      { writes: true, repository: REPOSITORY },
+    ]);
+    await app.getByRole('button', { name: 'Send 1 change to GitHub' }).click();
+    await expect(status).toContainText('GitHub refused a change', {
+      timeout: 30_000,
+    });
+    await expect(syncCard.locator('[data-key=headline]')).toHaveText(
+      /^Sync failed /,
+    );
+    await expect(syncCard).toContainText(
+      'GitHub refused a change and applied nothing (HTTP 422: Validation Failed; title is too long (maximum is 256 characters)).',
+    );
+    await expect(syncCard).toContainText(
+      'Edit the change here, then Review and send it again; nothing is resent on its own.',
+    );
+    // Nothing reached GitHub, and the comment waits for review again, not
+    // as an uncertain write.
+    const refused = (await fixture('snapshot', [REPOSITORY])) as {
+      comments: { issue_url: string }[];
+    };
+    expect(
+      refused.comments.filter(c => c.issue_url.endsWith('/issues/1')),
+    ).toHaveLength(1);
+    await expect(syncCard.locator('[data-key=uncertain]')).toHaveCount(0);
+    await expect(syncCard).toContainText('1 change waiting to send to GitHub.');
+    // After a failed pass the bar offers Sync now only; the card offers the
+    // review.
+    await syncCard
+      .getByRole('button', { name: 'Review and send' })
+      .click({ timeout: 30_000 });
+    await expect(review).toContainText(
+      'Add a comment on #1: “Fixed in the app.”',
+    );
     await app.getByRole('button', { name: 'Send 1 change to GitHub' }).click();
     await expect(bar).toHaveAttribute('title', /1 sent to GitHub/, {
       timeout: 30_000,
     });
+    await expect(status).toContainText('Synced');
     const { comments } = (await fixture('snapshot', [REPOSITORY])) as {
       comments: { body: string; issue_url: string }[];
     };

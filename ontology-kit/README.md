@@ -11,10 +11,10 @@ Two top-level folders, split so that everything under the vocabulary's URL
 space is an immutable generated file (a term, or a lens catalog file) and
 nothing else:
 
-| Folder          | Holds                                                                                                                                                                                                                                                                                               | Published?                              | Changes?                      |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ----------------------------- |
-| `ontology/`     | Only generated files: the terms `v<N>`, `classes/<name>-v<N>`, `properties/<shortname>`, and the lens catalog `lenses/` ([LENSES.md](LENSES.md))                                                                                                                                                    | Yes, by GitHub Pages at `<base>/<path>` | Never, once on `main` (below) |
-| `ontology-kit/` | `base.json`, `source.json`, `lenses.json`, the build and check (`ontology.mjs`, `lens-catalog.mjs`), the generated subject constants (`terms.mjs`, `terms.d.mts`), the field resolver (`resolver.mjs`, `resolver.d.mts`), the lens interpreter (`lens.mjs`, `lens.d.mts`), their tests, this README | No                                      | Yes                           |
+| Folder          | Holds                                                                                                                                                                                                                                                                                                                                                                     | Published?                              | Changes?                      |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ----------------------------- |
+| `ontology/`     | Only generated files: the terms `v<N>`, `classes/<name>-v<N>`, `properties/<shortname>`, and the lens catalog `lenses/` ([LENSES.md](LENSES.md))                                                                                                                                                                                                                          | Yes, by GitHub Pages at `<base>/<path>` | Never, once on `main` (below) |
+| `ontology-kit/` | `base.json`, `source.json`, `lenses.json`, the build and check (`ontology.mjs`, `lens-catalog.mjs`), the generated subject constants (`terms.mjs`, `terms.d.mts`), the field resolver (`resolver.mjs`, `resolver.d.mts`), the lens interpreter (`lens.mjs`, `lens.d.mts`), the generated published lens mappings (`lenses.mjs`, `lenses.d.mts`), their tests, this README | No                                      | Yes                           |
 
 Both are shared code outside the plugin folders, approved by Michiel on #177
 (question 12).
@@ -34,7 +34,7 @@ specifies:
 
 Which app uses which class today: Google Calendar (`calendar` 0.3.2) writes
 `event-v1`; GitHub issues (`issue-tracker` 0.3.1), Todoist (`todoist` 0.2.0)
-and Google Tasks (`google-tasks` 0.1.0) write `issue-v1`; Clockify (`timesheets` 0.7.1) writes `time-entry-v1`, linked
+and Google Tasks (`google-tasks` 0.1.0) write `issue-v1`; Clockify (`timesheets` 0.7.2) writes `time-entry-v1`, linked
 to `work-project-v1` and `work-person-v1` rows of its own; Money (`money`)
 writes `bank-transaction-v1`; Moneybird (`moneybird` 0.3.0, in
 `integrations/money/moneybird/`) writes `time-entry-v1` (with

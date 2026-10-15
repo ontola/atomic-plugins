@@ -2,8 +2,12 @@ export default {
   root: new URL('.', import.meta.url).pathname,
   resolve: {
     alias: {
+      // The Clockify lens in devonian/clockify/ imports the npm `devonian`
+      // package, pinned in app/package.json and installed in app/node_modules
+      // (CI's "Install plugin npm dependencies"). The drive app does not
+      // import it, so its bundle is unaffected.
       'devonian/lenses': new URL(
-        '../../devonian/src/lenses/index.ts',
+        'app/node_modules/devonian/build/src/lenses/index.js',
         import.meta.url,
       ).pathname,
       vitest: new URL(

@@ -17,7 +17,8 @@
  *     built from source (AGENTS.md, "Shared pinned atomic-server build").
  *     When the SessionStart hook's stamp next to it names another commit
  *     than the checkout is at, it is refused as stale (binaryProblem), with
- *     the full build lines; a stampless build is trusted;
+ *     the full build lines; a stampless build is trusted, with a warning
+ *     that says how to stamp it;
  *   - with ATOMIC_SERVER_IMAGE set (e.g.
  *     `ghcr.io/ontola/atomic-server-e2e:$(cat .atomic-server-ref)`), that
  *     image, run with `docker run` on the same port. Everything else is
@@ -54,8 +55,38 @@ import {
   root,
 } from './lanes.mjs';
 
-export const serverCheckout = () =>
-  process.env.ATOMIC_SERVER_CHECKOUT ?? '/tmp/atomic-server';
+/**
+ * The atomic-server checkout the lanes use: ATOMIC_SERVER_CHECKOUT when set
+ * and not empty (CI and the cloud hook set it; `ATOMIC_SERVER_CHECKOUT=''`
+ * counts as unset). Otherwise this pin's per-SHA checkout,
+ * `~/.cache/atomic-plugins/atomic-server/<.atomic-server-ref>`, when that
+ * directory exists (one checkout per SHA, docs/agents/build-vps.md), and
+ * `/tmp/atomic-server` when it does not.
+ */
+export const serverCheckout = ({
+  env = process.env,
+  home = env.HOME,
+  pin = () => readFileSync(resolve(root, '.atomic-server-ref'), 'utf8').trim(),
+} = {}) => {
+  if (env.ATOMIC_SERVER_CHECKOUT) return env.ATOMIC_SERVER_CHECKOUT;
+
+  if (home) {
+    let sha;
+
+    try {
+      sha = pin();
+    } catch {
+      sha = undefined;
+    }
+
+    if (sha && /^[0-9a-f]{40}$/.test(sha)) {
+      const perSha = resolve(home, '.cache/atomic-plugins/atomic-server', sha);
+      if (existsSync(perSha)) return perSha;
+    }
+  }
+
+  return '/tmp/atomic-server';
+};
 
 /** The image to run atomic-server from instead of a local binary, if any. */
 export const serverImage = () => process.env.ATOMIC_SERVER_IMAGE || undefined;
@@ -281,6 +312,28 @@ export function binaryProblem({
     `${binary} was built from ${stamp.slice(0, 12)} (${stampFile}), but ${checkout} is at ${head.slice(0, 12)}: ` +
     `that binary is a stale host. Rebuild it:\n${buildInstructions(checkout)}\n` +
     `Or delete ${stampFile} to run it anyway.`
+  );
+}
+
+/**
+ * A warning for a local e2e binary that has no stamp, or undefined. Such a
+ * binary is still run (binaryProblem trusts it), but nothing can tell
+ * whether it was built from the commit the checkout is at now, so a moved
+ * checkout would test a stale host without a word. The warning says how to
+ * write the stamp once the binary is known to match.
+ */
+export function binaryWarning({
+  checkout,
+  binary = resolve(checkout, 'target/e2e/atomic-server'),
+  head = checkoutHead(checkout),
+}) {
+  const stampFile = resolve(checkout, BUILD_STAMP);
+  if (!existsSync(binary) || existsSync(stampFile)) return undefined;
+
+  return (
+    `${binary} has no stamp (${stampFile}), so serve.mjs cannot tell which commit it was built from` +
+    `${head ? ` (the checkout is at ${head.slice(0, 12)})` : ''}. ` +
+    `If you built it from that commit, write the stamp: git -C "${checkout}" rev-parse HEAD > "${stampFile}"; otherwise tell whoever built it`
   );
 }
 
@@ -513,6 +566,8 @@ export async function bringUp({
     // and a binary whose stamp names another commit would run without a word.
     const problem = binaryProblem({ checkout: serverCheckout(), binary });
     if (problem) throw new Error(problem);
+    const warning = binaryWarning({ checkout: serverCheckout(), binary });
+    if (warning) console.warn(`warning: ${warning}`);
   }
 
   await assertFree(ports, config);

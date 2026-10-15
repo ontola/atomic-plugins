@@ -38,11 +38,53 @@ function validSchemes(
   return map;
 }
 
+/**
+ * The first scheme that fails validation but whose auto-detection would
+ * match the operation, when no valid scheme matches it: the operation
+ * presumably pages, but the scheme cannot be applied. A read that makes
+ * one request must then not take that page as the whole collection.
+ * `undefined` when an explicit `x-pagination` applies, a valid scheme
+ * matches, or no invalid one would.
+ */
+export function invalidAutoDetected(
+  document: OpenApiDocument,
+  operation: OperationObject,
+): { schemeName: string; problems: string[] } | undefined {
+  const explicit = operation['x-pagination'];
+  if (explicit !== undefined && !(Array.isArray(explicit) && !explicit.length))
+    return undefined;
+  const valid = validSchemes(document);
+  for (const scheme of valid.values())
+    if (autoDetectMatches(scheme, operation)) return undefined;
+  const schemes = document.components?.paginationSchemes ?? {};
+  for (const [schemeName, scheme] of Object.entries(schemes)) {
+    if (valid.has(schemeName) || !isPlainObject(scheme)) continue;
+    if (autoDetectMatches(scheme, operation))
+      return {
+        schemeName,
+        problems: validatePaginationScheme(schemeName, scheme),
+      };
+  }
+  return undefined;
+}
+
+/**
+ * The operation's query parameter names. A malformed `parameters` (not an
+ * array) or entry (not an object) is skipped rather than thrown on, so a
+ * broken operation cannot make auto-detection, and every read that runs
+ * it, throw.
+ */
 function queryParamNames(operation: OperationObject): Set<string> {
+  const parameters: unknown = operation.parameters;
+  if (!Array.isArray(parameters)) return new Set();
   return new Set(
-    (operation.parameters ?? [])
-      .filter((parameter) => parameter.in === 'query')
-      .map((parameter) => parameter.name),
+    parameters
+      .filter(
+        (parameter): parameter is { in: unknown; name: unknown } =>
+          isPlainObject(parameter) && parameter['in'] === 'query',
+      )
+      .map((parameter) => parameter.name)
+      .filter((name): name is string => typeof name === 'string'),
   );
 }
 
@@ -66,8 +108,10 @@ function autoDetectMatches(
   if (scheme.autoDetect === false || scheme.type === 'rangeWindow') {
     return false;
   }
-  const options =
-    typeof scheme.autoDetect === 'object' ? scheme.autoDetect : {};
+  // Anything but an Auto-Detect Object (`true`, or an invalid `null`,
+  // string, number or array) means the default options: an invalid scheme
+  // that then matches makes its read not complete, never one page complete.
+  const options = isPlainObject(scheme.autoDetect) ? scheme.autoDetect : {};
   const requireAll = options.requireAll ?? true;
   const results: boolean[] = [];
 
@@ -181,6 +225,40 @@ export function resolveEffectiveScheme(
     if (windowed && explicit.length > 1) {
       throw new PaginationSchemeError(
         'x-pagination applies a rangeWindow scheme together with another scheme',
+      );
+    }
+    // Rule 22: a scheme with a Short Page Object pages by exactly one page field.
+    const pageFields = (['queryParameters', 'bodyFields'] as const).flatMap(
+      (location) =>
+        Object.values(scheme.request?.[location] ?? {}).filter(
+          (field) => field.role === 'page',
+        ),
+    );
+    if (scheme.response?.shortPage !== undefined && pageFields.length !== 1) {
+      throw new PaginationSchemeError(
+        `x-pagination applies the pagination scheme "${name}", whose shortPage needs exactly one request field with role page`,
+      );
+    }
+    // Rule 25 (0.7.0): an offset that advances by the page size needs one.
+    const advancesByPageSize = (
+      ['queryParameters', 'bodyFields'] as const
+    ).some((location) =>
+      Object.values(scheme.request?.[location] ?? {}).some(
+        (field) => field.role === 'offset' && field.advance === 'pageSize',
+      ),
+    );
+    const hasPageSize =
+      (['queryParameters', 'bodyFields'] as const).some((location) =>
+        Object.values(scheme.request?.[location] ?? {}).some(
+          (field) => field.role === 'pageSize',
+        ),
+      ) ||
+      Object.values(scheme.response?.bodyFields ?? {}).some(
+        (field) => field.role === 'pageSize',
+      );
+    if (advancesByPageSize && !hasPageSize) {
+      throw new PaginationSchemeError(
+        `x-pagination applies the pagination scheme "${name}", whose offset advances by the page size but which has no request or response field with role pageSize`,
       );
     }
     return { schemeName: name, scheme };

@@ -1,5 +1,5 @@
 // @wc-ignore-file
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   classifyThrottling,
   declaredThrottling,
@@ -234,6 +234,150 @@ describe('classifyThrottling, after the spec tests', () => {
     expect(verdict?.signal).toMatchObject({
       header: { name: 'retry-after', present: true },
     });
+  });
+});
+
+describe('header values: number bounds and stripped characters (Throttling follow-up)', () => {
+  it('a 400-digit Retry-After does not parse: the backoff applies', () => {
+    expect(classify(429, { 'Retry-After': '9'.repeat(400) })).toEqual({
+      meaning: 'throttled',
+    });
+  });
+
+  it('a reset of 2^53 seconds does not parse; 2^53 − 1 does', () => {
+    const headers = (reset: string): Record<string, string> => ({
+      'X-RateLimit-Remaining': '0',
+      'X-RateLimit-Reset': reset,
+    });
+    // Without a parsing reset, the bucket window is the fallback.
+    expect(classify(403, headers(String(2 ** 53)))!.retryAt).toBe(s(3600));
+    expect(
+      classify(403, headers(String(Number.MAX_SAFE_INTEGER)))!.retryAt,
+    ).toBe(Number.MAX_SAFE_INTEGER * 1000);
+  });
+
+  it('strips only space, tab, CR and LF from a header value', () => {
+    expect(classify(429, { 'Retry-After': ' \t30\r\n' })!.retryAt).toBe(s(30));
+    for (const value of ['\u00a030', '30\u00a0', '30\u2003', '\ufeff30'])
+      expect(classify(429, { 'Retry-After': value })!.retryAt).toBeUndefined();
+  });
+
+  it('matches a header predicate after the same stripping only', () => {
+    const doc = withSignals([
+      {
+        status: [403],
+        header: { name: 'X-Reason', equals: 'rate' },
+        meaning: 'throttled',
+      },
+    ]);
+    expect(classify(403, { 'X-Reason': ' rate\t' }, undefined, doc)).toEqual({
+      meaning: 'throttled',
+    });
+    expect(
+      classify(403, { 'X-Reason': 'rate\u00a0' }, undefined, doc),
+    ).toBeUndefined();
+  });
+});
+
+describe('HTTP-dates: only the exact RFC 9110 forms (#491 review)', () => {
+  const DATE = Date.parse('Wed, 21 Oct 2015 07:28:00 GMT');
+
+  it.each([
+    ['IMF-fixdate', 'Wed, 21 Oct 2015 07:28:00 GMT'],
+    ['the RFC 850 form', 'Wednesday, 21-Oct-15 07:28:00 GMT'],
+    ['asctime', 'Wed Oct 21 07:28:00 2015'],
+  ])('reads %s', (_label, value) => {
+    expect(headerTime(value, 'httpDate', NOW)).toBe(DATE);
+  });
+
+  it('reads a header IMF-fixdate after stripping space and tab', () => {
+    expect(
+      classify(429, { 'Retry-After': ' Wed, 21 Oct 2015 07:28:00 GMT\t' })!
+        .retryAt,
+    ).toBe(DATE);
+  });
+
+  it.each([
+    ['a leading U+00A0', '\u00a0Wed, 21 Oct 2015 07:28:00 GMT'],
+    ['a leading byte-order mark', '\ufeffWed, 21 Oct 2015 07:28:00 GMT'],
+    ['an em space inside', 'Wed,\u200321 Oct 2015 07:28:00 GMT'],
+    ['an ISO date', '2015-10-21T07:28:00Z'],
+    ['UTC instead of GMT', 'Wed, 21 Oct 2015 07:28:00 UTC'],
+    ['a day the month lacks', 'Sat, 31 Feb 2015 07:28:00 GMT'],
+    ['a free-form date', 'October 21, 2015 07:28'],
+  ])('refuses %s', (_label, value) => {
+    expect(headerTime(value, 'httpDate', NOW)).toBeUndefined();
+    expect(
+      classify(429, { 'Retry-After': value }, undefined)!.retryAt,
+    ).toBeUndefined();
+  });
+
+  it('reads a space-padded asctime day', () => {
+    expect(headerTime('Thu Oct  1 07:28:00 2015', 'httpDate', NOW)).toBe(
+      Date.parse('2015-10-01T07:28:00Z'),
+    );
+  });
+
+  it('reads a leap second as the next second of the same day', () => {
+    expect(headerTime('Sat, 31 Dec 2016 23:59:60 GMT', 'httpDate', NOW)).toBe(
+      Date.parse('2017-01-01T00:00:00Z'),
+    );
+    expect(headerTime('Sat Dec 31 23:59:60 2016', 'httpDate', NOW)).toBe(
+      Date.parse('2017-01-01T00:00:00Z'),
+    );
+  });
+
+  it('keeps a 4-digit year below 100 as written, not 19xx', () => {
+    const expected = new Date(0);
+    expected.setUTCFullYear(50, 0, 1);
+    expected.setUTCHours(7, 28, 0);
+    expect(headerTime('Sat, 01 Jan 0050 07:28:00 GMT', 'httpDate', NOW)).toBe(
+      expected.getTime(),
+    );
+    expect(expected.getUTCFullYear()).toBe(50);
+    expect(headerTime('Sat Jan  1 07:28:00 0050', 'httpDate', NOW)).toBe(
+      expected.getTime(),
+    );
+  });
+
+  describe('the RFC 850 century rule compares full dates', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-10-12T12:00:00Z'));
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('keeps a date at most 50 years ahead in this century', () => {
+      expect(
+        headerTime('Sunday, 11-Oct-76 07:28:00 GMT', 'httpDate', NOW),
+      ).toBe(Date.parse('2076-10-11T07:28:00Z'));
+    });
+
+    it('rolls a date more than 50 years ahead back a century, in the same year', () => {
+      expect(
+        headerTime('Wednesday, 13-Oct-76 07:28:00 GMT', 'httpDate', NOW),
+      ).toBe(Date.parse('1976-10-13T07:28:00Z'));
+    });
+
+    it('rolls a later two-digit year back a century', () => {
+      expect(
+        headerTime('Friday, 01-Jan-99 00:00:00 GMT', 'httpDate', NOW),
+      ).toBe(Date.parse('1999-01-01T00:00:00Z'));
+    });
+  });
+
+  it('refuses a Date header with a U+00A0: the consumer clock alone counts', () => {
+    const at = String(NOW / 1000 + 60);
+    expect(
+      headerTime(
+        at,
+        'epochSeconds',
+        NOW,
+        '\u00a0Fri, 15 Jan 2027 07:00:00 GMT',
+      ),
+    ).toBe(NOW + 60_000);
   });
 });
 

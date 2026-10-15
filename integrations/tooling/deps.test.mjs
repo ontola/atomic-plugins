@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import {
   installMissing,
+  installReason,
   missingInstalls,
   pluginDependencyDirs,
   sharedDependencyDirs,
@@ -24,12 +25,21 @@ import {
 function fixture(dirs) {
   const base = mkdtempSync(join(tmpdir(), 'atomic-deps-'));
 
-  for (const [dir, { lock = true, installed = false }] of Object.entries(
-    dirs,
-  )) {
+  for (const [
+    dir,
+    { lock = true, installed = false, from = 'lockfileVersion: 9\n' },
+  ] of Object.entries(dirs)) {
     mkdirSync(join(base, dir), { recursive: true });
-    if (lock) writeFileSync(join(base, dir, 'pnpm-lock.yaml'), '');
-    if (installed) mkdirSync(join(base, dir, 'node_modules'));
+    if (lock)
+      writeFileSync(join(base, dir, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+
+    if (installed) {
+      // pnpm keeps a copy of the lockfile it installed from; `from` is it,
+      // or null for a node_modules without one.
+      mkdirSync(join(base, dir, 'node_modules/.pnpm'), { recursive: true });
+      if (from !== null)
+        writeFileSync(join(base, dir, 'node_modules/.pnpm/lock.yaml'), from);
+    }
   }
 
   return base;
@@ -47,6 +57,27 @@ function recorder(base, status = 0) {
     },
   };
 }
+
+test("a plugin's lockfile folders match the four globs ci.yml installs", () => {
+  assert.deepEqual(pluginDependencyDirs('notion'), [
+    'integrations/notion',
+    'integrations/notion/app',
+    'integrations/notion/e2e',
+    'integrations/notion/devonian',
+  ]);
+  const workflow = readFileSync(
+    join(import.meta.dirname, '../../.github/workflows/ci.yml'),
+    'utf8',
+  );
+  const loops = workflow.match(/for lock in [^;]*;/g) ?? [];
+  assert.equal(loops.length, 2, 'ci.yml has two plugin install loops');
+  const globs = pluginDependencyDirs('*').map(dir => `${dir}/pnpm-lock.yaml`);
+  for (const loop of loops)
+    assert.deepEqual(
+      loop.slice('for lock in '.length, -1).trim().split(/\s+/),
+      globs,
+    );
+});
 
 test('a lockfile without node_modules is installed, with one line each', () => {
   const base = fixture({
@@ -98,6 +129,37 @@ test('an existing node_modules is left alone, as on CI', () => {
     );
     assert.deepEqual(calls, []);
     assert.deepEqual(lines, []);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('a node_modules installed from a different lockfile is installed again, and says so', () => {
+  const base = fixture({
+    'integrations/notion': { installed: true, from: 'lockfileVersion: 8\n' },
+    'integrations/pets': { installed: true },
+    'integrations/calendar/app': { installed: true, from: null },
+  });
+
+  try {
+    const { calls, install } = recorder(base);
+    const lines = [];
+    installMissing(
+      [
+        ...pluginDependencyDirs('notion'),
+        ...pluginDependencyDirs('pets'),
+        ...pluginDependencyDirs('calendar'),
+      ],
+      { base, install, log: line => lines.push(line) },
+    );
+    // Up to date, or without pnpm's copy to compare: left alone.
+    assert.deepEqual(calls, ['integrations/notion']);
+    assert.deepEqual(lines, [
+      'Installing integrations/notion dependencies again: node_modules was installed from a different pnpm-lock.yaml (pnpm install --frozen-lockfile)',
+    ]);
+    assert.equal(installReason('integrations/notion', base), 'stale');
+    assert.equal(installReason('integrations/pets', base), undefined);
+    assert.equal(installReason('integrations/calendar/app', base), undefined);
   } finally {
     rmSync(base, { recursive: true, force: true });
   }
@@ -166,4 +228,29 @@ test('certify.mjs and run-lane.mjs both install before they run', () => {
     assert.match(source, /from '\.\/deps\.mjs'/, file);
     assert.match(source, /installMissing\(/, file);
   }
+});
+
+test('the Devonian lens folder of a plugin is one of its dependency folders', () => {
+  assert.deepEqual(pluginDependencyDirs('bookmarks'), [
+    'integrations/bookmarks',
+    'integrations/bookmarks/app',
+    'integrations/bookmarks/e2e',
+    'integrations/bookmarks/devonian',
+  ]);
+  const base = fixture({
+    'integrations/bookmarks/devonian': {},
+    'integrations/solid/devonian': { installed: true },
+  });
+  const { calls, install } = recorder(base);
+
+  try {
+    installMissing(
+      [...pluginDependencyDirs('bookmarks'), ...pluginDependencyDirs('solid')],
+      { base, install, log: () => {} },
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+
+  assert.deepEqual(calls, ['integrations/bookmarks/devonian']);
 });

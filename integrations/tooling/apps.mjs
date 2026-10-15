@@ -93,6 +93,29 @@ export function appEntries(catalog) {
 }
 
 /**
+ * The catalog's version of drive app `id` (its shortname), read from
+ * `integrations/catalog.json` at call time. The lane e2e specs import it, so
+ * a version bump in the catalog needs no spec edit: the host must then show
+ * that version, which is what the lane's dev-server serves. Throws for an id
+ * that is not a drive app entry, or whose entry has no version, rather than
+ * letting a spec compare against `undefined`.
+ */
+export function appVersion(id, base = root) {
+  const entry = appEntries(readCatalog(base)).find(
+    candidate => candidate[terms.shortname] === id,
+  );
+  if (!entry)
+    throw new Error(
+      `apps: no drive app entry with shortname "${id}" in ${catalogPath(base)}`,
+    );
+  const version = entry[terms.version];
+  if (typeof version !== 'string' || !version)
+    throw new Error(`apps: the catalog entry "${id}" has no version`);
+
+  return version;
+}
+
+/**
  * Drive apps whose source is not at `integrations/<shortname>/app/`, by
  * catalog shortname: the folder (repository-relative) holding the app's
  * `build.mjs` and a `private` `package.json` with just its version. For an
@@ -291,23 +314,93 @@ export const blobId = bytes =>
     .digest('hex');
 
 /**
+ * The commit where this branch and `ref` parted, or undefined when there is
+ * none (no HEAD yet, or unrelated histories).
+ */
+export function mergeBaseWith(ref, base = root) {
+  try {
+    return git(base, ['merge-base', 'HEAD', ref]).trim();
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether `base` is a shallow clone (CI's checkout is). */
+export function isShallow(base = root) {
+  try {
+    return (
+      git(base, ['rev-parse', '--is-shallow-repository']).trim() === 'true'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The one line for published files missing here because the branch is
+ * behind `ref`, naming the first few.
+ */
+export function behindLine(ref, paths) {
+  const shown = paths.slice(0, 3).join(', ');
+  const more = paths.length > 3 ? `, and ${paths.length - 3} more` : '';
+
+  return `${paths.length} file(s) published at ${ref} are not on this branch, which is behind it (${shown}${more}): merge ${ref} (never restore them by hand)`;
+}
+
+/** Whether `path` exists in the tree of commit `treeish`. */
+export function inTree(treeish, path, base = root) {
+  try {
+    git(base, ['cat-file', '-e', `${treeish}:${path}`]);
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Published version files that the working tree changed or deleted. A
  * published file's URL is what installed apps recorded; its bytes must stay.
+ * A file `ref` published after this branch parted from it is missing here
+ * because the branch is behind, not because anyone deleted it: those are
+ * reported together as "behind", with the merge as the fix, since restoring
+ * them by hand is what the immutability rule must never provoke.
  */
 export function publishedProblems(ref, base = root) {
   const problems = [];
+  const mergeBase = mergeBaseWith(ref, base);
+  // Behind only when the branch point is not `ref` itself.
+  // A shallow clone counts as having none: its merge-base may stop short of
+  // the real one, so it cannot tell "behind" from "deleted" either.
+  const shallow = isShallow(base);
+  const behindRef =
+    !shallow &&
+    mergeBase !== undefined &&
+    mergeBase !== git(base, ['rev-parse', `${ref}^{commit}`]).trim();
+  const behind = [];
+  // Without a merge-base (unrelated histories, or a shallow clone such as
+  // CI's, where `git merge-base` fails or may stop short), a file main
+  // published since cannot be told from one this branch lost: say both.
+  const unsure =
+    mergeBase === undefined || shallow
+      ? ` (This ${shallow ? 'shallow clone' : 'checkout'} cannot tell whether the branch is behind ${ref}: if it is, merge ${ref} first instead.)`
+      : '';
 
   for (const [path, blob] of publishedModules(ref, base)) {
     const file = resolve(base, path);
-    if (!existsSync(file))
-      problems.push(
-        `${path} is published at ${ref} and was deleted. Published versions stay available: restore it.`,
-      );
-    else if (blobId(readFileSync(file)) !== blob)
+    if (!existsSync(file)) {
+      if (behindRef && !inTree(mergeBase, path, base)) behind.push(path);
+      else
+        problems.push(
+          `${path} is published at ${ref} and was deleted. Published versions stay available: restore it.${unsure}`,
+        );
+    } else if (blobId(readFileSync(file)) !== blob)
       problems.push(
         `${path} is published at ${ref} and was changed. Published versions are immutable: restore it and release a new version.`,
       );
   }
+
+  if (behind.length) problems.push(behindLine(ref, behind));
 
   return problems;
 }

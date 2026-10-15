@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { effectiveProperties, itemSchemaFor, locateItemsField } from '../../../src/pagination/items.js';
+import {
+  effectiveProperties,
+  itemSchemaFor,
+  locateItemsField,
+} from '../../../src/pagination/items.js';
 import type { PaginationSchemeObject } from '../../../src/pagination/types.js';
 
 const scheme: PaginationSchemeObject = {
   type: 'pageNumber',
   request: { queryParameters: { offset: { role: 'offset' } } },
-  response: { bodyFields: { 'pagination.total_count': { role: 'totalCount' } } },
+  response: {
+    bodyFields: { 'pagination.total_count': { role: 'totalCount' } },
+  },
 };
 
 describe('effectiveProperties', () => {
@@ -80,11 +86,17 @@ describe('itemSchemaFor', () => {
       {
         type: 'object',
         properties: {
-          data: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' } } } },
+          data: {
+            type: 'array',
+            items: { type: 'object', properties: { id: { type: 'string' } } },
+          },
         },
       },
       scheme,
     );
-    expect(schema).toEqual({ type: 'object', properties: { id: { type: 'string' } } });
+    expect(schema).toEqual({
+      type: 'object',
+      properties: { id: { type: 'string' } },
+    });
   });
 });

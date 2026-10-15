@@ -18,19 +18,32 @@ describe('Notion drive-plugin bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource, so the size is capped at
-    // the measured size plus about 10% (the owner's rule for bundle limits):
-    // 125 712 bytes on 2026-10-06 for 0.5.0 (the shared sync-status card of
-    // Q-084 with its card.css and the view/status.ts mapping, on top of
-    // syncables 0.19.0's read path, the catalog document, devonian's Atomic
-    // Data API, the sync-status view of #177 Q9, #8's compare-on-open,
-    // review and send, the option Tags of options.ts and #303's retirement
-    // of stray columns; JS and embedded CSS minified by esbuild). 0.5.1
-    // measured 125 914 on 2026-10-08, with devonian 0.9.0's compiled
-    // devonian/atomic in place of 0.6.1's TypeScript sources. 0.4.2
-    // measured 115 818; 0.4.1 113 988 with syncables 0.18.0; 0.4.0 113 536;
-    // 0.3.0 107 509; 0.2.0 133 028 with the #89 browsing views; 0.1.0
-    // 117 969. A change that needs more should say why and re-measure.
-    expect(bytes).toBeLessThan(138_300);
+    // the measured size plus about 10% (the owner's rule for bundle limits).
+    // Minified by esbuild, JS and embedded CSS; oldest first:
+    // 0.1.0 117 969; 0.2.0 133 028 with the #89 browsing views; 0.3.0
+    // 107 509; 0.4.0 113 536; 0.4.1 113 988 with syncables 0.18.0; 0.4.2
+    // 115 818.
+    // 0.5.0 125 712 on 2026-10-06: the shared sync-status card of Q-084
+    // with its card.css and the view/status.ts mapping, on top of syncables
+    // 0.19.0's read path, the catalog document, devonian's Atomic Data API,
+    // the sync-status view of #177 Q9, #8's compare-on-open, review and
+    // send, the option Tags of options.ts and #303's retirement of stray
+    // columns.
+    // 0.5.1 125 914 on 2026-10-08: devonian 0.9.0's compiled devonian/atomic
+    // in place of 0.6.1's TypeScript sources.
+    // 0.5.2 144 024 on 2026-10-09: syncables 0.21.0's read path (Pagination
+    // Schemes 0.4.0/0.5.0 link checks and windows, the Throttling 0.2.0
+    // classifier, CRUD Causality fixed reads); the app's own code unchanged.
+    // 0.5.3 145 070 on 2026-10-13: formatted text imported as plain text
+    // (usertest-findings#19).
+    // 0.5.4 179 518 on 2026-10-14: syncables 0.23.0's read path in place of
+    // 0.21.0's (+33 811: time zones, runtime schemas, pages, throttling,
+    // produced classes, the invalid-auto-detected check, incomplete markers
+    // and list tombstones) and the blocked-429 handling (637).
+    // 0.5.5 179 723 on 2026-10-14: a blocked 429 is also caught on the
+    // pre-PATCH GET and in the read transport (+205).
+    // A change that needs more should say why and re-measure.
+    expect(bytes).toBeLessThan(197_800);
   });
 
   it('carries no credential handling or network access of its own', () => {

@@ -9,6 +9,8 @@ import {
   type Term,
 } from '../localthought.js';
 import type { RawNamed, RawTimeEntry } from './clockifyApi.js';
+import type { ClockifyTimeEntry } from '../devonian/clockify/lens/index.js';
+import { entryValues } from './catalogLens.js';
 
 /**
  * Runs the one Clockify lens (`../devonian/clockify/`, via
@@ -94,6 +96,14 @@ export function projectEntries(
   const references = new Map(
     resolveClockifyReferences(projected).map(r => [r.timeEntryId, r]),
   );
+  // The Name is the catalog lens's (0.8.0): the description exactly, not
+  // the projection's trimmed one or its "Time entry" for none.
+  const names = new Map(
+    entries.map(e => [
+      e.id,
+      entryValues(e as unknown as ClockifyTimeEntry)?.name ?? '',
+    ]),
+  );
 
   return projected.records
     .filter(r => r.resource === 'timeentry')
@@ -103,7 +113,7 @@ export function projectEntries(
 
       return {
         entryId: r.id,
-        name: r.name,
+        name: names.get(r.id) ?? '',
         start: r.values[clockifyFields.start] as number,
         end: r.values[clockifyFields.end] as number,
         ...(typeof billable === 'boolean' ? { billable } : {}),
