@@ -147,6 +147,42 @@ describe('checking a file against the table (same rules as the importer)', () =>
     expect(safe.ok && safe.preview.withoutReference).toBe(2);
   });
 
+  it('a no-reference twin whose write failed can be imported afterwards, and is not an overlap (#572, #587)', () => {
+    // Two identical rows without a bank reference in one statement.
+    const twins = [
+      ':20:SYNTHETIC',
+      ':25:NL00BUNQ0000000000',
+      ':28C:1/1',
+      ':60F:C260901EUR100,00',
+      ':61:2609020902D12,34NTRFNONREF',
+      ':86:Fixture lunch',
+      ':61:2609020902D12,34NTRFNONREF',
+      ':86:Fixture lunch',
+      ':62F:C260902EUR75,32',
+      '',
+    ].join('\n');
+    const both = asTxn(imported(twins));
+    expect(both).toHaveLength(2);
+    expect(both[0].fingerprint).toBe(both[1].fingerprint);
+    // Only the first twin was written.
+    const parsed = read(twins);
+    if (!parsed.ok) throw new Error('unreadable');
+    const result = compare(parsed.format, parsed.statements, both.slice(0, 1));
+    expect(result.ok && result.preview.fresh).toHaveLength(1);
+    expect(result.ok && result.preview.already).toHaveLength(1);
+    // Both written: nothing new.
+    const all = compare(parsed.format, parsed.statements, both);
+    expect(all.ok && all.preview.fresh).toHaveLength(0);
+    // The same content in another statement is still an overlap, also when
+    // a twin of this statement is in the table too.
+    const other = read(twins.replace(':28C:1/1', ':28C:2/1'));
+    if (!other.ok) throw new Error('unreadable');
+    const overlap = compare(other.format, other.statements, both.slice(0, 1));
+    expect(!overlap.ok && overlap.problem.code).toBe(
+      'OVERLAP_WITHOUT_REFERENCES',
+    );
+  });
+
   it('reports reader failures with their codes', () => {
     expect(read(mt940.replace('107,66', '107,67'))).toMatchObject({
       ok: false,

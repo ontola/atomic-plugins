@@ -150,6 +150,8 @@ export interface FakeStore extends PluginStore {
   }[];
   /** Resources made with `newResource`, in order. */
   readonly created: string[];
+  /** Resources destroyed, in order. */
+  readonly destroyed: string[];
   /** Adds rows to the table, notifying subscribers of the table. */
   addRows(rows: SeedRow[]): string[];
   /** Fails the next `n` saves with `message`. */
@@ -322,6 +324,7 @@ export function fakeStore({
   const saves: FakeStore['saves'] = [];
   const schemaSaves: FakeStore['saves'] = [];
   const created: string[] = [];
+  const destroyed: string[] = [];
   const listeners = new Map<string, Set<() => void>>();
   const subscribed = new Set<string>();
   let failing = 0;
@@ -409,7 +412,15 @@ export function fakeStore({
         return this;
       },
       async destroy() {
+        await Promise.resolve();
+        if (!within(subject) && !(writable && isRow(subject)))
+          throw new Error(REFUSED);
+        const current = resources.get(subject);
+        if (!current) throw new Error(`No resource ${subject}`);
         resources.delete(subject);
+        destroyed.push(subject);
+        const parent = current[atomic.parent];
+        if (typeof parent === 'string') notify(parent);
       },
     };
   };
@@ -457,6 +468,7 @@ export function fakeStore({
     resources,
     runs,
     created,
+    destroyed,
     get accessRequests() {
       return accessRequests;
     },
