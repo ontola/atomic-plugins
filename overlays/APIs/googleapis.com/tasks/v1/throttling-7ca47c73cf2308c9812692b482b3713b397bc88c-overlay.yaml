@@ -3,6 +3,9 @@
 # Source: https://developers.google.com/workspace/tasks/limits (courtesy limit only)
 # Needs Throttling 0.2.0-draft (openapi-extensions/spec/throttling, headers and signals).
 # The error evidence is the Calendar API's error guide, not a Tasks-specific error document.
+# Not declared: Retry-After. Google's error guides recommend exponential backoff and do not
+# document sending it, and the spec declares a header only where documents establish its
+# role and unit.
 overlay: 1.0.0
 info:
   title: Google Tasks v1 throttling signals
@@ -12,13 +15,6 @@ actions:
   - target: $
     update:
       x-throttling:
-        headers:
-          Retry-After:
-            role: retryAfter
-            unit: deltaSecondsOrHttpDate
-            description: >-
-              The standard RFC 9110 header. Google's error guides recommend
-              exponential backoff and do not document sending it.
         signals:
           - status: [403, 429]
             body:

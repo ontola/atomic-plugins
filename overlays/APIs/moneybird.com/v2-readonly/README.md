@@ -29,3 +29,11 @@ source-IP quota using [`openapi-extensions/spec/throttling`](../../../../openapi
 window algorithm is explicitly unspecified; pacing/retries remain consumer
 choices. The catalog excludes report endpoints, whose stricter quota is not
 modeled by this overlay. Source: https://developer.moneybird.com/#throttling
+
+`throttling-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` (#615) keeps
+v1's limits exactly and adds what the introduction's Throttling section
+documents for a 429: `Retry-After` ("the time after which a new request can
+be made") and a 429 as `quotaExhausted` on the `apiRequests` bucket.
+`RateLimit-Remaining`, `RateLimit-Limit` and `RateLimit-Reset` are not
+declared: the introduction gives them no units. No dated catalog selects it
+yet. `../../../tests/test_throttling_overlays.py` checks it.

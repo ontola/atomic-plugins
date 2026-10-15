@@ -82,6 +82,10 @@ class ThrottlingOverlayTests(unittest.TestCase):
         self.assertEqual(primary, {"meaning": "quotaExhausted", "bucket": None, "retryAt": NOW + 60})
         app = (ROOT.parent / "integrations/issue-tracker/app/rateLimit.ts").read_text()
         self.assertIn("secondary rate limit", app)
+        # The app also matches "abuse detection", which the overlays do not declare.
+        self.assertIn("abuse detection", app)
+        abuse = {"message": "You have triggered an abuse detection mechanism."}
+        self.assertIsNone(self.classify("github", 403, {"x-ratelimit-remaining": "12"}, abuse))
 
     def test_google_tasks_reasons_and_other_403s(self):
         for status in (403, 429):
@@ -93,12 +97,17 @@ class ThrottlingOverlayTests(unittest.TestCase):
                                      {"meaning": "throttled", "bucket": None, "retryAt": None})
         forbidden = {"error": {"errors": [{"domain": "global", "reason": "insufficientPermissions"}], "code": 403}}
         self.assertIsNone(self.classify("google_tasks", 403, body=forbidden))
+        # No header is declared: Google does not document sending Retry-After,
+        # so a Retry-After on a throttled answer sets no retry time.
+        self.assertNotIn("headers", self.documents["google_tasks"][1]["x-throttling"])
+        body = {"error": {"errors": [{"reason": "rateLimitExceeded"}], "code": 429}}
+        self.assertEqual(self.classify("google_tasks", 429, {"Retry-After": "30"}, body)["retryAt"], None)
 
     def test_moneybird_429_exhausts_the_source_ip_bucket(self):
         result = self.classify("moneybird", 429, {"Retry-After": "42", "RateLimit-Remaining": "42"})
         self.assertEqual(result, {"meaning": "quotaExhausted", "bucket": "apiRequests", "retryAt": NOW + 42})
         self.assertEqual(set(self.documents["moneybird"][1]["x-throttling"]["headers"]), {"Retry-After"})
-        # Without Retry-After, the 300-second window is the floor.
+        # Without Retry-After, the 300-second window is the fallback.
         self.assertEqual(self.classify("moneybird", 429)["retryAt"], NOW + 300)
         # The bucket is only unambiguous while the pinned OAD has no /reports/ endpoints.
         self.assertFalse(any("/reports" in path for path in self.documents["moneybird"][0]["paths"]))
