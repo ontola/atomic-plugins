@@ -477,8 +477,9 @@ reference `read_item_cursor`. No provider was called.
 
 The overlay file's comment is published and cannot change; checked again
 on 2026-10-15, it needs these corrections and additions. Get Channel
-Messages does state its order, "from newest to oldest", but it pages
-backwards with `before` (a message id), and so do the other `before`-only
+Messages does state its order, "from newest to oldest" (it takes
+`before`, `after` and `around`; newest to oldest is not ascending, so its
+`after` is no rule (b) bound either). Newest-first, too, are the `before`-only
 lists the comment does not name: List Public Archived Threads and List
 Private Archived Threads ("ordered by `archive_timestamp`, in descending
 order", `before` a timestamp), List Joined Private Archived Threads
@@ -486,7 +487,7 @@ order", `before` a timestamp), List Joined Private Archived Threads
 Channel Pins (`before` a pin timestamp, order not stated). Rule (b) covers
 an ascending order with a lower bound only, so none of them qualifies in
 Pagination Schemes 0.9.0. Get Guild Join Requests takes `before` and
-`after` but has no documented order. Checked word for word against the raw
+`after` but is undocumented (it is in the pinned OAD only). Checked word for word against the raw
 pages with curl on 2026-10-15, every quote in the overlay matches except
 one: the scheduled-event users' `after` row reads "consider only users
 after given user id" (lowercase), not "Consider ...", and its `limit` row
