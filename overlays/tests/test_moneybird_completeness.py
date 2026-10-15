@@ -2,11 +2,12 @@
 
 It composes with the catalog's Moneybird overlays of the same pin, in either
 order; the result must pass the completeness and collection-read validators
-(with the published crud-causality overlay's known rule-10 warnings), the
-overlay must declare exactly the collections whose resource has an item read
-documented with a 404 (less the two exclusions its header gives), each list
-must still document a default that leaves out existing records or have no
-filter at all, and a missing record is classified as declared. No provider
+(with the published crud-causality overlay's known rule-10 warnings). The
+overlay must declare exactly the five lists that send no filter and leave
+nothing out by default (Collection Completeness §4.2: `removed` "still tells a
+consumer that the list does not filter by default"), every list whose
+documented default leaves out existing records must stay undeclared, and a
+missing record is classified as declared. No provider
 is called. Use --directory for a full-history openapi-directory checkout;
 otherwise the full-SHA source URL is downloaded.
 """
@@ -56,15 +57,30 @@ KNOWN_WARNINGS = {
     "bound nor in a collection's urlTemplate (rule 10, SHOULD)",
 }
 EXCLUDED = {"financial_mutation", "subscription"}
-# Each declared list's documented default that leaves out records that still exist.
-DEFAULTS = {
-    "assets": ("active", True), "products": ("active", True), "projects": ("filter", "state:active"),
-    "recurring_sales_invoices": ("filter", "state:active"), "purchase_transactions": ("filter", "unbatched:true"),
-    "general_documents": ("filter", "period:this_year"), "general_journal_documents": ("filter", "period:this_year"),
-    "purchase_invoices": ("filter", "period:this_year"), "receipts": ("filter", "period:this_year"),
-    "typeless_documents": ("filter", "period:this_year"), "estimates": ("filter", "period:this_year"),
-    "external_sales_invoices": ("filter", "period:this_year"), "sales_invoices": ("filter", "period:this_year"),
-    "time_entries": ("filter", "period:this_year"),
+# The lists that send no filter: only page and per_page, or nothing.
+DECLARED = {("identity", "identities"), ("ledger_account", "ledger_accounts"),
+            ("task_list_template", "task_list_templates"), ("task_list", "task_lists"),
+            ("workflow", "workflows")}
+PAGING = {"page", "per_page"}
+# The lists whose documented default leaves out records that still exist:
+# never declared, since with `removed` every record outside the default would
+# go unconfirmed (the documents' period:this_year on 1 January, say).
+NARROWING = {
+    "asset": ("assets", "active", True),
+    "product": ("products", "active", True),
+    "project": ("projects", "filter", "state:active"),
+    "contact": ("contacts", "include_archived", None),
+    "recurring_sales_invoice": ("recurring_sales_invoices", "filter", "state:active"),
+    "purchase_transaction": ("purchase_transactions", "filter", "unbatched:true"),
+    "general_document": ("general_documents", "filter", "period:this_year"),
+    "general_journal_document": ("general_journal_documents", "filter", "period:this_year"),
+    "purchase_invoice": ("purchase_invoices", "filter", "period:this_year"),
+    "receipt": ("receipts", "filter", "period:this_year"),
+    "typeless_document": ("typeless_documents", "filter", "period:this_year"),
+    "estimate": ("estimates", "filter", "period:this_year"),
+    "external_sales_invoice": ("external_sales_invoices", "filter", "period:this_year"),
+    "sales_invoice": ("sales_invoices", "filter", "period:this_year"),
+    "time_entrie": ("time_entries", "filter", "period:this_year"),
 }
 
 
@@ -102,37 +118,40 @@ class MoneybirdCompletenessTests(unittest.TestCase):
             apply(reordered, overlay)
         self.assertEqual(reordered, self.composed)
 
-    def test_declared_on_exactly_the_collections_with_a_documented_404_read(self):
-        expected = set()
-        for name, resource in self.composed["components"]["crudResources"].items():
-            template = (resource.get("identity") or {}).get("urlTemplate")
-            read = self.original["paths"].get(template, {}).get("get") if template else None
-            if not read or "404" not in read["responses"] or name in EXCLUDED:
-                continue
-            if self.resolve(read["responses"]["404"])["description"] != "Not found":
-                # One read documents its 404 as "Error code"; its resource has no collection.
-                self.assertFalse(resource.get("collections"), name)
-                continue
-            expected.update((name, collection) for collection in resource.get("collections") or {})
+    def query(self, name, collection):
+        path = self.composed["components"]["crudResources"][name]["collections"][collection]["urlTemplate"]
+        parameters = map(self.resolve, self.original["paths"][path]["get"].get("parameters", []))
+        return {p["name"]: p for p in parameters if p["in"] == "query"}
+
+    def test_declared_on_exactly_the_lists_that_do_not_filter(self):
         found = {(name, collection) for name, resource in self.declared.items()
                  for collection in resource["collections"]}
-        self.assertEqual(found, expected)
-        self.assertEqual(len(found), 20)
+        self.assertEqual(found, DECLARED)
+        for name, collection in DECLARED:
+            with self.subTest(collection=collection):
+                # No filter parameter at all: only paging, or nothing.
+                self.assertLessEqual(set(self.query(name, collection)), PAGING)
+                # Each has an item read that documents a 404.
+                template = self.composed["components"]["crudResources"][name]["identity"]["urlTemplate"]
+                self.assertIn("404", self.original["paths"][template]["get"]["responses"])
 
-    def test_the_lists_document_defaults_that_leave_out_existing_records(self):
+    def test_lists_that_leave_out_existing_records_stay_undeclared(self):
         crud_resources = self.composed["components"]["crudResources"]
-        for name, resource in self.declared.items():
-            for collection in resource["collections"]:
-                if collection not in DEFAULTS:
-                    continue
-                parameter, default = DEFAULTS[collection]
-                path = crud_resources[name]["collections"][collection]["urlTemplate"]
-                with self.subTest(collection=collection):
-                    found = {p["name"]: p for p in map(self.resolve, self.original["paths"][path]["get"]["parameters"])}
+        for name, (collection, parameter, default) in NARROWING.items():
+            with self.subTest(collection=collection):
+                found = self.query(name, collection)
+                if default is None:
+                    self.assertIn(parameter, found)  # contacts: archived ones only with include_archived
+                else:
                     self.assertEqual(found[parameter]["schema"]["default"], default)
-        contacts = {p["name"] for p in map(self.resolve,
-                                           self.original["paths"]["/{administration_id}/contacts.json"]["get"]["parameters"])}
-        self.assertIn("include_archived", contacts)
+                self.assertNotIn("x-completeness", crud_resources[name]["collections"][collection])
+        # Every list with a filter parameter is either narrowing or excluded.
+        for name, resource in crud_resources.items():
+            for collection in resource.get("collections") or {}:
+                if (name, collection) in DECLARED or name in EXCLUDED:
+                    continue
+                with self.subTest(other=collection):
+                    self.assertNotIn("x-completeness", resource["collections"][collection])
 
     def test_excluded_collections_stay_undeclared(self):
         resources = self.composed["components"]["crudResources"]

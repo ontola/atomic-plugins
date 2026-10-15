@@ -32,33 +32,50 @@ modeled by this overlay. Source: https://developer.moneybird.com/#throttling
 
 `completeness-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` declares
 [Collection Completeness 0.2.0-draft](../../../../openapi-extensions/spec/collection-completeness/README.md)
-`absent: removed` and `notFound: unavailable` on the 20 collections whose
-resource has an item read documented with a 404. The evidence is the pinned
-document alone; developer.moneybird.com renders client-side and could not be
-read. Absence is `removed` because the lists' own documented defaults leave
-out records that still exist (`filter` defaults `period:this_year`,
-`state:active` and `unbatched:true`; `active` default true for assets and
-products; archived contacts only with `include_archived`), so a record
-absent from a read is settled by its own read. The reads document their 404
-only as "Not found", which does not tell a deleted record from one the
-caller cannot read, so a 404 is `unavailable` rather than the default
-`deleted`. Not declared: `financial_mutations` (capped at 100 with no page
-parameter, so a read is complete only through the range-window overlay, not
-yet on `main`), `subscriptions` (listed per contact through a `contact_id`
-query the collection does not model), the resources without an item read
-(absence could never be settled), `gone` (no 410 documented) and
-`parentAbsent` (no administration resource). Not verified: what any read
-answers for a deleted record. No dated catalog selects it yet.
-`../../../tests/test_moneybird_completeness.py` composes it with the
-catalog's Moneybird overlays in either order, runs both validators, and
-checks which collections are declared, the documented defaults and the
-outcomes `classify_read` gives. No provider was called.
+`absent: removed` and `notFound: unavailable` on the five lists whose read
+sends no filter and leaves nothing out by default: identities,
+ledger_accounts, task_list_templates, task_lists and workflows. §4.2 says
+`removed` "still tells a consumer that the list does not filter by default",
+which holds for these; an absent record may still exist and is settled by its
+own read. The evidence is the pinned document and developer.moneybird.com's
+server-rendered `/api/<resource>` pages, which embed the same OpenAPI and are
+readable with curl: `/api/ledger-accounts` lists "Returns 404 when requesting
+unexisting ledger account" with the ledger account read, and `/api/identities`
+"Returns 404 when identity does not exist" with the identity read. Neither
+says what a deleted record's read answers, nor tells a deleted record from
+one that never existed or that the caller cannot read, so a 404 is
+`unavailable` rather than the default `deleted`.
 
-Not checked here, and worth checking: `all-records-selection.json` sends
-`active: false` on assets, whose parameter reads "Whether to include only
-active assets". For products the document says false includes deactivated
-ones; for assets it does not say whether false means all assets or only
-inactive ones.
+Not declared:
+
+- Lists whose documented default leaves out records that still exist: the
+  documents, estimates, external and sales invoices and time entries
+  (`filter` default `period:this_year`), purchase transactions
+  (`unbatched:true`) and recurring sales invoices (`state:active`). With
+  `removed`, every record outside the default would go unconfirmed and need
+  its own read; on 1 January that is every prior-year record, against a
+  check budget of 50 per sync and 150 requests per 300 s.
+- Assets, products, projects and contacts (`active` default true,
+  `state:active`, archived contacts only with `include_archived`). A
+  crud-causality revision that fixes the widening query as a `listQuery`, as
+  `all-records-selection.json` does, could declare them on that read later.
+- `financial_mutations` (capped at 100 with no page parameter, read by period
+  windows below), `subscriptions` (listed per contact through a `contact_id`
+  query the collection does not model), the resources without an item read,
+  `gone` (no 410 documented) and `parentAbsent` (no administration resource).
+
+Not verified: what any read answers for a deleted record. No dated catalog
+selects it yet. `../../../tests/test_moneybird_completeness.py` composes it
+with the catalog's Moneybird overlays in either order, runs both validators,
+checks that exactly the five unfiltered lists are declared and that every
+narrowing list stays undeclared, and checks the outcomes `classify_read`
+gives. No provider was called.
+
+`all-records-selection.json` sends `active: false` on assets. The parameter
+reads "Whether to include only active assets", and the pinned document's
+example for `false` is named `ReturnsAListOfAllAssets` ("Returns a list of all
+assets", as `/api/assets` shows it), so `false` lists all assets, active and
+inactive.
 
 `pagination-range-window-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml`
 declares `GET /{administration_id}/financial_mutations.json` as a
