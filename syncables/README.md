@@ -1897,14 +1897,22 @@ const { records, ontology, errors } = await readPlatform(document, {
   `{workspaceId}`), giving `{ resource, path, values }`. A time entry with
   `projectId: "p-9"`, read under workspace 42, resolves to
   `/workspaces/42/projects/p-9`. A reference with `required: false` whose
-  field is absent or `null` resolves to nothing; anything else that cannot
-  be filled (a required field absent, a value that is not a string or an
-  integer, a variable missing from `context`, a declaration it cannot
-  read) throws. So does a value, bound or from `context`, that is `.` or
-  `..` (it survives percent-encoding, and `/projects/..` normalises to
-  `/`, another resource) or has leading or trailing whitespace. It
-  asserts identity only: nothing is fetched, and the path need not exist
-  or be readable.
+  field is absent or `null` resolves to nothing, even when a context
+  variable is missing too: bound fields are read first. An empty string
+  is a value, not an absence, and throws whether the reference is
+  required or not. Anything else that cannot be filled throws: a
+  required field absent, a value that is neither a string nor a safe
+  integer (`Number.isSafeInteger`: beyond 2^53 - 1 a parsed number may
+  not be the id the API sent), a variable missing from `context`, or a
+  declaration it cannot read. A declaration it cannot read includes an
+  `identity.urlTemplate` that is not a path starting with one `/` (an
+  absolute URL, a variable in the host): `path` is always relative to
+  the API's server. A value, bound or from `context`, also throws when it
+  is `.` or `..` (it survives percent-encoding, and `/projects/..`
+  normalises to `/`, another resource), has leading or trailing
+  whitespace, contains NUL, or holds a lone surrogate. Other characters
+  are percent-encoded (`/` as `%2F`, `%` as `%25`). It asserts identity
+  only: nothing is fetched, and the path need not exist or be readable.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -2050,8 +2058,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 - **Unreleased**: `resolveReference` (and the `ResolvedReference` type)
   resolves a CRUD Causality §4.1.3 Reference Object for an object: the
   referenced resource's identity path, filled from the object's fields and
-  the request context. A value of `.` or `..`, or one padded with
-  whitespace, throws instead of moving the path. Additive.
+  the request context. A value of `.` or `..`, an empty or
+  whitespace-padded one, one with NUL or a lone surrogate, an integer
+  beyond `Number.MAX_SAFE_INTEGER`, or a target template that is not a
+  path, throws instead of naming another object. Additive.
 - **0.24.0**: CRUD Causality 0.7.0's `replace` and `unkeyedLists` for
   APIs that cannot update an object or give list items no id (see "APIs
   that cannot update"): `replaceOf`, `replaceBlock`, `unkeyedListsOf`,

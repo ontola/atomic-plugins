@@ -33,3 +33,22 @@ differs, for bound fields and context values alike, with a message
 naming the field or variable. `...` and inner spaces or dots still pass.
 Eleven new tests, all failing on the code before. README section and
 changelog, CLAUDE.md.
+
+## Turn 3
+
+**Human (via the coordinator session):** the #611 review. Blockers:
+use `Number.isSafeInteger` (`1e21` bound as `1e%2B21`,
+`9007199254740993` became `...992`); and an optional reference's outcome
+depended on template order (a null `projectId` with no `workspaceId` in
+the context threw instead of giving undefined). Nits: refuse a template
+that is not a path, decide on `''`, wrap a lone surrogate's `URIError`,
+refuse NUL, and add tests for `%2e%2e`, `/`, `?` and `#`.
+
+**Assistant:** Bound fields are now read in a first pass, so an
+optional reference with an absent or null field gives undefined before
+any context variable is looked up. A number must be a safe integer.
+A template must start with exactly one `/`. `''` stays a value, not an
+absence: it throws as "empty", required or not, because the spec names
+only absent and `null`. `segmentProblem` also refuses NUL, and a lone
+surrogate gets a message naming the field or variable. 14 new tests,
+13 of them failing on the code before. README, CLAUDE.md, changelog.

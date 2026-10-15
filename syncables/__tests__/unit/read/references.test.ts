@@ -119,10 +119,60 @@ describe('resolveReference', () => {
     ],
     [
       'an empty string',
+      document({ required: true }),
+      { projectId: '' },
+      { workspaceId: '42' },
+      /projectId is "", empty$/,
+    ],
+    [
+      'an empty string under required: false, which is a value, not an absence',
       document(),
       { projectId: '' },
       { workspaceId: '42' },
-      /not a string or an integer/,
+      /projectId is "", empty$/,
+    ],
+    [
+      'an integer beyond Number.MAX_SAFE_INTEGER',
+      document(),
+      // 9007199254740993 in the API's JSON, which parses to ...992.
+      { projectId: 2 ** 53 + 1 },
+      { workspaceId: '42' },
+      /projectId is 9007199254740992, not a safe integer/,
+    ],
+    [
+      '1e21, which would bind as 1e%2B21',
+      document(),
+      { projectId: 1e21 },
+      { workspaceId: '42' },
+      /projectId is 1e\+21, not a safe integer/,
+    ],
+    [
+      'NaN',
+      document(),
+      { projectId: NaN },
+      { workspaceId: '42' },
+      /projectId is NaN, not a string or an integer/,
+    ],
+    [
+      'a value containing NUL',
+      document(),
+      { projectId: 'p\u00009' },
+      { workspaceId: '42' },
+      /contains NUL$/,
+    ],
+    [
+      'a lone surrogate',
+      document(),
+      { projectId: 'p-\ud800' },
+      { workspaceId: '42' },
+      /projectId is ".*", not well-formed Unicode \(a lone surrogate\)$/,
+    ],
+    [
+      'a lone surrogate from the context',
+      document(),
+      entry,
+      { workspaceId: '\udc00' },
+      /\{workspaceId\} from the request context is ".*", not well-formed Unicode/,
     ],
     [
       'a target without an identity',
@@ -184,6 +234,74 @@ describe('resolveReference', () => {
         { workspaceId: 'a.b c' },
       )?.path,
     ).toBe('/workspaces/a.b%20c/projects/...');
+  });
+
+  it('identifies no object when an optional field is null, whatever the variable order', () => {
+    // {workspaceId} comes first in the template and is missing from the
+    // context; the null projectId still decides.
+    expect(
+      resolveReference(document(), 'timeEntry', 'project', {
+        id: 'te-2',
+        projectId: null,
+      }),
+    ).toBeUndefined();
+    expect(() =>
+      resolveReference(document({ required: true }), 'timeEntry', 'project', {
+        id: 'te-2',
+        projectId: null,
+      }),
+    ).toThrow(/required field projectId is absent/);
+  });
+
+  it('binds the largest safe integer and a negative one', () => {
+    for (const projectId of [Number.MAX_SAFE_INTEGER, -7])
+      expect(
+        resolveReference(
+          document(),
+          'timeEntry',
+          'project',
+          { projectId },
+          { workspaceId: '42' },
+        )?.path,
+      ).toBe(`/workspaces/42/projects/${String(projectId)}`);
+  });
+
+  it('percent-encodes /, ?, # and an already encoded %2e%2e', () => {
+    const path = (projectId: string): string | undefined =>
+      resolveReference(
+        document(),
+        'timeEntry',
+        'project',
+        { projectId },
+        { workspaceId: '42' },
+      )?.path;
+    expect(path('a/b')).toBe('/workspaces/42/projects/a%2Fb');
+    expect(path('a?b')).toBe('/workspaces/42/projects/a%3Fb');
+    expect(path('a#b')).toBe('/workspaces/42/projects/a%23b');
+    expect(path('../x')).toBe('/workspaces/42/projects/..%2Fx');
+    // The % is encoded again, so the segment stays literal `%2e%2e`, not `..`.
+    expect(path('%2e%2e')).toBe('/workspaces/42/projects/%252e%252e');
+  });
+
+  it.each([
+    'https://api.example.com/projects/{projectId}',
+    '{host}/projects/{projectId}',
+    'projects/{projectId}',
+    '//evil.example/projects/{projectId}',
+  ])('refuses the identity.urlTemplate %j', (urlTemplate) => {
+    const doc = document();
+    const crud = (
+      doc.components as {
+        crudResources: { project: { identity: { urlTemplate: string } } };
+      }
+    ).crudResources;
+    crud.project.identity.urlTemplate = urlTemplate;
+    expect(() =>
+      resolveReference(doc, 'timeEntry', 'project', entry, {
+        workspaceId: '42',
+        host: 'h',
+      }),
+    ).toThrow(/is not a path starting with one \//);
   });
 
   it('throws for an unknown resource or reference', () => {
