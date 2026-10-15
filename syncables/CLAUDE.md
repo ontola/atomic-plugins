@@ -132,7 +132,11 @@ Data flows through four stages, each its own directory under `src/`:
    (`ResourceStore` in `store.ts`, one in-memory `Map` per collection path,
    CRUD semantics based on collection vs. item path and HTTP method) or
    falls back to serving the operation's documented example/generated schema
-   response verbatim. Resource collections are lazily seeded with
+   response verbatim. A Pagination Schemes 0.9.0 item-cursor scheme (a
+   query field with `fromLastItem`) is served as the page after the item
+   whose value the request names, with `hasMore`; each generated item gets
+   a unique value at that path (`unit/mock-server/item-cursor.test.ts`).
+   Resource collections are lazily seeded with
    `SEED_COUNT` fake records (via `fake-data/generate.ts`) on first `GET`.
 
 4. **`client/`** — `client.ts` is the browser-safe local-first core, exported

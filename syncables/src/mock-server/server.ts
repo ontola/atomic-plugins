@@ -251,6 +251,19 @@ function handleCollectionRequest(
   sendJson(res, 405, { error: 'Method Not Allowed' });
 }
 
+/** A dot-path's value in an item: own properties, names split on `.`. */
+function itemValue(item: unknown, path: string): unknown {
+  let current: unknown = item;
+  for (const name of path.split('.'))
+    current =
+      current !== null &&
+      typeof current === 'object' &&
+      Object.hasOwn(current, name)
+        ? (current as Record<string, unknown>)[name]
+        : undefined;
+  return current;
+}
+
 function fieldNameForRole(
   scheme: EffectiveScheme['scheme'],
   role: string,
@@ -303,6 +316,12 @@ function handlePaginatedListRequest(
   const { scheme } = effective;
   const responseSchema = responseSchemaFor(operation, [200]);
 
+  // Pagination Schemes 0.9.0 §4.3.3: the query field whose value is a
+  // field of the previous page's last item.
+  const itemCursor = Object.entries(scheme.request?.queryParameters ?? {}).find(
+    ([, field]) => typeof field.fromLastItem === 'string',
+  );
+  const itemPath = itemCursor?.[1].fromLastItem;
   let items = paginatedLists.get(pathTemplate);
   if (!items) {
     const itemSchema = paginationItemSchemaFor(responseSchema, scheme);
@@ -320,6 +339,12 @@ function handlePaginatedListRequest(
         id: randomUUID(),
       };
     });
+    // Each item gets its own value at the item cursor's path too (a
+    // schema's fixed example would repeat it), in list order.
+    if (itemPath && itemPath !== 'id')
+      items.forEach((item, i) =>
+        setNestedField(item, itemPath, `item_${String(i).padStart(6, '0')}`),
+      );
     paginatedLists.set(pathTemplate, items);
   }
 
@@ -338,7 +363,17 @@ function handlePaginatedListRequest(
     : defaultSize;
 
   let offset = 0;
-  if (offsetParam) {
+  if (itemCursor && itemPath) {
+    // After the item whose value the request names; the first page
+    // without one. A value no item has answers an empty page.
+    const after = url.searchParams.get(itemCursor[0]);
+    if (after !== null) {
+      const at = items.findIndex(
+        (item) => String(itemValue(item, itemPath)) === after,
+      );
+      offset = at === -1 ? items.length : at + 1;
+    }
+  } else if (offsetParam) {
     offset = Number(url.searchParams.get(offsetParam) ?? '0');
   } else if (pageParam) {
     const start = pageStart(scheme);
@@ -379,6 +414,9 @@ function handlePaginatedListRequest(
         break;
       case 'totalPages':
         setNestedField(body, path, Math.ceil(items.length / pageSize));
+        break;
+      case 'hasMore':
+        setNestedField(body, path, hasMore);
         break;
       case 'nextPageToken':
       case 'nextCursor':

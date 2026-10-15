@@ -1905,7 +1905,10 @@ const { records, ontology, errors } = await readPlatform(document, {
   only an absent `hasMore` decides nothing). The cursor
   field must be a query parameter or, on a POST, a body field; a header
   field ends the read with an error. The validator checks rules 27 to 29.
-  Not served by the mock server.
+  The mock server serves such a scheme on a GET: the page after the item
+  whose value the request names (the first page without one, an empty
+  last page for a value no item has), with `hasMore` set; each generated
+  item gets its own value at the `fromLastItem` path.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -2048,6 +2051,9 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: The mock server serves a Pagination Schemes 0.9.0
+  item-cursor scheme on a GET (the page after the named item, `hasMore`);
+  before, it read the cursor as an offset and answered an empty page.
 - **Unreleased**: Pagination Schemes 0.9.0: a cursor read from the last
   item (`fromLastItem`, Stripe's `starting_after`) with the `hasMore`
   response role. The validator accepts them under rules 27 to 29 (no
