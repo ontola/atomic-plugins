@@ -503,9 +503,19 @@ into the view root.
     entries 58 ms, 1.11 MB and 907 KB. #97 §7 estimated under 10 ms and
     at most 300 KB / 1 MB, so both are somewhat over. atomic-server's
     JSON extractor limit, read from the pinned source (actix's default
-    `JsonConfig`, 2 MiB; not exercised), would take a 2,000-entry
-    snapshot as one `/app-write` with little room to spare once the JSON
-    text is escaped; snapshots are not split per week yet.
+    `JsonConfig`, 2 MiB; not exercised), takes a 2,000-entry
+    mock-shaped snapshot as one `/app-write`: escaped, it measured
+    1,168,596 bytes, about 56% of the limit (the size budget below). Live
+    entries carry more fields, and snapshots are not split per week yet.
+  - _Size budget_ (`app/snapshotBudget.test.ts`, committed): a first sync
+    of 2,000 mock-shaped entries (40-character descriptions, one tag)
+    over 30 days must keep every log resource, escaped as an `/app-write`
+    body, under 1,835,008 bytes (2 MiB less 256 KiB for the rest of the
+    body). Measured 1,168,596 bytes for the snapshot, the largest, on
+    2026-10-15. A live entry carries more fields (rates, custom field
+    values), so real snapshots are larger; when this fails, the next step
+    is the per-week snapshot split of #123 M5. Timing is printed, not
+    asserted.
 - **Timeline lens** (#123 M2, read-only). Two stages over the mirror, full
   recompute on every build (not measured; #97 §3.2 estimates single-digit
   ms at 2,000 entries):

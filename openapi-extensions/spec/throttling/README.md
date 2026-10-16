@@ -1,6 +1,6 @@
 # OpenAPI Throttling Extension
 
-**Spec version:** 0.5.0-draft
+**Spec version:** 0.5.1-draft
 
 This proposal addresses [issue #13](https://github.com/pondersource/openapi-extensions/issues/13).
 It describes announced API request quotas, the response headers that report
@@ -451,6 +451,20 @@ Signal Object; in particular, a `403` that matches no signal is not
 throttling. When `signals` is absent, this extension says nothing about
 responses other than `429`.
 
+**Cached responses.** Since 0.5.1. A throttling or `blocked` response, and
+the rate-limit headers and body fields of any response, describe the API's
+state when the API sent it. A consumer MUST NOT store a response that it
+classifies as throttling or `blocked` in a cache that answers later requests
+in the API's place, and MUST NOT classify a response such a cache answers (one
+the API did not send for this request) at all: it neither sets an earliest
+retry time, nor pauses a bucket, nor counts as a refusal, and its `retryAfter`
+or `reset` values are not read. A delay counted from a replayed response would
+start at the wrong time, and a stored `blocked` answer would refuse requests
+the API might now accept. The time a consumer measures a delay from is the
+time it received the response from the API (above). An HTTP revalidation that
+the API answers with `304 Not Modified` is a response the API sent, and is
+classified as any other.
+
 `headers` and `signals` are root-level only in this version: an operation's
 `x-throttling` array still selects buckets and nothing else. An API whose
 throttling responses differ per operation is described by the union of its
@@ -632,6 +646,7 @@ API throttling.
 
 ## Changes
 
+- **0.5.1-draft** (2026-10-15): Cached responses: a throttling or `blocked` response is not stored in a cache that answers later requests, and a response such a cache answers is not classified (no retry time, no bucket pause, no refusal). `cacheable` and `classify(..., from_cache=True)` in the validator, and tests. No document changes meaning; the rule binds consumers that cache, such as a caching transport.
 - **0.5.0-draft** (2026-10-13): adds `tiers` to the Limit Object (Plan tiers):
   one bucket whose amount and window depend on the account's plan, as Asana,
   Notion and Clockify document, each tier naming its `plans`. A consumer

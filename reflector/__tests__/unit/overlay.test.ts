@@ -21,17 +21,15 @@ describe('parseTarget', () => {
   });
 
   it('parses quoted bracket paths containing slashes and braces', () => {
-    expect(parseTarget("$.paths['/calendars/{calendarId}/events'].get")).toEqual([
-      'paths',
-      '/calendars/{calendarId}/events',
-      'get',
-    ]);
+    expect(
+      parseTarget("$.paths['/calendars/{calendarId}/events'].get"),
+    ).toEqual(['paths', '/calendars/{calendarId}/events', 'get']);
   });
 });
 
 describe('applyOverlay', () => {
   it('deep-merges update actions and creates missing parents', () => {
-    const doc = { paths: { "/calendars/{calendarId}/events": { get: {} } } };
+    const doc = { paths: { '/calendars/{calendarId}/events': { get: {} } } };
     const overlay: OverlayDocument = {
       overlay: '1.0.0',
       info: { title: 't', version: '1' },
@@ -87,10 +85,15 @@ describe('adaptSchemesForSyncables', () => {
         },
       },
     };
-    const adapted = adaptSchemesForSyncables(doc as never) as unknown as typeof doc;
+    const adapted = adaptSchemesForSyncables(
+      doc as never,
+    ) as unknown as typeof doc;
     const scheme = adapted.components.paginationSchemes.eventSync;
     expect(scheme.type).toBe('pageToken');
-    expect(Object.keys(scheme.request.queryParameters)).toEqual(['maxResults', 'pageToken']);
+    expect(Object.keys(scheme.request.queryParameters)).toEqual([
+      'maxResults',
+      'pageToken',
+    ]);
     expect(Object.keys(scheme.response.bodyFields)).toEqual(['nextPageToken']);
     // The envelope hint is preserved and harmless.
     expect(scheme.response.envelope).toEqual({ itemsField: 'items' });
@@ -202,5 +205,45 @@ describe('pinItemsFields', () => {
     );
     // Nothing is pinned from a refused application.
     expect(properties(doc)).toEqual(['defaultReminders', 'items']);
+  });
+
+  it.each([{ scheme: 'pages' }, 'pages', 3, null])(
+    'refuses an x-pagination that is not an array (%j), as syncables does',
+    (application) => {
+      const doc = documentWith(application);
+      expect(() => pinItemsFields(doc as never)).toThrow(
+        "paths['/events'].get: x-pagination must be an array of Pagination Application Objects",
+      );
+      expect(properties(doc)).toEqual(['defaultReminders', 'items']);
+    },
+  );
+
+  it('skips an operation without x-pagination, and an empty one', () => {
+    for (const application of [undefined, []]) {
+      const doc = documentWith(application);
+      pinItemsFields(doc as never);
+      expect(properties(doc)).toEqual(['defaultReminders', 'items']);
+    }
+  });
+
+  it("applies an override of the envelope's itemsField", () => {
+    const doc = documentWith([
+      {
+        scheme: 'pages',
+        overrides: {
+          response: { envelope: { itemsField: 'defaultReminders' } },
+        },
+      },
+    ]);
+    pinItemsFields(doc as never);
+    expect(properties(doc)).toEqual(['defaultReminders']);
+  });
+
+  it('keeps the scheme’s itemsField under an override of something else', () => {
+    const doc = documentWith([
+      { scheme: 'pages', overrides: { response: { envelope: {} } } },
+    ]);
+    pinItemsFields(doc as never);
+    expect(properties(doc)).toEqual(['items']);
   });
 });
