@@ -786,6 +786,122 @@ test('test-side revoke drops a delegation or a whole connection', async () => {
   }
 });
 
+test('webhook inbox: a runtime of the delegated app subscribes, fetches, acknowledges and reconciles (#369)', async () => {
+  const { base, close } = await start({ platforms: 'pets' });
+
+  try {
+    const id = await connect(base, 'pets');
+    const runtime = await signed(owner, 'POST', `${base}/runtimes`, {
+      body: JSON.stringify({ app: app.agent, agent: node.agent }),
+    });
+    assert.equal(runtime.status, 200);
+
+    const call = async (signer, method, path, body) => {
+      const response = await signed(signer, method, `${base}${path}`, {
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+
+      return [response.status, await response.json()];
+    };
+
+    const subscriptionRequest = {
+      source: 'project',
+      parameters: { id: '1' },
+      events: ['task'],
+    };
+    // Nobody without standing on the connection.
+    assert.deepEqual(
+      (
+        await call(
+          stranger,
+          'POST',
+          `/connections/${id}/subscriptions`,
+          subscriptionRequest,
+        )
+      )[1],
+      { status: 'error', code: 'access-denied' },
+    );
+    const [created, sub] = await call(
+      node,
+      'POST',
+      `/connections/${id}/subscriptions`,
+      subscriptionRequest,
+    );
+    assert.equal(created, 201);
+    assert.equal(sub.state, 'needs-reconciliation');
+    assert.equal(sub.reconciliationRequired.gap.reason, 'initial');
+    const deliver = body =>
+      fetch(`${base}/__mock/inbox/deliver`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }).then(r => r.json());
+    assert.deepEqual(
+      await deliver({
+        connection: id,
+        deliveryId: 'd-1',
+        eventType: 'task',
+        body: '{"id":1}',
+      }),
+      { routed: 1 },
+    );
+    const [, page] = await call(
+      node,
+      'GET',
+      `/subscriptions/${sub.id}/events?wait=0`,
+    );
+    assert.deepEqual(
+      page.events.map(e => [e.deliveryId, e.cursor, e.payload.body]),
+      [['d-1', '1:1', Buffer.from('{"id":1}').toString('base64')]],
+    );
+    assert.equal(page.reconciliationRequired.barrier, '1:0');
+    assert.deepEqual(
+      (
+        await call(node, 'POST', `/subscriptions/${sub.id}/ack`, {
+          generation: 'g0',
+          cursor: '1:1',
+        })
+      )[1],
+      { status: 'error', code: 'obsolete-generation' },
+    );
+    assert.equal(
+      (
+        await call(node, 'POST', `/subscriptions/${sub.id}/ack`, {
+          generation: 'g1',
+          cursor: '1:1',
+        })
+      )[0],
+      200,
+    );
+    const [, done] = await call(
+      node,
+      'POST',
+      `/subscriptions/${sub.id}/reconciled`,
+      {
+        generation: 'g1',
+        barrier: '1:0',
+      },
+    );
+    assert.equal(done.state, 'active');
+    const [, after] = await call(
+      node,
+      'GET',
+      `/subscriptions/${sub.id}/events`,
+    );
+    assert.deepEqual(after.events, []);
+    // A removed delegation stops the runtime at once.
+    await fetch(`${base}/__mock/revoke`, {
+      method: 'POST',
+      body: JSON.stringify({ connection_id: id, agent: app.agent }),
+    });
+    assert.deepEqual(await call(node, 'GET', `/subscriptions/${sub.id}`), [
+      403,
+      { status: 'error', code: 'access-denied' },
+    ]);
+  } finally {
+    await close();
+  }
+});
+
 test('MOCK_PROXY_PLATFORMS restricts the catalog, consent and catalog documents', async () => {
   const warn = console.warn;
   const warnings = [];
@@ -910,6 +1026,35 @@ test('notion: POST list bodies reach the fixture; the cursor travels in the body
       server.fixtures.notion.requests[2].body.start_cursor,
       first.body.next_cursor,
     );
+  } finally {
+    await close();
+  }
+});
+
+test('moneybird: a fixture learns the connection, so its deliberate outage is per connection', async () => {
+  const { base, close } = await start({ platforms: 'moneybird' });
+
+  try {
+    const [a, b] = [
+      frameClient(base, await connect(base, 'moneybird'), 'moneybird'),
+      frameClient(base, await connect(base, 'moneybird'), 'moneybird'),
+    ];
+    const administrations = await (
+      await a('GET', '/api/v2/administrations.json')
+    ).json();
+    const contacts = `/api/v2/${administrations[0].id}/contacts.json?per_page=100`;
+    /** One full read of the contacts through one connection. */
+    const read = async call => [
+      (await call('GET', contacts)).status,
+      (await call('GET', `${contacts}&page=2`)).status,
+    ];
+
+    // Each connection meets the outage at its own second read, whatever
+    // the other read in between (one shared count would fail b's first).
+    assert.deepEqual(await read(a), [200, 200]);
+    assert.deepEqual(await read(b), [200, 200]);
+    assert.deepEqual(await read(b), [200, 503]);
+    assert.deepEqual(await read(a), [200, 503]);
   } finally {
     await close();
   }

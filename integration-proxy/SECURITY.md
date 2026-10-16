@@ -8,8 +8,9 @@ both base64 alphabets, and are canonicalized (`atomic:agent:` + unpadded
 base64url) before any comparison or storage. Weak (small-order) keys are
 refused and signatures are checked with `verify_strict`.
 
-Every request that reads or changes a connection is signed with Atomic's v2
-headers. The message covers the method, the full URL (the configured
+Connection administration uses Atomic v2 signatures. Reads additionally
+accept opt-in, owner-approved device bearer sessions restricted to selected
+connections and read scopes (DEVICE_AUTH.md). The signed message covers the method, the full URL (the configured
 `BASE_URL` plus the path and query as received, never the `Host` header),
 the timestamp and a SHA-256 of the body, under a fixed `atomic-request-v2`
 prefix, so a captured request cannot be replayed with another body, method,
@@ -28,7 +29,8 @@ A connection row holds one provider credential sealed with
 XChaCha20-Poly1305 under `ENCRYPTION_KEY`, with associated data binding the
 envelope to its row id, so an envelope copied into another row does not
 open. The row records its platform and owner. Only the owner (the agent that
-signed `/connect/redeem`) may delete it, delegate it, or list it. A delegation
+signed `/connect/redeem`) may delete it or delegate it. Device sessions may
+list only the connections the owner explicitly approved. A delegation
 names an app agent; a runtime registered by the owner names a node's agent
 that acts for a delegated app. Both are read on every proxied request, so
 revocation is immediate. A connection unused for 90 days is deleted with its
@@ -448,6 +450,69 @@ provider. What it changes for safety:
 - **Fails open.** A malformed or unknown declaration paces nothing; the
   provider's own limit still applies.
 
+## Key rotation (#410, unreleased)
+
+`POST /agents/transfer` moves an owner's connections and runtimes to a new
+agent id and retires the old one (README, routes).
+
+- **Scope: planned rotation only.** The user holds both keys: the old one
+  signs the request, the new one signs the proof. **A lost or compromised
+  key is out of scope.** If the old key is lost, nothing can sign a
+  transfer; if it is compromised, its holder can already use, delegate and
+  delete its connections, and could transfer them first. In both cases:
+  delete the connections (while the key still works) and connect again with
+  the new key. Recovery without the old key is to go through the SaaS
+  account (atomic-saas#138), not through this route.
+- **Both keys agree.** The proof binds the old id, the new id, this proxy's
+  origin and the outer request's timestamp. The outer request is v2 signed,
+  accepted once and within five minutes, so a proof cannot be replayed,
+  used at another proxy, or attached to another request.
+- **Admission.** The old agent passes the access policy as any signer
+  does, and so must the new one before anything moves.
+- **All or nothing, and serialized.** One transaction retires the old id
+  and moves its connections and runtimes; a collision (the new agent already
+  has a runtime with the same agent) undoes all of it, the retirement
+  included. The transaction holds a transaction-scoped advisory lock per
+  owner (`hashtextextended(id, 0)`, both ids, in sorted order) and checks
+  retirement under them. Every write that adds to what an owner holds
+  (a connection at redeem, a runtime, a delegation, which is also bound to
+  the connection's owner) takes the same lock and the same check. So two
+  transfers sharing an id (A→B and B→C on two instances) run one after the
+  other, and a write by the old key either lands before the move, and moves
+  with it, or is refused as retired.
+- **Afterwards.** The old id is refused as an owner everywhere: the access
+  check every signed route makes about the connection owner (or the signer
+  about to become one) refuses a retired id first (`403 agent_retired`).
+  That covers management calls, `/connect/redeem`, transfers (from or to
+  it), `/proxy` requests by any caller of a connection that still names it,
+  and the webhook routes. Capabilities it signed fail at once for moved
+  connections, because the owner key changed. Delegated app agents keep
+  working: delegations name the connection and the app, not the owner.
+- **Webhooks.** While the old agent has a webhook subscription that is not
+  yet closed (live or in cleanup; subscriptions, receipts and usage are
+  keyed by owner), the transfer is refused with `409 transfer_blocked`. The
+  check runs inside the transfer's transaction, after it has taken the old
+  owner's connection rows `FOR UPDATE`; a subscription takes its connection
+  row `FOR SHARE` first, so it either committed before the check or finds
+  the connection moved. The table is checked whenever it exists, so a
+  deployment that turned `WEBHOOKS_ENABLED` off keeps its old subscriptions
+  in mind.
+- **Device sessions** (RFC 8628 CLI logins, DEVICE_AUTH.md) belong to the
+  owner that approved them and do not move with a transfer. Every use of
+  one asks the access check about that owner, so after the transfer they
+  answer `403 agent_retired`; the user approves the CLI again with the new
+  key. Neither key can revoke the old sessions (the owner-signed session
+  routes refuse the retired id, and the new id does not own them), so they
+  stay inert until they expire, at most 30 days after approval; the CLI that
+  holds one can still end it with `/oauth/device/revoke`.
+- **Stranded rows.** With the locks above, no connection should end up
+  owned by a retired id. One that does anyway (written by an older binary
+  during a rolling deploy, which knows nothing of `retired_agents`) is
+  inert: every use is refused, so nothing refreshes its `last_used_at`, and
+  it is deleted after 90 idle days like any other.
+- **Audit.** The `retired_agents` row (old id, successor, time) and a log
+  line with the counts moved, not the ids.
+
 ## Release gate
 
 Provider callback URLs and credential variable names are now deterministic
@@ -652,14 +717,14 @@ generic code.
   Behind a proxy such as Heroku's router, `TRUST_FORWARDED_FOR` must be
   set (`heroku`), or every sender is one network: the router's.
   There is one endpoint-lookup slot. Requests from networks over their
-  limit may wait for it, but at most 2 of them at a time across all such
-  networks; while 2 wait, any further request from a network over its
+  limit may wait for or hold it, but at most 2 of them at a time across all
+  such networks; while 2 do, any further request from a network over its
   limit gets `429` at once. The slot's semaphore is fair, so a released
   slot goes to the requests already waiting in order, and those 2 cannot
   jump ahead of other networks' requests. What holds: a flood from
   networks over their limit cannot hold up deliveries from other networks,
   and a real delivery from a network over its limit still gets through
-  whenever fewer than 2 of its kind are waiting. What remains:
+  whenever fewer than 2 of its kind are waiting for or holding the slot. What remains:
   - A provider whose delivery addresses also carry junk (anyone can point
     the provider's hooks at junk ids, so its network goes over the limit)
     has its real deliveries compete for those 2 places with the junk. Under
@@ -674,3 +739,18 @@ generic code.
 Not yet verified: any real provider's deliveries (only the synthetic
 fixtures), and how the limits behave across several instances (each counts
 its own).
+
+## Local Thought device client sessions
+
+See [DEVICE_AUTH.md](DEVICE_AUTH.md) for the complete #565 contract and limits.
+The opt-in RFC 8628 path authenticates the approving Atomic owner with signed,
+replay-protected challenge and approval requests; a user code or submitted owner
+ID is not authentication. CLI bearer tokens resolve to that same canonical
+owner with an explicit connection/read scope. They never confer owner
+administration. Connections, AccessPolicy and catalog permissions are checked
+live on each request. Device/approval/token secrets are stored as hashes in
+PostgreSQL; grants are single-use and refresh families rotate under row locks.
+Refresh-token reuse revokes the family across instances. The local owner bridge
+is a dogfooding example, not a production login. Device routes omit query strings
+from tracing, and consume bearer headers before the provider request is built.
+No provider credential is returned by device/token/connection-discovery routes.

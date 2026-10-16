@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.8.0: schema, document validator, examples, link resolution and range windows."""
+"""Pagination Schemes 0.10.0: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -6,10 +6,10 @@ import unittest
 import yaml
 from openapi_spec_validator import validate as validate_openapi
 
-from validate import LinkRefused, PageReadError, WindowReadError, halves, page_items, read_offsets, read_pages, read_range, resolve_link, response_incomplete, rfc3986_resolve, validate, window_request
+from validate import LinkRefused, PageReadError, WindowReadError, halves, page_items, read_item_cursor, read_offsets, read_pages, read_range, resolve_link, response_incomplete, rfc3986_resolve, validate, window_request
 
 ROOT = pathlib.Path(__file__).parent
-EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml", "empty-when-absent.yaml", "offset-advance.yaml", "incomplete-marker.yaml")
+EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml", "empty-when-absent.yaml", "offset-advance.yaml", "incomplete-marker.yaml", "item-cursor.yaml", "item-order.yaml")
 
 
 def example(name):
@@ -870,6 +870,243 @@ class IncompleteMarkerTests(unittest.TestCase):
         for name in ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml",
                      "empty-when-absent.yaml", "offset-advance.yaml"):
             validate(example(name))
+
+
+class ItemCursorTests(unittest.TestCase):
+    """0.9.0: a cursor read from the last item (§4.3.3, rules 27-29)."""
+
+    def document(self):
+        return example("item-cursor.yaml")
+
+    def scheme(self, document):
+        return document["components"]["paginationSchemes"]["afterLastObject"]
+
+    def provider(self, total, size=2, has_more=True, key="id"):
+        ids = [f"cus_{i:03d}" for i in range(total)]
+        calls = []
+
+        def request(values):
+            calls.append(values)
+            after = values.get(("queryParameters", "starting_after"))
+            start = ids.index(after) + 1 if after else 0
+            page = [{key: i} for i in ids[start:start + size]]
+            body = {"object": "list", "data": page}
+            if has_more:
+                body["has_more"] = start + size < total
+            return body
+
+        return request, calls
+
+    def test_shape(self):
+        validate(self.document())
+        for mutate in (lambda s: s["request"]["queryParameters"]["limit"].update(fromLastItem="id"),
+                       lambda s: s["request"]["queryParameters"]["starting_after"].update(fromLastItem=""),
+                       lambda s: s["request"]["queryParameters"]["starting_after"].update(fromLastItem="a..b"),
+                       lambda s: s["request"]["queryParameters"]["starting_after"].update(fromLastItem=3),
+                       lambda s: s["response"]["bodyFields"].update(next={"role": "nextCursor"}),
+                       lambda s: s["request"]["queryParameters"].update(
+                           ending_before={"role": "pageToken", "fromLastItem": "id"}),
+                       lambda s: s.update(type="nextLink")):
+            document = self.document()
+            mutate(self.scheme(document))
+            with self.subTest(), self.assertRaises(ValueError):
+                validate(document)
+        # hasMore only in a pageToken scheme.
+        document = example("offset-advance.yaml")
+        for scheme in document["components"]["paginationSchemes"].values():
+            scheme["response"].setdefault("bodyFields", {})["has_more"] = {"role": "hasMore"}
+        with self.assertRaises(ValueError):
+            validate(document)
+        # An override that adds a next token is refused after the merge.
+        document = self.document()
+        document["paths"]["/v1/customers"]["get"]["x-pagination"][0]["overrides"] = {
+            "response": {"bodyFields": {"next": {"role": "nextCursor"}}}}
+        with self.assertRaises(ValueError):
+            validate(document)
+
+    def test_reads_by_the_last_id_and_ends_at_has_more_false(self):
+        request, calls = self.provider(5)
+        result = read_item_cursor(self.scheme(self.document()), request, page_size=2)
+        self.assertEqual(result["cursors"], [None, "cus_001", "cus_003"])
+        self.assertEqual(len(result["items"]), 5)
+        self.assertTrue(result["complete"])
+        self.assertNotIn(("queryParameters", "starting_after"), calls[0])
+        self.assertEqual({c[("queryParameters", "limit")] for c in calls}, {2})
+
+    def test_without_has_more_an_empty_page_ends_it(self):
+        request, calls = self.provider(4, has_more=False)
+        result = read_item_cursor(self.scheme(self.document()), request)
+        self.assertEqual(result["cursors"], [None, "cus_001", "cus_003"])  # the third page is empty
+        self.assertEqual(len(result["items"]), 4)
+        self.assertTrue(result["complete"])
+
+    def test_integer_ids_are_sent_in_decimal(self):
+        scheme = self.scheme(self.document())
+        pages = iter([{"data": [{"id": 7}, {"id": 9}]}, {"data": []}])
+        sent = []
+        result = read_item_cursor(scheme, lambda values: sent.append(values) or next(pages))
+        self.assertEqual(sent[1][("queryParameters", "starting_after")], "9")
+        self.assertTrue(result["complete"])
+
+    def test_errors_end_the_read(self):
+        scheme = self.scheme(self.document())
+        for pages, message in (
+                ([{"data": [{"name": "x"}], "has_more": True}], "no usable id"),
+                ([{"data": [{"id": True}], "has_more": True}], "no usable id"),
+                ([{"data": [{"id": "a"}], "has_more": True}, {"data": [{"id": "b"}, {"id": "a"}], "has_more": True}],
+                 "earlier page"),
+        ):
+            source = iter(pages)
+            with self.subTest(message=message), self.assertRaises(PageReadError) as raised:
+                read_item_cursor(scheme, lambda values: next(source), identity=lambda item: item.get("id"))
+            self.assertIn(message, str(raised.exception))
+        # A server that ignores the cursor repeats the page: an error, not a loop.
+        with self.assertRaises(PageReadError):
+            read_item_cursor(scheme, lambda values: {"data": [{"id": "a"}], "has_more": True},
+                             identity=lambda item: object())
+        request, _ = self.provider(10)
+        with self.assertRaises(PageReadError):
+            read_item_cursor(scheme, request, max_pages=2)
+
+    def test_a_marked_page_is_not_complete(self):
+        scheme = copy.deepcopy(self.scheme(self.document()))
+        scheme["response"]["incomplete"] = {"field": "capped", "equals": True}
+        request, _ = self.provider(5)
+        marked = lambda values: {**request(values), "capped": True}
+        self.assertFalse(read_item_cursor(scheme, marked)["complete"])
+        # Only the first page marked: still not complete.
+        request, calls = self.provider(5)
+        first_only = lambda values: {**request(values), "capped": len(calls) == 1}
+        result = read_item_cursor(scheme, first_only)
+        self.assertEqual(len(result["items"]), 5)
+        self.assertFalse(result["complete"])
+
+    def test_an_empty_page_with_has_more_true_is_an_error(self):
+        scheme = self.scheme(self.document())
+        pages = iter([{"data": [{"id": "a"}], "has_more": True}, {"data": [], "has_more": True}])
+        with self.assertRaises(PageReadError) as raised:
+            read_item_cursor(scheme, lambda values: next(pages))
+        self.assertIn("hasMore true", str(raised.exception))
+        # Without has_more, an empty page ends it complete.
+        pages = iter([{"data": [{"id": "a"}]}, {"data": []}])
+        self.assertTrue(read_item_cursor(scheme, lambda values: next(pages))["complete"])
+
+    def test_a_has_more_that_is_not_a_boolean_is_an_error(self):
+        scheme = self.scheme(self.document())
+        for value in ("false", "true", 0, 1, None, []):
+            pages = iter([{"data": [{"id": "a"}], "has_more": value}, {"data": []}])
+            with self.subTest(value=value), self.assertRaises(PageReadError) as raised:
+                read_item_cursor(scheme, lambda values: next(pages))
+            self.assertIn("not a boolean", str(raised.exception))
+        # Absent is still fine.
+        pages = iter([{"data": [{"id": "a"}]}, {"data": []}])
+        self.assertTrue(read_item_cursor(scheme, lambda values: next(pages))["complete"])
+
+    def test_floats_are_refused_and_items_without_an_id_use_the_whole_item(self):
+        scheme = self.scheme(self.document())
+        pages = iter([{"data": [{"id": 1.5}], "has_more": True}])
+        with self.assertRaises(PageReadError):
+            read_item_cursor(scheme, lambda values: next(pages))
+        # The default identity does not need an id field: no KeyError.
+        scheme = copy.deepcopy(scheme)
+        scheme["request"]["queryParameters"]["starting_after"]["fromLastItem"] = "key"
+        pages = iter([{"data": [{"key": "a"}, {"key": "b"}]}, {"data": []}])
+        self.assertTrue(read_item_cursor(scheme, lambda values: next(pages))["complete"])
+
+    def test_rules_28_and_29_review(self):
+        for mutate in (lambda s: s["response"]["bodyFields"].update(next={"role": "nextLink"}),
+                       lambda s: s["response"].update(headers={"X-Has-More": {"role": "hasMore"}})):
+            document = self.document()
+            mutate(self.scheme(document))
+            with self.subTest(), self.assertRaises(ValueError):
+                validate(document)
+        # hasMore without fromLastItem, even in a pageToken scheme.
+        document = self.document()
+        del self.scheme(document)["request"]["queryParameters"]["starting_after"]["fromLastItem"]
+        with self.assertRaises(ValueError) as raised:
+            validate(document)
+        self.assertIn("rule 29", str(raised.exception))
+
+    def test_0_8_documents_stay_valid(self):
+        for name in ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml",
+                     "empty-when-absent.yaml", "offset-advance.yaml", "incomplete-marker.yaml"):
+            validate(example(name))
+
+
+
+class ItemOrderTests(unittest.TestCase):
+    """0.10.0: order beside fromLastItem (§4.3.3, rule 30)."""
+
+    def document(self):
+        return example("item-order.yaml")
+
+    def scheme(self, document=None):
+        return (document or self.document())["components"]["paginationSchemes"]["beforeLastMessage"]
+
+    def test_shape(self):
+        validate(self.document())
+        for mutate in (lambda f: f.update(order="newest"),
+                       lambda f: f.pop("fromLastItem")):
+            document = self.document()
+            mutate(self.scheme(document)["request"]["queryParameters"]["before"])
+            with self.subTest(), self.assertRaises(ValueError):
+                validate(document)
+        document = self.document()
+        self.scheme(document)["request"]["queryParameters"]["limit"]["order"] = "ascending"
+        with self.assertRaises(ValueError):
+            validate(document)
+
+    def pages(self, *pages):
+        source = iter(list(pages) + [[]])
+        return lambda values: next(source)
+
+    def test_descending_snowflakes_read_newest_to_oldest(self):
+        request = self.pages([{"id": "1300000000000000010"}, {"id": "1300000000000000009"}],
+                             [{"id": "999999999999999999"}])  # fewer digits, still smaller as a number
+        result = read_item_cursor(self.scheme(), request)
+        self.assertEqual(result["cursors"], [None, "1300000000000000009", "999999999999999999"])
+        self.assertTrue(result["complete"])
+
+    def test_out_of_order_ends_the_read(self):
+        for pages in (([{"id": "10"}, {"id": "11"}],),                    # within a page
+                      ([{"id": "10"}, {"id": "9"}], [{"id": "9"}]),       # equal across pages (not strict)
+                      ([{"id": "10"}], [{"id": "12"}])):                  # across pages
+            with self.subTest(pages=pages), self.assertRaises(PageReadError) as raised:
+                read_item_cursor(self.scheme(), self.pages(*pages), identity=lambda item: object())
+            self.assertIn("out of descending order", str(raised.exception))
+
+    def test_values_that_cannot_be_ordered(self):
+        for pages in (([{"id": "10"}, {"id": "abc"}],), ([{"id": "10"}, {"id": "-1"}],), ([{"id": -1}],),
+                      ([{"id": 1.5}],), ([{"id": True}],)):
+            with self.subTest(pages=pages), self.assertRaises(PageReadError):
+                read_item_cursor(self.scheme(), self.pages(*pages), identity=lambda item: object())
+
+    def test_numbers_compare_exactly_and_mix_with_digit_strings(self):
+        scheme = copy.deepcopy(self.scheme())
+        scheme["request"]["queryParameters"]["before"]["order"] = "ascending"
+        # An integer beside a digit string compares as a number.
+        self.assertTrue(read_item_cursor(scheme, self.pages([{"id": "9"}, {"id": 10}]))["complete"])
+        with self.assertRaises(PageReadError):
+            read_item_cursor(scheme, self.pages([{"id": 10}, {"id": "9"}]), identity=lambda item: object())
+        # Exact beyond 2**53, and leading zeros do not count.
+        big = 2 ** 63
+        self.assertTrue(read_item_cursor(scheme, self.pages([{"id": str(big)}, {"id": str(big + 1)}]))["complete"])
+        with self.assertRaises(PageReadError):  # "010" equals "10": not strictly ascending
+            read_item_cursor(scheme, self.pages([{"id": "10"}, {"id": "010"}]), identity=lambda item: object())
+
+    def test_text_values_compare_by_code_point_and_ascending_works(self):
+        scheme = copy.deepcopy(self.scheme())
+        scheme["request"]["queryParameters"]["before"]["order"] = "ascending"
+        result = read_item_cursor(scheme, self.pages([{"id": "a1"}, {"id": "a2"}], [{"id": "b"}]))
+        self.assertTrue(result["complete"])
+        self.assertEqual(len(result["items"]), 3)
+        # Without order nothing is checked.
+        del scheme["request"]["queryParameters"]["before"]["order"]
+        self.assertTrue(read_item_cursor(scheme, self.pages([{"id": "b"}, {"id": "a"}]))["complete"])
+
+    def test_0_9_documents_stay_valid(self):
+        validate(example("item-cursor.yaml"))
+
 
 
 if __name__ == "__main__":

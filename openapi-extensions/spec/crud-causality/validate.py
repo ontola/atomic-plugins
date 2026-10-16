@@ -1,4 +1,4 @@
-"""Validate CRUD Causality 0.6.0 documents: every rule of §8 (1-26).
+"""Validate CRUD Causality 0.7.0 documents: every rule of §8 (1-29).
 
 `validate(document, warnings)` raises ValueError listing every violation it
 finds and returns None for a valid document; the SHOULD rules (6, 10, 13
@@ -11,11 +11,15 @@ validation is separate.
 read's first page sends (§4.2.1, steps 1-3), as a reference for consumers.
 `compound_create(document, crud, planned, send_create, send_follow_up, ...)` makes a
 compound create as §4.7.2 says (`continue_compound_create` resumes one), and `validate` checks its `followUps`.
+`replace_block(replace, obj)` is the Block Object a replacement stops on (§4.8),
+and `pair_items(unkeyed, baseline, now)` pairs the items of a list without
+item identity (§4.9.2).
 """
 import copy
 import json
 import re
 import sys
+import unicodedata
 from urllib.parse import quote, unquote
 
 METHODS = ("get", "put", "post", "delete", "options", "head", "patch", "trace")
@@ -470,6 +474,7 @@ def validate(document, warnings=None):
                 errors.append(f"{where}.resource: {crud.get('resource')!r} is not a crudResources key (rule 2)")
                 continue
             errors += _follow_up_errors(document, crud, where, item, operation)
+            errors += _committed_error_errors(crud, where, resource)
             if crud.get("action") != "list":
                 continue
             collection = (resource.get("collections") or {}).get(crud.get("collection"))
@@ -482,8 +487,175 @@ def validate(document, warnings=None):
             expected = str(effective(collection)[0]).lower()
             if isinstance(template, str) and (template != path or expected != method):
                 errors.append(f"{where}: collection {crud['collection']} is read at {expected.upper()} {template}")
+    errors += _replace_errors(document, resources)
     if errors:
         raise ValueError("\n".join(errors))
+
+
+BLOCK_WHEN = ("present", "nonEmpty")
+
+
+def _crud_actions(document):
+    """{resource name: set of x-crud actions naming it}."""
+    found = {}
+    for item in (document.get("paths") or {}).values():
+        item = _resolve(document, item)
+        if not isinstance(item, dict):
+            continue
+        for method in METHODS:
+            operation = item.get(method)
+            crud = operation.get("x-crud") if isinstance(operation, dict) else None
+            if isinstance(crud, dict) and isinstance(crud.get("resource"), str):
+                found.setdefault(crud["resource"], set()).add(crud.get("action"))
+    return found
+
+
+def _replace_errors(document, resources):
+    """Rules 27-29: `replace` (§4.8) and `unkeyedLists` (§4.9)."""
+    errors = []
+    actions = _crud_actions(document)
+    for name, resource in resources.items():
+        if not isinstance(resource, dict):
+            continue
+        where = f"crudResources.{name}"
+        if "replace" in resource:
+            replace = resource["replace"]
+            named = actions.get(name, set())
+            if "create" not in named or "delete" not in named:
+                errors.append(f"{where}.replace: needs an x-crud create and delete of {name} (rule 27)")
+            if "update" in named:
+                errors.append(f"{where}.replace: {name} has an x-crud update (rule 27)")
+            if not isinstance(replace, dict):
+                errors.append(f"{where}.replace: expected an object (§4.8.1)")
+                replace = {}
+            blocks = replace.get("blockedBy", [])
+            if not isinstance(blocks, list):
+                errors.append(f"{where}.replace.blockedBy: expected an array (rule 28)")
+                blocks = []
+            for index, block in enumerate(blocks):
+                at = f"{where}.replace.blockedBy[{index}]"
+                if not isinstance(block, dict):
+                    errors.append(f"{at}: expected an object (rule 28)")
+                    continue
+                if not _well_formed_path(block.get("field")):
+                    errors.append(f"{at}.field: expected a dot-path (rule 28)")
+                if "when" in block and block["when"] not in BLOCK_WHEN:
+                    errors.append(f"{at}.when: expected present or nonEmpty (rule 28)")
+                if "moreThan" in block:
+                    count = block["moreThan"]
+                    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+                        errors.append(f"{at}.moreThan: expected an integer >= 0 (rule 28)")
+                    if "when" in block:
+                        errors.append(f"{at}: moreThan is not given with when (rule 28)")
+                if "except" in block:
+                    if not isinstance(block["except"], dict):
+                        errors.append(f"{at}.except: expected an object (rule 28)")
+                    if "moreThan" not in block:
+                        errors.append(f"{at}.except: only with moreThan (rule 28)")
+        if "unkeyedLists" in resource:
+            lists = resource["unkeyedLists"]
+            if not isinstance(lists, dict):
+                errors.append(f"{where}.unkeyedLists: expected an object (rule 29)")
+                continue
+            for key, spec in lists.items():
+                at = f"{where}.unkeyedLists.{key}"
+                if not _well_formed_path(key):
+                    errors.append(f"{at}: the key is not a dot-path (rule 29)")
+                if not isinstance(spec, dict):
+                    errors.append(f"{at}: expected an object (rule 29)")
+                    continue
+                match = spec.get("match")
+                if (not isinstance(match, list) or not match
+                        or not all(_well_formed_path(m) for m in match) or len(set(match)) != len(match)):
+                    errors.append(f"{at}.match: expected a nonempty array of distinct dot-paths (rule 29)")
+                    match = []
+                if "children" in spec:
+                    if not _well_formed_path(spec["children"]):
+                        errors.append(f"{at}.children: expected a dot-path (rule 29)")
+                    elif spec["children"] in match:
+                        errors.append(f"{at}.children: is also a match field (rule 29)")
+    return errors
+
+
+_ABSENT = object()
+
+
+def _at(value, path):
+    for segment in dot_path(path):
+        if not isinstance(value, dict) or segment not in value:
+            return _ABSENT
+        value = value[segment]
+    return value
+
+
+def replace_block(replace, obj):
+    """The first Block Object of a Replace Object (§4.8.2) that matches `obj`, or None: replace only on None."""
+    for block in (replace or {}).get("blockedBy", []):
+        value = _at(obj, block["field"])
+        if "moreThan" in block:
+            if not isinstance(value, list):
+                continue
+            skip = block.get("except") or {}
+            counted = [item for item in value
+                       if not (skip and isinstance(item, dict) and all(item.get(k) == v for k, v in skip.items()))]
+            if len(counted) > block["moreThan"]:
+                return block
+            continue
+        if value is _ABSENT or value is None:
+            continue
+        if block.get("when", "present") == "present":
+            return block
+        if isinstance(value, (list, dict, str)) and len(value):
+            return block
+    return None
+
+
+def _flatten(items, children):
+    out = []
+    for item in items or []:
+        out.append(item)
+        if children:
+            kids = _at(item, children)
+            out.extend(kids if isinstance(kids, list) else [])
+    return out
+
+
+def pair_items(unkeyed, baseline, now):
+    """§4.9.2: for each item of `now`, flattened, the index of its baseline item (flattened), or None."""
+    match, children = unkeyed["match"], unkeyed.get("children")
+    base, current = _flatten(baseline, children), _flatten(now, children)
+    out = [None] * len(current)
+    taken = set()
+
+    def same(fields):
+        def test(b, n):
+            return all(_at(b, f) == _at(n, f) for f in fields)
+        return test
+
+    for test in (same(match), same(match[:1])):
+        for ni, item in enumerate(current):
+            if out[ni] is not None:
+                continue
+            best = None
+            for bi, candidate in enumerate(base):
+                if bi in taken or not test(candidate, item):
+                    continue
+                if best is None or abs(bi - ni) < abs(best - ni):
+                    best = bi
+            if best is not None:
+                out[ni] = best
+                taken.add(best)
+    for ni in range(len(current)):
+        if out[ni] is not None:
+            continue
+        before = next((out[p] for p in range(ni - 1, -1, -1) if out[p] is not None), -1)
+        after = next((out[n] for n in range(ni + 1, len(current)) if out[n] is not None), len(base))
+        for bi in range(before + 1, after):
+            if bi not in taken:
+                out[ni] = bi
+                taken.add(bi)
+                break
+    return out
 
 
 FOLLOW_UP_FIELDS = {"field", "create", "itemKey", "operation", "bind", "description"}
@@ -536,6 +708,46 @@ def _bind_key(key):
     """(kind, name) of a bind key, the header name lower-cased."""
     kind, _, name = key.partition(".")
     return kind, name.lower() if kind == "header" else name
+
+
+def _committed_error_errors(crud, where, resource):
+    """Rules 30-32 (0.8.0)."""
+    if "committedErrors" not in crud:
+        return []
+    if crud.get("action") != "create":
+        return [f"{where}.committedErrors: allowed only on action create (rule 30)"]
+    if "followUps" in crud:
+        return [f"{where}.committedErrors: not allowed with followUps (rule 32)"]
+    entries = crud["committedErrors"]
+    if not isinstance(entries, list) or not entries:
+        return [f"{where}.committedErrors: expected a nonempty array (rule 30)"]
+    template = (resource.get("identity") or {}).get("urlTemplate")
+    variables = set(VARIABLE.findall(template)) if isinstance(template, str) else set()
+    errors = []
+    for index, entry in enumerate(entries):
+        at = f"{where}.committedErrors[{index}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{at}: expected an object (rule 31)")
+            continue
+        unknown = {k for k in entry if k not in ("status", "identity", "description") and not str(k).startswith("x-")}
+        if unknown:
+            errors.append(f"{at}: unknown fields {sorted(unknown)} (rule 31)")
+        status = entry.get("status")
+        if not (isinstance(status, list) and status and len(set(map(repr, status))) == len(status)
+                and all(type(s) is int and 500 <= s <= 599 for s in status)):
+            errors.append(f"{at}.status: expected unique integer statuses 500-599 (rule 31)")
+        identity = entry.get("identity")
+        if not isinstance(identity, dict) or not identity:
+            errors.append(f"{at}.identity: expected a nonempty object (rule 31)")
+            continue
+        for variable, path in identity.items():
+            if variable not in variables:
+                errors.append(f"{at}.identity.{variable}: not a variable of identity.urlTemplate (rule 31)")
+            if not _well_formed_path(path):
+                errors.append(f"{at}.identity.{variable}: expected a dot-path (rule 31)")
+        if "description" in entry and not isinstance(entry["description"], str):
+            errors.append(f"{at}.description: expected a string (rule 31)")
+    return errors
 
 
 def _follow_up_errors(document, crud, where, create_item, create_operation):
@@ -701,6 +913,39 @@ def created_identity(document, crud, created, headers=None, sent=None):
             return None
         values[binding.get("field")] = value
     return values
+
+
+def committed_identity(document, crud, status, body):
+    """§4.3.3 (0.8.0): {identity variable: value} from an error response that says the create was applied, else None.
+
+    `status` is the response status and `body` its parsed JSON body (None when
+    it is not JSON). Unlike `created_identity`, which returns {object field:
+    value}, this returns {identity template variable: value}, the identity
+    map's keys. Values are strings: a non-empty string without surrounding
+    whitespace, `/`, `?`, `#` or a control character, and not `.` or `..`, or
+    a non-negative integer in decimal form; anything else leaves the
+    entry unmatched. None means the response matches no Committed Error
+    Object: the outcome stays unknown.
+    """
+    if crud.get("action") != "create" or not isinstance(body, (dict, list)):
+        return None
+    for entry in crud.get("committedErrors") or []:
+        if not isinstance(entry, dict) or status not in (entry.get("status") or []):
+            continue
+        values = {}
+        for variable, path in (entry.get("identity") or {}).items():
+            value = get_path(body, path)
+            usable = (isinstance(value, int) and not isinstance(value, bool) and value >= 0) or (
+                isinstance(value, str) and value != "" and value == value.strip()
+                and value not in (".", "..") and not set(value) & set("/?#")
+                and not any(unicodedata.category(c) == "Cc" for c in value))
+            if not usable:
+                values = None
+                break
+            values[variable] = str(value) if isinstance(value, int) else value
+        if values:
+            return values
+    return None
 
 
 def missing_value(follow_up, planned, created):

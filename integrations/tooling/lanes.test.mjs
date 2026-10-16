@@ -224,6 +224,7 @@ test('the shared route-install e2e helper is listed by exactly the lanes that im
   const expected = [
     'atproto',
     'fediverse',
+    'issue-tracker',
     'open-cloud-mesh',
     'remotestorage',
     'solid',

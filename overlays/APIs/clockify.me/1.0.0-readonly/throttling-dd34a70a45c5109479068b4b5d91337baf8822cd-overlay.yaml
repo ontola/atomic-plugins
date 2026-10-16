@@ -1,0 +1,47 @@
+# Reviewed 2026-10-14 against the pinned OAD and official provider documentation; no live calls.
+# Source: https://clockify.me/help/getting-started/webhook-and-api-limitations (API limits):
+#   "Newly created workspaces on the Free plan are restricted to 30 API requests per hour for
+#   the entire workspace. Workspaces on any paid plan maintain the standard limit of 50 requests
+#   per second."
+# The Free tier holds for newly created Free workspaces; the page does not say what applies to
+# an older Free workspace, or to a trial. A consumer that is not told the workspace's plan, or is
+# told a plan name no tier names (a trial, say), falls back to the default: it keeps within both
+# tiers at once, 30 per hour and 50 per second.
+# docs.clockify.me's Rate limiting section documents only the add-on limit ("50 requests per
+# second (by addon on one workspace) when accessed using X-Addon-Token"), which the catalog's
+# X-Api-Key credential does not use. No per-API-key limit is documented; none is declared.
+# No signal or header either: neither page names a status code, a Retry-After or rate-limit
+# headers. The only error text either page gives is the add-on limit's: exceeding it "will result
+# in an error message with the description "Too many requests"", which does not say what the
+# X-Api-Key limits answer.
+# (Revised before publication: an earlier draft quoted per-plan X-Api-Key limits for
+# docs.clockify.me that the page does not contain.)
+# Needs Throttling 0.5.0-draft (openapi-extensions/spec/throttling: tiers).
+overlay: 1.0.0
+info:
+  title: Clockify API throttling
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dd34a70a45c5109479068b4b5d91337baf8822cd/APIs/clockify.me/1.0.0-readonly/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        limits:
+          perWorkspace:
+            partitionBy: [account]
+            description: >-
+              "for the entire workspace": counted per Clockify workspace (the
+              account here), by the workspace's plan. The counting algorithm
+              is not documented.
+            tiers:
+              - plans: [Free]
+                requests: 30
+                window: { seconds: 3600, kind: unspecified }
+                description: >-
+                  "Newly created workspaces on the Free plan"; what applies
+                  to an older Free workspace is not documented.
+              - plans: [Paid]
+                requests: 50
+                window: { seconds: 1, kind: unspecified }
+                description: '"Workspaces on any paid plan".'
+        applies: [perWorkspace]

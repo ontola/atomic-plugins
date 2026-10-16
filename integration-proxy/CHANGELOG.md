@@ -5,8 +5,38 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
 ## Unreleased
 
-`Config` gains a public field (`webhooks`), a breaking change under Cargo's
-0.x semver rules, so the next release is 0.4.0.
+- Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
+  paced at the tier whose `plans` name the plan the catalog selection's
+  `throttlingPlans` gives for it, else within every tier at once (each its
+  own count). Unknown entries are logged at load and ignored.
+- Key rotation (#410): `POST /agents/transfer`, signed by the old agent with
+  a proof by the new one, moves the old agent's connections and runtimes to
+  the new id in one transaction and retires the old id (new `retired_agents`
+  table). Planned rotation only; a lost or compromised key is out of scope
+  (SECURITY.md, "Key rotation"). New errors `invalid_transfer_proof`,
+  `agent_retired`, `transfer_blocked`, `transfer_conflict`. The transfer, and
+  every write that adds a connection, runtime or delegation, run in a
+  transaction under per-owner advisory locks; the access check refuses a
+  retired owner on every route. Device sessions (0.4.0) are not moved: they
+  answer `agent_retired` until they expire, and the user approves the CLI
+  again with the new key. **Rolling deploys and downgrades:** a binary
+  older than this one ignores `retired_agents` and takes no owner lock, so
+  while one runs it serves a retired owner and can race a transfer. Finish a
+  rolling deploy before relying on transfers, and expect a downgrade to
+  re-admit retired ids (the table is left in place and is honoured again on
+  upgrade).
+
+## 0.4.0 (2026-10-13)
+
+- Opt-in OAuth device authorization for public CLI clients (#565), with Atomic
+  owner-signed browser approval, explicitly selected connections and read scopes,
+  PostgreSQL single-use grants, short-lived opaque access tokens, rotating refresh
+  families with reuse revocation, and signed per-session owner revocation. See
+  DEVICE_AUTH.md for the contract and examples. Device clients and an owner
+  approval hub must be configured to enable it.
+
+`Config` gains public fields (`webhooks`, `device`), a breaking change under Cargo's
+0.x semver rules, so this release is 0.4.0.
 
 - Pacing under provider quotas (docs/design/pieces.md P4): for `x-throttling`
   buckets partitioned by `sourceIp` or by nothing, with at most 10,000

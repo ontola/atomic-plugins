@@ -13,6 +13,7 @@ pub fn state(security: Option<crate::security::Security>) -> AppState {
         base_url: BASE_URL.into(),
         public_origin: PUBLIC_ORIGIN.into(),
         catalog: crate::catalog::Catalog::for_test("github-issues"),
+        device: Default::default(),
         security,
         access: std::sync::Arc::new(crate::access::AllowAll),
         operator: crate::templates::Operator::new(
@@ -101,7 +102,7 @@ fn build(
 
 /// Distinct per call, so two otherwise identical requests signed in the same
 /// millisecond are not mistaken for a replay of each other.
-fn unique_now_ms() -> u64 {
+pub fn unique_now_ms() -> u64 {
     static OFFSET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     crate::now_ms() - 60_000 + OFFSET.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % 60_000
 }
