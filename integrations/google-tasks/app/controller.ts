@@ -22,7 +22,12 @@ import {
   provision,
   recordChosenLists,
 } from './drive.js';
-import { GoogleError, GoogleRateLimited } from './read.js';
+import {
+  GoogleError,
+  GoogleRateLimited,
+  GoogleRefused,
+  type Refusal,
+} from './read.js';
 import type { PluginStore } from './store.js';
 import {
   listTasks,
@@ -85,6 +90,8 @@ export type ViewState =
       /** Google's HTTP status, when the error was its answer. */
       status?: number;
       rateLimited?: RateLimited;
+      /** A refusal no wait or reconnect fixes (0.1.1); never retried. */
+      refusal?: Refusal;
       connection?: Connection;
     } & Listed);
 
@@ -454,6 +461,7 @@ export function createController(
           message: message(error),
           at,
           ...status,
+          ...(error instanceof GoogleRefused ? { refusal: error.refusal } : {}),
           ...rows,
         });
       }

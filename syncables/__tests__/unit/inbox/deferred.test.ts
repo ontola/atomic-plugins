@@ -220,6 +220,54 @@ describe("InboxConsumer with acknowledge: 'next-step'", () => {
     ).toEqual(['subscription-events-limit']);
   });
 
+  it('reports nothing while reconcile answers pending, and reports once it completes', async () => {
+    const inbox = new FakeInbox();
+    const journal = new StagedJournal();
+    let done = false;
+    const asked: string[] = [];
+    const consumer = new InboxConsumer({
+      client: new InboxClient('https://proxy.example', inbox.transport),
+      journal,
+      subscription: {
+        connection: 'c-1',
+        source: 'project',
+        parameters: {},
+        events: ['task'],
+      },
+      // The full read runs as separate work; it is done when `done` is set.
+      reconcile: async (reason, required): Promise<void | 'pending'> => {
+        asked.push(`${reason} ${required.barrier}`);
+        return done ? undefined : 'pending';
+      },
+      now: (): number => inbox.now,
+      acknowledge: 'next-step',
+      wait: 0,
+    });
+    await consumer.step();
+    await journal.commit();
+    inbox.deliver('d-1');
+    expect(await consumer.step()).toEqual({
+      kind: 'reconciling',
+      reason: 'initial',
+    });
+    await journal.commit();
+    expect(journal.durable.stored?.unconfirmedReconciliation).toBeUndefined();
+    expect(inbox.requests.some((r) => r.endsWith('/reconciled'))).toBe(false);
+    // Events keep being journaled meanwhile.
+    expect(journal.durable.events.map((e) => e.deliveryId)).toEqual(['d-1']);
+    done = true;
+    expect(await consumer.step()).toEqual({
+      kind: 'reconciled',
+      reason: 'initial',
+    });
+    await journal.commit();
+    await consumer.step();
+    expect(inbox.subs.get('sub-1')!.needsReconciliation).toBe(false);
+    // The same gap each time, so a host can key its work on it.
+    expect(new Set(asked).size).toBe(1);
+    expect(journal.durable.gaps).toHaveLength(1);
+  });
+
   it('drops a reconciliation whose barrier moved, and reconciles again', async () => {
     const { inbox, journal, consumer, reconciles } = setup();
     await consumer.step();
