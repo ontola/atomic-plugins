@@ -104,7 +104,7 @@ describe('worked on P over [a, b) (§3.3)', () => {
     expect(brief(steps)).toEqual(['create 1-2']);
     expect(steps[0]).toMatchObject({
       values: {
-        name: 'Time entry',
+        name: '',
         billable: true,
         projectId: P,
         project: PROJECT.name,
