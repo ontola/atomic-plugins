@@ -121,7 +121,7 @@ const NO_CHANGES: ChangesState = { review: [], providerWon: [], recovered: [] };
 function sampleChanges(sheet: Timesheet): ChangesState {
   const [first, second] = sheet.entries;
   const values = (e: Timesheet['entries'][number]): EntryValues => ({
-    name: e.description || 'Time entry',
+    name: e.description,
     start: e.start,
     end: e.end,
     billable: e.billable,
