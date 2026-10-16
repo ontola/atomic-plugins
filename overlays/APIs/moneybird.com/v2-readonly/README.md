@@ -137,6 +137,28 @@ example for `false` is named `ReturnsAListOfAllAssets` ("Returns a list of all
 assets", as `/api/assets` shows it), so `false` lists all assets, active and
 inactive.
 
+`crud-causality-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml` is v1
+plus a fixed read ([CRUD Causality 0.4.0](../../../../openapi-extensions/spec/crud-causality/README.md)
+`listQuery`, §4.2.1) on the four lists that narrow by default, with exactly
+the values `all-records-selection.json` passes as consumer configuration:
+assets and products `active=false`, contacts `include_archived=true`,
+projects `filter=state:all`. From the server-rendered pages: `/api/assets`
+"Whether to include only active assets" (default true; the example for
+`false` is named "Returns a list of all assets"), `/api/products` "When true,
+only active products are returned. Set to false to include deactivated
+products.", `/api/projects` "Any filter you pass replaces the defaults below
+entirely, so include every key you need." with `state` taking "all, active or
+archived.". `/api/contacts` gives `include_archived` no description: that
+`true` lists archived contacts as well as the others is inferred from its
+name, not documented. `completeness-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml`
+keeps v1's five declarations and adds the same `absent: removed` and
+`notFound: unavailable` on those four, composed after crud-causality v2 (not
+v1, whose reads of them narrow). Neither is selected by a dated catalog.
+`../../../tests/test_moneybird_widened_reads.py` checks that v2 is v1 plus
+those list queries, that each names a parameter the list declares, that
+completeness v2 is v1 plus the four, that every declared list reads without
+a narrowing default, and both validators. No provider was called.
+
 `pagination-range-window-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml`
 declares `GET /{administration_id}/financial_mutations.json` as a
 [Pagination Schemes 0.5.0](../../../../openapi-extensions/spec/pagination-schemes/README.md#46-range-windows)
