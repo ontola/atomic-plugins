@@ -42,7 +42,7 @@ server with builds").
 Say in the PR which row applies. CI's tooling unit tests rebuild every
 user-testing module and fail when one differs from what its version was
 recorded with in `usertest/builds.json`, so a forgotten bump fails CI
-instead of reaching the droplet.
+instead of reaching the server.
 
 ## Commands
 

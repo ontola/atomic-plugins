@@ -59,6 +59,6 @@ change to an app's source:
   ```
 
   It exits 1, naming the apps, when an app was rebuilt into a version the
-  server already serves with other bytes: bump its `VERSIONS` entry. An
-  unreachable live catalog passes. `usertest-deploy.yml` runs it before it
+  server already serves with other bytes: bump its `VERSIONS` entry. Only a definite absence counts as a first deploy; an
+  unreachable or invalid live catalog fails. `usertest-deploy.yml` runs it before it
   touches the server.
