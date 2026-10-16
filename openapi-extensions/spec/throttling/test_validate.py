@@ -57,7 +57,7 @@ import pathlib
 
 import yaml
 
-from validate import classify, fallback_window, limits_in_force
+from validate import cacheable, classify, fallback_window, limits_in_force
 
 EXAMPLES = pathlib.Path(__file__).parent / "examples"
 NOW = 1_800_000_000
@@ -460,6 +460,26 @@ class PlanTierTests(unittest.TestCase):
         for name in ("windowed.yaml", "response-signals.yaml", "body-fields.yaml", "blocked.yaml"):
             validate(example(name))
 
+
+class CachedResponseTests(unittest.TestCase):
+    """0.5.1: a throttling or blocked response is not cached, and a cached response is not classified."""
+
+    def test_throttling_and_blocked_responses_are_not_cacheable(self):
+        signals = example("response-signals.yaml")
+        blocked = example("blocked.yaml")
+        self.assertFalse(cacheable(signals, 429, {}, None))
+        self.assertFalse(cacheable(blocked, 429, {}, {"additional_data": {"rate_limit_reason": "public_api_request_blocked"}}))
+        self.assertTrue(cacheable(signals, 200, {"x-ratelimit-remaining": "10"}, None))
+        self.assertTrue(cacheable(signals, 404, {}, None))
+
+    def test_a_response_from_a_cache_is_not_classified(self):
+        signals = example("response-signals.yaml")
+        self.assertIsNotNone(classify(signals, 429, {"retry-after": "30"}, None, NOW))
+        self.assertIsNone(classify(signals, 429, {"retry-after": "30"}, None, NOW, from_cache=True))
+        blocked = example("blocked.yaml")
+        body = {"additional_data": {"rate_limit_reason": "public_api_request_blocked"}}
+        self.assertEqual(classify(blocked, 429, {}, body, NOW)["meaning"], "blocked")
+        self.assertIsNone(classify(blocked, 429, {}, body, NOW, from_cache=True))
 
 
 if __name__ == "__main__": unittest.main()
