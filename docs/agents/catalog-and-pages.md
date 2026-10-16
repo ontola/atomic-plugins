@@ -37,7 +37,7 @@ change to an app's source:
    A file under `apps/` that is on `main` is never changed or deleted.
 2. **User-testing catalog.** Bump the app's entry in `VERSIONS` in
    `usertest/catalog.mjs`, run `node usertest/catalog.mjs --record` and
-   commit `usertest/builds.json`. Otherwise the droplet serves new bytes
+   commit `usertest/builds.json`. Otherwise the user-testing server serves new bytes
    under an old version, and installed apps fail the host's integrity
    check; CI's tooling unit tests (`apps.test.mjs`) fail on it.
 
@@ -51,14 +51,14 @@ change to an app's source:
   yet (`--no-install` skips that), so a fresh worktree needs no manual
   install step before it.
 - `usertest/check-live.mjs` compares the catalog `usertest/catalog.mjs` just
-  built with the droplet's live one:
+  built with the user-testing server's live one:
 
   ```sh
-  USERTEST_LOG_URL=https://logs.178-62-223-35.sslip.io/log node usertest/catalog.mjs
-  node usertest/check-live.mjs https://catalog.178-62-223-35.sslip.io/catalog.json
+  USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log node usertest/catalog.mjs
+  node usertest/check-live.mjs https://catalog.usertest.michielbdejong.com/catalog.json
   ```
 
   It exits 1, naming the apps, when an app was rebuilt into a version the
-  droplet already serves with other bytes: bump its `VERSIONS` entry. An
-  unreachable live catalog passes. `usertest-deploy.yml` runs it before it
-  touches the droplet.
+  server already serves with other bytes: bump its `VERSIONS` entry. Only a definite absence counts as a first deploy; an
+  unreachable or invalid live catalog fails. `usertest-deploy.yml` runs it before it
+  touches the server.
