@@ -316,6 +316,8 @@ export const SHARED_PACKAGES = [
  */
 export const ROUTE_INSTALL_HELPER = 'integrations/tooling/e2e/route-install.ts';
 const ROUTE_INSTALL_LANES = [
+  // inbox.spec.ts opens a Plugin draft for the webhook inbox (#369 step 4b).
+  'issue-tracker',
   'remotestorage',
   'open-cloud-mesh',
   'fediverse',

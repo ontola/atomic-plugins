@@ -304,7 +304,7 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `OPERATOR_URL` | no | Absolute `http(s)` link for `OPERATOR_NAME` on those pages. Anything else (`javascript:`, a relative path, credentials in the URL) is refused at startup. 0.2.1 and later. |
 | `KEY_CHECK_LIMIT_PER_HOUR` | no | The most API key or token checks the consent form makes for one client network and platform in any hour (a sliding window, counted in PostgreSQL across instances). Defaults to `20`; `0` turns the limit off; more than `10000` stops the proxy at startup. Only platforms with a declared key check count. A client over it gets `429` and no key check. A network is an IPv4 address or an IPv6 /64. Unreleased. |
 | `WEBHOOKS_ENABLED` | no | `true` creates the webhook inbox's tables, runs its sweeper and mounts the webhook routes below (ontola/atomic-plugins#369; see [SECURITY.md](SECURITY.md#webhook-inbox-369-unreleased)). Unset, empty or `false` (the default): no inbox table, no sweeper, no webhook route. Any other value stops the proxy at startup. Unreleased. |
-| `WEBHOOK_INGRESS_LIMIT_PER_NETWORK` | no | Refusals (unknown or malformed endpoint id, failed verification, oversized body; not `400` or `408`) one client network (an IPv4 address or IPv6 /64, found as `TRUST_FORWARDED_FOR` says, which behind Heroku's router or another proxy must be set) may cause on `POST /webhooks/…` per minute. Over it, its requests for ids that name no endpoint get `429` with `Retry-After`, and at most 2 of its requests at a time may wait for the endpoint-lookup slot: while the slot is busy and 2 wait, any further request from such a network gets `429` at once, a delivery to an existing endpoint included (a provider that shares its delivery addresses with the junk sent to it can lose one that way; see SECURITY.md). Default `120`; `1` to `100000`. Per instance. Read only with `WEBHOOKS_ENABLED=true`. Unreleased. |
+| `WEBHOOK_INGRESS_LIMIT_PER_NETWORK` | no | Refusals (unknown or malformed endpoint id, failed verification, oversized body; not `400` or `408`) one client network (an IPv4 address or IPv6 /64, found as `TRUST_FORWARDED_FOR` says, which behind Heroku's router or another proxy must be set) may cause on `POST /webhooks/…` per minute. Over it, its requests for ids that name no endpoint get `429` with `Retry-After`, and at most 2 requests of such networks at a time may wait for or hold the endpoint-lookup slot: while 2 do, any further request from such a network gets `429` at once, a delivery to an existing endpoint included (a provider that shares its delivery addresses with the junk sent to it can lose one that way; see SECURITY.md). Default `120`; `1` to `100000`. Per instance. Read only with `WEBHOOKS_ENABLED=true`. Unreleased. |
 | `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT` | no | Failed verifications one existing webhook endpoint counts per minute; over it, further ones get `429` instead of `401`. A delivery that verifies is never refused for it. Default `600`; `1` to `100000`. Per instance. Read only with `WEBHOOKS_ENABLED=true`. Unreleased. |
 | `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER` | no | Subscription requests per connection owner per hour, counted before the access check reaches the provider; every request counts, retries included. Default `20`; `1` to `100000`. Per instance. Read only with `WEBHOOKS_ENABLED=true`. Unreleased. |
 | `WEBHOOK_SECRET_<PLATFORM>` | with webhooks, per platform | The secret of a platform's shared application hook, as configured at the provider (`<PLATFORM>` is the catalog name, upper case, `-` as `_`). Read only with `WEBHOOKS_ENABLED=true`, for platforms whose composed document declares `x-webhook-deliveries`. Without it, every delivery to that platform is refused and no subscription to it is created. Unreleased. |
@@ -695,6 +695,18 @@ paces its own requests under it:
   `window.seconds`. Buckets partitioned by user, credential or anything else
   are each caller's own and not paced; a bucket over 10,000 requests per
   window is not paced either.
+- **Plan tiers** (Throttling 0.5.0). A bucket whose limit has `tiers` is
+  paced at the tier whose `plans` name the deployment's plan, given in the
+  dated catalog entry's `selection` as
+  `"throttlingPlans": {"<bucket id>": "<plan>"}`. Without one, or for a plan
+  no tier names, the proxy keeps within every tier at once, each tier's
+  `requests` in its own window as a separate count over the same requests
+  (no single tier is safe alone: 30 an hour still allows a burst 20 a second
+  forbids). For these proxy-wide buckets the plan that counts is the
+  deployment's own (its address or application), so the deployment's
+  catalog chooses it. An entry for a bucket without tiers or for a plan no
+  tier names is logged when the catalog loads and ignored. A tier over
+  10,000 requests per window is left out; the other tiers still count.
 - **How.** A sliding log per platform and bucket: at most `requests`
   requests in any `window.seconds`, which stays under the limit for `fixed`
   (with or without an `anchor`), `sliding` and `unspecified` windows alike.

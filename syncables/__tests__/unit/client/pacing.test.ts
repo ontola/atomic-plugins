@@ -1,5 +1,5 @@
 // @wc-ignore-file
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createApiClient,
   prepareDocument,
@@ -83,24 +83,49 @@ async function client(
 const settle = (ms = 30): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Runs `body` with `Date` frozen (timers stay real). The read-side pacer
+ * measures its wait from `Date.now()`, while the injected sleep returns at
+ * once, so with a real clock the wait shrinks by however long the test
+ * took: in a loaded full run, more than a second between the first request
+ * and the paced one made "more than 59,000 ms" fail. A frozen clock makes
+ * the wait exact.
+ */
+async function withFrozenDate(body: () => Promise<void>): Promise<void> {
+  vi.useFakeTimers({ toFake: ['Date'], now: Date.UTC(2026, 9, 15) });
+  try {
+    await body();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe('pacing reads', () => {
-  it('waits through the injected sleep once the window holds the fraction of requests', async () => {
-    const slept: number[] = [];
-    const fake = provider();
-    // 3 × 0.8 = 2 requests per minute.
-    const c = await client(doc(quota(3, 60)), fake, {
-      sleep: async (ms) => {
-        slept.push(ms);
-      },
-    });
-    await c.sync();
-    expect(slept).toEqual([]);
-    await c.sync();
-    expect(slept).toHaveLength(1);
-    expect(slept[0]).toBeGreaterThan(59_000);
-    expect(slept[0]).toBeLessThanOrEqual(60_000);
-    expect(fake.sent).toHaveLength(3);
+  // withFrozenDate restores the clock itself; this also covers a test
+  // that fails or times out inside it.
+  afterEach(() => {
+    vi.useRealTimers();
   });
+
+  it('waits through the injected sleep once the window holds the fraction of requests', async () =>
+    withFrozenDate(async () => {
+      const slept: number[] = [];
+      const fake = provider();
+      // 3 × 0.8 = 2 requests per minute.
+      const c = await client(doc(quota(3, 60)), fake, {
+        sleep: async (ms) => {
+          slept.push(ms);
+        },
+      });
+      await c.sync();
+      expect(slept).toEqual([]);
+      // However long the test takes, the clock has not moved: the whole
+      // window is still to wait.
+      await settle(1100);
+      await c.sync();
+      expect(slept).toEqual([60_000]);
+      expect(fake.sent).toHaveLength(3);
+    }));
 
   it("stops a read whose wait is past the read's time, before the request", async () => {
     const fake = provider();
@@ -113,20 +138,21 @@ describe('pacing reads', () => {
     expect(fake.sent).toHaveLength(1);
   });
 
-  it('paces at the Moneybird default of 120 of 150 per 300 s', async () => {
-    const slept: number[] = [];
-    const fake = provider();
-    const c = await client(doc(moneybirdThrottling), fake, {
-      sleep: async (ms) => {
-        slept.push(ms);
-      },
-    });
-    for (let i = 1; i < 120; i++) await c.sync();
-    expect(slept).toEqual([]);
-    await c.sync();
-    expect(slept).toHaveLength(1);
-    expect(slept[0]).toBeGreaterThan(290_000);
-  });
+  it('paces at the Moneybird default of 120 of 150 per 300 s', async () =>
+    // The same real-clock dependency: 120 syncs had to finish within 10 s.
+    withFrozenDate(async () => {
+      const slept: number[] = [];
+      const fake = provider();
+      const c = await client(doc(moneybirdThrottling), fake, {
+        sleep: async (ms) => {
+          slept.push(ms);
+        },
+      });
+      for (let i = 1; i < 120; i++) await c.sync();
+      expect(slept).toEqual([]);
+      await c.sync();
+      expect(slept).toEqual([300_000]);
+    }));
 
   it('is off with pace: false, and with a paceFraction of 1 sends every announced request', async () => {
     const off = provider();
