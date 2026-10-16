@@ -965,11 +965,10 @@ info:
     - anyOf: [crud-causality-v2-<pin>-overlay.yaml]
 ```
 
-`x-requires` is a convention of this repository, not part of an
-openapi-extensions specification: it names files by this folder's revision
-filenames (`<kind>[-vN]-<pin>-overlay.yaml`) and is checked against this
-repository's dated catalogs, so it means nothing to a consumer that composes
-documents from elsewhere; a consumer may ignore it. Published completeness
+`x-requires` is specified by [Overlay Requirements](../openapi-extensions/spec/overlay-requirements/README.md).
+This repository additionally checks revision filenames (`<kind>[-vN]-<pin>-overlay.yaml`)
+against its dated catalogs and rejects another revision of a required kind.
+Published completeness
 overlays cannot change, so `tests/test_completeness_requirements.py` holds the
 same groups for them in a table (and for those still in review when it was written). For every dated
 catalog it checks that each completeness overlay it selects has every group
