@@ -1586,7 +1586,14 @@ async fn ingress_limits_never_refuse_a_delivery_that_verifies() {
 #[tokio::test]
 #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
 async fn a_blocked_network_queues_for_the_lookup_slot_only_a_little() {
-    let mut env = env(small()).await;
+    // Room for every real delivery below (12), so each one is stored rather
+    // than recorded as a gap, and the test can count them.
+    let mut policy = small();
+    policy.subscription_max_pending_events = 32;
+    policy.subscription_max_pending_bytes = 1 << 16;
+    policy.owner_max_pending_bytes = 1 << 17;
+    policy.owner_max_pending_references = 64;
+    let mut env = env(policy).await;
     let alice = Agent::new(99);
     let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
     env.subscribe_project(&alice, &connection, "p-100").await;
@@ -1679,8 +1686,13 @@ async fn a_blocked_network_queues_for_the_lookup_slot_only_a_little() {
         let status = request.await.unwrap().status();
         assert!(matches!(status, StatusCode::TOO_MANY_REQUESTS), "{status}");
     }
-    // Every 204 above was a durable outcome (stored, or recorded as a gap
-    // once the small test policy's pending limit is reached).
+    // Every real delivery above was stored: the two queued while the slot
+    // was busy and the ten interleaved with the flood. No flood request
+    // stored anything.
+    assert_eq!(
+        env.count("SELECT count(*) FROM webhook_event_refs").await,
+        12
+    );
     env.drop_schema().await;
 }
 

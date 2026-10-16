@@ -18,6 +18,7 @@ import {
   githubThrottling,
   googleThrottling,
   moneybirdThrottling,
+  notionThrottling,
   responseSignals,
   throttledPets,
   todoistThrottling,
@@ -977,5 +978,85 @@ describe('reads under declared signals', () => {
     expect(items).toEqual([{ id: 'r1' }]);
     expect(calls).toBe(2);
     expect(slept).toHaveLength(1);
+  });
+});
+
+describe("a blocked answer (Throttling 0.4.0, Notion's public_api_request_blocked)", () => {
+  const notion429 = (reason: string): TransportResponse =>
+    json(
+      {
+        object: 'error',
+        status: 429,
+        code: 'rate_limited',
+        additional_data: { rate_limit_reason: reason },
+      },
+      429,
+      { 'retry-after': '1' },
+    );
+
+  it('fails the write at once, not resent and not held by a retry time', async () => {
+    const fake = provider(() => notion429('public_api_request_blocked'));
+    const c = await client(doc(notionThrottling), fake);
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(c.pendingWrites()).toMatchObject([
+        { id: '1', state: 'failed', attempts: 1, lastStatus: 429 },
+      ]),
+    );
+    await settle(1200);
+    expect(fake.writes).toHaveLength(1);
+  });
+
+  it('still retries another rate-limit reason after its Retry-After', async () => {
+    const fake = provider((_r, n) =>
+      n === 1 ? notion429('public_api_request_rate_limit') : undefined,
+    );
+    const c = await client(doc(notionThrottling), fake);
+    await c.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(c.pendingWrites()).toEqual([]), {
+      timeout: 3000,
+    });
+    expect(fake.writes).toHaveLength(2);
+  });
+
+  it('is permanent in the default classification', () => {
+    const failure: WriteFailure = {
+      type: 'update',
+      method: 'PATCH',
+      status: 429,
+      headers: {},
+      body: '',
+      resource: 'pets',
+      id: '1',
+      afterRenewal: false,
+      throttling: { meaning: 'blocked' },
+    };
+    expect(defaultWriteFailureClass(failure)).toBe('permanent');
+    expect(
+      defaultWriteFailureClass({
+        ...failure,
+        throttling: { meaning: 'throttled' },
+      }),
+    ).toBe('retry');
+  });
+
+  it('ends a read without sleeping', async () => {
+    const slept: number[] = [];
+    const fake = provider(() => undefined, {
+      list: () => notion429('public_api_request_blocked'),
+    });
+    const result = await readCollections(doc(notionThrottling), {
+      transport: fake.transport,
+      legacy: {},
+      sleep: async (ms) => {
+        slept.push(ms);
+      },
+    });
+    expect(result.collections[0]).toMatchObject({
+      complete: false,
+      error: expect.stringMatching(/responded 429/),
+    });
+    expect(fake.reads).toBe(1);
+    expect(slept).toEqual([]);
   });
 });

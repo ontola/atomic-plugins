@@ -32,6 +32,7 @@ DIRECTORY = None
 NOW = 1_800_000_000
 NOTION = "APIs/notion.com/2026-03-11/"
 OVERLAY = NOTION + "throttling-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml"
+OVERLAY_V2 = NOTION + "throttling-v2-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml"
 # What the dated catalogs select for Notion (catalog/2026-10-11-box.json).
 SIBLINGS = [NOTION + "auth-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml",
             NOTION + "pagination-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml",
@@ -59,6 +60,9 @@ class NotionThrottlingTests(unittest.TestCase):
         cls.original = yaml.safe_load(raw)
         cls.composed = copy.deepcopy(cls.original)
         apply(cls.composed, yaml.safe_load((ROOT / OVERLAY).read_text()))
+        assert overlay_pin(ROOT / OVERLAY_V2)[0] == url
+        cls.v2 = copy.deepcopy(cls.original)
+        apply(cls.v2, yaml.safe_load((ROOT / OVERLAY_V2).read_text()))
 
     def classify(self, status, headers, body):
         return throttling.classify(self.composed, status, headers, body, NOW)
@@ -71,17 +75,19 @@ class NotionThrottlingTests(unittest.TestCase):
         self.assertNotIn("limits", self.composed["x-throttling"])
 
     def test_composes_with_the_catalogued_overlays_in_either_order(self):
-        overlay = yaml.safe_load((ROOT / OVERLAY).read_text())
         siblings = [yaml.safe_load((ROOT / s).read_text()) for s in SIBLINGS]
-        first, second = copy.deepcopy(self.original), copy.deepcopy(self.original)
-        for s in siblings:
-            apply(first, s)
-        apply(first, overlay)
-        apply(second, overlay)
-        for s in siblings:
-            apply(second, s)
-        self.assertEqual(first, second)
-        throttling.validate(first)
+        for path in (OVERLAY, OVERLAY_V2):
+            with self.subTest(overlay=path):
+                overlay = yaml.safe_load((ROOT / path).read_text())
+                first, second = copy.deepcopy(self.original), copy.deepcopy(self.original)
+                for s in siblings:
+                    apply(first, s)
+                apply(first, overlay)
+                apply(second, overlay)
+                for s in siblings:
+                    apply(second, s)
+                self.assertEqual(first, second)
+                throttling.validate(first)
 
     def test_documented_429(self):
         for reason in (None, "public_api_request_rate_limit", "public_api_space_request_rate_limit"):
@@ -100,6 +106,31 @@ class NotionThrottlingTests(unittest.TestCase):
         body = {"object": "error", "status": 503, "code": "service_unavailable", "additional_data": {}}
         self.assertIsNone(self.classify(503, {"Retry-After": "5"}, body))
         self.assertIsNone(self.classify(400, {}, {"object": "error", "status": 400, "code": "rate_limited"}))
+
+    def test_v2_does_not_retry_a_blocked_request(self):
+        throttling.validate(self.v2)
+        standard = copy.deepcopy(self.v2)
+        standard.pop("x-throttling")
+        self.assertEqual(standard, self.original)
+        blocked = error("rate_limited", "public_api_request_blocked")
+        self.assertEqual(throttling.classify(self.v2, 429, {"Retry-After": "2"}, blocked, NOW),
+                         {"meaning": "blocked", "bucket": None, "retryAt": None})
+        # Every other answer classifies as under v1.
+        for reason in (None, "public_api_request_rate_limit", "public_api_space_request_rate_limit"):
+            with self.subTest(reason=reason):
+                body = error("rate_limited", reason)
+                self.assertEqual(throttling.classify(self.v2, 429, {"Retry-After": "2"}, body, NOW),
+                                 self.classify(429, {"Retry-After": "2"}, body))
+        self.assertIsNone(throttling.classify(self.v2, 400, {}, {"code": "rate_limited"}, NOW))
+
+    def test_v2_is_v1_plus_the_blocked_signal(self):
+        v1 = yaml.safe_load((ROOT / OVERLAY).read_text())["actions"][0]["update"]["x-throttling"]
+        v2 = yaml.safe_load((ROOT / OVERLAY_V2).read_text())["actions"][0]["update"]["x-throttling"]
+        self.assertEqual(v1["headers"], v2["headers"])
+        first, *rest = v2["signals"]
+        self.assertEqual(first["meaning"], "blocked")
+        strip = lambda signals: [{k: v for k, v in s.items() if k != "description"} for s in signals]
+        self.assertEqual(strip(rest), strip(v1["signals"]))
 
 
 if __name__ == "__main__":

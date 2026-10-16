@@ -467,6 +467,47 @@ mention. No dated catalog selects it yet. `tests/test_airtable_throttling.py`
 composes it alone and after the catalog's Airtable overlays and classifies
 a synthetic 429. No provider was called.
 
+## Asana project tasks completeness
+
+[`completeness-b58c91d9…-overlay.yaml`](APIs/asana.com/1.0/completeness-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml)
+declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on Asana's four lists, `workspaces`, `workspaceProjects`, `users` and
+`projectTasks`: `absent: removed` and `notFound: unavailable`, plus
+`parentAbsent: unavailable` on projects (parent: workspace) and tasks (parent:
+project). Each list sends no narrowing filter ("all workspaces visible to the
+authorized user", "all projects in the workspace" without the optional
+`archived` filter, "all users in all workspaces and organizations accessible
+to the authenticated user", every task of the project). From the pinned OAD's
+own text (the same as Asana's
+[API reference](https://developers.asana.com/reference/rest-api-reference)).
+Its 404 says the object "does not exist", but deleted tasks go into the
+deleting user's trash and "can be recovered from the trash within a period of
+30 days", and what a trashed task's read answers is not documented, so a 404
+is not a final deletion. A task leaves a project's list when deleted or
+removed from that project ("Tasks can exist in more than one project at a
+time"), so absence leads to the task's own read. Not declared: `gone` (no 410
+documented). Not verified: that the list without `completed_since`
+returns completed tasks (the parameter's text implies it), and whether
+subtasks not added to the project are listed. An expired offset token ("an
+offset token will expire after some time") fails the read, which is then not
+complete. No dated catalog selects it yet.
+
+It composes only after
+[`crud-causality-v2-b58c91d9…`](APIs/asana.com/1.0/crud-causality-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml),
+also new: v1 plus `listQuery: {limit: '100'}` on each of the four Asana
+lists. v1's read sends no `limit`, and Asana's
+[pagination guide](https://developers.asana.com/docs/pagination) says "When
+making paginated requests, you are able to "page through" all objects for a
+particular query up to 100 objects at a time. Alternatively, your query will
+be truncated at about 1,000 objects." A large project would then read as
+complete while missing tasks. With the fixed `limit` (the pagination scheme's
+`pageSize` field, which CRUD Causality §4.2.1 lets a `listQuery` set) the read
+pages through every task. `tests/test_asana_tasks_completeness.py` composes
+the completeness overlay with the catalog's auth and pagination overlays and
+crud-causality v2, in either order, runs both validators, checks that v2 is v1
+plus the `limit`, the pinned wording and the outcomes `classify_read` gives.
+No provider was called.
+
 ## Asana throttling
 
 [Asana API throttling](APIs/asana.com/1.0/throttling-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml)
@@ -482,6 +523,26 @@ version of the extension does not describe. No dated catalog selects it
 yet. `tests/test_asana_throttling.py` composes it alone and after the
 catalog's Asana overlays and classifies a synthetic 429. No provider was
 called.
+
+## Notion throttling
+
+[Notion API throttling](APIs/notion.com/2026-03-11/throttling-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml)
+declares [Throttling 0.2.0-draft](../openapi-extensions/spec/throttling/README.md)
+from Notion's [request-limits page](https://developers.notion.com/reference/request-limits):
+`Retry-After` in seconds ("an integer number of seconds") and a 429 with the
+code `rate_limited` as `throttled`. Its
+[v2](APIs/notion.com/2026-03-11/throttling-v2-0c8e229623efdcc1d4ab50111d17bcca3214a899-overlay.yaml)
+(Throttling 0.4.0-draft) adds a first signal: a 429 whose
+`additional_data.rate_limit_reason` is `public_api_request_blocked`, for which
+Notion says "This connection's API access has been restricted. Retrying won't
+help. Contact Notion support.", is `blocked`, so a consumer does not retry it.
+Not declared: the per-connection limits (600 or 180 requests per minute,
+depending on the workspace's plan, which a document cannot select), the
+per-workspace limit, which has no number, and the 529 `service_overload`,
+since a 5xx is not a throttling signal. No dated catalog selects either
+revision yet. `tests/test_notion_throttling.py` composes v1 and v2 with
+the catalog's Notion overlays in either order, and
+classifies synthetic errors in Notion's format. No provider was called.
 
 ## GitLab throttling
 
@@ -594,7 +655,7 @@ fixed read is the request the drive app sends. No provider was called.
 
 ## Collection completeness
 
-Three standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
+Four standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
 `x-completeness`, which syncables reads (`absent`, `notFound`, `gone`,
 `parentAbsent`). No dated catalog selects them yet.
 
@@ -602,7 +663,7 @@ Three standalone overlays declare [Collection Completeness](../openapi-extension
 | --- | --- | --- |
 | [Google Tasks v1 completeness](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks `absent: removed`, `notFound: unavailable`; tasks `parentAbsent: unavailable`; the task read tombstone `deleted: true`. Needs crud-causality v2 (the fixed read that returns hidden tasks). | The pinned OAD (tasklists.list "Returns all the authenticated user's task lists"; Task.deleted "Flag indicating whether the task has been deleted"); what a 404 means is not documented |
 | [GitHub Issues completeness](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | Issues `absent: removed`, `notFound: unavailable`, no `gone`; comments the same plus `parentAbsent: unavailable`. Page-number paging can skip an issue deleted or transferred during a read; it stays unconfirmed until its GET settles it. | [Get an issue](https://docs.github.com/en/rest/issues/issues#get-an-issue): 301 when transferred, 404 when transferred or deleted out of the caller's reach, 410 when deleted where the caller can read, and 410 for every issue when issues are turned off, so neither a 404 nor a 410 is declared a deletion |
-
+| [Google Calendar v3 events completeness](APIs/googleapis.com/calendar/v3/completeness-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Events `absent: removed`, `notFound: unavailable`, no `gone`, no `parentAbsent`. Composes with app-crud-causality, its v2 and crud-causality; a deletion is the read tombstone (a 2xx `cancelled` answer), never a 404. | [Errors guide](https://developers.google.com/workspace/calendar/api/guides/errors): a 404 when the resource "has never existed" or for "a calendar that the user can not access"; the 410s are about sync tokens and repeated deletes. The pinned OAD: cancelled events, "The get method always returns them", and they "will eventually disappear". An event may also leave the list without being deleted when the user's access to the calendar changes (assumed; not documented). A move can "leave behind a cancelled event where only the id field is guaranteed to be populated": with read-tombstone-v2 or list-tombstone selected, that remnant reads as a deletion from the source calendar; under the catalogs' read without them, a deletion or a move is an absence. `removed` stays safe either way. Not verified: what a deleted event's read answers once it has disappeared |
 | [Todoist v1 active-task completeness](APIs/todoist.com/1/completeness-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml) (#99) | Tasks `absent: removed`, `notFound: unavailable`; no read tombstone and no `gone`. | [API v1 reference](https://developer.todoist.com/api/v1/), read raw with curl: Get Tasks "Get all active tasks for the user"; Get Task "Returns a single active (non-completed) task by ID"; Close Task "Regular tasks are marked complete and moved to history"; Delete Task "Delete a task and all of its subtasks."; pagination "When next_cursor is null, you've reached the end of the results." A task that leaves the list may be completed, deleted or out of reach, and its read cannot return it as `checked` or `is_deleted`; no read answer is taken as a deletion, and a read that stops before a null `next_cursor` is not complete |
 
 An earlier Todoist draft was left out because the reference could not be
@@ -612,12 +673,35 @@ for a completed, a deleted or an inaccessible task; whether `GET /tasks`
 includes tasks of an archived project; and whether "Tasks Completed By
 Completion Date" (up to 3 months) lists every task that left the active
 list by completion, which would tell completion from deletion.
+Discord gets none: its one catalog collection (`/users/@me/guilds`) has no
+item read in the crud overlay, so an absent guild could never be settled.
 `tests/test_completeness_overlays.py`,
-`tests/test_github_issues_completeness.py` and
+`tests/test_github_issues_completeness.py`,
+`tests/test_calendar_events_completeness.py` and
 `tests/test_todoist_completeness.py` compose each overlay with the
 overlays it needs, run the Collection Completeness and CRUD Causality
 validators, and classify synthetic reads with the spec's `classify_read`.
 No provider was called.
+
+## Lists without pagination
+
+Fourteen catalog collections have no pagination scheme, so syncables reads
+each once and takes the answer as the whole list. Checked on 2026-10-14 from
+the providers' documentation only, so the next person need not re-check:
+
+| Collection | Pages? | Evidence |
+| --- | --- | --- |
+| Moneybird `financial_accounts`, `identities`, `ledger_accounts`, `subscriptions` (one contact's), `users`, `webhooks`, `workflows`, `custom_fields`, `document_styles`, `task_list_templates`, and the contact's and subscription's `additional_charges` | No | The pinned OAD (`85a61052`, "Generated from the official Moneybird OpenAPI v2 specification") gives none of them a `page` or `per_page` parameter; its paginated lists all have both ("The list is paginated. Use the `per_page` and `page` parameters"). `ledger_accounts`: "Pagination is not supported for this endpoint." Several say they return all: `ledger_accounts` ("a list of all the ledger accounts"), `workflows`, `document_styles`, `task_list_templates`, `webhooks`; `financial_accounts` returns "Only active financial accounts". Moneybird's server-rendered reference pages carry the same text: [`/api/ledger-accounts`](https://developer.moneybird.com/api/ledger-accounts) "Returns a list of all the ledger accounts in the administration. Pagination is not supported for this endpoint." Not verified: that a large administration's answer is never cut short (no limit is documented for these). |
+| Moneybird `financial_mutations` | No, but capped | "Limited to 100 financial mutations" and no page parameter (the pinned OAD and [`/api/financial-mutations`](https://developer.moneybird.com/api/financial-mutations): "Returns a list of financial mutations in the administration. Limited to 100 financial mutations."). Read by period windows: `pagination-range-window-85a61052…` (Pagination Schemes 0.5.0 `rangeWindow`, #397, #614), on `main` and selected by no dated catalog. |
+| Discord `/users/@me/guilds` | Yes (`before`, `after`, `limit` 1–200) | Discord's [Get Current User Guilds](https://docs.discord.com/developers/resources/user): "This endpoint returns 200 guilds by default, which is the maximum number of guilds a non-bot user can join. Therefore, pagination is not needed". The catalog's crud-causality overlay sends `limit=200` (`x-list-query`), and its credential is a user's OAuth token. A bot token can see more guilds; following `after` (the last guild's id) would need a last-item cursor, which `pagination-v2-9d0d73c6…` deliberately does not declare here: Discord does not document the order of the guilds it returns. |
+
+The Moneybird drive app (`integrations/money/moneybird/read.ts`) reads with
+its own client, not syncables: `financial_accounts` in one answer, financial
+mutations by its own period windows, and none of the other eleven lists in
+the table's first row, so it is not affected. `tests/test_unpaged_lists.py` fails if a pinned document gains
+a page parameter on one of these operations, if a catalogued Moneybird
+pagination overlay starts to declare one, or if the catalogs' Discord list
+stops asking for 200 guilds. No provider was called.
 
 ## Throttling with plan tiers
 
