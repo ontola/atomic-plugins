@@ -2,6 +2,15 @@ import type { SchemaObject } from '../openapi/types.js';
 
 let stringCounter = 0;
 
+/**
+ * A schema's own value (`example`, `examples`, `const`, `enum`) as a fresh
+ * copy: the caller may change what it gets (the mock server sets an id or
+ * a cursor field on each generated item), and an object returned by
+ * reference would be shared by every item and by the document.
+ */
+const copy = (value: unknown): unknown =>
+  typeof value === 'object' && value !== null ? structuredClone(value) : value;
+
 const finite = (value: unknown): number | undefined =>
   typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 
@@ -107,17 +116,17 @@ function generate(schema: SchemaObject | undefined, budget: Budget): unknown {
     return null;
   }
   if (schema.example !== undefined) {
-    return schema.example;
+    return copy(schema.example);
   }
   const examples: unknown = schema['examples'];
   if (Array.isArray(examples) && examples.length > 0) {
-    return examples[0];
+    return copy(examples[0]);
   }
   if (Object.hasOwn(schema, 'const')) {
-    return schema['const'];
+    return copy(schema['const']);
   }
   if (schema.enum && schema.enum.length > 0) {
-    return schema.enum[0];
+    return copy(schema.enum[0]);
   }
   if (schema.allOf) {
     return schema.allOf.reduce<Record<string, unknown>>((merged, sub) => {
