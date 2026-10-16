@@ -35,7 +35,7 @@ authoritative):
   answered "Yes, standing OK as worded" on 2026-10-08):
   - **Q-104:** deploy to user testing (the catalog, the moderator and the
     atomic-server image), after checking on the server that no session is in
-    progress ([usertest-droplet.md](usertest-droplet.md)), and build and tag
+    progress ([usertest-droplet.md](usertest-server.md)), and build and tag
     new atomic-server pin candidates ([pins.md](pins.md)).
   - **Q-105:** npm releases (syncables, devonian, …) and integration-proxy
     crates.io releases, and proxy deploys to Heroku, only from merged,
