@@ -467,6 +467,7 @@ export function zoneReader(
     url: URL;
     method: 'GET';
     headers: Record<string, string>;
+    purpose: 'zone';
   }) => Promise<{ status: number; body: string }>,
   isBudgetError: (error: unknown) => boolean,
 ): {
@@ -515,6 +516,7 @@ export function zoneReader(
         url: new URL(url.href),
         method: 'GET',
         headers: { accept: 'application/json' },
+        purpose: 'zone',
       });
       if (response.status < 200 || response.status >= 300) return null;
       const zone = atPointer(JSON.parse(response.body), pointer);

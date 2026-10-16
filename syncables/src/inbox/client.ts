@@ -179,6 +179,7 @@ export class InboxClient {
       url,
       method,
       headers: body === undefined ? {} : { 'content-type': 'application/json' },
+      purpose: 'inbox',
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     let parsed: unknown;

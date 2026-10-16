@@ -224,7 +224,13 @@ Data flows through four stages, each its own directory under `src/`:
    `lastSeen`, which the mark keeps and stores. GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
-   over supplied/global fetch. `auth.ts` holds credentials and an injected
+   over supplied/global fetch. Every request sets `TransportRequest.purpose`
+   (`RequestPurpose`; the internal senders, `Budget.send`, `requestJson`,
+   the zone reader, take `PurposedRequest`, so a missing one is a type
+   error, and `unit/read/request-purpose.test.ts` scans `src/` for request
+   literals without it). A response with `fromCache: true` gives the pacer
+   its counted request back (`Pacer.release`, watched beside the caller so
+   no turn is added) and is not counted by `Budget`. `auth.ts` holds credentials and an injected
    `authenticate(request, credentials)` adapter, plus API-key/bearer helpers.
    `node.ts`, exported by the main entry, adds environment fallback through
    `credentials.ts`: explicit fields override `SYNCABLES_*` values, with an

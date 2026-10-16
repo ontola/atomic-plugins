@@ -30,7 +30,7 @@ The extension versions this source reads, against the specifications in
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Auto-detection by query parameters, body fields, and (§6.3, when the scheme turns them on) response headers and response fields as the operation's description declares them. Not `incrementalSync`. |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), and Reference Objects resolved to a path (`resolveReference`, §4.1.3). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.1-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -1746,6 +1746,27 @@ token persistence are the adapter's responsibility; loading application
 credentials alone does not log a user in. Credentials without an authentication
 adapter are rejected. Keep confidential client credentials in server-side
 configuration. Authentication happens after the data-read capture boundary.
+
+Every request syncables makes says why, in `TransportRequest.purpose`
+(`RequestPurpose`): `list` (a page of a collection read, `paginate` or a
+range window), `feed` (a deletion feed page), `item` (a record's own GET
+when a list lacks it), `describer`, `zone`, `precondition` (a read a
+write depends on), `write` (a create, update, delete or follow-up) and
+`inbox`. A transport may ignore it; it is optional on the type, so a
+transport written before it still works. A caching transport uses it to
+answer only what it may: a `list` read, say. An `item` read must be
+fresh, like a `precondition` read: it decides whether a record a list
+left out still exists. A `write` is never answered from a cache, and a
+request without a `purpose` (from code that predates it) must be taken
+as not cacheable. An authentication adapter that builds a new request
+must keep the `purpose` of the one it was given. A transport that answers
+without asking the provider sets `fromCache: true` on its response: the
+client then gives back the request it counted against a pacing quota,
+and the read's `maxRequests` does not count it. Under Throttling
+0.5.1-draft, cached responses are not classified: they set no retry time
+and pause no bucket. A cache must not store throttling or blocked answers. A `304` that the conditional cache
+answers with a stored body carries the `fromCache` of that `304`, not
+of the stored response.
 
 ## Optional raw read-response storage
 
