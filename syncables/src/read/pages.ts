@@ -143,6 +143,7 @@ export class Budget {
       }
       const throttled = classifyThrottling(this.throttling, {
         status: response.status,
+        fromCache: response.fromCache === true,
         headers: response.headers,
         body: response.body,
         receivedAt,

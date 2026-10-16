@@ -1177,6 +1177,7 @@ class HttpStatusError extends Error {
     readonly status: number,
     readonly headers: Record<string, string>,
     readonly body: string,
+    readonly fromCache = false,
   ) {
     super(message);
   }
@@ -2750,6 +2751,7 @@ export function createApiClient(
           ]),
         ),
         response.body ?? '',
+        response.fromCache === true,
       );
     }
     if (received)
@@ -2910,6 +2912,7 @@ export function createApiClient(
   ): WriteOutcome | undefined {
     const throttled = classifyThrottling(throttling, {
       status: error.status,
+      fromCache: error.fromCache,
       headers: error.headers,
       body: error.body,
       receivedAt: error.receivedAt,
@@ -3555,6 +3558,7 @@ export function createApiClient(
         error instanceof HttpStatusError
           ? classifyThrottling(throttling, {
               status: error.status,
+              fromCache: error.fromCache,
               headers: error.headers,
               body: error.body,
               receivedAt: error.receivedAt,
@@ -3745,7 +3749,9 @@ export function createApiClient(
       }
       const asked =
         error instanceof HttpStatusError
-          ? retryAfterMs(error.headers)
+          ? error.fromCache
+            ? undefined
+            : retryAfterMs(error.headers)
           : undefined;
       // A Retry-After on another retryable answer (a 503, say) only
       // lengthens the wait (never below the backoff, so "0", a past date or
@@ -4410,6 +4416,7 @@ export function createApiClient(
   ): Promise<void> {
     const throttled = classifyThrottling(throttling, {
       status: response.status,
+      fromCache: response.fromCache === true,
       headers: lowerCaseHeaders(response.headers),
       body: response.body,
       receivedAt,

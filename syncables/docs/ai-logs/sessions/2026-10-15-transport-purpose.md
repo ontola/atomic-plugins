@@ -46,3 +46,10 @@ the request literals per file (`client/client.ts` 6, `read/pages.ts` 3,
 `inbox/client.ts`, `read/runtime-schemas.ts` and `read/time-zone.ts` 1)
 and exempts only the stored response record in `read/responses.ts`, by
 its `status` and `receivedAt` keys.
+
+## Merge maintenance, 2026-10-16
+
+Merged current main and aligned cache handling with Throttling 0.5.1-draft
+from #643. Carry cache provenance into the classifier and HTTP errors,
+skip cached Retry-After, and test cached throttling/blocked responses and
+shared bucket pauses.

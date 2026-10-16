@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import { Budget } from '../../../src/read/pages.js';
 import {
   createApiClient,
+  classifyThrottling,
+  declaredThrottling,
   Pacer,
   prepareDocument,
   type OpenApiDocument,
@@ -148,6 +150,81 @@ describe('every request syncables makes sets a purpose', () => {
 });
 
 describe('a response a cache answered', () => {
+  it('does not classify cached throttling or blocked answers', async () => {
+    const declaration = declaredThrottling(
+      prepareDocument(
+        throttledPets({
+          signals: [{ status: [403], meaning: 'blocked' }],
+        }),
+      ),
+    );
+    for (const status of [403, 429]) {
+      const response = { status, headers: { 'retry-after': '30' }, body: '' };
+      expect(classifyThrottling(declaration, response)).toBeDefined();
+      expect(
+        classifyThrottling(declaration, { ...response, fromCache: true }),
+      ).toBeUndefined();
+      const slept: number[] = [];
+      let sent = 0;
+      const budget = new Budget(
+        async () => {
+          sent += 1;
+          return { ...response, fromCache: true };
+        },
+        {},
+        async (ms) => {
+          slept.push(ms);
+        },
+        declaration,
+      );
+      expect(
+        (
+          await budget.send({
+            url: new URL('https://api.example.com/pets'),
+            method: 'GET',
+            headers: {},
+            purpose: 'list',
+          })
+        ).status,
+      ).toBe(status);
+      expect(sent).toBe(1);
+      expect(slept).toEqual([]);
+    }
+  });
+
+  it('does not pause shared buckets when a cached read says quota exhausted', async () => {
+    const slept: number[] = [];
+    let sent = 0;
+    const client = createApiClient(
+      prepareDocument(
+        throttledPets({
+          signals: [
+            {
+              status: [403],
+              meaning: 'quotaExhausted',
+              bucket: 'api',
+              minDelaySeconds: 30,
+            },
+          ],
+        }),
+      ),
+      {
+        limits: { maxRetries: 0 },
+        transport: async () =>
+          ++sent === 1
+            ? { status: 403, headers: {}, body: '', fromCache: true }
+            : { status: 200, headers: {}, body: '[]' },
+        sleep: async (ms) => {
+          slept.push(ms);
+        },
+      },
+    );
+    await expect(client.sync()).rejects.toThrow();
+    await client.sync();
+    expect(slept).toEqual([]);
+    expect(sent).toBe(2);
+  });
+
   it('gives the pacer back the request it counted', () => {
     const pacer = new Pacer(
       new Map([['api', { requests: 2, seconds: 60, kind: 'sliding' }]]),

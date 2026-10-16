@@ -1762,10 +1762,9 @@ as not cacheable. An authentication adapter that builds a new request
 must keep the `purpose` of the one it was given. A transport that answers
 without asking the provider sets `fromCache: true` on its response: the
 client then gives back the request it counted against a pacing quota,
-and the read's `maxRequests` does not count it. Everything else about
-the response still applies: a cached `429`, or a declared throttling
-signal in a cached body, pauses its buckets as a live one does, so a
-cache should not keep such answers. A `304` that the conditional cache
+and the read's `maxRequests` does not count it. Under Throttling
+0.5.1-draft, cached responses are not classified: they set no retry time
+and pause no bucket. A cache must not store throttling or blocked answers. A `304` that the conditional cache
 answers with a stored body carries the `fromCache` of that `304`, not
 of the stored response.
 
