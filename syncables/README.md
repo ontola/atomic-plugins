@@ -30,7 +30,7 @@ The extension versions this source reads, against the specifications in
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), and Reference Objects resolved to a path (`resolveReference`, §4.1.3). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.1-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
@@ -1962,7 +1962,11 @@ const { records, ontology, errors } = await readPlatform(document, {
   Schemes 0.9.1; only an absent `hasMore` decides nothing). The cursor field
   must be a query parameter or, on a POST, a body field; a header
   field ends the read with an error. The validator checks rules 27 to 29.
-  Not served by the mock server.
+  The mock server serves such a scheme on a GET: the page after the item
+  whose value the request names (the first page without one, an empty
+  last page for a value no item has or an empty value), with `hasMore`
+  set; each generated item gets its own value at the `fromLastItem`
+  path.
   With `order: ascending` or `descending` beside `fromLastItem`
   (Pagination Schemes 0.10.0, rule 30), the read checks that the
   `fromLastItem` values of all its items, within and between pages, are
@@ -2146,12 +2150,12 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **Unreleased**: `TransportRequest.purpose` (`list`, `feed`, `item`,
-  `describer`, `zone`, `precondition`, `write`, `inbox`) on every request
-  syncables makes, and `TransportResponse.fromCache`, which gives back the
-  request's pacing count and does not count against `maxRequests`. Both
-  optional; the `PurposedRequest` and `RequestPurpose` types are exported.
-  #566's "smallest backward-compatible extension" for a caching transport.
+- **Unreleased**: The mock server serves a Pagination Schemes 0.9.0
+  item-cursor scheme on a GET (the page after the named item, `hasMore`);
+  before, it read the cursor as an offset and answered an empty page.
+  `generateFromSchema` returns a copy of a schema's own `example`,
+  `examples`, `const` or `enum` value, so generated items no longer share
+  an object example.
 - **Unreleased**: Pagination Schemes 0.10.0 `order` beside
   `fromLastItem`: the read checks that the cursor values of all its items
   are strictly ascending or descending, comparing digit strings and

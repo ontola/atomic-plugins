@@ -1,0 +1,93 @@
+# Reviewed 2026-10-15 against the pinned OAD and official provider documentation; no live calls.
+# Revision 3 of pagination-9d0d73c6...: v2's actions, each kept, plus two changes that Pagination
+# Schemes 0.10.0 allows (order beside fromLastItem; §4.3.3 (b) with an upper bound):
+# - afterUserId declares order: ascending, which Discord documents for both lists it serves
+#   (Get Guild Bans and Get Guild Scheduled Event Users: "Users will always be returned in
+#   ascending order by `user.id`" / "by `user_id`"), so a client checks it;
+# - a new scheme, beforeThreadId, on List Joined Private Archived Threads. Discord: "Threads are
+#   ordered by their id, in descending order"; before: "returns threads before this id"; has_more:
+#   "whether there are potentially additional threads that could be returned on a subsequent
+#   call" (https://docs.discord.com/developers/resources/channel). The thread id is unique and
+#   before is a strict upper bound over items in descending order of it: §4.3.3 (b). The cursor is
+#   the last (lowest) thread's id; has_more false ends the read, as does an empty page.
+# Not declared, because §4.3.3 (b) needs a documented order of the cursor's own unique field:
+#   Get Channel Messages ("Returns an array of message objects from newest to oldest": an order of
+#   time, not of id; and "If the current user is missing the READ_MESSAGE_HISTORY permission in the
+#   channel, then no messages will be returned", so an empty read looks like an empty channel), and
+#   List Public or Private Archived Threads ("Threads are ordered by archive_timestamp, in
+#   descending order", a field that is not unique, with a timestamp before).
+# Pagination Schemes 0.10.0 says no overlay should declare order until syncables checks it: this
+# revision stays unpublished until then.
+# Not declared, as in v2: the lists whose order Discord does not document (List Guild Members, Get
+# Reactions, List Thread Members, Get Answer Voters, List Entitlements, List SKU Subscriptions, Get
+# Current User Guilds, the scheduled-event exception users, the guild audit log).
+# Needs Pagination Schemes 0.10.0. A 0.9.x consumer that validates rejects order; one that does not
+# ignores it and reads without the check, so do not use this revision with one.
+overlay: 1.0.0
+info:
+  title: Discord API Pagination Schemes (revision 3)
+  version: 3.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9d0d73c6b23cb07ca2d225fb8b3848fede322b21/APIs/discord.com/10/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        afterUserId:
+          type: pageToken
+          autoDetect: false
+          description: >-
+            Send no `after` first, then the `user.id` of the previous page's
+            last item. Discord returns these users "in ascending order" of
+            their id and `after` considers "only users after given user id".
+            An empty page ends the list; a short page does not.
+          request:
+            queryParameters:
+              after:
+                role: cursor
+                fromLastItem: user.id
+                order: ascending
+              limit:
+                role: pageSize
+        beforeThreadId:
+          type: pageToken
+          autoDetect: false
+          description: >-
+            Send no `before` first, then the `id` of the previous page's last
+            (lowest) thread. Discord orders these threads "by their id, in
+            descending order" and `before` "returns threads before this id".
+            has_more false, or an empty page, ends the list.
+          request:
+            queryParameters:
+              before:
+                role: cursor
+                fromLastItem: id
+                order: descending
+              limit:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: threads
+            bodyFields:
+              has_more:
+                role: hasMore
+  - target: $.paths['/channels/{channel_id}/users/@me/threads/archived/private'].get
+    update:
+      x-pagination:
+        - scheme: beforeThreadId
+  - target: $.paths['/guilds/{guild_id}/bans'].get
+    update:
+      x-pagination:
+        - scheme: afterUserId
+  - target: $.paths['/guilds/{guild_id}/scheduled-events/{guild_scheduled_event_id}/users'].get
+    update:
+      x-pagination:
+        - scheme: afterUserId
+  - target: $.paths['/users/@me/guilds'].get
+    update:
+      description: >-
+        The initial read-only integration requests the maximum 200 guilds in
+        one page: Discord says 200 "is the maximum number of guilds a non-bot
+        user can join. Therefore, pagination is not needed". Discord also
+        supports `before` and `after`, but does not document the order of the
+        guilds it returns, so no cursor read from the last item is declared
+        (Pagination Schemes §4.3.3).
