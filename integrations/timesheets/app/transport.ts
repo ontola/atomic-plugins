@@ -79,6 +79,9 @@ const RECONNECT_CODES = [
   'capability_scope',
   'platform_mismatch',
   'credential_refresh_failed',
+  // Someone else's connection, or one whose owner id was transferred (#410).
+  'not_owner',
+  'agent_retired',
 ];
 const REFUSAL_CODES = [
   ...RECONNECT_CODES,
@@ -94,7 +97,6 @@ const REFUSAL_CODES = [
   'capability_too_long',
   'wrong_audience',
   'capability_key_mismatch',
-  'not_owner',
   'access_denied',
 ];
 

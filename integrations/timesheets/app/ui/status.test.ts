@@ -145,11 +145,29 @@ describe('syncStatusFor', () => {
         'forbidden',
         'network',
         'other',
+        'proxy-access',
         'rate-limited',
         'reauth',
         'too-many',
       ].sort(),
     );
+  });
+
+  it('a proxy access refusal says to ask whoever runs the proxy, not to reconnect (0.8.2)', () => {
+    const status = syncStatusFor({
+      state: ready({
+        ok: false,
+        at: NOW,
+        error: 'access_denied',
+        problem: { kind: 'proxy-access', detail: 'access_denied' },
+      }),
+      sheet: sheet(),
+      changes: NO_CHANGES,
+    });
+    expect(status.last).toMatchObject({
+      nextStep:
+        "Ask whoever runs the integration proxy to let you use it; reconnecting won't help.",
+    });
   });
 
   it('syncing and sending are busy', () => {

@@ -95,10 +95,20 @@ read, minute snapping and the range planner are unchanged.
   tested against a 0.8.0 drive). Creates staged from 0.8.1 send their Name
   as it is.
 - **Times are sent in whole seconds** (0.8.1). The lens's `iso-seconds-to-ms`
-  refuses a time with milliseconds rather than lose them, so `putBody`
-  rounds down to the second first, as the code lens did. This is
-  defensive: changed times are already snapped to minutes before they
-  reach it.
+  refuses a time with milliseconds rather than lose them; `putBody` rounds
+  down to the second first, as the code lens did. Row times are snapped to
+  minutes, so only a time typed into the table can carry milliseconds.
+- **The proxy's own refusals get the right next step** (0.8.2). The
+  integration proxy's `access_denied` ("this agent may not use the proxy",
+  its access check) is a problem of its own: "The integration proxy does
+  not let you use it." with "Ask whoever runs the integration proxy to let
+  you use it; reconnecting won't help." Before, it read as Clockify's own
+  403 and said "Choose another workspace in Settings". `not_owner` (someone
+  else's connection) and `agent_retired` (the owner's id was transferred,
+  #410) now say "Connect again", like a lost connection; `agent_retired`
+  was not recognised as the proxy's at all. Codes from
+  `integration-proxy/src/api_error.rs`. Unit-tested (`problem.ts`,
+  `transport.ts` `proxyRefusal`, the card, frame J7).
 - **A refusal names its reason** (0.8.1). An entry Clockify returns that the lens
   refuses outside a running timer, a break or another listed blocker (a
   start or end that is not an ISO instant, say) is refused with the
@@ -114,7 +124,7 @@ read, minute snapping and the range planner are unchanged.
 
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 194 KB for 0.8.1, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 194 KB for 0.8.2, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
