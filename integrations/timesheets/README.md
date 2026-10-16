@@ -87,11 +87,13 @@ read, minute snapping and the range planner are unchanged.
   a change taken over from Clockify, and nothing is sent for it. A filled
   gap staged then and not yet sent holds "Time entry" too: from 0.8.1 a
   create without the `exactName` mark in `clockify-create` (staged before
-  0.8.0) whose Name is "Time entry" or blank is created with no
-  description. A create 0.8.0 staged has no mark either, so a copy of an
-  entry whose description is exactly "Time entry", or only spaces, staged
-  by 0.8.0 and sent by 0.8.1 is created with none (not tested against a
-  0.8.0 drive).
+  0.8.1) whose Name is "Time entry" or blank is created with no
+  description. The rule cannot tell those apart from a Name meant
+  literally, so an unmarked create is also sent with no description when
+  someone typed "Time entry" into its Name, or when it is a 0.8.0 copy of
+  an entry whose description is exactly "Time entry" or only spaces (not
+  tested against a 0.8.0 drive). Creates staged from 0.8.1 send their Name
+  as it is.
 - **Times are sent in whole seconds** (0.8.1). The lens's `iso-seconds-to-ms`
   refuses a time with milliseconds rather than lose them; `putBody` rounds
   down to the second first, as the code lens did. Row times are snapped to
