@@ -56,3 +56,9 @@ outside this cloud environment's allowed outbound hosts, and the remote web
 reader could not access discovery. This does not establish the current live
 deployment's status. Persistent auth, coverage/outbox, daemon installation and
 runtime Atomic/NextGraph/remoteStorage replication remain later stages of #566.
+
+GitHub's full Syncables matrix passed on Node 22, 24 and 26. The required
+repository CI exposed a missing lockfile update in the original scaffold:
+the issue-tracker lane installs Syncables with pnpm, while the draft had
+updated only package-lock.json. Regenerated pnpm-lock.yaml with CI's pnpm
+10.15.1 and verified an isolated frozen install before republishing the fix.
