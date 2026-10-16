@@ -144,6 +144,31 @@ when to try again. "Sync now" cancels a waiting retry; nothing is scheduled
 while a pass is busy or after `dispose()`. Unit-tested against fake
 transports with a pinned clock (`read.test.ts`, `sync.test.ts`).
 
+Two refusals are neither a wait nor a lost grant (0.1.1, `read.ts`
+`googleRefusal`), so neither is retried and neither asks for a reconnect:
+
+- **A used-up daily quota:** 403 (or 429) with the reason
+  `dailyLimitExceeded`, or a google.rpc `ErrorInfo` `RATE_LIMIT_EXCEEDED`
+  whose `metadata.quota_limit` is a per-day limit (a per-minute one stays a
+  rate limit). The pass stops before any write; the card says "Google Tasks'
+  daily quota for this app is used up … Google resets it at midnight Pacific
+  time; reconnecting won't help." with the next step "Try again after
+  midnight Pacific time, when Google resets daily quotas. The quota belongs
+  to the integration proxy's Google project, so whoever runs the proxy can
+  ask Google to raise it."
+- **The Tasks API turned off** in the Google project behind the integration
+  proxy: 403 with `accessNotConfigured`, or an `ErrorInfo`
+  `SERVICE_DISABLED`. The next step is "Ask whoever runs the integration
+  proxy to turn on the Google Tasks API for its Google project."
+
+Either one also stops the by-id lookups of a pass at the first such answer,
+like a rate limit: the remaining lookups would be refused too, so they are
+not sent.
+
+Taken from Google's documented error reasons; the bodies in
+`app/fakeStore.ts` (`DAILY_LIMIT_403`, `API_DISABLED_403`) are written from
+that reference, not recorded from Google.
+
 The integration proxy forwards only some upstream response headers to the
 frame (`integration-proxy/src/proxy.rs` `upstream_response_headers`:
 `content-type`, `link`, `retry-after`, `etag`, `x-total-count`,
@@ -175,11 +200,11 @@ Moneybird apps made the same choice.
 
 ## What is verified
 
-- Unit (`app/*.test.ts`, 72 tests): the mapping, the reader and its rate
-  limits, every card state, the import pass and the controller, with the
-  clock pinned (`vi.useFakeTimers({ toFake: ['Date'] })`).
+- Unit (`app/*.test.ts`, 80 tests): the mapping, the reader and its rate
+  limits, the daily-quota and API-disabled refusals (0.1.1), every card
+  state, the import pass and the controller, with the clock pinned (`vi.useFakeTimers({ toFake: ['Date'] })`).
 - Host E2E (`e2e/google-tasks.spec.ts`, the `google-tasks` lane): catalog
-  install of 0.1.0, connect through the host's consent bar and the mock
+  install of the catalog's version, connect through the host's consent bar and the mock
   proxy, the lists read with nothing imported, a ticked list's 5 rows as
   `issue-v1` at the published subjects, a reload that writes no row, a task
   completed in Google turning up done, a deleted one marked deleted and kept,

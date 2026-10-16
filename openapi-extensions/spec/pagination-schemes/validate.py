@@ -451,6 +451,36 @@ def _item_cursor_fields(scheme):
     ]
 
 
+DIGITS = re.compile(r"[0-9]+")
+
+
+def _order_key(value):
+    """0.10.0: (kind, key) to compare fromLastItem values; None when the value is neither kind.
+
+    Non-negative integers and ASCII digit strings are numbers, compared exactly
+    (Python integers have arbitrary precision; "010" equals "10"). Other
+    strings are text, compared by code point.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return ("number", value) if value >= 0 else None
+    if isinstance(value, str):
+        if DIGITS.fullmatch(value):
+            return ("number", int(value))
+        return ("text", value)
+    return None
+
+
+def _in_order(previous, current, order):
+    """Whether two order keys are strictly in `order`; None when they cannot be compared."""
+    if previous is None or current is None:
+        return None
+    if previous[0] != current[0]:
+        return None
+    return previous[1] < current[1] if order == "ascending" else previous[1] > current[1]
+
+
 def _response_roles(scheme):
     response = scheme.get("response", {})
     return [field.get("role") for kind in ("bodyFields", "headers")
@@ -752,6 +782,8 @@ def read_item_cursor(scheme, request, *, page_size=None, identity=_default_ident
     if len(fields) != 1:
         raise ValueError("an item-cursor read has exactly one fromLastItem field (rule 28)")
     [(location, name, path)] = fields
+    order = scheme["request"][location][name].get("order")
+    last_key = None
     size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
     items, seen, cursors = [], set(), []
     marked = False
@@ -769,6 +801,17 @@ def read_item_cursor(scheme, request, *, page_size=None, identity=_default_ident
         if any(i in seen for i in ids):
             raise PageReadError(f"the page after {cursor!r} holds an item an earlier page returned")
         seen.update(ids)
+        if order:  # 0.10.0: strictly in the declared order across the whole read
+            for item in page:
+                value = item
+                for segment in path.split("."):
+                    value = value.get(segment) if isinstance(value, dict) else None
+                key = _order_key(value)
+                if key is None:
+                    raise PageReadError(f"an item's {path} cannot be ordered: {value!r}")
+                if last_key is not None and not _in_order(last_key, key, order):
+                    raise PageReadError(f"{path} {value!r} is out of {order} order; the read is not complete")
+                last_key = key
         items.extend(page)
         marked = marked or response_incomplete(scheme, body)
         has_more = _present_role_value(body, scheme, "hasMore")
