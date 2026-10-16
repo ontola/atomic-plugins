@@ -153,6 +153,9 @@ upstream transport and accepts only the next matching bodyless GET.
   release another worker's lease. Independent requests can execute in parallel.
 - Live mode fetches/revalidates; simultaneous identical refreshes can share the
   newly fetched response. Cache mode requires an explicit acceptable age.
+  An age passed with `mode: 'live'` does not enable sequential cache hits.
+  `leaseMs` and `waitMs` bound refresh coordination (defaults: 30 and 35
+  seconds); neither setting changes the upstream transport's timeout.
   `no-store`, `no-cache`, `Vary: *` and credential-varying responses are not served
   as fresh cache hits. Private opt-in history still records those responses.
 

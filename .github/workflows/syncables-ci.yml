@@ -50,6 +50,7 @@ jobs:
             syncables:
               - 'syncables/**'
               - '.github/workflows/syncables-ci.yml'
+              - 'integration-proxy/tests/fixtures/device-contract.json'
 
   build:
     name: Lint, test, build (Node ${{ matrix.node }})

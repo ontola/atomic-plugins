@@ -23,3 +23,36 @@ Merged main at 18e42516 into the draft, keeping current Syncables 0.24.0 and
 its newer pagination, throttling and read behavior. Resolved package-script
 and changelog conflicts. Further validation and review follow-up are recorded
 below. Test data and credentials are invented; no provider data is committed.
+
+Addressed the complexity review by sharing the proxy-prefix and fresh-response
+checks and importing readdir with the other filesystem functions. Retained
+explicit live/cache modes and bounded lease/wait controls: live mode deliberately
+refreshes sequential requests even when maxAgeMs is supplied. A database test
+now verifies that distinction. Kept the historical disclosure log because the
+repository requires it, and moved the draft's changelog bullets into fragments.
+
+Added a CLI auth test against integration-proxy's checked-in device contract,
+including the documented public client, scopes, endpoints, connection discovery
+and proxy route. CI reruns Syncables when that fixture changes. Updated the
+live guide with the published client/scopes and operator approval requirements.
+
+## Validation
+
+On Node 24.19.0 with disposable PostgreSQL 17, the merged full suite passed
+1,636 tests in 87 files. After adding the two regression/contract cases, the
+affected CLI, PostgreSQL and client selection passed 797 tests in 39 files.
+Lint, formatting, TypeScript compilation, release build and changelog-fragment
+validation passed.
+
+Installed an npm tarball into an isolated directory: Node/browser/PostgreSQL
+imports and executable help passed, and all three backend definitions could
+be added/listed. The installed executable completed mock device approval,
+recorded one upstream read and one cache hit, then replayed both after stopping
+the mock API and restarting PostgreSQL. Its invented 4,360-byte response used
+one 100-byte compressed payload (payload bytes only).
+
+Live localthought.io/GitHub authorization was not verified: localthought.io is
+outside this cloud environment's allowed outbound hosts, and the remote web
+reader could not access discovery. This does not establish the current live
+deployment's status. Persistent auth, coverage/outbox, daemon installation and
+runtime Atomic/NextGraph/remoteStorage replication remain later stages of #566.

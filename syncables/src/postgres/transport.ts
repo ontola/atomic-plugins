@@ -73,6 +73,16 @@ export function createCachingTransport(options: {
       options.onResponse?.({ origin: 'cache', response: stored.response });
       return stored.response;
     };
+    const freshSince = async (): Promise<ResponseHead | undefined> => {
+      if (conditional) return undefined;
+      const latest = await options.archive.head(
+        options.scope,
+        identity.cacheKey,
+      );
+      return latest && latest.id !== initial?.id && reusable(latest, leaseMs)
+        ? latest
+        : undefined;
+    };
     if (
       !conditional &&
       options.mode === 'cache' &&
@@ -94,31 +104,13 @@ export function createCachingTransport(options: {
         throw new Error('Timed out waiting for a cache refresh lease');
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
-      const latest = await options.archive.head(
-        options.scope,
-        identity.cacheKey,
-      );
-      if (
-        !conditional &&
-        latest &&
-        latest.id !== initial?.id &&
-        reusable(latest, leaseMs)
-      )
-        return hit(latest);
+      const latest = await freshSince();
+      if (latest) return hit(latest);
     }
     try {
       // A completed refresh may have released its lease between our lookup and claim.
-      const latest = await options.archive.head(
-        options.scope,
-        identity.cacheKey,
-      );
-      if (
-        !conditional &&
-        latest &&
-        latest.id !== initial?.id &&
-        reusable(latest, leaseMs)
-      )
-        return await hit(latest);
+      const latest = await freshSince();
+      if (latest) return await hit(latest);
       let response: TransportResponse;
       try {
         response = await options.upstream(request);

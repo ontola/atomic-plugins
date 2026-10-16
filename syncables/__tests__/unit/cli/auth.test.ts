@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   deviceLogin,
@@ -53,6 +54,74 @@ const granted = {
 };
 
 describe('CLI device authorization', () => {
+  it('uses the published proxy device contract for login, discovery and an API read', async () => {
+    const contract = JSON.parse(
+      readFileSync(
+        new URL(
+          '../../../../integration-proxy/tests/fixtures/device-contract.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    );
+    const fake = fixture([
+      {
+        status: 200,
+        body: {
+          issuer,
+          device_authorization_endpoint:
+            issuer + contract.device_authorization_path,
+          token_endpoint: issuer + contract.token_path,
+          token_endpoint_auth_methods_supported: ['none'],
+        },
+      },
+      device,
+      granted,
+      {
+        status: 200,
+        body: {
+          owner: 'atomic:agent:demo',
+          client_id: contract.public_client.client_id,
+          session_id: 'invented-session',
+          connections: [
+            {
+              connection_id: 'demo',
+              platform: 'github-issues',
+              owner: 'atomic:agent:demo',
+            },
+          ],
+        },
+      },
+      { status: 200, body: [{ id: 1 }] },
+    ]);
+    const session = await deviceLogin(
+      {
+        issuer,
+        clientId: contract.public_client.client_id,
+        scope: contract.scopes.join(' '),
+      },
+      { fetch: fake.fetch, sleep: async () => {}, report: () => {} },
+    );
+    const available = await listConnections(session, fake.fetch);
+    await probeApi(
+      session,
+      available.connections[0],
+      '/repos/demo/tasks/issues',
+      fake.fetch,
+    );
+    expect(fake.requests.map(({ url }) => new URL(url).pathname)).toEqual([
+      contract.discovery_path,
+      contract.device_authorization_path,
+      contract.token_path,
+      '/connections',
+      '/proxy/demo/github-issues/repos/demo/tasks/issues',
+    ]);
+    const form = fake.requests[1].init.body as URLSearchParams;
+    expect(form.get('client_id')).toBe(contract.public_client.client_id);
+    expect(form.get('scope')).toBe(contract.scopes.join(' '));
+    expect(form.has('client_secret')).toBe(false);
+  });
+
   it('honours pending and slow_down, then verifies connections and a read-only API', async () => {
     const fake = fixture([
       discovery,

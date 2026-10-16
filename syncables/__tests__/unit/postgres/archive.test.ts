@@ -129,6 +129,23 @@ describe.skipIf(!database)('local PostgreSQL archive (real database)', () => {
     ).toBeUndefined();
   });
 
+  it('live mode refreshes sequential reads even when an acceptable cache age is supplied', async () => {
+    const owner = scope('live-refresh');
+    const run = await archive.createRun(owner, 'live mode');
+    let calls = 0;
+    const transport = createCachingTransport({
+      archive,
+      scope: owner,
+      run,
+      mode: 'live',
+      maxAgeMs: 60_000,
+      upstream: async () => response(String(++calls)),
+    });
+    expect((await transport(request())).body).toBe('1');
+    expect((await transport(request())).body).toBe('2');
+    await archive.finishRun(owner.owner, run);
+  });
+
   it('coalesces concurrent refreshes across independent PostgreSQL pools', async () => {
     const owner = scope('parallel');
     const other = new PostgresArchive(database!);

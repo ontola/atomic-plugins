@@ -1,4 +1,11 @@
-import { mkdir, readFile, writeFile, link, unlink } from 'node:fs/promises';
+import {
+  mkdir,
+  readFile,
+  readdir,
+  writeFile,
+  link,
+  unlink,
+} from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { homedir } from 'node:os';
@@ -113,7 +120,6 @@ export async function addConnection(
 export async function listReplication(
   directory: string,
 ): Promise<ReplicationConnection[]> {
-  const { readdir } = await import('node:fs/promises');
   let files: string[];
   try {
     files = await readdir(directory);

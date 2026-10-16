@@ -253,6 +253,10 @@ export async function listConnections(
   };
 }
 
+function proxyPrefix(connection: Connection): string {
+  return `/proxy/${encodeURIComponent(connection.connection_id)}/${encodeURIComponent(connection.platform)}/`;
+}
+
 export function proxyRequest(
   session: Session,
   connection: Connection,
@@ -262,7 +266,7 @@ export function proxyRequest(
     throw new Error(
       'API path must begin with / and must not contain a fragment',
     );
-  const prefix = `/proxy/${encodeURIComponent(connection.connection_id)}/${encodeURIComponent(connection.platform)}/`;
+  const prefix = proxyPrefix(connection);
   const url = new URL(prefix + path.slice(1), session.issuer);
   if (!url.pathname.startsWith(prefix))
     throw new Error('API path escapes the selected connection');
@@ -274,7 +278,7 @@ export function proxyReadTransport(
   connection: Connection,
   fetchImpl: typeof fetch = globalThis.fetch,
 ): Transport {
-  const prefix = `/proxy/${encodeURIComponent(connection.connection_id)}/${encodeURIComponent(connection.platform)}/`;
+  const prefix = proxyPrefix(connection);
   return async (input) => {
     if (
       input.method !== 'GET' ||

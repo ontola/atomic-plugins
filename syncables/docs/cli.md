@@ -66,9 +66,11 @@ it with `SYNCABLES_MOCK_PORT` if needed and use that origin in the CLI command.
 
 ## Test the real Local Thought deployment
 
-[#565](https://github.com/ontola/atomic-plugins/issues/565) must supply the
-public client ID, read scopes and deployed device-flow contract first. Use those
-published values, not the mock's `syncables-cli-demo` client ID. Update and
+The device-flow contract is implemented in integration-proxy 0.4.0; its
+[device-auth guide](../../integration-proxy/DEVICE_AUTH.md) publishes client ID
+`syncables-cli` and scopes `connections:read proxy:read`. The operator must
+register that client and configure a working owner approval page at the deployed
+issuer. The mock's `syncables-cli-demo` client ID is local-only. Update and
 rebuild the checkout before testing:
 
 ```sh
@@ -83,8 +85,8 @@ approve the existing GitHub connection in the browser, and test one issue:
 ```sh
 node build/src/cli/main.js auth-test \
   --issuer https://localthought.io \
-  --client-id '<published-public-client-id>' \
-  --scope '<published-read-scope>' \
+  --client-id syncables-cli \
+  --scope 'connections:read proxy:read' \
   --path '/repos/ontola/usertest-findings/issues?state=all&per_page=1'
 ```
 
@@ -104,17 +106,21 @@ grant that upstream access.
 
 If it fails, share the terminal error/status only. The CLI does not print tokens
 or the provider response body. A discovery 404 means the contract is not yet
-available at this issuer (or needs the published endpoint overrides); a proxy
-401/403 or provider 404 needs connection/scope/repository-access verification.
+available at this issuer. A 404 with `device_auth_disabled` means the operator
+must enable the client and configure `DEVICE_APPROVAL_URL`. The `/device` page
+only links to that approval page; it does not authenticate an Atomic owner.
+A proxy 401/403 or provider 404 needs connection/scope/repository-access
+verification.
 
 Discovery uses `/.well-known/oauth-authorization-server` and requires matching
 issuer, `device_authorization_endpoint` and `token_endpoint`. If #565 publishes
 endpoints before discovery, supply both `--device-endpoint` and
 `--token-endpoint`. This scaffold permits HTTPS or loopback HTTP, requires the
-device/token endpoints on the issuer origin, and refuses redirects. The proposed
-resource contract is bearer-authenticated `/connections` and
-`/proxy/{connection_id}/{platform}/{path}`. Adapt it to #565's final contract
-before claiming live compatibility.
+device/token endpoints on the issuer origin, and refuses redirects. The
+implemented resource contract is bearer-authenticated `/connections` and
+`/proxy/{connection_id}/{platform}/{path}`. The contract-fixture test checks
+the CLI against the proxy's checked-in contract; only a successful provider
+read establishes live compatibility.
 
 Polling obeys the interval, pending/slow-down responses, denial and expiry,
 with a 15-minute command cap and 10-second request timeouts. Tokens stay in
