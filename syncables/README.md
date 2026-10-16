@@ -69,8 +69,13 @@ and custom mutation protocols may need an adapter.
 Start with the [local-first guide](docs/local-first.md): it includes a runnable
 offline-edit example, the document/overlay workflow, direct and proxy transports,
 persistence and write recovery. The API details below serve as a reference.
-This README describes current source, including any **Unreleased** changes;
-the guide explains how to run that source before an npm release.
+For the CLI/daemon product direction, see the
+[local archive and migration design](docs/daemon-design.md), which records the
+PostgreSQL cache, compact collection coverage, durable outbox, device approval
+and replication plans with their implementation status.
+This README describes current source, including unreleased changes, which
+are listed in [`changes/`](changes/) until a release folds them into the
+changelog; the guide explains how to run that source before an npm release.
 
 ## Usage
 

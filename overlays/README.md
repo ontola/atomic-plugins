@@ -655,7 +655,7 @@ fixed read is the request the drive app sends. No provider was called.
 
 ## Collection completeness
 
-Three standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
+Four standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
 `x-completeness`, which syncables reads (`absent`, `notFound`, `gone`,
 `parentAbsent`). No dated catalog selects them yet.
 
@@ -663,7 +663,7 @@ Three standalone overlays declare [Collection Completeness](../openapi-extension
 | --- | --- | --- |
 | [Google Tasks v1 completeness](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks `absent: removed`, `notFound: unavailable`; tasks `parentAbsent: unavailable`; the task read tombstone `deleted: true`. Needs crud-causality v2 (the fixed read that returns hidden tasks). | The pinned OAD (tasklists.list "Returns all the authenticated user's task lists"; Task.deleted "Flag indicating whether the task has been deleted"); what a 404 means is not documented |
 | [GitHub Issues completeness](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | Issues `absent: removed`, `notFound: unavailable`, no `gone`; comments the same plus `parentAbsent: unavailable`. Page-number paging can skip an issue deleted or transferred during a read; it stays unconfirmed until its GET settles it. | [Get an issue](https://docs.github.com/en/rest/issues/issues#get-an-issue): 301 when transferred, 404 when transferred or deleted out of the caller's reach, 410 when deleted where the caller can read, and 410 for every issue when issues are turned off, so neither a 404 nor a 410 is declared a deletion |
-
+| [Google Calendar v3 events completeness](APIs/googleapis.com/calendar/v3/completeness-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Events `absent: removed`, `notFound: unavailable`, no `gone`, no `parentAbsent`. Composes with app-crud-causality, its v2 and crud-causality; a deletion is the read tombstone (a 2xx `cancelled` answer), never a 404. | [Errors guide](https://developers.google.com/workspace/calendar/api/guides/errors): a 404 when the resource "has never existed" or for "a calendar that the user can not access"; the 410s are about sync tokens and repeated deletes. The pinned OAD: cancelled events, "The get method always returns them", and they "will eventually disappear". An event may also leave the list without being deleted when the user's access to the calendar changes (assumed; not documented). A move can "leave behind a cancelled event where only the id field is guaranteed to be populated": with read-tombstone-v2 or list-tombstone selected, that remnant reads as a deletion from the source calendar; under the catalogs' read without them, a deletion or a move is an absence. `removed` stays safe either way. Not verified: what a deleted event's read answers once it has disappeared |
 | [Todoist v1 active-task completeness](APIs/todoist.com/1/completeness-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml) (#99) | Tasks `absent: removed`, `notFound: unavailable`; no read tombstone and no `gone`. | [API v1 reference](https://developer.todoist.com/api/v1/), read raw with curl: Get Tasks "Get all active tasks for the user"; Get Task "Returns a single active (non-completed) task by ID"; Close Task "Regular tasks are marked complete and moved to history"; Delete Task "Delete a task and all of its subtasks."; pagination "When next_cursor is null, you've reached the end of the results." A task that leaves the list may be completed, deleted or out of reach, and its read cannot return it as `checked` or `is_deleted`; no read answer is taken as a deletion, and a read that stops before a null `next_cursor` is not complete |
 
 An earlier Todoist draft was left out because the reference could not be
@@ -673,8 +673,11 @@ for a completed, a deleted or an inaccessible task; whether `GET /tasks`
 includes tasks of an archived project; and whether "Tasks Completed By
 Completion Date" (up to 3 months) lists every task that left the active
 list by completion, which would tell completion from deletion.
+Discord gets none: its one catalog collection (`/users/@me/guilds`) has no
+item read in the crud overlay, so an absent guild could never be settled.
 `tests/test_completeness_overlays.py`,
-`tests/test_github_issues_completeness.py` and
+`tests/test_github_issues_completeness.py`,
+`tests/test_calendar_events_completeness.py` and
 `tests/test_todoist_completeness.py` compose each overlay with the
 overlays it needs, run the Collection Completeness and CRUD Causality
 validators, and classify synthetic reads with the spec's `classify_read`.

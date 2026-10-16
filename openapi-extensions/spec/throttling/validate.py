@@ -349,7 +349,7 @@ def _body_text(body, path):
     return value.strip(WHITESPACE) if isinstance(value, str) else None
 
 
-def classify(document, status, headers, body, received_at, plan=None):
+def classify(document, status, headers, body, received_at, plan=None, from_cache=False):
     """Classify one response under the document's x-throttling.
 
     `headers` maps names (any case) to a value, or to a list of values when the
@@ -361,7 +361,13 @@ def classify(document, status, headers, body, received_at, plan=None):
     Since 0.4.0 the meaning can be `blocked` (also for a signal whose meaning
     is not recognised, with any bucket or delay it carries ignored): then
     `retryAt` None means never retry automatically, not the consumer's backoff.
+
+    Since 0.5.1, `from_cache=True` (a response a cache answered, which the API
+    did not send for this request) returns None: such a response is not
+    classified at all (Cached responses).
     """
+    if from_cache:
+        return None
     root = document.get("x-throttling") or {}
     headers = {name.lower(): value for name, value in headers.items()}
     matched = None
@@ -426,6 +432,12 @@ def _load(path):
             return json.load(source)
         import yaml
         return yaml.safe_load(source)
+
+
+def cacheable(document, status, headers, body, received_at=0, plan=None):
+    """0.5.1: whether a cache may store this response: not when it is throttling or blocked."""
+    return classify(document, status, headers, body, received_at, plan) is None
+
 
 if __name__ == "__main__":
     for name in sys.argv[1:]:

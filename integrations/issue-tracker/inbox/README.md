@@ -70,6 +70,10 @@ runner exists (docs/design/pieces.md D2/D5).
     6 MiB of base64 in one run the plugin stops collecting, without error,
     and the next run goes on. A page over the fetch cap fails once, and
     the runs after it fetch one event at a time until one succeeds.
+  - That success clears the error, so the run after it asks for the full
+    page again. While the rest of the page is still over the cap, runs
+    alternate between that failure and a one-event success: one event per
+    two runs, half the throughput of one event per run.
   - A `maxBytes` parameter on `events`, returning an oversized event
     without its body, is the planned fix (step-4b plan, Unit B).
 - **An abandoned first run leaves an orphan gap row and reconcile item.**

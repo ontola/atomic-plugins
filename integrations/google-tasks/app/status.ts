@@ -25,7 +25,7 @@ import {
   type SyncStatus,
 } from '../../sync-status/card.js';
 import { rateLimitWords, type ViewState } from './controller.js';
-import { MAX_LOOKUPS, MAX_PAGES } from './read.js';
+import { MAX_LOOKUPS, MAX_PAGES, type Refusal } from './read.js';
 import type { TaskRow } from './sync.js';
 
 export interface StatusInput {
@@ -50,7 +50,15 @@ export const NO_RELAY_NOTE =
   'Nothing is sent to Google Tasks, and nothing is read or overwritten until this Atomic Server can connect apps to it.';
 
 /** The plain next step after a failed sync, by Google's answer. */
-export function nextStep(status: number | undefined): string {
+export function nextStep(
+  status: number | undefined,
+  refusal?: Refusal,
+): string {
+  // Neither is fixed by reconnecting (read.ts `googleRefusal`, 0.1.1).
+  if (refusal === 'daily-quota')
+    return "Try again after midnight Pacific time, when Google resets daily quotas. The quota belongs to the integration proxy's Google project, so whoever runs the proxy can ask Google to raise it.";
+  if (refusal === 'api-disabled')
+    return 'Ask whoever runs the integration proxy to turn on the Google Tasks API for its Google project.';
   if (status === 401 || status === 403) return 'Reconnect Google Tasks.';
   if (status !== undefined && status >= 500)
     return 'Google had a problem; try again in a moment.';
@@ -253,7 +261,7 @@ export function syncStatusFor(input: StatusInput): SyncStatus | undefined {
               // Without a connection only "Connect Google Tasks" is shown,
               // so point at it: the load's connection lookup failed.
               nextStep: state.connection
-                ? nextStep(state.status)
+                ? nextStep(state.status, state.refusal)
                 : 'Reload the app, or press Connect Google Tasks.',
             }),
         ...(lastGood !== undefined ? { lastGood } : {}),
