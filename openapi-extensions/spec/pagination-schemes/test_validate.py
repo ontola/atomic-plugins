@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.10.0: schema, document validator, examples, link resolution and range windows."""
+"""Pagination Schemes 0.10.1: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -967,6 +967,24 @@ class ItemCursorTests(unittest.TestCase):
         request, _ = self.provider(10)
         with self.assertRaises(PageReadError):
             read_item_cursor(scheme, request, max_pages=2)
+
+    def test_other_cursor_fields_are_allowed_and_not_sent(self):
+        document = self.document()
+        scheme = self.scheme(document)
+        scheme["request"]["queryParameters"]["ending_before"] = {"role": "previousPageToken"}
+        document["paths"]["/v1/customers"]["get"]["parameters"].append(
+            {"name": "ending_before", "in": "query", "schema": {"type": "string"}})
+        validate(document)
+        for role in ("cursor", "pageToken"):
+            other = copy.deepcopy(document)
+            self.scheme(other)["request"]["queryParameters"]["ending_before"] = {"role": role}
+            with self.subTest(role=role):
+                validate(other)
+        request, calls = self.provider(5)
+        read_item_cursor(scheme, request, page_size=2)
+        self.assertTrue(all(("queryParameters", "ending_before") not in values for values in calls))
+        self.assertEqual([values.get(("queryParameters", "starting_after")) for values in calls],
+                         [None, "cus_001", "cus_003"])
 
     def test_a_marked_page_is_not_complete(self):
         scheme = copy.deepcopy(self.scheme(self.document()))

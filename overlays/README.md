@@ -225,15 +225,27 @@ outcome. The query is capped at 10,000 results, so a catalog selects this
 overlay only together with `pagination-v3-0c8e2296…`, which marks a capped
 read incomplete; under an earlier pagination revision a query over 10,000
 results looks complete (the test asserts this pairing). Not declared:
-`gone` (no 410 documented), anything on `data_sources` (`POST /search`, not
-documented as returning every shared data source), and so `parentAbsent`,
-which needs a parent collection with a Completeness Object (§4.4). The pinned
-OAD is an authored subset without descriptions, so the evidence is Notion's
-reference. No dated catalog selects it yet.
+`gone` (no 410 documented), anything on `data_sources`, and so
+`parentAbsent`, which needs a parent collection with a Completeness Object
+(§4.4). The pinned OAD is an authored subset without descriptions, so the
+evidence is Notion's reference. No dated catalog selects it yet.
 `tests/test_notion_pages_completeness.py` composes it with the catalog's
 auth, pagination and crud-causality overlays (and with pagination-v3), in
 either order, runs both validators, and checks the outcomes `classify_read`
 gives. No provider was called.
+
+Why `data_sources` stays undeclared (checked 2026-10-15, quotes curl'd from
+the raw pages): the collection is read through `POST /search`.
+[Search by title](https://developers.notion.com/reference/post-search) says
+"If no query param is provided, then the response contains all pages or
+data_sources that have been shared with the connection.", but
+[Search optimizations and limitations](https://developers.notion.com/reference/search-optimizations-and-limitations)
+lists among what search is not optimized for "Exhaustively enumerating
+through all the documents that a bot has access to in a workspace." and says
+"Search is not guaranteed to return everything, and the index may change as
+your connection iterates through pages and databases." and "Search indexing
+is not immediate." A data source absent from a read can therefore be one the
+index has not caught up with, so no completeness is declared on it.
 
 ## Write preconditions
 
@@ -269,14 +281,54 @@ issue after one deleted during a read; that issue still exists, and its own
 read finds it present. Not verified: which issue types (tasks, incidents)
 the list returns without `issue_type`, and whether they are read as issues
 are. Not
-declared: `gone` (no 410 documented for issues), anything on `projects` (the
-catalog narrows it with `membership=true`, and a consumer drops a declaration
-a selection narrows), and so `parentAbsent`, which needs a parent collection
-with a Completeness Object (§4.4). No dated catalog selects it yet.
+declared: `gone` (no 410 documented for issues), anything on `projects`, and
+so `parentAbsent`, which needs a parent collection with a Completeness Object
+(§4.4). No dated catalog selects it yet.
 `tests/test_gitlab_issues_completeness.py` composes it with the catalog's
 auth, pagination and crud-causality overlays of the same pin, in either order,
 runs both validators, and checks the outcomes `classify_read` gives. No
 provider was called.
+
+Why `projects` stays undeclared (checked 2026-10-15, quotes curl'd from the
+raw [projects reference](https://docs.gitlab.com/api/projects/)): the catalog
+narrows the list with a `membership=true` selection override ("Limit by
+projects that the current user is a member of."), and a consumer drops a
+completeness declaration that a selection narrows. A crud-causality revision
+could fix `membership=true` as a `listQuery` (as Google Tasks'
+crud-causality v2 and Google Calendar's app-crud-causality v2 fix their reads,
+and as
+`APIs/moneybird.com/v2-readonly/all-records-selection.json` widens
+Moneybird's), but the read would still narrow by default: parameters exist
+that would widen it, `include_pending_delete` ("Include projects pending
+deletion. (administrators only)") and `include_hidden` ("Include hidden
+projects. (administrators only) Premium and Ultimate only."), and a caller
+that is not an administrator cannot send them. In this repository a list
+filters by default when such a parameter exists (Moneybird's
+`include_archived`, GitHub's `state`), and Collection Completeness §4.2 says
+`absent: removed` "still tells a consumer that the list does not filter by
+default", so no completeness is declared on it.
+
+## Todoist projects completeness
+
+[`completeness-v2-ac07532b…`](APIs/todoist.com/1/completeness-v2-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml)
+keeps v1's tasks declaration (#99) and adds the `projects` collection:
+`absent: removed`, `notFound: unavailable` (quotes curl'd from the raw
+[API v1 reference](https://developer.todoist.com/api/v1/) on 2026-10-15). Get
+Projects says "Get all active user projects, optionally filtered by folder or
+workspace."; its `folder_id` and `workspace_id` only narrow it and are not
+sent, and no parameter widens it to archived projects (those come from a
+separate endpoint, Get Archived: "Get the user's archived projects."). As for
+the tasks list ("all active tasks"), the list therefore does not filter by
+default in the sense this repository applies (a parameter that would widen
+it), and an archived project ("removing it from view") or a deleted one is an
+absence its own read settles: §4.2's `removed` "MAY still exist, for example
+archived". The reference lists a 404 among the read's responses without
+saying which case gives it, so a 404 is `unavailable`. Not verified: what a
+project's read answers once it is archived or deleted. It states
+`info.x-requires` (the catalog's crud-causality overlay). No dated catalog
+selects it. `tests/test_todoist_completeness_v2.py` checks that v2 is v1 plus
+the projects declaration, composes it in either order, and checks the
+outcomes `classify_read` gives. No provider was called.
 
 ## Google Calendar deletion feed
 
@@ -616,6 +668,26 @@ one: the scheduled-event users' `after` row reads "consider only users
 after given user id" (lowercase), not "Consider ...", and its `limit` row
 reads "number of users to return (up to maximum 100)".
 
+[`pagination-v3-9d0d73c6…`](APIs/discord.com/10/pagination-v3-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+(Pagination Schemes 0.10.0) keeps v2, adds `order: ascending` to its scheme
+so a client checks the documented order, and pages
+[List Joined Private Archived Threads](https://docs.discord.com/developers/resources/channel)
+back with `before` from the last thread's `id`, `order: descending`, and
+`has_more` as `hasMore`: "Threads are ordered by their id, in descending
+order" and `before` "returns threads before this id" (§4.3.3 rule (b)).
+[Get Channel Messages](https://docs.discord.com/developers/resources/message)
+stays without a scheme: its "newest to oldest" is an order of time, not of
+the id `before` bounds, and "If the current user is missing the
+READ_MESSAGE_HISTORY permission in the channel, then no messages will be
+returned", so an empty read cannot be told from an empty channel. The
+public and private archived-thread lists are ordered by `archive_timestamp`,
+which is not unique, and stay without one too. No dated catalog selects v3,
+and Pagination Schemes 0.10.0 asks that no overlay declaring `order` be
+published until syncables checks it. `tests/test_discord_pagination_v3.py`
+composes it, runs the validators, and reads synthetic pages with
+`read_item_cursor`, including out-of-order pages that fail. No provider was
+called.
+
 ## Discord throttling
 
 [Discord API v10 throttling](APIs/discord.com/10/throttling-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
@@ -873,6 +945,37 @@ Checks:
 - `.github/workflows/overlays-published.yml` (after each Pages build): the
   served dated catalogs, every overlay and Pages-published OAD they list, and
   the pets demo's data match the built commit.
+
+### What a completeness overlay is declared on
+
+A Collection Completeness overlay is a claim about a collection's read as one
+crud-causality revision defines it (its fixed query, its page size) and, for
+some, as one pagination revision pages it. Selected with another revision the
+same declaration can be wrong: Asana's tasks completeness assumes
+crud-causality v2's `limit=100`, without which Asana truncates a list at about
+1,000 objects. So a new completeness overlay states what it is declared on in
+its `info`, as groups of revision filenames of its own pin, each group met by
+selecting any one of its files:
+
+```yaml
+info:
+  title: …
+  version: 1.0.0
+  x-requires:
+    - anyOf: [crud-causality-v2-<pin>-overlay.yaml]
+```
+
+`x-requires` is a convention of this repository, not part of an
+openapi-extensions specification: it names files by this folder's revision
+filenames (`<kind>[-vN]-<pin>-overlay.yaml`) and is checked against this
+repository's dated catalogs, so it means nothing to a consumer that composes
+documents from elsewhere; a consumer may ignore it. Published completeness
+overlays cannot change, so `tests/test_completeness_requirements.py` holds the
+same groups for them in a table (and for those still in review when it was written). For every dated
+catalog it checks that each completeness overlay it selects has every group
+met, and that no other revision of a group's kinds is selected for that
+platform; it also fails on a completeness overlay that states no
+requirement either way.
 
 ## Reviewed standalone pagination overlays
 

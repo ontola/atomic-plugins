@@ -1,6 +1,6 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.10.0
+**Spec version:** 0.10.1
 
 ---
 
@@ -218,7 +218,10 @@ why rule (b) asks for a documented order of the field itself.
 A request field with `fromLastItem` names the item field. A client that reads
 with it:
 
-1. sends the first request without that field;
+1. sends the first request without that field, and no request with any
+   other field of the scheme whose `role` is `pageToken`, `cursor` or
+   `previousPageToken` (since 0.10.1; such a field, as Stripe's
+   `ending_before`, pages the other way and is not part of this read);
 2. ends the read at a page with no items, or at a page whose `hasMore`
    response field (§4.5) is `false`: complete, unless any response of the
    read was marked by the scheme's Incomplete Object (§4.4.6);
@@ -1102,7 +1105,7 @@ A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every lin
 25. When a scheme whose `offset` field has `advance: pageSize` is applied to an operation, after its overrides are merged, it has a request or response field whose `role` is `pageSize`. A component scheme on its own is not checked.
 26. `incomplete` MAY appear only in the Response Pagination Fields Object of a `pageNumber`, `pageToken` or `nextLink` scheme. Its `field` is a dot-path of one or more non-empty names, and it has exactly one of `equals` (a JSON scalar) or `in` (a nonempty array of JSON scalars).
 27. `fromLastItem` MAY appear only on a Request Field Object whose `role` is `pageToken` or `cursor`. It is a dot-path of one or more non-empty names.
-28. A scheme with a `fromLastItem` field is a `pageToken` scheme with exactly one such field, and has no response field whose `role` is `nextPageToken`, `nextCursor` or `nextLink`. A validator checks this on a component scheme and again after an application's overrides are merged.
+28. A scheme with a `fromLastItem` field is a `pageToken` scheme with exactly one such field, and has no response field whose `role` is `nextPageToken`, `nextCursor` or `nextLink`. A validator checks this on a component scheme and again after an application's overrides are merged. Other request fields of such a scheme whose `role` is `pageToken`, `cursor` or `previousPageToken` (Stripe's `ending_before`, say) are allowed, and a client reading with `fromLastItem` does not send them (§4.3.3).
 29. A response field whose `role` is `hasMore` MAY appear only in `bodyFields`, and only in a scheme with a `fromLastItem` field.
 30. `order` MAY appear only on a Request Field Object that has `fromLastItem`, and is `ascending` or `descending`.
 
@@ -1124,6 +1127,7 @@ cd openapi-extensions/spec/pagination-schemes
 
 ## Changes
 
+- **0.10.1** (2026-10-15): rule 28 and §4.3.3 step 1 say that a scheme with `fromLastItem` may also declare other `pageToken`, `cursor` or `previousPageToken` fields (Stripe's `ending_before`), and that a client reading with `fromLastItem` sends none of them, as `read_item_cursor` and syncables already do. A test. No document changes meaning.
 - **0.10.0** (2026-10-15): adds `order` beside `fromLastItem` (§4.3.3): the declared order of the cursor values, which the client checks across the read and which ends it with an error when broken (non-negative integers and digit strings compare exactly as numbers, other strings by code point). Extends the evidence rule (b) to an upper bound ("before") over items in documented descending order of the unique field, as Discord's List Joined Private Archived Threads documents. An order of another property (Discord's messages, newest to oldest) does not qualify: the check sees only the items returned, and an item out of id order at a page boundary would be dropped unseen. Validation rule 30, `read_item_cursor` checks `order`, an example (`examples/item-order.yaml`) and tests. A 0.9.1 document stays valid and means the same. A 0.9.1 validator rejects `order`; a consumer that does not validate ignores it and does not check the order, so a document that relies on `order` should not be used with a 0.9.x consumer, and no overlay should declare it until syncables checks it.
 - **0.9.1** (2026-10-15): a `hasMore` field that is present but not a boolean (`"false"`, `0`, `null`) ends an item-cursor read with an error (§4.3.3 step 4); 0.9.0 read it as absent, so `"false"` asked for another page and an empty page then ended the read as complete. `read_item_cursor` and a test. No document changes meaning.
 - **0.9.0** (2026-10-14): adds `fromLastItem` to the Request Field Object (§4.3.3): a cursor the client reads from a field of the previous page's last item, as Stripe's `starting_after` and Discord's `after` take; and the response role `hasMore`, whose `false` ends the list. Validation rules 27–29, `read_item_cursor` in the validator, an example and tests. A document valid under 0.8.0 stays valid and means the same. A 0.8.0 validator rejects `fromLastItem` and the `hasMore` role. A 0.8.0 consumer that does not validate reads such a scheme as a `pageToken` scheme without a next token: it stops after one page and takes that page as the complete list, so a document that needs `fromLastItem` should not be used with one.
