@@ -246,6 +246,38 @@ describe('Notion fixture', () => {
     ).toBe(false);
     expect(() => api.editPage(pages[1]!.id, { Done: { number: 1 } })).toThrow();
   });
+
+  it('reset undoes edits, renames, archives and the scenario (reset driver)', () => {
+    expect(fixture.drivers).toContain('reset');
+    const api = notionFixture();
+    const before = {
+      page: api.getPage(pages[1]!.id),
+      second: api.getPage(pages[0]!.id),
+    };
+    const option = (
+      before.page.properties.Status as {
+        status: { id: string };
+      }
+    ).status.id;
+    api.editPage(pages[1]!.id, { Done: { checkbox: false } });
+    api.renameOption(option, 'Shipped');
+    api.archivePage(pages[0]!.id);
+    api.setScenario('empty');
+    api.request('GET', url('/v1/pages/anything'));
+    expect(api.requests).toHaveLength(1);
+
+    api.reset();
+
+    expect(api.getPage(pages[1]!.id)).toEqual(before.page);
+    expect(api.getPage(pages[0]!.id)).toEqual(before.second);
+    expect(api.requests).toEqual([]);
+    expect(
+      api.request('POST', url('/v1/search'), {
+        filter: { value: 'page', property: 'object' },
+      }).status,
+    ).toBe(200);
+    expect(api.requests).toHaveLength(1);
+  });
 });
 
 describe('read-only lens over the fixture pages', () => {
@@ -306,10 +338,11 @@ describe('read-only lens over the fixture pages', () => {
     expect(changelog!.values[key('BJXS')]).toBe(true);
     expect(changelog!.values[key('Tg%5Cq')]).toEqual([]);
     expect(retro!.values).not.toHaveProperty(key('n%3D1'));
-    // Formatted rich text is reported, not flattened.
-    expect(retro!.values).not.toHaveProperty(key('Nt0s'));
+    // Formatted rich text is imported as plain text, and reported
+    // (usertest-findings#19).
+    expect(retro!.values[key('Nt0s')]).toBe('Keep this bold');
     expect(projected.errors).toEqual([
-      `Notion page ${retro!.id} property "Notes" (rich_text) has no lossless plain value; left unprojected`,
+      `Notion page ${retro!.id} property "Notes" (rich_text) has formatting; imported as plain text`,
     ]);
   });
 

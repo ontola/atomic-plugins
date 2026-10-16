@@ -8,7 +8,9 @@
  *
  * A copy of `integrations/pets/app/store.ts` (itself from timesheets), with the relay
  * ops atomic-server#1657 adds (merged into `feat/plugin-debug`)
- * (`connections`, `connect`, response `headers`, request `method`/`body`).
+ * (`connections`, `connect`, response `headers`, request `method`/`body`)
+ * and the row grant ops of atomic-server#1740/#1849 (`rowAccess`,
+ * `requestRowAccess`), as timesheets' copy has them.
  * Kept per plugin on purpose (strict per-plugin containment); sharing one
  * copy is a maintainer decision, see README.md.
  */
@@ -70,6 +72,28 @@ export interface HostProxy {
   connect(args: { platform: string }): Promise<{ status: 'cancelled' }>;
 }
 
+/**
+ * What `store.rowAccess()` answers (atomic-server#1740, #1849): whether this
+ * app may edit the rows of the table it is a view of, and which of its
+ * declared `row-extras` that grant covers.
+ */
+export type RowAccess =
+  | {
+      status: 'granted';
+      grantedBy: string;
+      grantedAt: number;
+      via: string;
+      extras: string[];
+    }
+  | { status: 'none' }
+  /** Not shown as a table's view. */
+  | { status: 'unavailable' };
+
+/** What `store.requestRowAccess()` answers once the person chose. */
+export type RowAccessAnswer =
+  | { status: 'granted' }
+  | { status: 'denied'; reason: string };
+
 export interface PluginStore {
   getApp(): Promise<string>;
   getData(): Promise<DataRef | undefined>;
@@ -83,6 +107,18 @@ export interface PluginStore {
   subscribe(subject: string, handler: () => void): () => void;
   /** Feature-detected: hosts without the relay (atomic-server#1624) lack it. */
   proxy?: HostProxy;
+  /**
+   * Whether this app may edit the rows of the table it is a view of.
+   * Feature-detected (pin a12b74a has it), like `requestRowAccess`.
+   */
+  rowAccess?(): Promise<RowAccess>;
+  /**
+   * Asks the person, in the host's own bar ("Allow editing" / "Not now"),
+   * to let this app edit the table's rows and keep its `row-extras` on them.
+   * Answered straight away when a live grant already covers every extra the
+   * App declares now.
+   */
+  requestRowAccess?(): Promise<RowAccessAnswer>;
 }
 
 export interface ViewArgs {

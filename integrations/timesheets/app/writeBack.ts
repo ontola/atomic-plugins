@@ -51,11 +51,7 @@ import {
   blockers,
   changedFields,
   clockifyInstant,
-  descriptionOf,
   ENTRY_FIELDS,
-  entryValues,
-  NO_DESCRIPTION,
-  putBody,
   snapToMinute,
   type ClockifyProject,
   type ClockifyTimeEntry,
@@ -64,6 +60,8 @@ import {
   type PlanStep,
   type WriteContext,
 } from '../devonian/clockify/lens/index.js';
+// Name, start, end and billable both ways: the catalog lens (0.8.0).
+import { entryValues, putBody } from './catalogLens.js';
 import type { RawTimeEntry } from './clockifyApi.js';
 import {
   canonicalEntry,
@@ -213,6 +211,14 @@ export interface SendOutcome {
   message?: string;
   /** For `adjusted` and `conflict`: the fields concerned. */
   fields?: EntryField[];
+  /**
+   * For `failed`: the provider write itself succeeded, and what failed came
+   * after it (the verification read found the entry no longer complete, or
+   * saving the row threw). Absent: nothing was written.
+   */
+  written?: true;
+  /** For a lease `not-sent`: when the other copy's turn ends, ISO 8601. */
+  until?: string;
 }
 
 const text = (value: JSONValue) =>
@@ -482,7 +488,8 @@ export const projectNames =
 
 /**
  * What would be sent for a row: its values, with changed times snapped to
- * whole minutes (#97 answer 7), an empty Name as "no description", and a
+ * whole minutes (#97 answer 7), the Name exactly as the row has it (the
+ * catalog lens maps it to the description unchanged; 0.8.0), and a
  * project name typed into the table resolved to that project's id (an
  * exact, active name; otherwise a blocker). A changed time that equals one
  * of `boundaries` (the start or end of an entry in Clockify) is not snapped.
@@ -494,10 +501,7 @@ export function desiredValues(
   boundaries: ReadonlySet<number> = new Set(),
 ): { desired: EntryValues; problems: string[] } {
   const problems: string[] = [];
-  const desired: EntryValues = {
-    ...ordered(local),
-    name: local.name.trim() || NO_DESCRIPTION,
-  };
+  const desired: EntryValues = ordered(local);
   // A time that lines up with another entry's start or end (a trim or an
   // extension from a range edit meeting its neighbour) is kept exact.
   const snap = (at: number) => (boundaries.has(at) ? at : snapToMinute(at));
@@ -713,11 +717,17 @@ export async function syncRow(
   return {
     valuesChanged,
     ...(notice ? { notice } : {}),
+    // An unconfirmed send, settled by this read. A delete that is still
+    // requested cannot have arrived: the entry is here, being synced. (Its
+    // values match the row's, so the value check alone would say it had.)
     ...(state.outbox
       ? {
-          recovered: same(ordered(state.local), ordered(remote))
-            ? ('applied' as const)
-            : ('not-applied' as const),
+          recovered:
+            same(ordered(state.local), ordered(remote)) &&
+            !state.deleteRequested &&
+            state.outbox.op !== 'delete'
+              ? ('applied' as const)
+              : ('not-applied' as const),
         }
       : {}),
     state: { ...state, local: result.values, baseline: result.baseline },
@@ -733,13 +743,62 @@ export async function requestDelete(
   if (setBookkeeping(row, schema, { delete: wanted })) await row.save();
 }
 
+/** What a send says when a row of a table the app is a view of stays. */
+export const ROW_KEPT =
+  'The row stays in the table as a row of its own, no longer synced: the app may edit that table’s rows but not delete them. Delete it there.';
+
+/**
+ * Takes a row out of the sync once its entry is gone from Clockify, or a
+ * new row is discarded before it was sent. On the app's own table the row
+ * is destroyed. On a table the app is a view of (#177 item 14) the row
+ * grant never deletes a row, so only the app's own extras are removed: the
+ * row stays as one of the person's, local only, with its values. Returns
+ * whether it was destroyed.
+ */
+export async function retireRow(
+  row: PluginResource,
+  schema: CompleteSchema,
+): Promise<boolean> {
+  if (schema.own) {
+    await row.destroy();
+
+    return true;
+  }
+
+  let changed = false;
+
+  for (const property of [schema.row.entryId, ...Object.values(schema.sync)])
+    if (row.get(property) !== undefined) {
+      row.remove(property);
+      changed = true;
+    }
+
+  if (changed) await row.save();
+
+  return false;
+}
+
+/** `message`, with `ROW_KEPT` after it when the row was kept. */
+const kept = (destroyed: boolean, message?: string) =>
+  destroyed
+    ? message
+      ? { message }
+      : {}
+    : { message: message ? `${message} ${ROW_KEPT}` : ROW_KEPT };
+
 /** Puts the row back to its baseline and drops a requested deletion; a
- * new row not yet created in Clockify is removed. */
+ * new row not yet created in Clockify is removed (on a
+ * table the app is a view of: kept as a row of its own, `retireRow`). */
 export async function discardChange(
   row: PluginResource,
   schema: CompleteSchema,
 ): Promise<void> {
-  if (await readCreateState(row, schema)) return row.destroy();
+  if (await readCreateState(row, schema)) {
+    await retireRow(row, schema);
+
+    return;
+  }
+
   const state = await readRowState(row, schema);
   if (!state?.baseline) return;
   const changed = await setRowValues(row, schema, state.baseline);
@@ -893,7 +952,14 @@ export async function stageRangePlan(
   for (const step of steps) {
     if (step.op === 'update') {
       const r = await row(step.entryId);
-      if (await setRowValues(r, schema, step.desired)) await r.save();
+      // A range edit changes times and projects, never the Name: keep the
+      // row's own, so no description change is sent for it.
+      const name = sharedValues(r.props)[NAME];
+      const desired = {
+        ...step.desired,
+        name: typeof name === 'string' ? name : '',
+      };
+      if (await setRowValues(r, schema, desired)) await r.save();
     } else if (step.op === 'delete')
       await requestDelete(await row(step.entryId), schema, true);
     else {
@@ -907,11 +973,17 @@ export async function stageRangePlan(
           ? { tagIds: [...source.tagIds] }
           : {}),
       };
+      // A copy (the right part of a split) keeps its entry's description
+      // exactly; a filled gap has none ("Time entry" is display only).
+      const values = {
+        ...step.values,
+        name: source ? (entryValues(source)?.name ?? '') : '',
+      };
       const created = await store.newResource({
         parent: schema.table,
         isA: [TIME_ENTRY_CLASS],
         propVals: {
-          ...(await rowValues(schema, step.values)),
+          ...(await rowValues(schema, values)),
           [schema.sync.create]: JSON.stringify(marker),
         },
       });
@@ -1111,7 +1183,24 @@ const bodyMessage = (body: unknown) =>
 class Uncertain extends Error {}
 class Stop extends Error {}
 /** Another copy holds the lease now: the rest waits for it. */
-class LeaseLost extends Stop {}
+class LeaseLost extends Stop {
+  constructor(
+    reason: string,
+    /** When the other copy's turn ends at the latest, ISO 8601. */
+    readonly until: string,
+  ) {
+    super(reason);
+  }
+}
+
+/**
+ * Set by `sendOne`/`sendCreate` once the provider write succeeded, so a
+ * failure after it (saving the row, say) is reported as `written`, not as
+ * "nothing was written".
+ */
+interface WriteTrack {
+  written: boolean;
+}
 
 /**
  * Sends reviewed changes, one entry at a time, in the order given. An
@@ -1126,7 +1215,7 @@ export async function sendChanges(
   let stopped = false;
   let lease: SendLease | undefined;
   const lost = (holder: LeaseState) =>
-    new LeaseLost(heldMessage(holder, context.timeZone));
+    new LeaseLost(heldMessage(holder, context.timeZone), holder.until);
 
   if (context.lease) {
     const taken = await SendLease.take(
@@ -1144,6 +1233,7 @@ export async function sendChanges(
         kind: change.kind,
         status: 'not-sent',
         message: reason,
+        until: taken.heldBy.until,
       }));
     }
 
@@ -1174,6 +1264,8 @@ export async function sendChanges(
         continue;
       }
 
+      const track: WriteTrack = { written: false };
+
       try {
         await sending.renew?.();
         outcomes.push({
@@ -1181,6 +1273,7 @@ export async function sendChanges(
           ...(await (change.kind === 'create' ? sendCreate : sendOne)(
             sending,
             change,
+            track,
           )),
         });
       } catch (error) {
@@ -1196,6 +1289,7 @@ export async function sendChanges(
             ...base,
             status: 'not-sent',
             message: error.message,
+            until: error.until,
           });
           stopped = true;
         } else if (error instanceof Stop) {
@@ -1206,6 +1300,8 @@ export async function sendChanges(
             ...base,
             status: 'failed',
             message: message(error),
+            // The write stood; saving the row or the log afterwards threw.
+            ...(track.written ? { written: true } : {}),
           });
       }
     }
@@ -1225,6 +1321,7 @@ type Result = Omit<SendOutcome, 'entryId' | 'title' | 'kind'>;
 async function sendOne(
   context: SendContext,
   change: PendingChange,
+  track: WriteTrack = { written: false },
 ): Promise<Result> {
   const { store, schema, log } = context;
   const row = await store.getResource(change.subject);
@@ -1245,13 +1342,14 @@ async function sendOne(
   const fresh = await readEntry(context, change.entryId);
 
   if (!fresh) {
-    await row.destroy();
+    const destroyed = await retireRow(row, schema);
 
     return {
       status: change.kind === 'delete' ? 'sent' : 'gone',
-      ...(change.kind === 'delete'
-        ? { message: 'Already deleted in Clockify.' }
-        : {}),
+      ...kept(
+        destroyed,
+        change.kind === 'delete' ? 'Already deleted in Clockify.' : undefined,
+      ),
     };
   }
 
@@ -1356,7 +1454,13 @@ async function sendOne(
       status: 'failed',
       message: `Clockify answered ${response.status}${detail ? `: ${detail}` : ''}.`,
     };
-  } else if (change.kind === 'update' && response.body) {
+  }
+
+  // A delete answered 404 wrote nothing: the entry was already gone.
+  if (!(response.status === 404 && change.kind === 'delete'))
+    track.written = true;
+
+  if (change.kind === 'update' && response.body) {
     await log.append({
       id: context.read.newId(),
       device: context.read.device,
@@ -1392,24 +1496,28 @@ async function sendOne(
       };
     }
 
-    await row.destroy();
-
-    return { status: 'sent' };
+    return { status: 'sent', ...kept(await retireRow(row, schema)) };
   }
 
   const after = verified && entryValues(verified, names);
 
   if (!after) {
-    if (!verified) await row.destroy();
+    let destroyed = true;
+
+    if (!verified) destroyed = await retireRow(row, schema);
     else {
       setBookkeeping(row, schema, { outbox: null });
       await row.save();
     }
 
     return {
+      ...(destroyed ? {} : { message: ROW_KEPT }),
       status: verified ? 'failed' : 'gone',
       ...(verified
-        ? { message: 'Clockify no longer lists it as a completed entry.' }
+        ? {
+            message: 'Clockify no longer lists it as a completed entry.',
+            written: true,
+          }
         : {}),
     };
   }
@@ -1440,6 +1548,7 @@ async function sendOne(
 async function sendCreate(
   context: SendContext,
   change: PendingChange,
+  track: WriteTrack = { written: false },
 ): Promise<Result> {
   const { store, schema, log } = context;
   const row = await store.getResource(change.subject);
@@ -1515,7 +1624,7 @@ async function sendCreate(
     start: clockifyInstant(desired.start),
     end: clockifyInstant(desired.end),
     billable: desired.billable,
-    description: descriptionOf(desired.name),
+    description: desired.name,
     ...(desired.projectId ? { projectId: desired.projectId } : {}),
     ...(state.create.taskId ? { taskId: state.create.taskId } : {}),
     tagIds: [...(state.create.tagIds ?? [])],
@@ -1547,6 +1656,7 @@ async function sendCreate(
     };
   }
 
+  track.written = true;
   const made = response.body as RawTimeEntry | null;
   if (!made || typeof made.id !== 'string')
     throw new Uncertain(
@@ -1584,16 +1694,22 @@ async function sendCreate(
   const after = verified && entryValues(verified, names);
 
   if (!after) {
-    if (!verified) await row.destroy();
+    let destroyed = true;
+
+    if (!verified) destroyed = await retireRow(row, schema);
     else {
       setBookkeeping(row, schema, { outbox: null });
       await row.save();
     }
 
     return {
+      ...(destroyed ? {} : { message: ROW_KEPT }),
       status: verified ? 'failed' : 'gone',
       ...(verified
-        ? { message: 'Clockify does not list it as a completed entry.' }
+        ? {
+            message: 'Clockify does not list it as a completed entry.',
+            written: true,
+          }
         : {}),
     };
   }

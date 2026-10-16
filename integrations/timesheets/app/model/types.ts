@@ -50,11 +50,34 @@ export interface Conflict {
   fields: string[];
 }
 
+/**
+ * A row of a `time-entry-v1` table missing a required field (#177;
+ * ontology-kit's rule: shown as incomplete, never skipped). It is not an
+ * entry, so it has no place in the week or the totals; the views list it
+ * with its note and a way to the row in the host.
+ */
+export interface IncompleteRow {
+  /** The row's subject. */
+  id: string;
+  /** The row's name, or empty. */
+  description: string;
+  /** "Incomplete: missing Start". */
+  note: string;
+}
+
 export interface Timesheet {
   entries: TimeEntry[];
   /** Counted, not shown as entries (design §6A note). */
   running: number;
+  /** Rows missing a required field, read from a table's rows (`rows.ts`). */
+  incomplete?: IncompleteRow[];
   breaks: number;
+  /**
+   * Entries in the window that are shown but that the app cannot write back
+   * (the sync-status card lists them): locked in Clockify, or carrying
+   * custom field values (#123 §3.5). An entry with both counts in both.
+   */
+  uneditable?: { locked: number; customFields: number };
   /** The current import window, when settings are known. */
   window?: Interval;
   /** When a complete read last confirmed the window (ISO), if ever. */

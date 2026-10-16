@@ -8,6 +8,7 @@ export const MONEY_CSS = `
 .pl-app { margin: 0; }
 .m-amt { font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; }
 .m-amt[data-dir='in'] { color: var(--pl-pos); }
+.m-amt[data-dir='invalid'] { color: var(--pl-muted); font-weight: 500; font-style: italic; }
 .m-amt small { font-weight: 500; color: var(--pl-muted); margin-left: 3px; font-size: 11.5px; }
 
 /* Account switcher: a native select dressed as the design's switcher */
@@ -196,6 +197,20 @@ export const MONEY_CSS = `
 .m-cat[data-none] { color: var(--pl-muted); border-style: dashed; background: transparent; }
 .m-acctcell { color: var(--pl-muted); font-size: 12.5px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .m-more { padding: 14px 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+
+/* Incomplete rows (#177 rule), above the ledger */
+.m-incomplete {
+  margin: 12px 20px 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--pl-warn);
+  background: var(--pl-warn-soft);
+  border-radius: var(--pl-radius);
+  font-size: 13.5px;
+}
+.m-incomplete p { margin: 0 0 6px; }
+.m-incomplete ul { list-style: none; margin: 0; padding: 0; }
+.m-incomplete li { display: flex; gap: 8px 12px; align-items: center; flex-wrap: wrap; min-height: 30px; }
+.m-incomplete li .m-t { font-weight: 600; }
 
 /* Ledger list (<560px) */
 .m-list, .m-list ul { list-style: none; margin: 0; padding: 0; }

@@ -1,0 +1,19 @@
+{
+  "extends": "../../browser/tsconfig.build.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "typeRoots": ["../../browser/node_modules/@types"],
+    "types": ["node"],
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "devonian/lenses": ["../../devonian/src/lenses/index.ts"],
+      "devonian/atomic": ["../../devonian/src/atomic/index.ts"],
+      "@tomic/lib": ["../../browser/lib/src/index.ts"]
+    }
+  },
+  "include": ["devonian/**/*.ts"],
+  "exclude": ["devonian/**/*.test.ts"]
+}

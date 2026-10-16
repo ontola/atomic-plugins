@@ -1,0 +1,87 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/blogger/docs/3.0/reference/posts/list
+overlay: 1.0.0
+info:
+  title: Google blogger reviewed collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/091431739208d017c11b0b0589ab33293f8b3690/APIs/googleapis.com/blogger/v3/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include nextPageToken
+          and the item array. Keep blog/user/post scope, status, view, date filters, labels and ordering
+          fixed. Fetching bodies/images and private or draft visibility remain controlled by the original
+          request and authorization.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/v3/blogs/{blogId}/comments'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/v3/blogs/{blogId}/pages'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/v3/blogs/{blogId}/posts'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/v3/blogs/{blogId}/posts/{postId}/comments'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/v3/users/{userId}/blogs/{blogId}/posts'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize

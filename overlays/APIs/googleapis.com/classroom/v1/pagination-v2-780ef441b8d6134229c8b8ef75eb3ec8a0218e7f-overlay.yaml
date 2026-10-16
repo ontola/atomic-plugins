@@ -1,0 +1,171 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/classroom/reference/rest/v1/courses/list
+overlay: 1.0.0
+info:
+  title: Google classroom reviewed collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/780ef441b8d6134229c8b8ef75eb3ec8a0218e7f/APIs/googleapis.com/classroom/v1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include nextPageToken
+          and the item array. Keep course/student scope, filters, ordering and all other parameters fixed.
+          Zero or unspecified pageSize lets the server choose the maximum. Preserve the declared courseWorkMaterial
+          and topic envelopes despite their singular names.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/v1/courses'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: courses
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/courses/{courseId}/aliases'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: aliases
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/courses/{courseId}/announcements'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: announcements
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/courses/{courseId}/courseWork'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: courseWork
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/courses/{courseId}/courseWork/{courseWorkId}/studentSubmissions'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: studentSubmissions
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/courses/{courseId}/courseWorkMaterials'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: courseWorkMaterial
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/courses/{courseId}/students'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: students
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/courses/{courseId}/teachers'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: teachers
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/courses/{courseId}/topics'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: topic
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/invitations'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: invitations
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/userProfiles/{studentId}/guardianInvitations'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: guardianInvitations
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/userProfiles/{studentId}/guardians'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: guardians
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize

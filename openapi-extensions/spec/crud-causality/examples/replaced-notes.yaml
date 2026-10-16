@@ -1,0 +1,130 @@
+openapi: 3.0.3
+info:
+  title: Illustrative notes that are replaced
+  version: 1.0.0
+  description: >
+    Synthetic, shaped like Google Keep API v1 (§7.8). A note can be listed,
+    created and deleted, never updated, so a change replaces it. A list
+    note's items have no id.
+servers:
+  - url: https://notes.example.com
+components:
+  schemas:
+    ListItem:
+      type: object
+      properties:
+        text:
+          type: object
+          properties:
+            text: { type: string }
+        checked: { type: boolean }
+        childListItems:
+          type: array
+          items: { $ref: '#/components/schemas/ListItem' }
+    Note:
+      type: object
+      properties:
+        name: { type: string, readOnly: true }
+        title: { type: string }
+        body:
+          type: object
+          properties:
+            text:
+              type: object
+              properties:
+                text: { type: string }
+            list:
+              type: object
+              properties:
+                listItems:
+                  type: array
+                  items: { $ref: '#/components/schemas/ListItem' }
+        attachments:
+          type: array
+          readOnly: true
+          items: { type: object }
+        permissions:
+          type: array
+          readOnly: true
+          items:
+            type: object
+            properties:
+              role: { type: string }
+              email: { type: string }
+              deleted: { type: boolean }
+  crudResources:
+    note:
+      schema: { $ref: '#/components/schemas/Note' }
+      identity:
+        urlTemplate: /v1/{name}
+        bindings:
+          name: { field: name }
+      collections:
+        notes:
+          urlTemplate: /v1/notes
+          envelope: { itemsField: notes }
+      replace:
+        blockedBy:
+          - field: attachments
+            when: nonEmpty
+            description: The API cannot copy an attachment to a new note.
+          - field: permissions
+            moreThan: 1
+            except: { deleted: true }
+            description: A new note would lose its collaborators.
+      unkeyedLists:
+        body.list.listItems:
+          match: [text.text, checked]
+          children: childListItems
+paths:
+  /v1/notes:
+    get:
+      operationId: listNotes
+      x-crud: { action: list, resource: note, collection: notes }
+      responses:
+        '200':
+          description: The notes.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  notes:
+                    type: array
+                    items: { $ref: '#/components/schemas/Note' }
+    post:
+      operationId: createNote
+      x-crud:
+        action: create
+        resource: note
+        url: { source: bodyField, name: name }
+        addedFields:
+          name: { source: generated }
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/Note' }
+      responses:
+        '200':
+          description: The new note.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Note' }
+  /v1/{name}:
+    parameters:
+      - { name: name, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getNote
+      x-crud: { action: read, resource: note }
+      responses:
+        '200':
+          description: The note.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Note' }
+    delete:
+      operationId: deleteNote
+      x-crud: { action: delete, resource: note }
+      responses:
+        '200':
+          description: Deleted.

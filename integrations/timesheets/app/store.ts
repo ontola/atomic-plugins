@@ -104,6 +104,28 @@ export interface HostProxy {
 
 export type ColorScheme = 'light' | 'dark';
 
+/**
+ * What `store.rowAccess()` answers (atomic-server#1740, #1849): whether this
+ * app may edit the rows of the table it is a view of, and which of its
+ * declared `row-extras` that grant covers.
+ */
+export type RowAccess =
+  | {
+      status: 'granted';
+      grantedBy: string;
+      grantedAt: number;
+      via: string;
+      extras: string[];
+    }
+  | { status: 'none' }
+  /** Not shown as a table's view. */
+  | { status: 'unavailable' };
+
+/** What `store.requestRowAccess()` answers once the person chose. */
+export type RowAccessAnswer =
+  | { status: 'granted' }
+  | { status: 'denied'; reason: string };
+
 export interface PluginStore {
   getApp(): Promise<string>;
   getData(): Promise<DataRef | undefined>;
@@ -118,6 +140,18 @@ export interface PluginStore {
   subscribe(subject: string, handler: () => void): () => void;
   /** Feature-detected: hosts without integration-proxy support lack it. */
   proxy?: HostProxy;
+  /**
+   * Whether this app may edit the rows of the table it is a view of.
+   * Feature-detected (pin a12b74a has it), like `requestRowAccess`.
+   */
+  rowAccess?(): Promise<RowAccess>;
+  /**
+   * Asks the person, in the host's own bar ("Allow editing" / "Not now"),
+   * to let this app edit the table's rows and keep its `row-extras` on them.
+   * Answered straight away when a live grant already covers every extra the
+   * App declares now.
+   */
+  requestRowAccess?(): Promise<RowAccessAnswer>;
   /**
    * Opens an http(s) link in a new tab once the person confirms it: the
    * frame has no popup rights. Feature-detected, like the three below.

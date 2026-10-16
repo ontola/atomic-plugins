@@ -4,7 +4,7 @@
  * (DESIGN.md 6.6, 6.10). Dates are ISO strings compared as text; `today` is
  * passed in so tests (and the screenshot harness) pin it.
  */
-import { isOut } from './amounts.js';
+import { isAmount, isOut } from './amounts.js';
 import type { Txn } from './rows.js';
 
 export type PeriodKind =
@@ -102,7 +102,8 @@ export const matchesQuery = (row: Txn, query: string) => {
 };
 
 export const matchesDirection = (row: Txn, direction: Direction) =>
-  direction === 'all' || (direction === 'out') === isOut(row.amount);
+  direction === 'all' ||
+  (isAmount(row.amount) && (direction === 'out') === isOut(row.amount));
 
 /** Every filter except the account: what the summary strip totals. */
 export function filterExceptAccount(

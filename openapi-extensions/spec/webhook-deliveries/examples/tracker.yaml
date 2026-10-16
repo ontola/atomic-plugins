@@ -1,0 +1,224 @@
+openapi: 3.1.0
+info:
+  title: Example Tracker (illustrative, not a real provider)
+  version: 1.0.0
+  description: >
+    A made-up task tracker with both hook models of the Webhook Deliveries
+    extension. Every name, header and number is invented.
+servers:
+  - url: https://api.tracker.example
+paths:
+  /projects/{projectId}:
+    get:
+      operationId: getProject
+      parameters:
+        - {
+            name: projectId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+      responses:
+        '200':
+          description: The project.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+  /projects/{projectId}/tasks:
+    get:
+      operationId: listTasks
+      parameters:
+        - {
+            name: projectId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+      responses:
+        '200': { description: The project's tasks. }
+  /projects/{projectId}/tasks/{taskId}:
+    get:
+      operationId: getTask
+      parameters:
+        - {
+            name: projectId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+        - { name: taskId, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: The task. }
+  /projects/{projectId}/webhooks:
+    get:
+      operationId: listWebhooks
+      parameters:
+        - {
+            name: projectId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+      responses:
+        '200': { description: "The project's webhooks, as an array." }
+    post:
+      operationId: createWebhook
+      parameters:
+        - {
+            name: projectId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+      responses:
+        '201': { description: 'The webhook, with its id.' }
+  /projects/{projectId}/webhooks/{webhookId}:
+    delete:
+      operationId: deleteWebhook
+      parameters:
+        - {
+            name: projectId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+        - {
+            name: webhookId,
+            in: path,
+            required: true,
+            schema: { type: string },
+          }
+      responses:
+        '204': { description: Deleted. }
+webhooks:
+  task:
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/TaskEvent' }
+      responses:
+        '204': { description: Accepted. }
+components:
+  schemas:
+    Project:
+      type: object
+      properties:
+        id: { type: string }
+        workspace: { type: string }
+    Task:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+    TaskEvent:
+      type: object
+      required: [kind, change, project, task]
+      properties:
+        kind: { const: task }
+        change: { enum: [created, updated, deleted] }
+        project:
+          type: object
+          properties:
+            id: { type: string }
+            workspace: { type: string }
+        task: { $ref: '#/components/schemas/Task' }
+  crudResources:
+    task:
+      schema: { $ref: '#/components/schemas/Task' }
+      identity:
+        urlTemplate: /projects/{projectId}/tasks/{taskId}
+        bindings:
+          taskId: { field: id }
+      collections:
+        projectTasks:
+          urlTemplate: /projects/{projectId}/tasks
+x-webhook-deliveries:
+  description: >
+    Illustrative. The application hook signs the raw body; dedicated project
+    hooks sign a timestamp and the body. Neither is a real provider's
+    behaviour.
+  verificationProfiles:
+    appHook:
+      algorithm: hmac-sha256
+      signedContent: rawBody
+      signature:
+        { in: header, name: Tracker-Signature, prefix: 'v1=', encoding: hex }
+      secret: { source: operatorConfigured }
+    projectHook:
+      algorithm: hmac-sha256
+      signedContent: timestampDotRawBody
+      signature: { in: header, name: Tracker-Signature, encoding: base64 }
+      timestamp:
+        {
+          in: header,
+          name: Tracker-Timestamp,
+          format: unixSeconds,
+          toleranceSeconds: 300,
+        }
+      secret: { source: receiverGenerated, minBytes: 32 }
+  delivery:
+    id: { in: header, name: Tracker-Delivery }
+    redelivery: sameId
+    eventType: $request.body#/kind
+    action: $request.body#/change
+    responseDeadlineSeconds: 15
+    maxPayloadBytes: 1048576
+  sources:
+    project:
+      key: $request.body#/project/id
+      access:
+        operation: { method: get, path: '/projects/{projectId}' }
+        key: $response.body#/id
+      context:
+        workspace: $request.body#/project/workspace
+  hooks:
+    sharedApplication:
+      verificationProfile: appHook
+      description: Configured once by the operator in the tracker's app settings.
+    dedicated:
+      verificationProfile: projectHook
+      source: project
+      create:
+        method: post
+        path: /projects/{projectId}/webhooks
+        body:
+          target: $receiver.url
+          signingSecret: $receiver.secret
+          kinds: $events
+      hookId: $response.body#/id
+      list:
+        method: get
+        path: /projects/{projectId}/webhooks
+        url: $response.body#/*/target
+        hookId: $response.body#/*/id
+      delete:
+        method: delete
+        path: /projects/{projectId}/webhooks/{webhookId}
+      hookIdParameter: webhookId
+      description: Needs the tracker's (invented) webhooks:write scope.
+  events:
+    task:
+      source: project
+      actions: [created, updated, deleted]
+      payload: { $ref: '#/webhooks/task' }
+      resources:
+        - resource: task
+          bindings:
+            projectId: $request.body#/project/id
+            taskId: $request.body#/task/id
+      collections:
+        - resource: task
+          collection: projectTasks
+          bindings:
+            projectId: $request.body#/project/id
+  revocations:
+    - event: access
+      actions: [revoked]
+      source: project
+      keys: $request.body#/projects/*/id
+    - event: workspace
+      actions: [deleted]
+      source: project
+      context: workspace
+      keys: $request.body#/workspace/id

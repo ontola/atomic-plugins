@@ -74,15 +74,25 @@ impl Catalog {
         Self::load_with_mirror(path, client, None).await
     }
 
-    /// Loads this checkout's `overlays/catalog/2026-10-02.json`, reading every source
+    /// Loads this checkout's default catalog
+    /// ([`crate::config::DEFAULT_CATALOG_FILE`]), reading every source
     /// under [`crate::config::OVERLAYS_PAGES_BASE`] from the checked-in
     /// `overlays/` folder instead of GitHub Pages, which only publishes it
     /// once merged to `main`. Other sources (the pinned
     /// `ontola/openapi-directory` OADs) are still downloaded.
     #[cfg(test)]
     pub(crate) async fn load_checked_in(client: &reqwest::Client) -> Result<Self, String> {
+        Self::load_checked_in_file(client, crate::config::DEFAULT_CATALOG_FILE).await
+    }
+
+    /// [`Catalog::load_checked_in`] for another catalog under `overlays/`.
+    #[cfg(test)]
+    pub(crate) async fn load_checked_in_file(
+        client: &reqwest::Client,
+        file: &str,
+    ) -> Result<Self, String> {
         let overlays = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../overlays");
-        let catalog = overlays.join("catalog/2026-10-02.json");
+        let catalog = overlays.join(file);
         Self::load_with_mirror(&catalog.to_string_lossy(), client, Some(&overlays)).await
     }
 
@@ -113,7 +123,14 @@ impl Catalog {
                         })?;
                 apply_overlay(&mut document, overlay, &platform.openapi, &overlay_url)?;
             }
+            refuse_ref_path_items(&platform.name, &document)?;
             if let Some(selection) = platform.selection {
+                for problem in crate::pacing::plan_selection_problems(&document, &selection) {
+                    tracing::warn!(
+                        platform = %platform.name,
+                        "throttlingPlans: {problem}; the bucket keeps within every tier"
+                    );
+                }
                 selections.insert(platform.name.clone(), Value::Object(selection));
             }
             insert_document(
@@ -150,15 +167,47 @@ impl Catalog {
         let template = paths
             .keys()
             .find(|template| path_matches(template, relative_path))?;
-        if !paths
-            .get(template)?
-            .get(method.to_ascii_lowercase())?
-            .is_object()
-        {
+        let operation = paths.get(template)?.get(method.to_ascii_lowercase())?;
+        if !operation.is_object() || !self.profile_covers(platform, &document, operation) {
             return None;
         }
         Some(server_url)
     }
+    /// The path of the platform's first server URL, without a trailing
+    /// `/`: the prefix of every allowlisted request path.
+    pub(crate) fn server_base_path(&self, platform: &str) -> Option<String> {
+        let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+        let server = document
+            .get("servers")?
+            .as_array()?
+            .first()?
+            .get("url")?
+            .as_str()?;
+        Some(
+            url::Url::parse(server)
+                .ok()?
+                .path()
+                .trim_end_matches('/')
+                .to_owned(),
+        )
+    }
+
+    /// The platform's composed document, when it declares
+    /// `x-webhook-deliveries` (Webhook Deliveries 0.1.0-draft). Read by the
+    /// generic webhook code for any platform alike.
+    pub(crate) fn webhook_document(&self, platform: &str) -> Option<Value> {
+        let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+        document.get("x-webhook-deliveries")?;
+        Some(document)
+    }
+
+    /// The header values the catalog fixes for an operation: a header
+    /// parameter with a `schema.default`, or a `schema.enum` of exactly one
+    /// value, whether it is `required` or not (a required one with neither
+    /// refuses the operation: `None`). They are always sent, and since the
+    /// header allowlists of pieces.md P1-P3 a fixed value also replaces a
+    /// caller's header of the same name (`proxy::upstream_request`), so an
+    /// optional header with a default can no longer be chosen by the caller.
     pub fn required_headers(
         &self,
         platform: &str,
@@ -223,6 +272,87 @@ impl Catalog {
             out.push((name.to_owned(), value.to_owned()));
         }
         Some(out)
+    }
+    /// Whether the operation that `method` and `path` resolve to declares a
+    /// header parameter called `name` (compared case-insensitively), on the
+    /// operation or its path item, with `$ref`s resolved. It decides only
+    /// whether the caller's header of that name may go upstream; the value
+    /// itself is not validated. Anything unresolvable is `false`.
+    pub fn declares_header_parameter(
+        &self,
+        platform: &str,
+        method: &str,
+        path: &str,
+        name: &str,
+    ) -> bool {
+        let declared = || -> Option<bool> {
+            let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+            let server = document
+                .get("servers")?
+                .as_array()?
+                .first()?
+                .get("url")?
+                .as_str()?;
+            let server_url = url::Url::parse(server).ok()?;
+            let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
+            let paths = document.get("paths")?.as_object()?;
+            let template = paths.keys().find(|t| path_matches(t, relative))?;
+            // `$ref` path items are refused at load (`refuse_ref_path_items`).
+            let path_item = paths.get(template)?.as_object()?;
+            let operation = path_item.get(&method.to_ascii_lowercase())?.as_object()?;
+            Some(
+                operation
+                    .get("parameters")
+                    .into_iter()
+                    .chain(path_item.get("parameters"))
+                    .flat_map(Value::as_array)
+                    .flatten()
+                    .filter_map(|parameter| match parameter.get("$ref") {
+                        Some(reference) => document.pointer(reference.as_str()?.strip_prefix('#')?),
+                        None => Some(parameter),
+                    })
+                    .any(|parameter| {
+                        parameter.get("in").and_then(Value::as_str) == Some("header")
+                            && parameter
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|declared| declared.eq_ignore_ascii_case(name))
+                    }),
+            )
+        };
+        declared().unwrap_or(false)
+    }
+    /// The `x-throttling` buckets the proxy paces for the operation that
+    /// `method` and `path` resolve to ([`crate::pacing::selected_buckets`]).
+    /// Nothing when the operation or the declaration cannot be resolved.
+    pub fn paced_buckets(
+        &self,
+        platform: &str,
+        method: &str,
+        path: &str,
+    ) -> Vec<crate::pacing::PacedBucket> {
+        let resolve = || -> Option<Vec<crate::pacing::PacedBucket>> {
+            let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+            document.get("x-throttling")?;
+            let server = document
+                .get("servers")?
+                .as_array()?
+                .first()?
+                .get("url")?
+                .as_str()?;
+            let server_url = url::Url::parse(server).ok()?;
+            let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
+            let paths = document.get("paths")?.as_object()?;
+            let template = paths.keys().find(|t| path_matches(t, relative))?;
+            let operation = paths.get(template)?.get(method.to_ascii_lowercase())?;
+            let plans = self
+                .selections
+                .get(platform)
+                .and_then(|selection| selection.get("throttlingPlans"))
+                .and_then(Value::as_object);
+            Some(crate::pacing::selected_buckets(&document, operation, plans))
+        };
+        resolve().unwrap_or_default()
     }
     /// A bounded, explicit request validation against the composed OAD:
     /// every declared *required* query parameter must be present, a
@@ -354,40 +484,86 @@ impl Catalog {
         }
         Ok(())
     }
+    /// The platform's OAuth provider, resolved exactly as
+    /// [`Catalog::security_scheme`] resolves it, so the scopes asked for and
+    /// the token endpoints used always belong to the selected scheme or
+    /// authentication profile. A platform that does not resolve to OAuth is
+    /// an error.
     pub fn oauth_provider(&self, platform: &str) -> Result<crate::providers::Provider, String> {
-        let source = self.get(platform).ok_or("unknown catalog platform")?;
-        let document = serde_yaml::from_str(source).map_err(|_| "invalid catalog document")?;
-        let scheme = match self
-            .selections
-            .get(platform)
-            .and_then(|selection| selection.get("oauthSecurityScheme"))
-        {
-            Some(Value::String(scheme)) => Some(scheme.as_str()),
-            Some(_) => return Err("oauthSecurityScheme selection must be a string".into()),
-            None => None,
-        };
-        crate::providers::Provider::from_document(&document, scheme)
+        match self.security_scheme(platform)? {
+            crate::providers::SecurityScheme::OAuth(provider) => Ok(provider),
+            _ => Err("platform does not use an OAuth security scheme".into()),
+        }
     }
-    /// Resolves whichever kind of security scheme (OAuth or static apiKey)
-    /// the platform's composed document declares, generically. Callers that
-    /// only work with one kind keep using `oauth_provider` directly.
+    /// Resolves whichever kind of security scheme (OAuth, static apiKey, a
+    /// bearer or basic http token, or none) the platform's composed document
+    /// declares, generically. With an
+    /// `authenticationProfile` selection the document may declare several
+    /// kinds, and the selected profile decides
+    /// (openapi-extensions/spec/authentication-profiles).
     pub fn security_scheme(
         &self,
         platform: &str,
     ) -> Result<crate::providers::SecurityScheme, String> {
         let source = self.get(platform).ok_or("unknown catalog platform")?;
         let document = serde_yaml::from_str(source).map_err(|_| "invalid catalog document")?;
-        let selection = self.selections.get(platform);
-        let read_selected = |key: &str| -> Result<Option<&str>, String> {
-            match selection.and_then(|selection| selection.get(key)) {
-                Some(Value::String(scheme)) => Ok(Some(scheme.as_str())),
-                Some(_) => Err(format!("{key} selection must be a string")),
-                None => Ok(None),
-            }
-        };
-        let oauth_scheme = read_selected("oauthSecurityScheme")?;
-        let api_key_scheme = read_selected("apiKeySecurityScheme")?;
-        crate::providers::SecurityScheme::from_document(&document, oauth_scheme, api_key_scheme)
+        if let Some(profile) = self.selected_profile(platform)? {
+            return crate::providers::SecurityScheme::for_profile(&document, profile);
+        }
+        let oauth_scheme = self.selected_string(platform, "oauthSecurityScheme")?;
+        let api_key_scheme = self.selected_string(platform, "apiKeySecurityScheme")?;
+        let http_scheme = self.selected_string(platform, "httpSecurityScheme")?;
+        crate::providers::SecurityScheme::from_document(
+            &document,
+            oauth_scheme,
+            api_key_scheme,
+            http_scheme,
+        )
+    }
+    fn selected_string(&self, platform: &str, key: &str) -> Result<Option<&str>, String> {
+        match self
+            .selections
+            .get(platform)
+            .and_then(|selection| selection.get(key))
+        {
+            Some(Value::String(value)) => Ok(Some(value.as_str())),
+            Some(_) => Err(format!("{key} selection must be a string")),
+            None => Ok(None),
+        }
+    }
+    /// The catalog's `authenticationProfile` selection. It names the whole
+    /// choice, so it may not be combined with a scheme selection that could
+    /// disagree with it.
+    fn selected_profile(&self, platform: &str) -> Result<Option<&str>, String> {
+        let profile = self.selected_string(platform, "authenticationProfile")?;
+        if profile.is_some()
+            && (self
+                .selected_string(platform, "oauthSecurityScheme")?
+                .is_some()
+                || self
+                    .selected_string(platform, "apiKeySecurityScheme")?
+                    .is_some()
+                || self
+                    .selected_string(platform, "httpSecurityScheme")?
+                    .is_some())
+        {
+            return Err(
+                "authenticationProfile selection excludes oauthSecurityScheme, apiKeySecurityScheme and httpSecurityScheme"
+                    .into(),
+            );
+        }
+        Ok(profile)
+    }
+    /// Whether the selected authentication profile, if any, covers
+    /// `operation`. A platform without a profile selection is unchanged:
+    /// its security was checked whole when it resolved.
+    fn profile_covers(&self, platform: &str, document: &Value, operation: &Value) -> bool {
+        match self.selected_profile(platform) {
+            Ok(None) => true,
+            Ok(Some(profile)) => crate::providers::profile_scheme(document, profile)
+                .is_ok_and(|scheme| crate::providers::covers(document, operation, scheme)),
+            Err(_) => false,
+        }
     }
     fn get(&self, platform: &str) -> Option<&str> {
         self.documents.get(platform).map(String::as_str)
@@ -396,6 +572,26 @@ impl Catalog {
 
 fn parse_catalog_config(source: &str, path: &str) -> Result<CatalogConfig, String> {
     serde_yaml::from_str(source).map_err(|err| format!("cannot parse {path}: {err}"))
+}
+
+/// Refuses a composed document whose `paths` holds a path item that is a
+/// `$ref` (OpenAPI 3.1) or not an object. No catalog uses one (checked
+/// against every dated catalog on 2026-10-09), and the allowlist, the fixed
+/// headers, request validation, pacing and the scope and profile walk in
+/// `providers.rs` all read path items in place. Refusing such a document at
+/// load keeps all of them consistent and cannot widen what is allowed.
+fn refuse_ref_path_items(platform: &str, document: &Value) -> Result<(), String> {
+    let Some(paths) = document.get("paths").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    for (path, item) in paths {
+        if !item.is_object() || item.get("$ref").is_some() {
+            return Err(format!(
+                "platform {platform:?}: path item {path:?} is a $ref or not an object; this proxy does not resolve $ref path items"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn insert_document(
@@ -599,6 +795,41 @@ pub async fn document(Path(file): Path<String>, State(state): State<AppState>) -
 #[cfg(test)]
 mod tests {
     #[test]
+    fn a_header_parameter_is_declared_only_where_the_operation_or_its_path_says_so() {
+        use serde_json::json;
+        let catalog = super::Catalog::from_test_document(
+            "test",
+            json!({"servers":[{"url":"https://example.com/v1"}],
+            "components":{"parameters":{"key":{"in":"header","name":"Idempotency-Key"}}},
+            "paths":{
+                "/items":{"post":{"parameters":[{"$ref":"#/components/parameters/key"}]},
+                    "put":{"parameters":[{"in":"query","name":"Idempotency-Key"}]}},
+                "/items/{id}":{"parameters":[{"in":"header","name":"idempotency-key"}],
+                    "patch":{}},
+                "/other":{"post":{}}
+            }}),
+            json!({}),
+        );
+        let declared = |method, path| {
+            catalog.declares_header_parameter("test", method, path, "idempotency-key")
+        };
+        assert!(declared("POST", "/v1/items"));
+        assert!(declared("PATCH", "/v1/items/7"));
+        // A query parameter of that name, another operation, another path,
+        // a path outside the server URL or an unknown platform: not declared.
+        assert!(!declared("PUT", "/v1/items"));
+        assert!(!declared("GET", "/v1/items"));
+        assert!(!declared("POST", "/v1/other"));
+        assert!(!declared("POST", "/items"));
+        assert!(!catalog.declares_header_parameter(
+            "other",
+            "POST",
+            "/v1/items",
+            "idempotency-key"
+        ));
+    }
+
+    #[test]
     fn fixed_header_defaults_are_explicit_and_operation_overrides_path() {
         use serde_json::json;
         let mut doc = json!({"servers":[{"url":"https://example.com/v1"}], "paths":{"/items": {
@@ -765,22 +996,31 @@ mod tests {
     }
     use super::*;
 
-    /// The default catalog is `overlays/catalog/2026-10-02.json` as GitHub Pages
-    /// publishes it, and every overlay it lists is a file in `overlays/`.
+    /// The default catalog is `overlays/` + `DEFAULT_CATALOG_FILE` as GitHub
+    /// Pages publishes it, and every overlay any dated catalog lists is a
+    /// file in `overlays/`.
     #[test]
     fn default_catalog_is_the_published_checked_in_catalog() {
-        use crate::config::{DEFAULT_CATALOG_PATH, OVERLAYS_PAGES_BASE};
+        use crate::config::{DEFAULT_CATALOG_FILE, DEFAULT_CATALOG_PATH, OVERLAYS_PAGES_BASE};
         assert_eq!(
             DEFAULT_CATALOG_PATH,
-            format!("{OVERLAYS_PAGES_BASE}catalog/2026-10-02.json")
+            format!("{OVERLAYS_PAGES_BASE}{DEFAULT_CATALOG_FILE}")
         );
         let overlays = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../overlays");
-        let config = parse_catalog_config(
-            &fs::read_to_string(overlays.join("catalog/2026-10-02.json")).unwrap(),
-            "catalog.json",
-        )
-        .unwrap();
-        for platform in config.platforms {
+        assert!(overlays.join(DEFAULT_CATALOG_FILE).is_file());
+        let mut catalogs: Vec<_> = fs::read_dir(overlays.join("catalog"))
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .collect();
+        catalogs.sort();
+        assert!(catalogs.len() >= 2, "{catalogs:?}");
+        let platforms = catalogs.iter().flat_map(|path| {
+            parse_catalog_config(&fs::read_to_string(path).unwrap(), &path.to_string_lossy())
+                .unwrap()
+                .platforms
+        });
+        for platform in platforms {
             // An OAD may be published from overlays/ too (the pets demo's is).
             if let Some(relative) = platform.openapi.strip_prefix(OVERLAYS_PAGES_BASE) {
                 assert!(
@@ -810,7 +1050,7 @@ mod tests {
     async fn default_catalog_pets_is_a_credential_free_read_of_one_collection() {
         let overlays = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../overlays");
         let catalog: Value = serde_json::from_str(
-            &fs::read_to_string(overlays.join("catalog/2026-10-02.json")).unwrap(),
+            &fs::read_to_string(overlays.join(crate::config::DEFAULT_CATALOG_FILE)).unwrap(),
         )
         .unwrap();
         let pets = catalog["platforms"]
@@ -818,7 +1058,7 @@ mod tests {
             .unwrap()
             .iter()
             .find(|platform| platform["name"] == "pets")
-            .expect("overlays/catalog/2026-10-02.json lists pets")
+            .expect("the default catalog lists pets")
             .clone();
         let only_pets = tempfile_path("pets-catalog.json");
         fs::write(
@@ -870,6 +1110,87 @@ mod tests {
             .is_ok());
     }
 
+    /// Swagger 2.0 OADs have no `components`. The 2026-10-02 audit behind
+    /// ontola/atomic-plugins#264 found 21 overlays pinned to a `swagger.yaml`
+    /// that target `$.components`, which `merge_at_target` refuses; their
+    /// `-v2-` revisions add root `x-paginationSchemes`/`x-crudResources`
+    /// instead (overlays/README.md, "Swagger 2.0 documents"). Composes every
+    /// Swagger 2.0 overlay under `overlays/APIs` on its own against its
+    /// pinned OAD: a current revision loads, a superseded one fails on
+    /// exactly that target. No dated catalog selects these providers.
+    #[tokio::test]
+    #[ignore = "downloads the pinned Swagger 2.0 OADs the overlays extend"]
+    async fn swagger2_overlay_revisions_compose_without_components() {
+        use crate::config::OVERLAYS_PAGES_BASE;
+        let overlays = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../overlays");
+        let mut files = Vec::new();
+        collect_overlays(&overlays.join("APIs"), &mut files);
+        files.sort();
+        let client = crate::build_http_client();
+        let (mut current, mut superseded) = (0, 0);
+        for path in files {
+            let overlay: Value = serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            let Some(extends) = overlay["extends"].as_str() else {
+                continue;
+            };
+            if !extends.ends_with("/swagger.yaml") {
+                continue;
+            }
+            let relative = path.strip_prefix(&overlays).unwrap().to_str().unwrap();
+            let name = path.file_name().unwrap().to_str().unwrap();
+            // `<kind>-<sha>-overlay.yaml` is superseded by `<kind>-v2-<sha>-overlay.yaml`;
+            // the pin validator enforces the 40-hex-digit sha in the name.
+            let (kind, rest) = name.split_at(name.len() - "-".len() - 40 - "-overlay.yaml".len());
+            let is_superseded =
+                !kind.ends_with("-v2") && path.with_file_name(format!("{kind}-v2{rest}")).is_file();
+            let catalog = tempfile_path("swagger.json");
+            fs::write(
+                &catalog,
+                serde_json::json!({"platforms": [{
+                    "name": "swagger",
+                    "openapi": extends,
+                    "overlays": [format!("{OVERLAYS_PAGES_BASE}{relative}")],
+                }]})
+                .to_string(),
+            )
+            .unwrap();
+            let result =
+                Catalog::load_with_mirror(&catalog.to_string_lossy(), &client, Some(&overlays))
+                    .await;
+            if is_superseded {
+                let error = result
+                    .err()
+                    .unwrap_or_else(|| panic!("{relative}: a superseded revision should not load"));
+                assert!(
+                    error.contains("overlay target \"$.components\" does not exist"),
+                    "{relative}: {error}"
+                );
+                superseded += 1;
+            } else {
+                if let Err(error) = result {
+                    panic!("{relative}: {error}");
+                }
+                current += 1;
+            }
+        }
+        assert_eq!(
+            superseded, 21,
+            "the audit's 21 superseded Swagger 2.0 overlays"
+        );
+        assert!(current >= 21, "{current} current Swagger 2.0 overlays");
+    }
+
+    fn collect_overlays(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                collect_overlays(&path, out);
+            } else if path.to_string_lossy().ends_with("-overlay.yaml") {
+                out.push(path);
+            }
+        }
+    }
+
     fn tempfile_path(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "integration-proxy-test-{}-{}",
@@ -893,15 +1214,6 @@ mod tests {
             .await
             .unwrap();
         for name in catalog.names() {
-            if name == "discord" {
-                // The dated catalog selects the full OAD. Its bot-token and
-                // OAuth mix remains declared until the auth follow-up lands.
-                assert!(catalog
-                    .security_scheme(&name)
-                    .unwrap_err()
-                    .contains("mixed-kind catalogs are not supported"));
-                continue;
-            }
             let scheme = catalog
                 .security_scheme(&name)
                 .unwrap_or_else(|error| panic!("{name}: {error}"));
@@ -909,11 +1221,17 @@ mod tests {
             // scopes (it authorizes by integration capability instead), so
             // it is the one OAuth platform excluded from the non-empty
             // check. Clockify uses a static apiKey scheme, which has none.
-            if let crate::providers::SecurityScheme::OAuth(provider) = scheme {
+            if let crate::providers::SecurityScheme::OAuth(provider) = &scheme {
                 if name != "notion" {
                     assert!(!provider.scopes.is_empty(), "{name}");
                 }
             }
+            // Q-086 added http bearer/basic schemes; no platform of this
+            // catalog resolves to one, so none changes kind.
+            assert!(
+                !matches!(scheme, crate::providers::SecurityScheme::Http(_)),
+                "{name}"
+            );
         }
         // atomic-plugins#121: Clockify's key field links to where a key is
         // made, and a pasted key is checked with GET /v1/user first.
@@ -1466,6 +1784,101 @@ mod tests {
         }
     }
 
+    /// pieces.md D4: a Produced Classes declaration (`x-produces`,
+    /// openapi-extensions/spec/produced-classes) set by an overlay on a CRUD
+    /// Resource Object comes back unchanged from `/catalog/<name>.yaml`. The
+    /// proxy composes and serves it like any other member and never reads it.
+    #[tokio::test]
+    async fn a_produced_class_declaration_passes_through_unchanged() {
+        use crate::config::OVERLAYS_PAGES_BASE;
+        let produces = serde_json::json!([
+            {
+                "class": "https://ontology.example/classes/time-entry-v1",
+                "lens": "https://ontology.example/lenses/example-time-entry-v1",
+                "description": "Een lopende timer heeft geen einde: \"end\" ontbreekt.",
+                "x-note": {"since": "2026-10-08", "weights": [1, 2.5, null, true]}
+            },
+            {"class": "urn:example:classes:cost-centre"}
+        ]);
+        let mirror = tempfile_path("mirror");
+        let source = mirror.join("example");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("openapi.yaml"),
+            "openapi: 3.0.3\ninfo: {title: Example, version: '1'}\nservers: [{url: 'https://api.example'}]\npaths: {}\ncomponents: {}\n",
+        )
+        .unwrap();
+        let resources = serde_json::json!({
+            "overlay": "1.0.0",
+            "info": {"title": "CRUD", "version": "1"},
+            "actions": [{"target": "$.components", "update": {"crudResources": {
+                "timeEntry": {"identity": {"urlTemplate": "/time-entries/{id}"}},
+                "project": {"identity": {"urlTemplate": "/projects/{id}"}}
+            }}}]
+        });
+        let classes = serde_json::json!({
+            "overlay": "1.0.0",
+            "info": {"title": "Produced classes", "version": "1"},
+            "actions": [{"target": "$.components.crudResources.timeEntry",
+                "update": {"x-produces": produces}}]
+        });
+        fs::write(
+            source.join("crud-overlay.yaml"),
+            serde_yaml::to_string(&resources).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            source.join("produces-overlay.yaml"),
+            serde_yaml::to_string(&classes).unwrap(),
+        )
+        .unwrap();
+        let catalog_file = mirror.join("catalog.json");
+        fs::write(
+            &catalog_file,
+            serde_json::json!({"platforms": [{
+                "name": "example",
+                "openapi": format!("{OVERLAYS_PAGES_BASE}example/openapi.yaml"),
+                "overlays": [
+                    format!("{OVERLAYS_PAGES_BASE}example/crud-overlay.yaml"),
+                    format!("{OVERLAYS_PAGES_BASE}example/produces-overlay.yaml"),
+                ],
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        let catalog = Catalog::load_with_mirror(
+            &catalog_file.to_string_lossy(),
+            &crate::build_http_client(),
+            Some(&mirror),
+        )
+        .await
+        .unwrap();
+        let mut state = crate::test_support::state(None);
+        state.catalog = catalog;
+        let app = crate::router(state);
+        let get = |uri: &'static str| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{uri}");
+                to_bytes(response.into_body(), usize::MAX).await.unwrap()
+            }
+        };
+        let document: Value = serde_yaml::from_slice(&get("/catalog/example.yaml").await).unwrap();
+        assert_eq!(
+            document["components"]["crudResources"]["timeEntry"]["x-produces"],
+            produces
+        );
+        assert!(document["components"]["crudResources"]["project"]
+            .get("x-produces")
+            .is_none());
+        assert!(document.get("x-produces").is_none());
+        fs::remove_dir_all(mirror.parent().unwrap()).unwrap();
+    }
+
     #[tokio::test]
     async fn consumer_selection_is_separate_from_api_metadata() {
         let app = test_router();
@@ -1535,6 +1948,275 @@ mod tests {
             catalog.oauth_provider("fixture").unwrap_err(),
             "oauthSecurityScheme selection must be a string"
         );
+    }
+
+    fn mixed_catalog(selection: Value) -> Catalog {
+        Catalog::from_test_document(
+            "mixed",
+            crate::test_support::mixed_profiles_document("https://api.example/v1"),
+            selection,
+        )
+    }
+
+    /// atomic-plugins#258: a request reaches only the operations the selected
+    /// profile covers, whatever else the document declares.
+    #[test]
+    fn a_selected_profile_allows_only_the_operations_it_covers() {
+        use serde_json::json;
+        let user = mixed_catalog(json!({"authenticationProfile": "user"}));
+        assert_eq!(
+            user.oauth_provider("mixed").unwrap().scopes,
+            ["guilds", "identify"]
+        );
+        for path in ["/v1/users/@me", "/v1/users/@me/guilds"] {
+            assert!(user.allows("mixed", "GET", path).is_some(), "{path}");
+        }
+        for (method, path) in [
+            ("GET", "/v1/channels/1/messages"),
+            ("POST", "/v1/channels/1/messages"),
+            ("GET", "/v1/public"),
+            ("GET", "/v1/combined"),
+            ("GET", "/v1/implicit"),
+        ] {
+            assert!(
+                user.allows("mixed", method, path).is_none(),
+                "{method} {path}"
+            );
+        }
+
+        let bot = mixed_catalog(json!({"authenticationProfile": "bot"}));
+        assert!(matches!(
+            bot.security_scheme("mixed"),
+            Ok(crate::providers::SecurityScheme::ApiKey(_))
+        ));
+        assert!(bot.oauth_provider("mixed").is_err());
+        for (method, path) in [
+            ("GET", "/v1/users/@me"),
+            ("GET", "/v1/channels/1/messages"),
+            ("POST", "/v1/channels/1/messages"),
+        ] {
+            assert!(
+                bot.allows("mixed", method, path).is_some(),
+                "{method} {path}"
+            );
+        }
+        for path in ["/v1/users/@me/guilds", "/v1/public", "/v1/combined"] {
+            assert!(bot.allows("mixed", "GET", path).is_none(), "{path}");
+        }
+    }
+
+    #[test]
+    fn a_mixed_kind_platform_without_a_valid_profile_selection_is_refused() {
+        use serde_json::json;
+        for selection in [
+            json!({}),
+            json!({"oauthSecurityScheme": "userOAuth"}),
+            json!({"apiKeySecurityScheme": "botToken"}),
+            json!({"authenticationProfile": "nobody"}),
+            json!({"authenticationProfile": null}),
+            json!({"authenticationProfile": ["user"]}),
+            // A profile names the whole choice; a scheme selection next to
+            // it could disagree, so the pair is refused even when it agrees.
+            json!({"authenticationProfile": "user", "oauthSecurityScheme": "userOAuth"}),
+            json!({"authenticationProfile": "bot", "apiKeySecurityScheme": "botToken"}),
+            json!({"authenticationProfile": "bot", "httpSecurityScheme": "botToken"}),
+            json!({"httpSecurityScheme": "botToken"}),
+        ] {
+            let catalog = mixed_catalog(selection.clone());
+            assert!(catalog.security_scheme("mixed").is_err(), "{selection}");
+            assert!(catalog.oauth_provider("mixed").is_err(), "{selection}");
+        }
+        // An invalid profile selection refuses every request, rather than
+        // falling back to allowing the whole document.
+        for selection in [
+            json!({"authenticationProfile": "nobody"}),
+            json!({"authenticationProfile": 1}),
+            json!({"authenticationProfile": "user", "oauthSecurityScheme": "userOAuth"}),
+            json!({"authenticationProfile": "user", "httpSecurityScheme": "userOAuth"}),
+        ] {
+            let catalog = mixed_catalog(selection.clone());
+            assert!(
+                catalog.allows("mixed", "GET", "/v1/users/@me").is_none(),
+                "{selection}"
+            );
+        }
+    }
+
+    /// Q-086: `httpSecurityScheme` picks one of several bearer or basic
+    /// schemes of a document that declares no other kind; it must be a
+    /// string, like the other scheme selections.
+    #[test]
+    fn an_http_selection_picks_one_of_several_http_schemes() {
+        use serde_json::json;
+        let catalog = |selection| {
+            Catalog::from_test_document(
+                "service",
+                json!({
+                    "servers": [{"url": "https://api.service.example"}],
+                    "components": {"securitySchemes": {
+                        "pat": {"type": "http", "scheme": "bearer"},
+                        "basicToken": {"type": "http", "scheme": "basic",
+                            "x-api-key-details": {"basicCredentials":
+                                {"token": "username", "password": ""}}}
+                    }},
+                    "security": [{"pat": []}, {"basicToken": []}],
+                    "paths": {"/items": {"get": {}}}
+                }),
+                selection,
+            )
+        };
+        assert!(catalog(json!({})).security_scheme("service").is_err());
+        assert!(catalog(json!({"httpSecurityScheme": 1}))
+            .security_scheme("service")
+            .is_err());
+        assert!(matches!(
+            catalog(json!({"httpSecurityScheme": "pat"})).security_scheme("service"),
+            Ok(crate::providers::SecurityScheme::Http(
+                crate::providers::HttpScheme {
+                    auth: crate::providers::HttpAuth::Bearer,
+                    ..
+                }
+            ))
+        ));
+        assert!(matches!(
+            catalog(json!({"httpSecurityScheme": "basicToken"})).security_scheme("service"),
+            Ok(crate::providers::SecurityScheme::Http(
+                crate::providers::HttpScheme {
+                    auth: crate::providers::HttpAuth::Basic(_),
+                    ..
+                }
+            ))
+        ));
+        assert!(catalog(json!({"httpSecurityScheme": "pat"}))
+            .oauth_provider("service")
+            .is_err());
+    }
+
+    /// Writes the `name` entry of the checked-in catalog `file` as a
+    /// one-platform catalog and loads it the way `load_checked_in` does.
+    async fn checked_in_platform(file: &str, name: &str) -> Catalog {
+        let overlays = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../overlays");
+        let catalog: Value =
+            serde_json::from_str(&fs::read_to_string(overlays.join(file)).unwrap()).unwrap();
+        let platform = catalog["platforms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|platform| platform["name"] == name)
+            .unwrap_or_else(|| panic!("{file} lists {name}"))
+            .clone();
+        let only = tempfile_path(&format!("{name}-catalog.json"));
+        fs::write(
+            &only,
+            serde_json::json!({"platforms": [platform]}).to_string(),
+        )
+        .unwrap();
+        Catalog::load_with_mirror(
+            &only.to_string_lossy(),
+            &crate::build_http_client(),
+            Some(&overlays),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// atomic-plugins#258 against the catalog-pinned full Discord OAD: the
+    /// default catalog selects the `discordUser` profile, which covers the
+    /// two OAuth reads and nothing else; the 2026-10-02 catalog, which
+    /// selects no profile, still refuses the mixed document. Composition
+    /// only: no live Discord account is involved.
+    #[tokio::test]
+    #[ignore = "downloads the pinned full Discord OAD"]
+    async fn default_catalog_discord_selects_the_user_profile_of_the_full_oad() {
+        let catalog = checked_in_platform(crate::config::DEFAULT_CATALOG_FILE, "discord").await;
+        let crate::providers::SecurityScheme::OAuth(provider) =
+            catalog.security_scheme("discord").unwrap()
+        else {
+            panic!("discord: expected the OAuth user profile");
+        };
+        assert_eq!(provider.scopes, ["guilds", "identify"]);
+        assert_eq!(
+            provider.authorization_url,
+            "https://discord.com/oauth2/authorize"
+        );
+        assert_eq!(
+            provider.token_url,
+            "https://discord.com/api/v10/oauth2/token"
+        );
+        assert_eq!(catalog.oauth_provider("discord"), Ok(provider));
+
+        let document: Value = serde_yaml::from_str(catalog.get("discord").unwrap()).unwrap();
+        let operations: Vec<(&String, &str, &Value)> = document["paths"]
+            .as_object()
+            .unwrap()
+            .iter()
+            .flat_map(|(path, item)| {
+                ["get", "put", "post", "delete", "patch"]
+                    .into_iter()
+                    .filter_map(move |method| Some((path, method, item.get(method)?)))
+            })
+            .collect();
+        // The full OAD, not the historical two-read subset.
+        assert!(operations.len() > 200, "{}", operations.len());
+        let covered: Vec<_> = operations
+            .iter()
+            .filter(|(_, _, operation)| {
+                crate::providers::covers(&document, operation, "discordOAuth")
+            })
+            .map(|(path, method, _)| format!("{method} {path}"))
+            .collect();
+        assert_eq!(covered, ["get /users/@me", "get /users/@me/guilds"]);
+        for path in ["/api/v10/users/@me", "/api/v10/users/@me/guilds"] {
+            assert_eq!(
+                catalog.allows("discord", "GET", path).unwrap().as_str(),
+                "https://discord.com/api/v10"
+            );
+        }
+        // Bot-token operations, operations of the OAD's implicit-flow
+        // scheme, and either-credential operations other than the two reads
+        // never get the user's token.
+        for (method, path) in [
+            ("GET", "/api/v10/channels/123/messages"),
+            ("POST", "/api/v10/channels/123/messages"),
+            ("GET", "/api/v10/guilds/123"),
+            ("GET", "/api/v10/users/@me/guilds/123/member"),
+            ("GET", "/api/v10/oauth2/@me"),
+            ("DELETE", "/api/v10/users/@me/guilds/123"),
+        ] {
+            assert!(
+                operations.iter().any(|(template, m, _)| {
+                    *m == method.to_ascii_lowercase()
+                        && path_matches(template, path.strip_prefix("/api/v10").unwrap())
+                }),
+                "{method} {path} should be in the OAD"
+            );
+            assert!(
+                catalog.allows("discord", method, path).is_none(),
+                "{method} {path}"
+            );
+        }
+
+        // The declared bot profile resolves on the same document, though no
+        // catalog selects it.
+        let crate::providers::SecurityScheme::ApiKey(bot) =
+            crate::providers::SecurityScheme::for_profile(&document, "discordBot").unwrap()
+        else {
+            panic!("discordBot: expected an apiKey profile");
+        };
+        assert_eq!(bot.name, "Authorization");
+        let bot_covered = operations
+            .iter()
+            .filter(|(_, _, operation)| crate::providers::covers(&document, operation, "BotToken"))
+            .count();
+        assert!(bot_covered > 200, "{bot_covered}");
+
+        // Without a profile selection the same composition is refused.
+        let dated = checked_in_platform("catalog/2026-10-02.json", "discord").await;
+        assert!(dated
+            .security_scheme("discord")
+            .unwrap_err()
+            .contains("mixed-kind catalogs are not supported"));
+        assert!(dated.oauth_provider("discord").is_err());
     }
 
     #[tokio::test]
@@ -1635,6 +2317,68 @@ mod tests {
         .unwrap();
         assert_eq!(config.platforms[0].name, "example");
         assert!(valid_platform_name("bad_name").is_err());
+    }
+
+    /// No catalog uses a `$ref` path item, and no lookup resolves one: a
+    /// composed document with one (from the OAD or an overlay) is refused
+    /// at load, naming the platform and path, so the allowlist cannot
+    /// change silently.
+    #[tokio::test]
+    async fn a_ref_path_item_is_refused_at_load() {
+        use crate::config::OVERLAYS_PAGES_BASE;
+        let mirror = tempfile_path("mirror");
+        let source = mirror.join("example");
+        fs::create_dir_all(&source).unwrap();
+        let load = |paths: Value| {
+            let (mirror, source) = (mirror.clone(), source.clone());
+            async move {
+                fs::write(
+                    source.join("openapi.yaml"),
+                    serde_yaml::to_string(&serde_json::json!({
+                        "openapi": "3.1.0",
+                        "info": {"title": "Example", "version": "1"},
+                        "servers": [{"url": "https://api.example"}],
+                        "paths": paths,
+                        "components": {"pathItems": {"shared": {"get": {}}}}
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                let catalog_file = mirror.join("catalog.json");
+                fs::write(
+                    &catalog_file,
+                    serde_json::json!({"platforms": [{
+                        "name": "example",
+                        "openapi": format!("{OVERLAYS_PAGES_BASE}example/openapi.yaml"),
+                    }]})
+                    .to_string(),
+                )
+                .unwrap();
+                Catalog::load_with_mirror(
+                    &catalog_file.to_string_lossy(),
+                    &crate::build_http_client(),
+                    Some(&mirror),
+                )
+                .await
+            }
+        };
+        let catalog = load(serde_json::json!({"/items": {"get": {}}}))
+            .await
+            .unwrap();
+        assert!(catalog.allows("example", "GET", "/items").is_some());
+        for paths in [
+            serde_json::json!({"/items": {"get": {}}, "/shared": {"$ref": "#/components/pathItems/shared"}}),
+            serde_json::json!({"/shared": "not an object"}),
+        ] {
+            let error = load(paths).await.err().expect("refused");
+            assert!(
+                error.contains(
+                    "platform \"example\": path item \"/shared\" is a $ref or not an object"
+                ),
+                "{error}"
+            );
+        }
+        fs::remove_dir_all(mirror.parent().unwrap()).unwrap();
     }
 
     #[test]

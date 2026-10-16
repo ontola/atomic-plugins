@@ -39,6 +39,204 @@ pub struct Config {
     /// `OPERATOR_URL`: optional absolute http(s) link for the operator's
     /// name on those pages.
     pub operator_url: Option<String>,
+    /// `KEY_CHECK_LIMIT_PER_HOUR`: the most API key or token checks the
+    /// consent form makes for one client network and platform in any hour.
+    /// Defaults to [`DEFAULT_KEY_CHECK_LIMIT_PER_HOUR`]; `0` turns the limit
+    /// off.
+    pub key_check_limit_per_hour: u32,
+    /// `TRUST_FORWARDED_FOR`: where the client address of that limit comes
+    /// from. Defaults to [`TrustForwardedFor::None`].
+    pub trust_forwarded_for: TrustForwardedFor,
+    /// `WEBHOOKS_ENABLED` and the webhook inbox's limits. Off by default.
+    pub webhooks: WebhookConfig,
+    /// Registered public device clients and the owner approval bridge. Disabled by default.
+    pub device: crate::device::DeviceConfig,
+}
+
+/// The webhook inbox (ontola/atomic-plugins#369). Off unless
+/// `WEBHOOKS_ENABLED=true`: then, and only then, the proxy creates the inbox
+/// tables and runs the inbox sweeper. No webhook route is mounted yet.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct WebhookConfig {
+    /// `WEBHOOKS_ENABLED`: `true` turns the inbox on; unset, empty or
+    /// `false` leaves it off. Anything else stops the proxy at startup.
+    pub enabled: bool,
+    /// `WEBHOOK_INBOX_MAX_BYTES`: the deployment's inbox budget in bytes,
+    /// payloads plus the stated per-row overhead. Defaults to
+    /// [`DEFAULT_WEBHOOK_INBOX_MAX_BYTES`] (1 GiB).
+    pub inbox_max_bytes: i64,
+    /// `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`: failed verifications one
+    /// existing endpoint counts per minute, per instance; over it, further
+    /// ones get `429` instead of `401`. A delivery that verifies is never
+    /// refused for it. Default 600.
+    pub ingress_per_endpoint_per_minute: u32,
+    /// `WEBHOOK_INGRESS_LIMIT_PER_NETWORK`: refusals one client network (as
+    /// `TRUST_FORWARDED_FOR` finds it) may cause per minute, per instance
+    /// (not `400` or `408`). Over it, its requests for ids that name no
+    /// endpoint get `429`, and at most 2 requests of networks over their
+    /// limit may wait for or hold the lookup slot at a time. Default 120.
+    pub ingress_per_network_per_minute: u32,
+    /// `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`: subscription requests per
+    /// connection owner per hour, per instance, counted before the access
+    /// check reaches the provider. Default 20.
+    pub subscribe_per_owner_per_hour: u32,
+}
+
+impl Default for WebhookConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            inbox_max_bytes: DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
+            ingress_per_endpoint_per_minute: 600,
+            ingress_per_network_per_minute: 120,
+            subscribe_per_owner_per_hour: 20,
+        }
+    }
+}
+
+/// The largest value of a webhook rate limit.
+const MAX_WEBHOOK_LIMIT: u32 = 100_000;
+
+fn webhook_limit(name: &str, value: Option<&str>, default: u32) -> Result<u32, String> {
+    match value.map(str::trim) {
+        None | Some("") => Ok(default),
+        Some(value) => match value.parse::<u32>() {
+            Ok(limit) if (1..=MAX_WEBHOOK_LIMIT).contains(&limit) => Ok(limit),
+            _ => Err(format!(
+                "{name} must be a whole number from 1 to {MAX_WEBHOOK_LIMIT}"
+            )),
+        },
+    }
+}
+
+/// The deployment inbox budget when `WEBHOOK_INBOX_MAX_BYTES` is unset: the
+/// plan's 1 GiB pilot value.
+pub const DEFAULT_WEBHOOK_INBOX_MAX_BYTES: i64 = 1 << 30;
+
+/// The smallest `WEBHOOK_INBOX_MAX_BYTES` accepted: the owner budget
+/// (256 MiB), so one owner's limit can always be reached before the
+/// deployment's.
+const MIN_WEBHOOK_INBOX_MAX_BYTES: i64 = 256 << 20;
+
+/// The webhook variables as read from the environment, by name.
+pub(crate) type WebhookVariables<'a> = &'a dyn Fn(&str) -> Option<String>;
+
+#[cfg(test)]
+pub(crate) fn webhook_config(
+    enabled: Option<&str>,
+    inbox_max_bytes: Option<&str>,
+) -> Result<WebhookConfig, String> {
+    webhook_config_with(enabled, inbox_max_bytes, &|_| None)
+}
+
+/// [`webhook_config`] plus the rate limits, read only when the inbox is on.
+pub(crate) fn webhook_config_with(
+    enabled: Option<&str>,
+    inbox_max_bytes: Option<&str>,
+    variable: WebhookVariables<'_>,
+) -> Result<WebhookConfig, String> {
+    let enabled = match enabled.map(str::trim) {
+        None | Some("") | Some("false") => false,
+        Some("true") => true,
+        Some(_) => return Err("WEBHOOKS_ENABLED must be true or false".into()),
+    };
+    // Read only when the inbox is on: off, the variable is ignored.
+    let inbox_max_bytes = match inbox_max_bytes.map(str::trim).filter(|_| enabled) {
+        None | Some("") => DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
+        Some(value) => match value.parse::<i64>() {
+            Ok(bytes) if bytes >= MIN_WEBHOOK_INBOX_MAX_BYTES => bytes,
+            _ => {
+                return Err(format!(
+                    "WEBHOOK_INBOX_MAX_BYTES must be a whole number of bytes, at least {MIN_WEBHOOK_INBOX_MAX_BYTES}"
+                ))
+            }
+        },
+    };
+    let defaults = WebhookConfig::default();
+    let limit = |name: &str, default: u32| {
+        if enabled {
+            webhook_limit(name, variable(name).as_deref(), default)
+        } else {
+            Ok(default)
+        }
+    };
+    Ok(WebhookConfig {
+        enabled,
+        inbox_max_bytes,
+        ingress_per_endpoint_per_minute: limit(
+            "WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT",
+            defaults.ingress_per_endpoint_per_minute,
+        )?,
+        ingress_per_network_per_minute: limit(
+            "WEBHOOK_INGRESS_LIMIT_PER_NETWORK",
+            defaults.ingress_per_network_per_minute,
+        )?,
+        subscribe_per_owner_per_hour: limit(
+            "WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER",
+            defaults.subscribe_per_owner_per_hour,
+        )?,
+    })
+}
+
+/// The key checks one client network may make per platform and hour when
+/// `KEY_CHECK_LIMIT_PER_HOUR` is unset. A person entering a key makes one to
+/// three.
+pub const DEFAULT_KEY_CHECK_LIMIT_PER_HOUR: u32 = 20;
+
+/// Which client address the key-check limit counts against
+/// (`TRUST_FORWARDED_FOR`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TrustForwardedFor {
+    /// `none`: the TCP peer address; every `X-Forwarded-For` is ignored.
+    /// Right when nothing sits in front of the proxy, and the default.
+    #[default]
+    None,
+    /// `heroku`, or its synonym `rightmost`: the right-most
+    /// `X-Forwarded-For` entry, the one the proxy in front appended (Heroku's
+    /// router does; so do Caddy and nginx with
+    /// `$proxy_add_x_forwarded_for`); everything to its left came from the
+    /// client and is ignored. Only right when every request reaches the
+    /// proxy through exactly one such proxy: without it a client can write
+    /// that entry itself.
+    RightMost,
+}
+
+impl std::str::FromStr for TrustForwardedFor {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, String> {
+        match value.trim() {
+            "" | "none" => Ok(Self::None),
+            "heroku" | "rightmost" => Ok(Self::RightMost),
+            _ => Err("TRUST_FORWARDED_FOR must be `none`, `heroku` or `rightmost`".into()),
+        }
+    }
+}
+
+/// The highest `KEY_CHECK_LIMIT_PER_HOUR` accepted. Each check may scan the
+/// network's slots, so a huge limit makes every key check slow (2,000,000
+/// took 640 ms per insert); `0` is the way to turn the limit off.
+pub const MAX_KEY_CHECK_LIMIT_PER_HOUR: u32 = 10_000;
+
+/// `KEY_CHECK_LIMIT_PER_HOUR`: unset or blank means
+/// [`DEFAULT_KEY_CHECK_LIMIT_PER_HOUR`], `0` means no limit; anything but a
+/// whole number from 0 to [`MAX_KEY_CHECK_LIMIT_PER_HOUR`] is refused at
+/// startup.
+pub(crate) fn key_check_limit(value: Option<&str>) -> Result<u32, String> {
+    let invalid = || {
+        format!(
+            "KEY_CHECK_LIMIT_PER_HOUR must be a whole number from 0 (no limit) to {MAX_KEY_CHECK_LIMIT_PER_HOUR}"
+        )
+    };
+    match value.map(str::trim) {
+        None | Some("") => Ok(DEFAULT_KEY_CHECK_LIMIT_PER_HOUR),
+        Some(value) => match value.parse::<u32>() {
+            Ok(limit) if limit <= MAX_KEY_CHECK_LIMIT_PER_HOUR => Ok(limit),
+            _ => Err(invalid()),
+        },
+    }
 }
 
 /// The operator name when `OPERATOR_NAME` is unset: neutral, because the
@@ -46,17 +244,24 @@ pub struct Config {
 pub const DEFAULT_OPERATOR_NAME: &str = "this integration proxy";
 
 /// Where GitHub Pages serves this repository's `overlays/` folder. Every
-/// overlay URL in `overlays/catalog/2026-10-02.json` starts with this prefix.
+/// overlay URL in the dated catalogs under `overlays/catalog/` starts with
+/// this prefix.
 pub const OVERLAYS_PAGES_BASE: &str = "https://ontola.github.io/atomic-plugins/overlays/";
 
-/// `overlays/catalog/2026-10-02.json` as GitHub Pages publishes it from this
+/// The default dated catalog's path under `overlays/`, for tests that read
+/// the checked-in copy; `default_catalog_is_the_published_checked_in_catalog`
+/// keeps it equal to [`DEFAULT_CATALOG_PATH`]'s.
+#[cfg(test)]
+pub const DEFAULT_CATALOG_FILE: &str = "catalog/2026-10-02-auth-profiles.json";
+
+/// `overlays/catalog/2026-10-02-auth-profiles.json` as GitHub Pages publishes it from this
 /// repository's `main`, used when `CATALOG_PATH` is not set. Unlike the
 /// unversioned catalog this replaced, its dated file and selected overlay
 /// revisions are immutable; the proxy reads it once, at startup. Shared with
 /// tests that need to validate the exact catalog the application would load
 /// by default (they read the checked-in copy; see `Catalog::load_checked_in`).
 pub const DEFAULT_CATALOG_PATH: &str =
-    "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json";
+    "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json";
 
 /// Reads a required environment variable and rejects it if unset or blank,
 /// so a blank `.env` value fails configuration explicitly instead of being
@@ -164,6 +369,16 @@ impl Config {
             .map(|value| list(&value));
         let operator_name = operator_name(env::var("OPERATOR_NAME").ok().as_deref());
         let operator_url = validate_operator_url(env::var("OPERATOR_URL").ok().as_deref())?;
+        let key_check_limit_per_hour =
+            key_check_limit(env::var("KEY_CHECK_LIMIT_PER_HOUR").ok().as_deref())?;
+        let trust_forwarded_for = env::var("TRUST_FORWARDED_FOR")
+            .unwrap_or_default()
+            .parse()?;
+        let webhooks = webhook_config_with(
+            env::var("WEBHOOKS_ENABLED").ok().as_deref(),
+            env::var("WEBHOOK_INBOX_MAX_BYTES").ok().as_deref(),
+            &|name| env::var(name).ok(),
+        )?;
 
         Ok(Self {
             base_url,
@@ -176,6 +391,10 @@ impl Config {
             allowed_agents,
             operator_name,
             operator_url,
+            key_check_limit_per_hour,
+            trust_forwarded_for,
+            webhooks,
+            device: crate::device::DeviceConfig::from_env()?,
         })
     }
 
@@ -268,11 +487,92 @@ mod tests {
             allowed_agents: None,
             operator_name: DEFAULT_OPERATOR_NAME.into(),
             operator_url: None,
+            key_check_limit_per_hour: 0,
+            trust_forwarded_for: TrustForwardedFor::None,
+            webhooks: WebhookConfig::default(),
+            device: Default::default(),
         };
         assert_eq!(config.public_origin(), "https://proxy.example:8443");
         assert_eq!(config.public_host(), "proxy.example:8443");
         assert_eq!(public_host("https://proxy.example"), "proxy.example");
         assert_eq!(public_host("http://127.0.0.1:8080"), "127.0.0.1:8080");
+    }
+
+    #[test]
+    fn webhooks_are_off_unless_enabled_explicitly() {
+        assert_eq!(
+            webhook_config(None, None).unwrap(),
+            WebhookConfig::default()
+        );
+        assert!(!WebhookConfig::default().enabled);
+        assert_eq!(WebhookConfig::default().inbox_max_bytes, 1 << 30);
+        assert!(!webhook_config(Some(""), None).unwrap().enabled);
+        assert!(!webhook_config(Some("false"), None).unwrap().enabled);
+        assert!(webhook_config(Some("true"), None).unwrap().enabled);
+        for invalid in ["1", "yes", "TRUE", "on"] {
+            assert!(webhook_config(Some(invalid), None).is_err(), "{invalid}");
+        }
+        assert_eq!(
+            webhook_config(Some("true"), Some("536870912"))
+                .unwrap()
+                .inbox_max_bytes,
+            512 << 20
+        );
+        for invalid in ["0", "-1", "1e9", "268435455", "lots"] {
+            assert!(
+                webhook_config(Some("true"), Some(invalid)).is_err(),
+                "{invalid}"
+            );
+            // Off, the budget is not read at all.
+            assert_eq!(
+                webhook_config(None, Some(invalid)).unwrap(),
+                WebhookConfig::default()
+            );
+        }
+    }
+
+    #[test]
+    fn webhook_rate_limits_are_bounded_and_read_only_when_enabled() {
+        let vars = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| v.to_string())
+            }
+        };
+        let config = webhook_config_with(Some("true"), None, &|_| None).unwrap();
+        assert_eq!(
+            (
+                config.ingress_per_endpoint_per_minute,
+                config.ingress_per_network_per_minute,
+                config.subscribe_per_owner_per_hour
+            ),
+            (600, 120, 20)
+        );
+        let set = vars(&[
+            ("WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT", "1000"),
+            ("WEBHOOK_INGRESS_LIMIT_PER_NETWORK", "30"),
+            ("WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER", "5"),
+        ]);
+        let config = webhook_config_with(Some("true"), None, &set).unwrap();
+        assert_eq!(config.ingress_per_endpoint_per_minute, 1000);
+        assert_eq!(config.ingress_per_network_per_minute, 30);
+        assert_eq!(config.subscribe_per_owner_per_hour, 5);
+        for invalid in ["0", "-1", "100001", "lots", "1.5"] {
+            let bad = move |name: &str| {
+                (name == "WEBHOOK_INGRESS_LIMIT_PER_NETWORK").then(|| invalid.to_string())
+            };
+            assert!(
+                webhook_config_with(Some("true"), None, &bad).is_err(),
+                "{invalid}"
+            );
+            // Off, nothing is read.
+            assert_eq!(
+                webhook_config_with(None, None, &bad).unwrap(),
+                WebhookConfig::default()
+            );
+        }
     }
 
     #[test]
@@ -297,6 +597,33 @@ mod tests {
             "https://u:p@atomic.place",
         ] {
             assert!(validate_operator_url(Some(invalid)).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn the_key_check_limit_defaults_to_twenty_and_zero_turns_it_off() {
+        assert_eq!(key_check_limit(None).unwrap(), 20);
+        assert_eq!(key_check_limit(Some(" ")).unwrap(), 20);
+        assert_eq!(key_check_limit(Some("0")).unwrap(), 0);
+        assert_eq!(key_check_limit(Some(" 50 ")).unwrap(), 50);
+        assert_eq!(key_check_limit(Some("10000")).unwrap(), 10_000);
+        for invalid in ["-1", "twenty", "1.5", "10001", "2000000", "99999999999"] {
+            let error = key_check_limit(Some(invalid)).unwrap_err();
+            assert!(
+                error.contains("0 (no limit) to 10000"),
+                "{invalid}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn forwarded_for_is_trusted_only_when_named() {
+        assert_eq!("".parse(), Ok(TrustForwardedFor::None));
+        assert_eq!("none".parse(), Ok(TrustForwardedFor::None));
+        assert_eq!(" heroku ".parse(), Ok(TrustForwardedFor::RightMost));
+        assert_eq!("rightmost".parse(), Ok(TrustForwardedFor::RightMost));
+        for invalid in ["Heroku", "true", "all", "x-forwarded-for"] {
+            assert!(invalid.parse::<TrustForwardedFor>().is_err(), "{invalid}");
         }
     }
 

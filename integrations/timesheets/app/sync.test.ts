@@ -73,9 +73,10 @@ describe('ensureSchema', () => {
       'https://atomicdata.dev/datatypes/integer',
     );
     expect(property(schema.row.entryId)[PARENT]).toBe(ONTOLOGY);
-    // 1 row extra, 2 link extras, 3 settings, 7 log fields (lease and range
+    // 1 row extra, 2 link extras, 4 settings (the fourth names the table a
+    // sync binding is for, #177 item 14), 7 log fields (lease and range
     // edits: #123 M5), 4 sync extras (#123 M3, M4).
-    expect(store.resources.get(ONTOLOGY)![atomic.properties]).toHaveLength(17);
+    expect(store.resources.get(ONTOLOGY)![atomic.properties]).toHaveLength(18);
     // Nothing is added to any class: the columns are the shared class's.
     expect(store.resources.get(ROW_CLASS)![atomic.recommends]).toEqual([]);
     // Two tables under the App, of the shared project and person classes.

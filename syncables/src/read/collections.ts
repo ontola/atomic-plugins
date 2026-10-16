@@ -1,0 +1,523 @@
+import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
+import { resolveRefs } from '../openapi/resolve-refs.js';
+import { declaredThrottling } from '../throttling/throttling.js';
+import {
+  applySelection,
+  asText,
+  discoverReadModel,
+  listOperation,
+  rootParameters,
+  upstreamOf,
+  type QuerySelection,
+  type ReadCollection,
+  type ReadModel,
+} from './model.js';
+import {
+  bindPath,
+  Budget,
+  BudgetExhausted,
+  RetryBeyondDeadline,
+  walkPages,
+  type ReadLimits,
+  type WalkOutcome,
+  type WindowRange,
+} from './pages.js';
+import { resolveEffectiveScheme } from '../pagination/autodetect.js';
+import type { PaginationSchemeObject } from '../pagination/types.js';
+import { windowFields } from '../pagination/window.js';
+import {
+  pagingFields,
+  rangeParameters,
+  timeZoneParameters,
+  wallClockWindows,
+  wallClockQuery,
+  zoneReader,
+  type ReadCoverage,
+} from './time-zone.js';
+import { captureReadResponses, type StoreReadResponse } from './responses.js';
+import {
+  interpretRuntimeItems,
+  runtimeSchemasOf,
+  type RuntimeDescriber,
+  type RuntimeItem,
+  type RuntimeMembers,
+} from './runtime-schemas.js';
+import type { Transport } from './transport.js';
+import { isListTombstone } from './list-tombstones.js';
+
+export interface CollectionReadOptions {
+  transport: Transport;
+  constants?: Record<string, string>;
+  /**
+   * Throttling 0.5.0 plan tiers: the account's plan, as the provider names
+   * it in a tier's `plans`. A Limit Object with `tiers` is then read
+   * through the tier that names it; without one, or with a plan no tier
+   * names, every tier is kept within at once.
+   */
+  throttlingPlan?: string;
+  selection?: QuerySelection;
+  limits?: Partial<ReadLimits>;
+  sleep?: (ms: number) => Promise<void>;
+  storeResponse?: StoreReadResponse;
+  probe?: boolean;
+  /** Legacy path-pair discovery is opt-in for the existing client API. */
+  legacy?: { identityField?: string };
+  /**
+   * A budget shared with requests the caller makes after the read (the
+   * client's deletion-evidence reads). When given, `limits`, `sleep` and
+   * `storeResponse` are not used: the budget's own transport and limits are.
+   */
+  budget?: Budget;
+  /**
+   * The range to read a collection over when its list operation applies a
+   * `rangeWindow` pagination scheme (Pagination Schemes 0.5.0 §4.6), both
+   * bounds in the scheme's window format; `undefined` leaves such a
+   * collection unread, with an error. Which range to read is the caller's
+   * choice. Not called for other collections.
+   */
+  ranges?: (
+    collection: ReadCollection,
+    path: Record<string, string>,
+  ) => WindowRange | undefined;
+  /** Called per accepted record, before it is added to its collection. */
+  onRecord?: (
+    value: Record<string, unknown>,
+    collection: ReadCollection,
+    path: Record<string, string>,
+  ) => void;
+}
+
+export interface CollectionSnapshot {
+  collection: ReadCollection;
+  pathParams: Record<string, string>;
+  items: Record<string, unknown>[];
+  /**
+   * False when a page, identity check, storage hook or budget failed, or
+   * when the read returned every page but is never complete in the
+   * Collection Completeness sense (`notComplete` says why). Only a complete
+   * snapshot may be used to infer that an absent record is gone.
+   */
+  complete: boolean;
+  error?: string;
+  /**
+   * Present when the list operation has `x-time-zone` query parameters
+   * (Filtering 0.2.0-draft) with values: the values sent and the UTC span
+   * the read is known to cover.
+   */
+  coverage?: ReadCoverage;
+  /** Why a read that ended without an error is still not complete. */
+  notComplete?: string;
+  /**
+   * Deletion Feeds 0.3.0-draft §4.5: the ids of the list tombstones this
+   * read returned (deleted when it was read), in the order read; they are
+   * not in `items`. Present when the collection declares
+   * `x-list-tombstone`; empty when the read ended with an error. An item
+   * with the marker but no id is skipped (it names no object). An object
+   * returned twice in one read, as a member or a list tombstone, fails the
+   * read as a repeated identity.
+   */
+  tombstones?: string[];
+  /**
+   * For a resource that declares `x-runtime-schema` (Runtime Schemas
+   * 0.1.0-draft): each item's user-defined members, interpreted against its
+   * describer's class, in the order of `items`.
+   */
+  runtimeMembers?: RuntimeMembers[];
+}
+
+export interface CollectionReadResult {
+  collections: CollectionSnapshot[];
+  errors: string[];
+  /**
+   * Present when a read resource declares `x-runtime-schema`: every
+   * describer the items named, read once (twice after an unmatched member),
+   * with the class derived from it or the error that left its items without
+   * one.
+   */
+  describers?: RuntimeDescriber[];
+  /**
+   * The entries of `errors` about describers that could not be read: they
+   * leave items without a class, not a collection incomplete. They are the
+   * last entries of `errors`, after every collection's. Present with
+   * `describers`.
+   */
+  describerErrors?: string[];
+}
+
+interface Origin {
+  value: Record<string, unknown>;
+  path: Record<string, string>;
+}
+
+export class ProbeDone extends Error {}
+
+/** Every combination of provider values, one parent record per provider collection. */
+function invocations(
+  collection: ReadCollection,
+  model: ReadModel,
+  constants: Record<string, string>,
+  origins: Map<string, Origin[]>,
+): Record<string, string>[] {
+  const groups = new Map<string, { param: string; field: string }[]>();
+  for (const param of collection.contextParams) {
+    if (param in constants) {
+      continue;
+    }
+    const provider = model.providers.get(param);
+    if (!provider) {
+      continue;
+    }
+    groups.set(provider.collection, [
+      ...(groups.get(provider.collection) ?? []),
+      { param, field: provider.field },
+    ]);
+  }
+
+  let combos: Record<string, string>[] = [{ ...constants }];
+  for (const [source, params] of groups) {
+    const next: Record<string, string>[] = [];
+    for (const combo of combos) {
+      for (const parent of origins.get(source) ?? []) {
+        const values = { ...parent.path, ...combo };
+        for (const { param, field } of params) {
+          values[param] = asText(parent.value[field]);
+        }
+        if (params.every(({ param }) => values[param])) {
+          next.push(values);
+        }
+      }
+    }
+    combos = next;
+  }
+
+  const seen = new Set<string>();
+  return combos.filter((combo) => {
+    const key = JSON.stringify(
+      collection.contextParams.map((p) => combo[p] ?? ''),
+    );
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Raw provider collections, using the same traversal as the typed reader and local replica. */
+export async function readCollections(
+  document: OpenApiDocument,
+  options: CollectionReadOptions,
+): Promise<CollectionReadResult> {
+  const doc = resolveRefs(document);
+  const model = discoverReadModel(doc, options.legacy);
+  // The collections' own fixed query values, before a selection narrows
+  // them: they define a collection rather than narrow it (coverage).
+  const fixedQueries = new Map(
+    model.collections.map((c) => [c.name, { ...c.listQuery }]),
+  );
+  applySelection(doc, model, options.selection);
+  const constants = options.constants ?? {};
+  for (const param of rootParameters(model)) {
+    if (!constants[param]) throw new Error(`Enter a value for ${param}`);
+  }
+  const budget =
+    options.budget ??
+    new Budget(
+      captureReadResponses(options.transport, options.storeResponse),
+      options.limits,
+      options.sleep,
+      declaredThrottling(doc, options.throttlingPlan),
+    );
+  const upstream = upstreamOf(doc);
+  // Zones are read once per read and again after it (Filtering 0.2.0-draft).
+  const zones = zoneReader(
+    doc,
+    upstream,
+    (request) => budget.send(request),
+    (error) =>
+      error instanceof BudgetExhausted || error instanceof RetryBeyondDeadline,
+  );
+  const zoned: {
+    snapshot: CollectionSnapshot;
+    keys: Set<string>;
+    /** Read by range windows whose bounds went to x-time-zone parameters. */
+    windowed: boolean;
+  }[] = [];
+  // A resource whose x-runtime-schema cannot be used fails its collections
+  // before any request: its items' members could not be interpreted.
+  const runtimeFailures = new Map<string, string>();
+  const schemas = runtimeSchemasOf(doc, runtimeFailures);
+  const collections: CollectionSnapshot[] = [];
+  const errors: string[] = [];
+  const origins = new Map<string, Origin[]>();
+  const identities = new Set<string>();
+  let count = 0;
+  let exhausted = false;
+  let pending = [...model.collections];
+  while (pending.length && !exhausted) {
+    const waiting: ReadCollection[] = [];
+    let progressed = false;
+    for (const collection of pending) {
+      const sources = collection.contextParams
+        .filter((p) => !(p in constants))
+        .map((p) => model.providers.get(p)?.collection);
+      if (sources.some((s) => s === undefined || s === collection.name)) {
+        errors.push(`${collection.name}: its context has no provider`);
+        progressed = true;
+        continue;
+      }
+      if (!sources.every((source) => origins.has(source as string))) {
+        waiting.push(collection);
+        continue;
+      }
+      progressed = true;
+      const read: Origin[] = [];
+      for (const path of invocations(collection, model, constants, origins)) {
+        const snapshot: CollectionSnapshot = {
+          collection,
+          pathParams: path,
+          items: [],
+          complete: false,
+          ...(collection.listTombstone ? { tombstones: [] } : {}),
+        };
+        collections.push(snapshot);
+        try {
+          const failure = runtimeFailures.get(collection.resource);
+          if (failure !== undefined) throw new Error(failure);
+          const operation = listOperation(
+            doc,
+            collection.url,
+            collection.method,
+          );
+          // Preserve the legacy client's observable 405 for a paired collection without GET.
+          if (
+            !operation &&
+            !(options.legacy && doc.components?.['crudResources'] === undefined)
+          ) {
+            throw new Error(
+              `${collection.url} declares no ${collection.method} operation`,
+            );
+          }
+          let query = collection.listQuery;
+          // A probe makes one request and reads nothing: no zone reads.
+          const timeZoned =
+            operation && !options.probe
+              ? timeZoneParameters(
+                  doc.paths[collection.url]?.['parameters'],
+                  operation,
+                )
+              : [];
+          const range = options.ranges?.(collection, path);
+          // A range read by windows sends wall-clock bounds to x-time-zone
+          // window parameters (Pagination Schemes 0.5.0 x Filtering 0.2.0).
+          let windowValue:
+            | ((parameter: string, bound: string) => string | undefined)
+            | undefined;
+          if (timeZoned.length) {
+            let scheme: PaginationSchemeObject | undefined;
+            try {
+              scheme = resolveEffectiveScheme(
+                doc,
+                operation as OperationObject,
+              )?.scheme;
+            } catch {
+              // An unusable scheme fails the read in walkPages below.
+            }
+            const others = {
+              ranges: rangeParameters(
+                doc.paths[collection.url]?.['parameters'],
+                operation as OperationObject,
+              ),
+              paging: pagingFields(scheme),
+              fixed: fixedQueries.get(collection.name) ?? {},
+            };
+            const windows =
+              range && scheme?.type === 'rangeWindow' && scheme.window
+                ? await wallClockWindows(
+                    timeZoned,
+                    windowFields(scheme).filter(
+                      (field) => field.location === 'queryParameters',
+                    ),
+                    scheme.window,
+                    range,
+                    query,
+                    path,
+                    zones.read,
+                    others,
+                  )
+                : undefined;
+            const written =
+              windows ??
+              (await wallClockQuery(
+                timeZoned,
+                query,
+                path,
+                zones.read,
+                others,
+              ));
+            if (windows) windowValue = windows.windowValue;
+            query = written.query;
+            if (written.coverage) {
+              snapshot.coverage = written.coverage;
+              zoned.push({
+                snapshot,
+                keys: written.keys,
+                windowed: windows !== undefined,
+              });
+            }
+          }
+          const outcome: WalkOutcome = { complete: true };
+          for await (const page of walkPages({
+            document: doc,
+            operation: operation ?? { responses: {} },
+            budget,
+            upstream,
+            path: bindPath(collection.url, path),
+            method: collection.method,
+            query,
+            body: collection.listBody,
+            // The declared envelope, if any; else walkPages locates the array.
+            ...(collection.itemsField !== undefined
+              ? { itemsField: collection.itemsField }
+              : {}),
+            ...(collection.emptyWhenAbsent ? { emptyWhenAbsent: true } : {}),
+            ...(range ? { range } : {}),
+            ...(windowValue ? { windowValue } : {}),
+            identity: (value) => asText(value[collection.idField]),
+            outcome,
+          })) {
+            if (options.probe) throw new ProbeDone();
+            for (const value of page.items) {
+              const id = asText(value[collection.idField]);
+              const key = JSON.stringify([
+                collection.resource,
+                collection.contextParams.map((p) => path[p]),
+                id,
+              ]);
+              // A list tombstone reports a deletion and is not a member
+              // (§4.5); one without an identity names no object. Its
+              // identity counts as returned: the same object again in this
+              // read, as a member or a list tombstone, is a repeated item
+              // (a restore between pages, say), and the read fails below.
+              if (
+                collection.listTombstone &&
+                isListTombstone(collection.listTombstone, value)
+              ) {
+                if (!id) continue;
+                if (identities.has(key))
+                  throw new Error(
+                    'Missing or repeated record identity; pagination may not be forwarded by the proxy',
+                  );
+                identities.add(key);
+                (snapshot.tombstones ??= []).push(id);
+                continue;
+              }
+              if (!id || identities.has(key)) {
+                throw new Error(
+                  'Missing or repeated record identity; pagination may not be forwarded by the proxy',
+                );
+              }
+              if (count >= budget.limits.maxRecords) {
+                throw new BudgetExhausted(
+                  `Read exceeds ${budget.limits.maxRecords} records; narrow its scope`,
+                );
+              }
+              options.onRecord?.(value, collection, path);
+              identities.add(key);
+              count += 1;
+              snapshot.items.push(value);
+            }
+          }
+          snapshot.complete = outcome.complete;
+          if (!outcome.complete && outcome.reason) {
+            snapshot.notComplete = outcome.reason;
+          }
+          read.push(...snapshot.items.map((value) => ({ value, path })));
+        } catch (error) {
+          if (error instanceof ProbeDone)
+            return { collections: [], errors: [] };
+          if (options.probe) throw error;
+          snapshot.error =
+            error instanceof Error ? error.message : String(error);
+          // A read that ended with an error reports no list tombstones: a
+          // repeated item makes them unreliable, and a client acts only on
+          // those of reads that ended without one (§4.5).
+          if (snapshot.tombstones) snapshot.tombstones = [];
+          errors.push(`${collection.name}: ${snapshot.error}`);
+          if (error instanceof BudgetExhausted) {
+            exhausted = true;
+            break;
+          }
+        }
+      }
+      origins.set(collection.name, read);
+      if (exhausted) break;
+    }
+    if (!progressed) {
+      for (const c of waiting)
+        errors.push(`${c.name}: its parent collection could not be read`);
+      break;
+    }
+    pending = waiting;
+  }
+  if (options.probe) throw new Error('No collection available to check');
+  if (zoned.length) {
+    // Step 4: a zone that changed during the read leaves its span unknown.
+    let changed = new Set<string>();
+    try {
+      if (!exhausted) changed = await zones.recheck();
+    } catch {
+      // The budget ran out: no zone could be checked again.
+      changed = new Set(zoned.flatMap(({ keys }) => [...keys]));
+    }
+    if (exhausted) changed = new Set(zoned.flatMap(({ keys }) => [...keys]));
+    for (const { snapshot, keys, windowed } of zoned) {
+      const coverage = snapshot.coverage as ReadCoverage;
+      // A read by range windows that finished is never complete
+      // (Pagination Schemes 0.5.0 §4.6.4) but asked for its whole range;
+      // any other read that is not complete (failed, or ended by a short
+      // page that is not documented as the last) covers nothing known.
+      const finishedWindows =
+        windowed &&
+        snapshot.error === undefined &&
+        snapshot.notComplete !== undefined;
+      if (!snapshot.complete && !finishedWindows)
+        snapshot.coverage = { ...coverage, spans: null, reason: 'incomplete' };
+      else if ([...keys].some((key) => changed.has(key)))
+        snapshot.coverage = { ...coverage, spans: null, reason: 'zoneChanged' };
+      else if (finishedWindows && coverage.spans)
+        // The spans asked for stay, marked incomplete.
+        snapshot.coverage = { ...coverage, reason: 'incomplete' };
+    }
+  }
+  if (!schemas.size) return { collections, errors };
+  // Runtime Schemas §5.2: the describers are read in the same read as the
+  // items, after them, through the same budget.
+  const items: RuntimeItem[] = [];
+  for (const snapshot of collections) {
+    if (!schemas.has(snapshot.collection.resource)) continue;
+    const members: RuntimeMembers[] = [];
+    snapshot.runtimeMembers = members;
+    snapshot.items.forEach((item, index) =>
+      items.push({
+        resource: snapshot.collection.resource,
+        item,
+        context: snapshot.pathParams,
+        set: (interpreted) => {
+          members[index] = interpreted;
+        },
+      }),
+    );
+  }
+  const describerErrors: string[] = [];
+  const describers = await interpretRuntimeItems(
+    schemas,
+    items,
+    budget,
+    upstream,
+    describerErrors,
+  );
+  // Last, after every collection error: callers split `errors` by count.
+  errors.push(...describerErrors);
+  return { collections, errors, describers, describerErrors };
+}

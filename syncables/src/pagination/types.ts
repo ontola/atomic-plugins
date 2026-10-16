@@ -8,29 +8,113 @@
  * transformation.
  */
 
-export type SchemeType = 'pageNumber' | 'pageToken' | 'nextLink';
+export type SchemeType =
+  | 'pageNumber'
+  | 'pageToken'
+  | 'nextLink'
+  | 'rangeWindow';
 
 export type RequestRole =
   | 'page'
   | 'pageSize'
   | 'offset'
   | 'pageToken'
-  | 'cursor';
+  | 'cursor'
+  | 'previousPageToken'
+  | 'syncToken'
+  | 'windowStart'
+  | 'windowEnd'
+  | 'windowRange';
+
+export type WindowUnit = 'day' | 'second' | 'integer';
+export type WindowFormat =
+  | 'date'
+  | 'basicDate'
+  | 'dateTime'
+  | 'unixSeconds'
+  | 'integer';
+export type WindowBounds = 'closed' | 'halfOpen';
+
+/**
+ * Range Window Object (spec 0.5.0 §4.6.1): a `rangeWindow` scheme's
+ * operation has no page parameter and answers at most `cap` items; a client
+ * reads a range of one item field as windows, splitting a full window.
+ */
+export interface RangeWindowObject {
+  unit: WindowUnit;
+  /** How a bound is written (§4.6.2); fits `unit`. */
+  format: WindowFormat;
+  /** `closed`: `[start, end]`; `halfOpen`: `[start, end)`. */
+  bounds: WindowBounds;
+  /** The most items one answer holds; an answer with that many is full. */
+  cap: number;
+  /** The narrowest window the operation selects correctly, in units. Default 1. */
+  minimumWidth?: number;
+  /** JSON Pointer to the item field the range selects on. */
+  field?: string;
+  /** `unit: day` only: an IANA time zone, or `unspecified`. */
+  timeZone?: string;
+  description?: string;
+  [key: `x-${string}`]: unknown;
+}
 
 export type ResponseRole =
   | 'nextPageToken'
   | 'nextCursor'
   | 'nextLink'
+  | 'previousPageToken'
+  | 'previousLink'
+  | 'nextSyncToken'
   | 'totalCount'
   | 'totalPages'
   | 'pageSize'
-  | 'currentPage';
+  | 'currentPage'
+  | 'offset'
+  /** 0.9.0: `false` ends a read whose cursor is read from the last item. */
+  | 'hasMore';
+
+/**
+ * Link Resolution Object (spec 0.4.0 §4.4.3): the base a relative
+ * `nextLink`/`previousLink` value is resolved against. `request` (the
+ * default when absent) is the URL of the request that returned the link,
+ * `server` the server URL as a directory (a `/` appended when its path has
+ * none), `declared` the `url` field as written.
+ */
+export interface LinkResolutionObject {
+  base: 'request' | 'server' | 'declared';
+  /** Required with `base: declared`, forbidden otherwise: an absolute http(s) URL without userinfo or fragment. */
+  url?: string;
+  description?: string;
+  [key: `x-${string}`]: unknown;
+}
 
 export interface RequestFieldObject {
   description?: string;
   schema?: unknown;
   role?: RequestRole;
   required?: boolean;
+  /** `windowRange` only: the field's value, with `{start}` and `{end}` once each (§4.6.1). */
+  template?: string;
+  /** `page` only: the number of the first page (spec 0.6.0 §4.3.1). Default 1. */
+  start?: number;
+  /**
+   * `offset` only: how the next offset is worked out (spec 0.7.0 §4.3.2).
+   * `itemCount` (default) adds the items the page held; `pageSize` adds the
+   * page size and ends only at `totalCount`.
+   */
+  advance?: 'itemCount' | 'pageSize';
+  /**
+   * `pageToken` or `cursor` only (spec 0.9.0 §4.3.3, rule 27): a dot-path
+   * into an item; the next request sends that value of the previous
+   * page's last item.
+   */
+  fromLastItem?: string;
+  /**
+   * Beside `fromLastItem` only (spec 0.10.0 §4.3.3, rule 30): the order of
+   * the `fromLastItem` values across the items a read returns, which the
+   * client checks.
+   */
+  order?: 'ascending' | 'descending';
   [key: `x-${string}`]: unknown;
 }
 
@@ -45,12 +129,61 @@ export interface ResponseFieldObject {
   description?: string;
   schema?: unknown;
   role?: ResponseRole;
+  /** Only on a `nextLink` or `previousLink` field (§4.4.3). */
+  linkResolution?: LinkResolutionObject;
   [key: `x-${string}`]: unknown;
 }
 
+/**
+ * Short Page Object (spec 0.6.0 §4.4.5), on a `pageNumber` scheme: a page
+ * with fewer than `size` items ends the list. Only `documented` makes a
+ * read ended that way complete.
+ */
+export interface ShortPageObject {
+  /** Items in a full page, or `request` for the `pageSize` the client sends. */
+  size: number | 'request';
+  assurance: 'documented' | 'observed' | 'assumed';
+  description?: string;
+  [key: `x-${string}`]: unknown;
+}
+
+/**
+ * Envelope Object (spec §4.4.2): where the items array sits in the body.
+ * `itemsField` omitted or `null` means the body root is the array.
+ */
+export interface EnvelopeObject {
+  itemsField?: string | null;
+  /**
+   * Pagination Schemes 0.7.0 §4.4.2: a body in which the `itemsField` field
+   * is absent is a page with no items (for providers that leave an empty
+   * array out). Only with a non-empty string `itemsField` (rule 23).
+   */
+  emptyWhenAbsent?: boolean;
+  [key: `x-${string}`]: unknown;
+}
+
+export type JsonScalar = string | number | boolean | null;
+
+/**
+ * Pagination Schemes 0.8.0 §4.4.6: a response body value that marks the
+ * result the pages come from as cut short by the server (Notion's
+ * `request_status.type: incomplete` past 10,000 results). `field` is a
+ * dot-path of property names matched literally (no bracket escapes in this
+ * version); exactly one of `equals` and `in`, compared by JSON equality.
+ */
+export type IncompleteObject = {
+  field: string;
+  description?: string;
+  [key: `x-${string}`]: unknown;
+} & ({ equals: JsonScalar } | { in: JsonScalar[] });
+
 export interface ResponsePaginationFieldsObject {
+  envelope?: EnvelopeObject;
   bodyFields?: Record<string, ResponseFieldObject>;
   headers?: Record<string, ResponseFieldObject>;
+  shortPage?: ShortPageObject;
+  /** Pagination Schemes 0.8.0 §4.4.6. */
+  incomplete?: IncompleteObject;
   [key: `x-${string}`]: unknown;
 }
 
@@ -67,6 +200,8 @@ export interface PaginationSchemeObject {
   type: SchemeType;
   description?: string;
   autoDetect?: boolean | AutoDetectObject;
+  /** Required for `rangeWindow`, absent otherwise (§4.6). */
+  window?: RangeWindowObject;
   request?: RequestPaginationFieldsObject;
   response?: ResponsePaginationFieldsObject;
   [key: `x-${string}`]: unknown;
@@ -84,7 +219,19 @@ export type PaginationSchemesMap = Record<string, PaginationSchemeObject>;
 /** Everything derivable from a server response about the state of pagination. */
 export interface PaginationResponseState {
   nextPageToken: string | null;
+  /** The `nextLink` value when it is a non-empty string; see `nextLinkValue` for the rest. */
   nextLink: string | null;
+  /**
+   * The raw `nextLink`-role value as the response carried it (a body field
+   * read as is, a header's `rel="next"` target): `undefined` when absent.
+   * `resolveLink` (`links.ts`) decides whether it is followed; a value that
+   * is not a string is refused there, never coerced. Optional only so that
+   * a state built by hand (older callers) still type-checks;
+   * `parsePaginationState` always sets it.
+   */
+  nextLinkValue?: unknown;
+  /** The Link Resolution Object of the field that carried `nextLink`, if any. */
+  nextLinkResolution?: LinkResolutionObject | null;
   currentPage: number | null;
   totalCount: number | null;
   totalPages: number | null;

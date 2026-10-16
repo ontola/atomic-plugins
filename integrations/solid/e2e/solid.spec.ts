@@ -27,6 +27,7 @@
  * the test then skips with that reason instead of failing.
  */
 import { readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 import { test, expect } from '@playwright/test';
@@ -40,10 +41,13 @@ import {
 } from '@tomic/lib';
 import {
   before,
-  createFromCatalog,
   getDevDriveSecret,
   SERVER_URL,
 } from '../../../browser/e2e/tests/test-utils';
+import {
+  openNewPluginDraft,
+  waitForOutboxDrained,
+} from '../../tooling/e2e/route-install';
 import { startIssuer, type TestIssuer } from './issuer';
 
 // Playwright loads this spec as CommonJS (no package.json with "type"
@@ -68,7 +72,14 @@ test.describe('Solid pod', () => {
     'run through run-lane.mjs solid, which sets the level, routes origin and issuer',
   );
   test.beforeAll(async () => {
-    issuer = await startIssuer(ISSUER);
+    // One key for every attempt of this run: a retry's new worker must not
+    // present a `kid` the server has not seen yet (./issuer.ts). Workers are
+    // children of the run's one runner process, so its pid names the run.
+    // Kept out of the output directory, which CI uploads.
+    issuer = await startIssuer(
+      ISSUER,
+      resolve(tmpdir(), `atomic-plugins-solid-issuer-${process.ppid}.json`),
+    );
   });
   test.afterAll(async () => {
     await issuer?.close();
@@ -293,12 +304,7 @@ _:p a solid:InsertDeletePatch;
  * URL and the folder.
  */
 async function installPod(page: import('@playwright/test').Page) {
-  await createFromCatalog(page, 'Plugin');
-  await expect(
-    page
-      .getByRole('main')
-      .getByRole('heading', { name: 'New plugin', level: 1 }),
-  ).toBeVisible({ timeout: 45_000 });
+  await openNewPluginDraft(page);
   const target = await page.evaluate(
     async ({ code }) => {
       const store = window.store!;
@@ -385,6 +391,8 @@ async function installPod(page: import('@playwright/test').Page) {
     },
     { target: storage, writer: pluginAgent },
   );
+  // The page saved the write grant locally, so wait for the server to have it.
+  await waitForOutboxDrained(page);
   const origin = new URL(ROUTES_ORIGIN);
   const pod = `${origin.protocol}//${routeSlug(installation)}.${origin.host}/`;
   issuer.setStorage('alice', pod);

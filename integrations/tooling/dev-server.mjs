@@ -4,15 +4,17 @@
  * `/integrations` route at build time (server/build.rs::embed_integrations,
  * removed in feat/plugin-debug 4bab16ee6), and even then it embedded its own
  * copy, never this repo's. This process serves the same filter the embed
- * used: a `plugin.js` anywhere under integrations/, plus the root
- * `catalog.json`. It also stands in for GitHub Pages for drive apps: it serves
+ * used: a `plugin.js` anywhere under integrations/ outside `node_modules`
+ * (an npm package can ship its own `plugin.js`, as `@atproto/crypto` does),
+ * plus the root `catalog.json`. It also stands in for GitHub Pages for drive apps: it serves
  * the committed `apps/<id>/<version>/ui.js` files at `/apps/...`, the same
  * layout Pages publishes, and the catalog it serves points `app-module` there
  * (see `localCatalog`). So an e2e installs exactly the bytes this checkout
  * would publish, through the same integrity check a published version gets,
  * before they are on Pages. In the same way it serves the committed shared
- * ontology (`ontology/...`, #177) at `/ontology/...`, with its subjects moved
- * to this server's origin and Pages' headers (`ontologyFile`, `serveTerm`).
+ * ontology (`ontology/...`, #177), lens catalog included, at `/ontology/...`,
+ * with its subjects moved to this server's origin and Pages' headers
+ * (`ontologyFile`, `serveTerm`).
  *
  * That is all it does. It used to also reverse-proxy everything else through
  * to a real atomic-server, so that one origin looked like an atomic-server
@@ -52,7 +54,7 @@ export function hostedAssets(base = root) {
       const full = join(dir, entry.name);
 
       if (entry.isDirectory()) {
-        walk(full, depth + 1);
+        if (entry.name !== 'node_modules') walk(full, depth + 1);
         continue;
       }
 
@@ -173,14 +175,16 @@ export function appModuleFile(path, base = root) {
 }
 
 /**
- * A committed ontology term file (`ontology/v<N>`, `ontology/classes/<name>`
- * or `ontology/properties/<shortname>`, written by `ontology-kit/ontology.mjs
- * build`) for a request path, or undefined. The pattern admits no `/`, `.` or
- * upper case in a segment, so the path cannot leave ontology/.
+ * A committed ontology file for a request path, or undefined: a term
+ * (`ontology/v<N>`, `ontology/classes/<name>`, `ontology/properties/<shortname>`)
+ * or a lens catalog file (`ontology/lenses/v<N>`, `ontology/lenses/<name>-v<N>`;
+ * see ontology-kit/LENSES.md), all written by `ontology-kit/ontology.mjs build`.
+ * The pattern admits no `/`, `.` or upper case in a segment, so the path
+ * cannot leave ontology/.
  */
 export function ontologyFile(path, base = root) {
   if (
-    !/^\/ontology\/(?:v[1-9][0-9]*|(?:classes|properties)\/[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(
+    !/^\/ontology\/(?:v[1-9][0-9]*|(?:classes|properties|lenses)\/[a-z0-9]+(?:-[a-z0-9]+)*)$/.test(
       path,
     )
   )
@@ -337,7 +341,8 @@ if (
     console.error(`dev-server: ${e.message}`);
     process.exit(1);
   });
-  server.listen(port, () => {
+  // Loopback unless DEV_SERVER_HOST says otherwise (serve.mjs sets it).
+  server.listen(port, process.env.DEV_SERVER_HOST || '127.0.0.1', () => {
     const assets = [...hostedAssets().keys()];
     console.log(
       `dev-server: hosting ${assets.length} integration asset(s) ` +

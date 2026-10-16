@@ -1,0 +1,286 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developers.asana.com/docs/pagination
+overlay: 1.0.0
+info:
+  title: Asana ordinary collection cursors
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/b58c91d9f59c6a10178916e7948793809edae46d/APIs/asana.com/1.0/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      cursorData:
+        type: pageToken
+        autoDetect: false
+        description: Specify limit to enable pagination and return the opaque next_page.offset token through
+          offset. Preserve filters and opt_fields. Stop when next_page is null; tokens expire. The audit-log
+          stream is deliberately outside this ordinary collection scheme.
+        request:
+          queryParameters:
+            offset:
+              role: cursor
+            limit:
+              role: pageSize
+              required: true
+        response:
+          envelope:
+            itemsField: data
+          bodyFields:
+            next_page.offset:
+              role: nextCursor
+- target: $.paths['/workspaces/{workspace_gid}/agents'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/workspaces/{workspace_gid}/ai_studio/runs'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/workspaces/{workspace_gid}/ai_studio/seats'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/allocations'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/attachments'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/projects/{project_gid}/custom_field_settings'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/portfolios/{portfolio_gid}/custom_field_settings'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/goals/{goal_gid}/custom_field_settings'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/workspaces/{workspace_gid}/custom_fields'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/custom_types'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/goal_relationships'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/goals'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/memberships'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/ooo_entries'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/portfolio_memberships'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/portfolios/{portfolio_gid}/portfolio_memberships'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/portfolios'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/portfolios/{portfolio_gid}/items'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/projects/{project_gid}/project_memberships'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/projects/{project_gid}/project_portfolio_settings'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/portfolios/{portfolio_gid}/project_portfolio_settings'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/projects/{project_gid}/project_statuses'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/project_templates'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/teams/{team_gid}/project_templates'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/projects'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/tasks/{task_gid}/projects'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/teams/{team_gid}/projects'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/workspaces/{workspace_gid}/projects'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/rates'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/reactions'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/roles'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/projects/{project_gid}/sections'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/status_updates'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/tasks/{task_gid}/stories'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/goals/{goal_gid}/stories'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/tags'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/tasks/{task_gid}/tags'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/workspaces/{workspace_gid}/tags'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/task_templates'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/tasks'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/projects/{project_gid}/tasks'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/sections/{section_gid}/tasks'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/tags/{tag_gid}/tasks'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/user_task_lists/{user_task_list_gid}/tasks'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/tasks/{task_gid}/subtasks'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/tasks/{task_gid}/dependencies'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/tasks/{task_gid}/dependents'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/team_memberships'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/teams/{team_gid}/team_memberships'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/users/{user_gid}/team_memberships'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/workspaces/{workspace_gid}/teams'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/users/{user_gid}/teams'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/time_periods'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/time_tracking_categories/{time_tracking_category_gid}/time_tracking_entries'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/time_tracking_categories'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/tasks/{task_gid}/time_tracking_entries'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/time_tracking_entries'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/timesheet_approval_statuses'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/users'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/users/{user_gid}/favorites'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/webhooks'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/users/{user_gid}/workspace_memberships'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/workspaces/{workspace_gid}/workspace_memberships'].get
+  update:
+    x-pagination:
+    - scheme: cursorData
+- target: $.paths['/workspaces'].get
+  update:
+    x-pagination:
+    - scheme: cursorData

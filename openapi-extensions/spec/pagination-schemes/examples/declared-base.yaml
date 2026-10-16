@@ -1,0 +1,53 @@
+openapi: 3.0.3
+info:
+  title: Illustrative declared link base
+  version: 1.0.0
+  description: >
+    Synthetic. The Link header carries a relative-path reference meant
+    relative to https://api.example.com/v2/, whichever request returned it.
+servers:
+  - url: https://api.example.com/v2
+components:
+  paginationSchemes:
+    linkHeader:
+      type: nextLink
+      autoDetect: false
+      request:
+        queryParameters:
+          limit:
+            role: pageSize
+      response:
+        headers:
+          Link:
+            role: nextLink
+            linkResolution:
+              base: declared
+              url: https://api.example.com/v2/
+paths:
+  /projects/{projectId}/items:
+    get:
+      parameters:
+        - name: projectId
+          in: path
+          required: true
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer }
+      x-pagination:
+        - scheme: linkHeader
+      responses:
+        '200':
+          description: One page of items; the body is the array.
+          headers:
+            Link:
+              description: RFC 8288 links; rel="next" is a relative reference such as <items?cursor=abc>.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }

@@ -1,0 +1,775 @@
+# OpenAPI Deletion Feeds Extension
+
+**Spec version:** 0.3.0-draft
+
+---
+
+## 1. Introduction
+
+A client that keeps a local copy of a collection needs to know when an object
+it had was deleted. A read of the collection's list does not tell it: an
+object can be absent because it was deleted or because the list does not
+return it. The [Collection Completeness extension](../collection-completeness/README.md)
+covers lists that leave nothing out. Many APIs instead report deletions
+directly, in one of three shapes:
+
+* a list of changes since a cursor, in which deleted objects appear as
+  tombstones (a `deleted: true` field, a `status: deleted`);
+* an endpoint that lists deleted objects;
+* an event log in which an event's action or type says that an object was
+  deleted.
+
+This extension adds one field, `x-deletion-feed`, on a
+[CRUD Causality](../crud-causality/README.md) Collection Object (§4.2 there)
+or on the Operation Object of a `list` operation. It names the operation that
+returns the feed, how to recognise a tombstone and which object it is about,
+and, optionally, the cursor that limits a read to changes since the previous
+one.
+
+Some APIs keep a deleted object readable: its own read answers 2xx with a
+marker instead of 404 (Google Calendar's `status: cancelled`). A second
+field, `x-read-tombstone` (§4.4), on a CRUD Causality Resource Object (§4.1
+there) or on the Operation Object of the resource's `read` operation,
+declares that marker, so that such an answer reports the deletion. A third,
+`x-list-tombstone` (§4.5, since 0.3.0), declares the same kind of marker on
+items of a collection's own list reads, for lists that can return deleted
+objects among the others. A
+document can declare it with or without a feed. It is part of this
+extension rather than a sibling one because it is a Tombstone Object
+(§4.3) and changes what §4.3 and §5 say about the object's own read; a
+separate extension would have to amend both.
+
+### 1.1 Shapes in real APIs
+
+The documents below are the OpenAPI documents that overlays in this
+repository's [`overlays/APIs/`](../../../overlays/APIs/) extend, at the
+`ontola/openapi-directory` commit those overlays pin. What is described here
+is what those documents state; none of it has been checked against the live
+APIs. Google Calendar's are declared by three overlays, which no dated catalog
+selects yet:
+[`read-tombstone-v2-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/read-tombstone-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(`x-read-tombstone`, `status: cancelled` on the event read, except items with
+`recurringEventId`, from the document's own description; it supersedes the
+earlier revision without the exception),
+[`list-tombstone-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/list-tombstone-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(`x-list-tombstone` on the event list) and
+[`deletion-feed-32237fa5…`](../../../overlays/APIs/googleapis.com/calendar/v3/deletion-feed-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml)
+(`x-deletion-feed`, the event list read with `syncToken`, with the same
+exception).
+
+| API (document) | Feed | Cursor | Tombstone |
+|----------------|------|--------|-----------|
+| YNAB 1.0.0 (`youneedabudget.com/1.0.0`, `dec74da7`) | The list itself, e.g. `GET /budgets/{budget_id}/transactions`, with `last_knowledge_of_server` | Query `last_knowledge_of_server`; response `data.server_knowledge` | `deleted: true`; "Deleted transactions will only be included in delta requests". The document does not say what `GET /budgets/{budget_id}/transactions/{transaction_id}` answers for a deleted transaction |
+| Google Calendar v3 (`googleapis.com/calendar/v3`, `32237fa5`) | The list itself, `GET /calendars/{calendarId}/events`, with `syncToken` | Query `syncToken`; response `nextSyncToken`, on the last page only; 410 when it expired | `status: cancelled` ("cancelled (deleted)"); only `id` is guaranteed. The `get` method "always returns" cancelled events, and an organizer's cancelled events "can be restored (undeleted)" |
+| Asana 1.0 (`asana.com/1.0`, `bdea260b`) | `GET /events?resource=...`; `resource` is a required query parameter | Query `sync`; response `sync`; 412 with a fresh token for a missing or expired one; `has_more` | `action: deleted` (also `changed`, `added`, `removed`, `undeleted`); the object is `resource` |
+| Box 2.0.0 (`box.com/2.0.0`, `dec74da7`) | `GET /events`; also `GET /folders/trash/items` | Query `stream_position`; response `next_stream_position` | `event_type: ITEM_TRASH`. A trashed file stays readable at `GET /files/{file_id}/trash`; the document does not say whether its own `GET /files/{file_id}` then answers 404 |
+| Stripe 2022-11-15 (`stripe.com/2022-11-15`, `dec74da7`) | `GET /v1/events`, 30 days back | `ending_before`, an event id, newest first | `type: customer.deleted` and similar; the object is `data.object` |
+| Todoist 1 (`todoist.com/1`, `ac07532b`) | none in this document | none | `is_deleted` on projects and tasks |
+| Xero Accounting 2.9.4 (`xero.com/xero_accounting/2.9.4`, `c9c64afb`) | The lists, with an `If-Modified-Since` header | A time the client chooses | `Status: DELETED` on some objects |
+
+YNAB has the shape of this version (a change list with a cursor it returns
+and a tombstone marker), but its document does not say that a deleted
+transaction's own read answers 404 or 410 (§4.3); that is neither documented
+nor verified, as for Box below.
+
+Google Calendar's cancelled events are returned by the event's own `get`
+(a 2xx with `status: cancelled`), and an organizer's can be restored. They
+fit §4.3 only when the event resource declares that marker in
+`x-read-tombstone` (§4.4). Its event list read with `showDeleted=true`
+returns them among the other events; that fits `x-list-tombstone` (§4.5,
+§7.5). The same list read with the cursor alone fits `x-deletion-feed`:
+the document's `syncToken` says "All events deleted since the previous
+list request will always be in the result set and it is not allowed to
+set showDeleted to False", so the feed needs no `showDeleted`, and a read
+without a cursor may leave deletions out (§4.1). The sync guide asks that
+every request of a sync use the same query parameters, so the first cursor
+comes from a feed read without one (§4.2), not from a list read with other
+parameters (`showDeleted=true`, say). All three declarations
+need the same `except` condition (§4.3): the document gives "cancelled" to
+deleted events and to cancelled exceptions of a recurring event, which
+"should no longer be presented" and which clients "should store"; an
+exception carries `recurringEventId`, so it is excluded and is not a
+deletion, whether a read, a list or the feed answers it. None of these
+declarations has live evidence.
+
+The others do not fit (yet):
+
+* Asana's `GET /events` needs the required query parameter `resource`; fixed
+  query parameters of a feed are not covered (§8), so a consumer that sends
+  only the cursor gets an error.
+* Box's `ITEM_TRASH` has the shape, but whether a trashed item's own read
+  answers 404 or 410 (§4.3) is not documented; unverified.
+* Stripe's cursor is the id of the newest event and its events come newest
+  first, Xero's is a client-chosen time in a header, and Todoist's document
+  has no feed.
+
+§8 lists these cases as not covered.
+
+## 2. Overview
+
+```yaml
+components:
+  crudResources:
+    transaction:
+      identity:
+        urlTemplate: /budgets/{budgetId}/transactions/{transactionId}
+        bindings:
+          transactionId: { field: id }
+      collections:
+        transactions:
+          urlTemplate: /budgets/{budgetId}/transactions
+          x-deletion-feed:            # Deletion Feed Object (§4.1)
+            operationId: listTransactions
+            envelope:
+              itemsField: data.transactions
+            cursor:                   # Cursor Object (§4.2)
+              parameter: last_knowledge_of_server
+              responseField: data.server_knowledge
+            tombstone:                # Tombstone Object (§4.3)
+              field: deleted
+              values: [true]
+```
+
+A resource whose own read answers 2xx for a deleted object (an invented
+calendar, §7.4):
+
+```yaml
+components:
+  crudResources:
+    event:
+      identity:
+        urlTemplate: /calendars/{calendarId}/events/{eventId}
+        bindings:
+          eventId: { field: id }
+      x-read-tombstone:               # Tombstone Object (§4.3), see §4.4
+        field: status
+        values: [cancelled]
+```
+
+## 3. Conventions
+
+The key words "MUST", "MUST NOT", "REQUIRED", "SHOULD", "MAY" are to be interpreted as described in [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119).
+
+A _feed read_ is a read of the feed operation that binds its path parameters,
+sends the cursor parameter when the consumer has a cursor, follows every page
+(per the [Pagination Schemes Extension](../pagination-schemes/README.md),
+where the operation is paginated), and gets a successful response for every
+page.
+
+An _item_ is an element of the array a feed read returns. A _tombstone_ is an
+item that §4.3 recognises as reporting a deletion.
+
+A _member_ is an object of the collection, as in Collection Completeness §3.
+
+## 4. Object Definitions
+
+### 4.1 Deletion Feed Object
+
+Placed under `x-deletion-feed` on a CRUD Causality Collection Object, or on
+the Operation Object of an operation that lists the collection. When both are
+present, the Collection Object's applies. Unlike a Completeness Object, the
+declaration is about objects, not about what a read of the list returns, so
+it applies to the collection however the consumer narrows its own list reads.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `operationId` | string | **Yes** | The `operationId` of a `GET` operation that returns the feed. It MAY be the collection's own `list` operation. Its path parameters are bound by name from the values used to read the collection (the collection's `urlTemplate` variables). |
+| `envelope` | Envelope Object | No | Locates the array of items in each response body, as in CRUD Causality §4.2: `{ itemsField: <dot-path> }`. Default: the response body itself, which is then an array. |
+| `cursor` | Cursor Object (§4.2) | No | How a read is limited to the changes since an earlier one. Without it, every read returns the whole feed (a deleted-items endpoint without a cursor, say). |
+| `tombstone` | Tombstone Object (§4.3) | No | Which items are tombstones. Without it, every item is one (a deleted-items endpoint). |
+| `idField` | string | No | Dot-path, in an item, to the identity value of the object the item is about. Default: the field the resource's `identity.bindings` binds to the variable of its `urlTemplate` that the collection's `urlTemplate` does not have. |
+| `description` | string | No | Human-readable description. |
+| `x-*` | any | No | Extension fields. |
+
+By declaring a Deletion Feed Object, the document states:
+
+* a tombstone reports that the object it is about was deleted (§4.3);
+* the items of one feed read that are about the same object are in the order
+  of the changes they report, oldest first, so the last one is the newest;
+* with a `cursor`: a feed read from a cursor returns at least one item for
+  every member deleted after the server issued that cursor, for as long as
+  the operation accepts the cursor, and the last item about such an
+  object is a tombstone unless a later change (a restore) followed the
+  deletion. A feed read without a cursor MAY leave out deletions.
+
+### 4.2 Cursor Object
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `parameter` | string | **Yes** | Name of the query parameter that carries the cursor. |
+| `responseField` | string | **Yes** | Dot-path to the cursor for the next read, in the body of the last page of a feed read. Its value is a string or a number; the consumer sends it back unchanged (a number in its decimal form). |
+| `expiredStatuses` | array of integer | No | Statuses with which the operation refuses a cursor it no longer accepts (410, 412). |
+| `x-*` | any | No | Extension fields. |
+
+The cursor is opaque to the consumer, even when it is a timestamp. A consumer
+SHOULD keep it across restarts. The operation SHOULD accept a cursor more than
+once, so that a consumer that stops before it stores a new cursor can read
+again from the old one.
+
+A response with one of the `expiredStatuses` is not a feed read. If its body
+is JSON with a value at `responseField`, that value is the consumer's new
+cursor; otherwise the consumer discards its cursor and the next read has none.
+
+### 4.3 Tombstone Object
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `field` | string | **Yes** | Dot-path to a field of the item. |
+| `values` | array of string, number or boolean | **Yes** | The item is a tombstone when the value at `field` equals one of these (same JSON type and value), unless `except` says otherwise. |
+| `except` | array of Condition Object | No | Since 0.3.0. A nonempty array. Items that have the marker but are not deletions: an item that matches any of these conditions is not a tombstone. |
+| `x-*` | any | No | Extension fields. |
+
+A **Condition Object** has a `field` (a dot-path into the item) and exactly
+one of: `values` (a nonempty array of strings, numbers or booleans; the
+value at `field` must equal one of them, same JSON type and value) or
+`present: true` (`field` resolves to any value, `null` included).
+
+The `except` conditions are for a provider that gives one marker to several
+documented states, only some of them deletion. Every marked state that no
+`except` condition excludes MUST be one the provider documents as the
+object's deletion; a state it documents as something else is excluded by a
+condition on the item, or the marker is not declared. When the item does
+not carry what tells the states apart, no tombstone can be declared
+soundly for that marker. A condition on an object other than the item (a
+parent's state, say) cannot be used. The same Tombstone Object, and so the
+same rule, serves a feed (§4.1), a read tombstone (§4.4) and a list
+tombstone (§4.5), so one provider state has one reading wherever it is
+answered.
+
+A tombstone has the meaning `absent: deleted` has in Collection Completeness
+§4.2: the object no longer exists, and the resource's `read` operation, if it
+has one, answers 404 or 410 for it, or a read tombstone (§4.4) when the
+resource declares `x-read-tombstone`. A state in which the object's read
+still answers 2xx without a read tombstone (archived, in a trash it can be
+restored from) is not a deletion: its marker MUST NOT be declared as a
+tombstone value for items that no `except` condition excludes. Where the
+marker also means deletion for other items, the value is declared and
+`except` excludes those in the other state.
+
+The converse does not hold everywhere: where a collection of a resource
+states `notFound: unavailable` ([Collection Completeness](../collection-completeness/README.md)
+0.2.0-draft, §4.3), a `404` or `410` from any read of that resource's objects,
+through whichever collection they were reached, is not evidence of deletion.
+Only a tombstone, a read tombstone, or a `404`/`410` under `notFound: deleted`
+or its default is.
+
+### 4.4 Read Tombstones
+
+A Tombstone Object (§4.3) placed under `x-read-tombstone` on a CRUD
+Causality Resource Object (§4.1 there), or on the Operation Object of the
+resource's `read` operation (the `GET` of its `identity.urlTemplate`). When
+both are present, the Resource Object's applies. A declaration that does not
+parse (its fields not as this section and §4.3 give them) is ignored, and
+the other placement's, if any, applies; this rule also places list
+tombstones (§4.5). It is not placed on a
+Collection Object: the read belongs to the resource, and every collection of
+the resource shares it.
+
+A _read tombstone_ is a 2xx response to the resource's `read` operation
+whose body is a JSON object about the object read (its identity field, the
+one `identity.bindings` binds to the template variable of the object's own
+identity, holds the value that was read), whose value at the Tombstone
+Object's `field` (a dot-path into that body) equals one of its `values`
+(same JSON type and value), and that matches none of its `except`
+conditions. A 2xx response about the object without that
+value is the object, as for any read.
+
+By declaring `x-read-tombstone`, the document states:
+
+* a read tombstone reports that the object was deleted when the read was
+  made: it has the meaning of a tombstone (§4.3), as a 404 or 410 would;
+* the provider documents the marked state as the object's deletion, for
+  every object whose read body no `except` condition excludes. A state it
+  documents as something else (archived, hidden, completed, moved to a
+  trash) MUST NOT be declared for such objects, even when the collection's list leaves the
+  object out.
+
+The declaration does not say whether a deleted object can be restored.
+Providers that keep a deleted object readable often allow it (Google
+Calendar's organizers can restore a cancelled event, §1.1), so a consumer
+treats every read tombstone as possibly restorable:
+
+* A read tombstone is the object's state at that read only. A later 2xx
+  read of the object, not as a read tombstone, or a later read of the
+  collection that returns the object, not as a tombstone, supersedes it. A
+  consumer MAY
+  also take a feed read made after it, whose last item about the object is
+  not a tombstone, as superseding it.
+* A consumer SHOULD NOT keep a read tombstone in place of reading the object
+  again, as §5 allows for a feed tombstone: reading again is the same
+  request, and shows a restore.
+* A consumer SHOULD NOT send a write other than a delete, queued before the
+  read tombstone, to the object without its user's or application's
+  decision. On a restorable state the write may restore the object, or
+  change a deleted one, and neither is what the write was made for. A
+  queued delete MAY be sent: it asks for the state the tombstone reports,
+  and the provider answers a deleted object with 404 or 410 or deletes it.
+* Restoring an object is an ordinary write that the provider documents; this
+  extension does not describe it.
+
+There is no field that says a state is restorable: the rules above hold
+either way, so it would change nothing a consumer does.
+
+### 4.5 List Tombstones
+
+Added in 0.3.0. Some lists can return deleted objects among the others,
+with the same marker their own read answers (Google Calendar's event list
+with `showDeleted=true` returns cancelled events, §1.1). A List Tombstone
+Object placed under `x-list-tombstone` on a CRUD Causality Collection
+Object, or on the Operation Object of an operation that lists the
+collection, declares that marker for the collection's reads. When both are
+present, the Collection Object's applies, and one that does not parse is
+ignored as §4.4 says. An operation's declaration covers
+every collection it lists, those with fixed reads (CRUD Causality §4.2.1)
+included.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `field` | string | **Yes** | Dot-path to a field of the item, as in a Tombstone Object (§4.3). |
+| `values` | array of string, number or boolean | **Yes** | As in a Tombstone Object. |
+| `except` | array of Condition Object (§4.3) | No | As in a Tombstone Object: items with the marker that are not deletions. |
+| `description` | string | No | Human-readable description. |
+| `x-*` | any | No | Extension fields. |
+
+A List Tombstone Object is a Tombstone Object (§4.3) with a `description`;
+its `except` conditions follow §4.3's rule.
+
+A _list tombstone_ is an item of a successful page of a read of the
+collection whose value at `field` equals one of `values`, and that matches
+no `except` condition. It is about the object its identity field names, as
+for any item of the collection (CRUD Causality §4.1.2). An item with the
+marker but without a value in that field names no object; a consumer skips
+it, as neither a member nor a list tombstone.
+
+By declaring `x-list-tombstone`, the document states:
+
+* a list tombstone reports that the object it is about was deleted when the
+  read was made: it has the meaning of a tombstone (§4.3);
+* a list tombstone is not a member of the collection (Collection
+  Completeness §3): a complete read returns the members and, among them,
+  list tombstones; an object that the read returns only as a list
+  tombstone is absent from it as a member;
+* the provider documents every marked state that no `except` condition
+  excludes as the object's deletion (§4.3). An item excluded by `except` is
+  an ordinary member, with the marker as one of its values.
+
+A list tombstone, like a read tombstone (§4.4), is the object's state at
+that read, and the object may be restorable:
+
+* A later read of the collection that returns the object, not as a
+  tombstone, or a later 2xx read of the object, not as a read tombstone,
+  supersedes it.
+* A consumer SHOULD NOT send a write other than a delete, queued before the
+  list tombstone, to the object without its user's or application's
+  decision, as §4.4 says; a queued delete MAY be sent.
+* A consumer MAY remove its local copy of the object on a list tombstone. If
+  it keeps a mark instead (to tell a restore from a new object), the mark is
+  dropped by the next read that returns the object as a member.
+
+Items of a read that is not complete (a page failed, a budget stopped it)
+are still what the provider answered: a list tombstone among them is
+evidence about its object. Only the absence of an object from such a read
+says nothing (Collection Completeness §3).
+
+One read returns an object at most once. An object that one read returns
+twice, as a member and as a list tombstone or as two list tombstones (an
+object restored or deleted between two pages, say), is a repeated item: the
+read is not complete, and neither item is evidence about that object. A
+consumer that cannot tell which items of the read are repeated takes none
+of its list tombstones as evidence.
+
+## 5. Relation to CRUD Causality and Collection Completeness
+
+The object an item is about is identified as for any member of the
+collection: `idField` gives the value CRUD Causality's `identity.bindings`
+puts into the object's `urlTemplate`, and the collection's context supplies
+the rest (CRUD Causality §4.1.2).
+
+A list tombstone (§4.5) in a read of the collection is the first evidence a
+consumer has: the object was deleted when that read was made, whatever the
+collection's `x-completeness` says. For a member it no longer finds at all
+in a complete read, a consumer that needs to know whether it was deleted
+SHOULD use:
+
+1. `x-completeness: { absent: deleted }` on the collection (Collection
+   Completeness): the object was deleted. No request is needed.
+2. The last item about the object in a feed read: a tombstone means the
+   object was deleted when the read was made. This holds whatever the
+   collection's `x-completeness` says, and without one.
+3. The object's own `read` operation: a 404, a 410 or a read tombstone
+   (§4.4) means it was deleted; another 2xx response about the object means
+   it exists.
+
+For a resource that declares `x-read-tombstone`, the 404 or 410 that
+`absent: deleted` stands for (Collection Completeness §4.2) includes a read
+tombstone. A collection that declares `x-list-tombstone` returns its
+deleted objects as list tombstones rather than leaving them out; an object
+absent from a complete read of it is still classified as above.
+
+A tombstone says nothing about what happened after its feed read: the
+object can be restored, or recreated with the same identity. A consumer
+MAY read the object first and use a feed read made after that only for
+objects whose read did not decide (no answer, or one other than 404, 410 or
+a 2xx with the object, a read tombstone included). A consumer MAY keep a
+tombstone from an earlier feed read and use it in place of reading the
+object, but only until any of these supersedes it:
+
+* a later feed read has a later item about the object that is not a
+  tombstone;
+* a later read of the object answers 2xx with the object, other than a read
+  tombstone, or a later complete read of the collection returns it without
+  a read tombstone's marker;
+* the API accepts a later write to the object with a 2xx.
+
+A consumer SHOULD read the feed again before it relies on a kept tombstone,
+to rule out the first case. When that read fails, it MAY still rely on the
+kept tombstone; an object restored in the meantime is then treated as
+deleted, although it exists, until a later read supersedes the tombstone.
+
+A feed read in which the object has no tombstone (no item, or a last item
+that is not one) does not show that the object exists. A deletion that
+happened after the object was last seen but before the feed read that
+returned the cursor is in an earlier read, not this one. Only when the
+consumer received the cursor before it sent the read in which it last saw
+the object, and sent the feed read after the read that lacked it, does a
+feed read without a tombstone for the object show that it was not deleted in
+between; the consumer MAY then treat it as `absent: removed` (Collection
+Completeness §4.2). Otherwise it uses step 3.
+
+## 6. Applying via OpenAPI Overlays
+
+```yaml
+overlay: 1.0.0
+info:
+  title: Declare the deletion feed of the transactions collection
+  version: 1.0.0
+actions:
+  - target: $.components.crudResources.transaction.collections.transactions
+    update:
+      x-deletion-feed:
+        operationId: listTransactions
+        envelope: { itemsField: data.transactions }
+        cursor:
+          parameter: last_knowledge_of_server
+          responseField: data.server_knowledge
+        tombstone: { field: deleted, values: [true] }
+```
+
+And for a resource whose own read returns tombstones:
+
+```yaml
+actions:
+  - target: $.components.crudResources.event
+    update:
+      x-read-tombstone: { field: status, values: [cancelled] }
+```
+
+And for a collection whose list returns them (§4.5, §7.5):
+
+```yaml
+actions:
+  - target: $.components.crudResources.event.collections.eventsWithDeleted
+    update:
+      x-list-tombstone:
+        field: status
+        values: [cancelled]
+        except:
+          - { field: recurringEventId, present: true }
+```
+
+An overlay author SHOULD have evidence for the declaration (provider
+documentation, or observed behaviour) and SHOULD cite it in the overlay's
+`description`. A wrong tombstone value makes a consumer treat existing
+objects as deleted. For `x-read-tombstone`, that evidence includes the
+provider documenting the marked state as deletion (§4.4).
+
+## 7. Examples
+
+### 7.1 A change list with a status marker
+
+An invented calendar API (not Google Calendar, whose cancelled events stay
+readable, §1.1) whose `GET /calendars/{calendarId}/events` takes a
+`syncToken`, returns `nextSyncToken` on its last page, answers 410 for an
+expired token, and lists deleted events with `status: cancelled` (their own
+`GET` answers 404):
+
+```yaml
+x-deletion-feed:
+  operationId: listEvents
+  envelope: { itemsField: items }
+  cursor:
+    parameter: syncToken
+    responseField: nextSyncToken
+    expiredStatuses: [410]
+  tombstone: { field: status, values: [cancelled] }
+```
+
+### 7.2 An event log
+
+An invented project tool whose `GET /projects/{projectId}/events` takes a
+`sync` token and returns `{ data: [{ action, resource: { gid } }], sync }`,
+answering 412 with a fresh `sync` for a missing or expired token. (Asana's
+own `GET /events` takes the resource as a required query parameter instead,
+which this version does not cover; §1.1.)
+
+```yaml
+x-deletion-feed:
+  operationId: getProjectEvents
+  envelope: { itemsField: data }
+  idField: resource.gid
+  cursor:
+    parameter: sync
+    responseField: sync
+    expiredStatuses: [412]
+  tombstone: { field: action, values: [deleted] }
+```
+
+An `undeleted` event after a `deleted` one for the same object makes the last
+item about it not a tombstone.
+
+### 7.3 A deleted-items endpoint
+
+An (invented) to-do API whose `GET /deleted-tasks?since=<token>` returns
+`{ items: [{ id }], next: <token> }`, every item a deleted task:
+
+```yaml
+x-deletion-feed:
+  operationId: listDeletedTasks
+  envelope: { itemsField: items }
+  cursor: { parameter: since, responseField: next }
+```
+
+### 7.4 An item read that returns tombstones
+
+An invented calendar API whose `GET /calendars/{calendarId}/events/{eventId}`
+answers 200 with `{ "id": "<eventId>", "status": "cancelled" }` for a deleted
+event, whose documentation calls that state "cancelled (deleted)", and whose
+event list leaves cancelled events out:
+
+```yaml
+components:
+  crudResources:
+    event:
+      identity:
+        urlTemplate: /calendars/{calendarId}/events/{eventId}
+        bindings:
+          eventId: { field: id }
+      x-read-tombstone: { field: status, values: [cancelled] }
+      collections:
+        events:
+          urlTemplate: /calendars/{calendarId}/events
+```
+
+A consumer that no longer finds an event in a complete read of `events`
+reads it: a 200 with `status: cancelled` means it was deleted, a 200 with
+another status means the list only leaves it out. A later 200 with another
+status, after a restore, supersedes the read tombstone (§4.4). Google
+Calendar's documents describe a similar `get` (§1.1); this example is not a
+declaration for it.
+
+### 7.5 A list that returns deleted objects
+
+An invented calendar API, shaped like Google Calendar's event list with
+`showDeleted=true` (§1.1), whose `GET /calendars/{calendarId}/events`
+returns deleted events with `status: cancelled` among the others when the
+read sends `showDeleted=true`. Its documentation gives `cancelled` two
+meanings: a cancelled exception of a recurring event (an item with
+`recurringEventId`) is one occurrence that "should no longer be presented"
+and that clients "should store"; every other cancelled event is deleted.
+
+```yaml
+components:
+  crudResources:
+    event:
+      identity:
+        urlTemplate: /calendars/{calendarId}/events/{eventId}
+        bindings:
+          eventId: { field: id }
+      collections:
+        eventsWithDeleted:
+          urlTemplate: /calendars/{calendarId}/events
+          listQuery: { showDeleted: 'true' }
+          envelope: { itemsField: items }
+          x-list-tombstone:
+            field: status
+            values: [cancelled]
+            except:
+              - { field: recurringEventId, present: true }
+```
+
+`{ "id": "e1", "status": "cancelled" }` in a read reports that `e1` was
+deleted; `{ "id": "e2_20261012", "status": "cancelled", "recurringEventId":
+"e2" }` is a member, an exception the consumer keeps with its status. A
+cancelled exception of a series that was itself deleted is, by that
+documentation, deleted too; the item does not say whether its series is,
+so the declaration keeps it as a member. In a list that returns series as
+items (Google Calendar's `singleEvents=false`), the series' own list
+tombstone reports the series; in one that expands series into instances
+(`singleEvents=true`), every instance carries `recurringEventId` and nothing
+in the list reports the deletion. When the organizer restores `e1`, a later read returns
+it with another status, as a member again.
+[`examples/list-tombstones.yaml`](examples/list-tombstones.yaml) is this
+document in full. This example is not a declaration for Google Calendar.
+
+## 8. Not covered
+
+* Cursors the API does not return: a time the consumer chooses itself
+  (`updated_since=<time of the previous read>`, an `If-Modified-Since`
+  header), with its clock and precision questions, or the id of the newest
+  item (Stripe's `ending_before`).
+* Feeds whose items come newest first.
+* Cursors in a header or a request body, and fixed query parameters that the
+  feed needs (Asana's required `resource`). Google Calendar's `showDeleted`
+  is not one: a read with its `syncToken` returns deleted events whatever
+  it says, so its feed is read with the cursor alone (§1.1). A collection's
+  own fixed reads (CRUD Causality §4.2.1) can carry `showDeleted`, and a
+  list tombstone (§4.5) covers that list.
+* Tombstones in a write answered 2xx; `x-read-tombstone` (§4.4) is about
+  the `read` operation, `x-list-tombstone` (§4.5) about list reads.
+* Conditions on objects other than the item (a parent's state) to tell a
+  deletion apart (§4.3).
+* Whether a deleted object can be restored, and how (§4.4).
+* Restores in a feed: a feed item after a tombstone that is not one is only
+  "not a tombstone"; this version does not say the object exists again. What
+  supersedes a read tombstone or a list tombstone is in §4.4 and §4.5.
+
+## 9. Validation
+
+A conforming document:
+
+* MUST name, in `operationId`, a `GET` operation of the document;
+* MUST give `tombstone.values` at least one value;
+* MUST NOT declare a tombstone value for a state in which the object's read
+  still answers 2xx without a read tombstone, for items or read bodies that
+  no `except` condition excludes (§4.3, §4.4);
+* MUST NOT declare a feed whose items about one object are not oldest first
+  (§4.1);
+* MUST give an `x-read-tombstone`'s `values` at least one value, and MUST
+  NOT declare in it a state that the provider does not document as the
+  object's deletion, for objects whose read body no `except` condition
+  excludes (§4.4);
+* since 0.3.0: MUST give a Tombstone Object's `except`, when present, at
+  least one condition, and each `except` condition of a Tombstone Object (a
+  feed's, a read tombstone's or a list tombstone's) a `field` and exactly
+  one of a nonempty `values` or `present: true`, and MUST exclude with one a
+  marked state the provider documents as something other than deletion, or
+  not declare the marker (§4.3);
+* since 0.3.0: MUST place `x-list-tombstone` only on a CRUD Causality
+  Collection Object or the Operation Object of a `GET` or `POST` operation,
+  and MUST give its `values` at least one value (§4.5).
+
+A conforming consumer:
+
+* MUST NOT use the items of a deletion feed's read that is not a feed read
+  (§3): a page failed, a budget stopped it, or a body did not have the
+  declared shape (§4.5 says what the list tombstones of an incomplete
+  collection read mean);
+* MUST NOT store a cursor from a read that is not a feed read, apart from
+  the case in §4.2;
+* MAY treat an object as deleted when the last item about it in a feed read
+  is a tombstone;
+* MUST NOT treat an object as existing because a feed read has no tombstone
+  for it, other than as §5 allows;
+* MAY treat an object as deleted when its read answers a read tombstone
+  (§4.4), and MUST NOT count a 2xx response as one unless its body is about
+  the object read;
+* SHOULD NOT keep a read tombstone in place of reading the object again
+  (§4.4);
+* since 0.3.0: MUST NOT count an item, a read's body or a list item that
+  matches an `except` condition as a tombstone (§4.3); MUST NOT store a list
+  tombstone as a member (§4.5); MAY treat its object as deleted when the
+  read was made; MUST treat a later read that returns the object, not as a
+  tombstone, as superseding it; MUST NOT take a list tombstone of an object
+  the same read returns twice as evidence (§4.5).
+
+## Validator, tests and example
+
+[`validate.py`](validate.py) checks the document rules of §9 that a
+document alone can show (it cannot check the evidence rules), and holds
+`list_tombstone(declaration, item)`, a reference implementation of §4.5's
+test of one item. [`test_validate.py`](test_validate.py) holds the cases,
+and [`examples/list-tombstones.yaml`](examples/list-tombstones.yaml) is
+§7.5's document. From the repository root:
+
+```sh
+cd openapi-extensions/spec/deletion-feeds
+pip install -r requirements.txt
+python3 -m unittest test_validate
+python3 validate.py examples/list-tombstones.yaml
+```
+
+## Changes
+
+- **0.3.0-draft** (2026-10-12): adds `except` conditions to the Tombstone
+  Object (§4.3), so a feed tombstone, a read tombstone and a list tombstone
+  share one rule for a marker the provider gives to several states, only
+  some of them deletion (Google Calendar's cancelled exceptions of a
+  recurring event, which clients store, are not deletions wherever they are
+  answered); adds `x-list-tombstone` (§4.5): items of a collection's read
+  that carry a deletion marker, not members and possibly restorable; a
+  validator, tests and an example (§7.5). States one placement rule for
+  read and list tombstones (a declaration that does not parse is ignored,
+  §4.4) and what an object returned twice in one read means (§4.5). For
+  ontola/atomic-plugins pieces.md K18. Settles that Google Calendar's event
+  list read with its `syncToken` alone fits `x-deletion-feed`, with the same
+  `except` (§1.1); §8 no longer lists its `showDeleted` as a fixed query
+  parameter a feed needs. A 0.2.0 document stays valid and means the same.
+- **0.2.0-draft**: `x-read-tombstone` (§4.4).
+- **0.1.0-draft**: `x-deletion-feed`.
+
+## Reference Implementation
+
+[`syncables`](../../../syncables/README.md#deletion-feeds) reads
+`x-deletion-feed` (on the Collection Object, else on the list operation),
+unless `x-completeness: { absent: deleted }` applies or its missing-record
+checks are off. It reads the feed once per sync, per bound context, at the
+end of the sync after the reads of missing records, from a cursor kept in its
+durable outbox when it has storage. For a record the collection read lacked,
+it uses a tombstone kept from an earlier feed read in place of the record's
+read, deciding at the end of the sync, after that sync's feed read: a later
+item about the record that is not a tombstone in a complete read supersedes
+it, and a failed or incomplete read leaves it standing (§5). Otherwise it
+reads the record, and when that read did not decide, uses the tombstone of
+this sync's feed read. It keeps tombstones only for records with unsettled
+writes, and drops one when a read returns the record (not a read tombstone)
+or a write to it is answered with a 2xx. It does not use the "not deleted"
+case of §5. Cursors in a header or body, and the other cases in §8, are not
+implemented.
+
+It reads `x-read-tombstone` (on the CRUD Resource Object, else on the GET
+operation of the item path) in its read of a missing record: a 2xx whose
+body has the record's identity and the marker makes the record deleted, with
+that GET's status, where it would otherwise be found to exist. That read
+comes in the same place as any read of the record: after
+`x-completeness: { absent: deleted }` and a kept feed tombstone, and before
+this sync's feed read; an item in that feed read that is not a tombstone
+does not supersede it (it does not use that MAY of §4.4). It does not keep
+read tombstones as such. When the collection also has a feed, though, the
+feed read at the end of that sync keeps a feed tombstone for the record (its
+failed writes are unsettled) if the feed reports it, and the next check uses
+that kept tombstone before any read, as above. Without one, the next check
+of the record reads it again. When the resource's declaration does not
+parse, it uses the operation's. A record
+found deleted this way is handled as for any deletion: the held updates at
+the head of its queue fail, and are sent only if the caller retries them.
+It does not look for the marker in write responses. It applies a Tombstone
+Object's `except` conditions (§4.3) wherever it reads one: a feed item, a
+read's body and a list item that match one are not tombstones, and a
+Tombstone Object whose `except` does not parse is ignored as a whole.
+
+It reads `x-list-tombstone` (§4.5; on the Collection Object, else, or when
+that one does not parse, on the list operation): a list tombstone is left
+out of the collection's members and its id reported with the read. In a
+complete read, a record the read returns only as one is concluded deleted
+without a request (`source: 'list'`): removed, or kept marked deleted under
+its `retainDeleted` option, with no check counted against its limit; a
+held update of it fails as deleted, and a held delete is released and
+sent. A read that ends without an error but is not complete removes
+nothing; its list tombstones still fail a held update as deleted and
+release a held delete. A read that ends with an error reports no list
+tombstones; one that returns an object twice, as a member or a list
+tombstone, is such a read (its repeated-identity check). An item with the
+marker and no id is skipped. A later read that returns the record, not as
+a tombstone, brings it back.
+
+Not verified against a real provider.

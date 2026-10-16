@@ -25,6 +25,7 @@ import {
   TASK_STATUS,
   TASK_TAGS,
 } from './tracker.js';
+import { pruneJournal } from './sync.js';
 import { relayDispatch } from './transport.js';
 
 type Ready = Extract<ViewState, { kind: 'ready' }>;
@@ -42,6 +43,20 @@ const property = (store: FakeStore, shortname: string) =>
     ([, props]) => props[SHORTNAME] === shortname,
   )![0];
 
+/** The transport's write journal, as the sync resource holds it. */
+const journalOf = (store: FakeStore): Record<string, { receipt?: unknown }> => {
+  for (const props of store.resources.values())
+    for (const value of Object.values(props))
+      if (typeof value === 'string' && value.startsWith('{"version":1'))
+        return (
+          JSON.parse(value) as {
+            journal: Record<string, { receipt?: unknown }>;
+          }
+        ).journal;
+
+  throw new Error('no sync state');
+};
+
 const rows = (store: FakeStore) =>
   [...store.resources.entries()].filter(([, p]) => p[PARENT] === TABLE);
 
@@ -53,6 +68,28 @@ async function bound(store = fakeStore()) {
 
   return { store, controller, state };
 }
+
+group('pruneJournal', () => {
+  it('drops answered writes only when no record has a saved operation', () => {
+    const journal = (): Record<string, unknown> => ({
+      answered: { signature: 'a', receipt: { status: 200 } },
+      lost: { signature: 'b' },
+    });
+    const idle = journal();
+    expect(pruneJournal(idle, { s: {} })).toBe(1);
+    expect(idle).toEqual({ lost: { signature: 'b' } });
+
+    // A saved operation, held or not, may still use any id: nothing goes.
+    for (const pending of [
+      { operation: 'x' },
+      { operation: 'x', held: true },
+    ]) {
+      const busy = journal();
+      expect(pruneJournal(busy, { s: {}, t: { pending } })).toBe(0);
+      expect(busy).toEqual(journal());
+    }
+  });
+});
 
 group('GitHub issues drive app', () => {
   it('says so and fetches nothing without the host relay', async () => {
@@ -213,6 +250,9 @@ group('GitHub issues drive app', () => {
     expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
       'closed',
     );
+    // Nothing is left pending, so the answered writes left the journal: the
+    // sync state does not grow with every send (0.4.2).
+    expect(journalOf(store)).toEqual({});
 
     // GitHub moved the issue's updated_at, so the row's GitHub source is
     // refreshed once; after that a pass changes nothing.
@@ -224,6 +264,51 @@ group('GitHub issues drive app', () => {
       addedHere: 0,
       held: [],
     });
+  });
+
+  it('shows a row missing its Name as incomplete and sends nothing for it, without failing the pass (#177)', async () => {
+    const { store, controller } = await bound();
+    const number = property(store, 'github-issue-number');
+    const [issue] = rows(store).find(([, p]) => p[number] === 1)!;
+    // The Name column cleared in the host table, with a status edit.
+    store.edit(issue, { [NAME]: '', [TASK_STATUS]: [TASK_TAGS.Done] });
+    // A row made in the table without a name, asked to publish.
+    const local = await store.newResource({
+      parent: TABLE,
+      isA: [ISSUE_V1],
+      propVals: { [TASK_STATUS]: [TASK_TAGS.Todo] },
+    });
+    const state = ready(await controller.publish(local.subject));
+    expect(state.problem).toBeUndefined();
+    expect(state.last!.result.held).toEqual([]);
+    const byRow = new Map(state.last!.result.rows.map(r => [r.subject, r]));
+    expect(byRow.size).toBe(3);
+    expect(byRow.get(issue)).toMatchObject({
+      number: 1,
+      title: '',
+      status: 'Todo',
+      incomplete: 'Incomplete: missing Name',
+    });
+    expect(byRow.get(local.subject)).toMatchObject({
+      title: '',
+      incomplete: 'Incomplete: missing Name',
+    });
+    expect(byRow.get(local.subject)!.number).toBeUndefined();
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'open',
+    );
+    expect(store.calls.every(c => (c.method ?? 'GET') === 'GET')).toBe(true);
+
+    // Completed in the table: the edits are held for review as usual, and
+    // the publish asked for earlier goes ahead.
+    store.edit(issue, { [NAME]: 'Keep the selected calendar after refresh' });
+    store.edit(local.subject, { [NAME]: 'Named now' });
+    const held = ready(await controller.sync());
+    expect(held.last!.result.rows.some(r => r.incomplete)).toBe(false);
+    expect(held.last!.result.held.map(describeHeld).sort()).toEqual([
+      'Create issue “Named now” (Todo)',
+      'Update #1: status Todo → Done (close it)',
+    ]);
   });
 
   it('settles into unchanged passes when the host never shows the app’s own saves', async () => {
@@ -412,6 +497,11 @@ group('GitHub issues drive app', () => {
     expect(again.problem).toBeUndefined();
     expect(posts()).toBe(sent);
     expect(store.github.snapshot(SEEDED_REPOSITORY).issues).toHaveLength(3);
+    // The unanswered create stays in the journal (no receipt), so the passes
+    // above never pruned the one thing that guards against a resend.
+    const left = Object.values(journalOf(store));
+    expect(left).toHaveLength(1);
+    expect(left[0].receipt).toBeUndefined();
   });
 
   it('links a lost create to the issue it became, without importing it twice', async () => {
@@ -617,7 +707,9 @@ group('frame store adapter', () => {
     const listed = store.resources.get('did:ad:ontology')?.[
       PROPERTIES
     ] as string[];
-    expect(listed.length).toBe(5);
+    // Number, source, baseline, repository, sync state, synced table,
+    // last sync.
+    expect(listed.length).toBe(7);
   });
 });
 

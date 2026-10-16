@@ -1,5 +1,9 @@
 # Bundles: organising plugins by what they do
 
+Amended 2026-10-08 (Michiel, relayed by coord): bundles are a grouping for
+discovery and search in the catalog, not the unit of matching; matching is by
+manifest, see [`pieces.md`](pieces.md).
+
 Status: **proposal, not reviewed. Nothing here is implemented.** It builds on
 the decisions recorded in
 [#177](https://github.com/ontola/atomic-plugins/issues/177) (shared row
@@ -12,7 +16,9 @@ against the current `.atomic-server-ref`.
 Decided by Michiel (2026-09-29):
 
 1. **The catalog lists bundles.** A bundle is the unit a person finds,
-   installs and removes.
+   installs and removes. _(Amended 2026-10-08 by pieces.md D3: matching is
+   by manifest, and bundles group pieces for discovery and search. Whether
+   install and removal go by piece or by bundle is still open.)_
 2. **A bundle holds parts of several kinds.** The kinds include reflectors
    (keeping a native table of a row class in sync with a remote dataset) and
    custom views (ways to show tables of a row class).
@@ -69,12 +75,12 @@ class. A view without the lens that makes it reachable is often useless.
 ## 2. The domain bundles
 
 A mapping of what exists today onto domain bundles. "Declared" means catalog
-copy or code without host evidence, as in [READINESS.md](../integrations/READINESS.md).
+copy or code without host evidence, as in [READINESS.md](../../integrations/READINESS.md).
 
 | Bundle       | Row class(es)                      | Views                                                                 | Reflectors                                               | Importers                                | Lenses (planned)                             | Folder today                                      | Catalog entries today                    |
 | ------------ | ---------------------------------- | --------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------- | -------------------------------------------- | ------------------------------------------------- | ---------------------------------------- |
 | **Calendar** | `event-v1`                         | `calendar/app/`; built-in Calendar                                    | Google Calendar (`calendar/devonian/google-calendar/`)   | –                                        | –                                            | `calendar/`                                       | `devonian-google-calendar`               |
-| **Issues**   | `issue-v1`                         | `issue-tracker/app/`; built-in Issues                                 | GitHub (`issue-tracker/devonian/github-issues/`), Todoist (read) | –                                 | Issue Tracker template → `issue-v1`          | `issue-tracker/`                                  | `devonian-todoist` (GitHub has none)     |
+| **Issues**   | `issue-v1`                         | `issue-tracker/app/`; built-in Issues                                 | GitHub (`issue-tracker/devonian/github-issues/`), Todoist (read) | –                                 | Issue Tracker template → `issue-v1`          | `issue-tracker/`                                  | `todoist` (GitHub has none)              |
 | **Time**     | `time-entry-v1` (+ `work-project-v1`, `work-person-v1`) | `timesheets/app/`; built-in Timer                | Clockify (`timesheets/devonian/clockify/`), read          | –                                        | Time tracker template → `time-entry-v1`      | `timesheets/`                                     | `timesheets`                             |
 | **Money**    | `bank-transaction-v1`              | `money/app/`                                                          | Moneybird (declared only)                                | MT940 and camt.053 (`money/plugin.ts`)   | –                                            | `money/`                                          | `money`, `moneybird`                     |
 | **Tables**   | Per data source (no shared class)  | Built-in table view                                                   | Notion (`notion/app/`, `notion/plugin.ts`)               | –                                        | –                                            | `notion/`                                         | `notion`                                 |
@@ -97,7 +103,7 @@ Notes:
   endpoints (placements C, D, E), not table sync or views. Q1 asks whether
   they get a part kind of their own (`route`) or stay outside this model.
 - A bundle may list a reflector with no host entry point yet, as today's
-  catalog lists `devonian-todoist`. The bundle's card must then say which
+  catalog listed `devonian-todoist` until the Todoist drive app hosted it. The bundle's card must then say which
   parts work, per the "declared, not verified" rule.
 
 ## 3. Catalog shape

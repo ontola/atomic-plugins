@@ -4,17 +4,18 @@
  * review that lists them (before → after per field), resolves conflicts
  * and sends. Nothing reaches Notion until the person presses Send
  * (#177 Q4–Q7: review every send while testing). The changes come from the
- * controller (`changes.ts`), wherever the edit was made.
+ * controller (`changes.ts`), wherever the edit was made: since the browsing
+ * views went (#177 Q9), that is the host's own table and views.
  */
 import type { FieldChange, RowChange } from '../changes.js';
-import { sendable } from '../changes.js';
+import { writeQueue } from '../changes.js';
 import type { ConnectedState } from '../controller.js';
 import type { SendOutcome } from '../send.js';
 import type { JSONValue } from '../store.js';
+import type { NotionOption } from '../sync.js';
 import { h, icon, type Child } from '../ui/dom.js';
 import { plural } from '../ui/format.js';
 import { button } from '../ui/shell.js';
-import { optionPill } from './cells.js';
 
 export interface ReviewActions {
   open(): void;
@@ -33,10 +34,44 @@ const OUTCOME: Record<SendOutcome['status'], string> = {
   unknown: 'Unknown whether Notion applied it; sending stopped',
 };
 
-const fieldCount = (changes: readonly RowChange[]) =>
-  changes.reduce((n, c) => n + c.fields.length, 0);
+/** Notion's ten option colours; anything else renders as `default`. */
+export const NOTION_COLOURS = new Set([
+  'default',
+  'gray',
+  'brown',
+  'orange',
+  'yellow',
+  'green',
+  'blue',
+  'purple',
+  'pink',
+  'red',
+]);
 
-/** The one-line strip above the rows, when there is something to review. */
+/** A select, status or multi-select option as a pill in Notion's colour. */
+export function optionPill(
+  doc: Document,
+  option: NotionOption | undefined,
+  id: string,
+  status: boolean,
+): HTMLElement {
+  const colour =
+    option && NOTION_COLOURS.has(option.color) ? option.color : 'default';
+
+  return h(
+    doc,
+    'span',
+    {
+      class: `nt-tag${status ? ' nt-status' : ''} c-${colour}`,
+      title: option
+        ? undefined
+        : `Option ${id} is not in the last sync’s schema`,
+    },
+    option?.name || (option ? 'Untitled option' : 'Unknown option'),
+  );
+}
+
+/** The one-line strip above the status card, when there is something to review. */
 export function renderChangesBar(
   doc: Document,
   state: ConnectedState,
@@ -45,7 +80,12 @@ export function renderChangesBar(
 ): HTMLElement | null {
   const changes = state.changes ?? [];
   if (open || (!changes.length && !state.outcomes?.length)) return null;
-  const conflicts = changes.filter(c => c.fields.some(f => f.conflict)).length;
+  // The same count as the sync-status card right below (`writeQueue`): in
+  // rows, without the rows the last Send left to the next sync.
+  const { queued } = writeQueue(changes, state.outcomes);
+  const conflicts = queued.filter(c => c.fields.some(f => f.conflict)).length;
+  // Rows the last Send left to the next sync: listed, not waiting.
+  const settled = changes.length - queued.length;
 
   return h(
     doc,
@@ -56,20 +96,22 @@ export function renderChangesBar(
       doc,
       'p',
       {},
-      changes.length
+      queued.length
         ? [
-            h(doc, 'b', {}, plural(fieldCount(changes), 'change')),
-            ` in ${plural(changes.length, 'row')} not sent to Notion yet`,
+            h(doc, 'b', {}, plural(queued.length, 'change')),
+            ' not sent to Notion yet',
             conflicts
               ? ` · ${plural(conflicts, 'row')} also changed in Notion`
               : '',
           ]
-        : 'All reviewed changes were handled.',
+        : settled
+          ? `Waiting for the next sync to confirm ${plural(settled, 'change')}.`
+          : 'All reviewed changes were handled.',
     ),
     button(doc, {
       kind: 'secondary',
       size: 'sm',
-      label: changes.length ? 'Review changes' : 'Show results',
+      label: queued.length ? 'Review changes' : 'Show results',
       key: 'review-open',
       onClick: actions.open,
     }),
@@ -94,9 +136,17 @@ function shown(
   switch (field.type) {
     case 'select':
     case 'status':
-      return typeof value === 'string' && value
-        ? option(value)
-        : h(doc, 'i', {}, 'empty');
+      if (typeof value === 'string' && value) return option(value);
+      if (Array.isArray(value) && value.length)
+        // More than one Tag in a single-option cell: shown, held back.
+        return h(
+          doc,
+          'span',
+          { class: 'nt-tags' },
+          value.map(v => option(String(v))),
+        );
+
+      return h(doc, 'i', {}, 'empty');
     case 'multi_select':
       return Array.isArray(value) && value.length
         ? h(
@@ -124,7 +174,8 @@ export function renderReview(
   const outcomes = new Map(
     (state.outcomes ?? []).map(o => [o.subject, o] as const),
   );
-  const ready = changes.filter(sendable);
+  // The same queue as the strip and the card: Send sends exactly `ready`.
+  const { ready, held } = writeQueue(changes, state.outcomes);
   const busy = !!state.sending || state.kind !== 'ready';
   const optionsOf = (change: RowChange, field: FieldChange) =>
     new Map(
@@ -134,6 +185,15 @@ export function renderReview(
           ?.properties.find(p => p.id === field.id)?.options ?? []
       ).map(o => [o.id, o]),
     );
+
+  // A PATCH that stood but could not be confirmed here says so itself
+  // ("Sent to Notion, but …"); "Not sent" would be wrong for it.
+  const outcomeText = (outcome: SendOutcome) =>
+    !('message' in outcome)
+      ? OUTCOME[outcome.status]
+      : outcome.status === 'refused' && outcome.written
+        ? outcome.message
+        : `${OUTCOME[outcome.status]}: ${outcome.message}`;
 
   const outcomeLine = (outcome: SendOutcome | undefined) =>
     outcome &&
@@ -145,9 +205,7 @@ export function renderReview(
         'data-outcome': outcome.status,
       },
       icon(doc, outcome.status === 'sent' ? 'check' : 'alert', 'sm'),
-      'message' in outcome
-        ? `${OUTCOME[outcome.status]}: ${outcome.message}`
-        : OUTCOME[outcome.status],
+      outcomeText(outcome),
     );
 
   const items = changes.map(change =>
@@ -330,19 +388,19 @@ export function renderReview(
         label: state.sending
           ? 'Sending…'
           : ready.length
-            ? `Send ${plural(fieldCount(ready), 'change')}`
+            ? `Send ${plural(ready.length, 'change')}`
             : 'Send',
         key: 'review-send',
         busy: !!state.sending,
         disabled: !ready.length || busy,
         onClick: actions.send,
       }),
-      ready.length < changes.length &&
+      held.length > 0 &&
         h(
           doc,
           'span',
           { class: 'nt-muted' },
-          `${plural(changes.length - ready.length, 'row')} held back until resolved`,
+          `${plural(held.length, 'row')} held back until resolved`,
         ),
     ),
   );

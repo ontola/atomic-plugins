@@ -97,10 +97,11 @@ const APPS = {
   },
   notion: {
     title: 'Notion (sample data)',
-    // Syncs by itself on first open.
+    // Syncs by itself on first open. Since notion 0.3.0 the app is a
+    // sync-status view (#177 Q9): it names the databases, not the rows.
     async start() {},
     async shows(app) {
-      await app.getByText('Launch plan').first().waitFor({ timeout: 30_000 });
+      await app.getByText('Roadmap').first().waitFor({ timeout: 30_000 });
     },
   },
 };
@@ -116,7 +117,8 @@ for (const id of wanted)
 const out = mkdtempSync(join(tmpdir(), 'usertest-samples-'));
 const built = spawnSync(
   process.execPath,
-  [resolve(repo, 'usertest/catalog.mjs'), out],
+  // Not deployed: no collector to report to.
+  [resolve(repo, 'usertest/catalog.mjs'), '--no-log', out],
   {
     stdio: ['ignore', 'pipe', 'inherit'],
     encoding: 'utf8',

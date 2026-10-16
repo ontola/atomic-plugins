@@ -1,0 +1,72 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/admin/reports/reference/rest/v1/customerUsageReports/get
+overlay: 1.0.0
+info:
+  title: Google reports collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/5e5d2369ea3e91b9b09193dd9928f628612369d3/APIs/googleapis.com/admin/reports_v1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send opaque nextPageToken as pageToken. Stop only when nextPageToken is absent or
+          empty, not when a page is short or empty. If using fields, include nextPageToken and the item
+          array. Preserve customer/user/entity scope, report date, activity time bounds, application,
+          parameter selection and filters. Page usageReports for usage operations; warnings is ancillary
+          status information and must still be inspected by callers. Activity listing pages items. Customer
+          usage has no page-size input in this pin, so none is invented.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/admin/reports/v1/activity/users/{userKey}/applications/{applicationName}'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/admin/reports/v1/usage/dates/{date}'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: usageReports
+- target: $.paths['/admin/reports/v1/usage/users/{userKey}/dates/{date}'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: usageReports
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+- target: $.paths['/admin/reports/v1/usage/{entityType}/{entityKey}/dates/{date}'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: usageReports
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize

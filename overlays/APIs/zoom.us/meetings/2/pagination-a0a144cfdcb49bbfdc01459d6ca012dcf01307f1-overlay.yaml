@@ -1,0 +1,310 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developers.zoom.us/docs/api/meetings/
+overlay: 1.0.0
+info:
+  title: Zoom Meetings explicit token collections
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/a0a144cfdcb49bbfdc01459d6ca012dcf01307f1/APIs/zoom.us/meetings/2/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      tokenCollections:
+        type: pageToken
+        autoDetect: false
+        description: Return next_page_token unchanged, keeping all filters and date ranges fixed. Stop
+          when the token is absent or empty; tokens expire after 15 minutes. For endpoints that normalize
+          a requested date range, callers must reuse the returned effective range before continuing. Deprecated
+          page_number is not selected.
+        request:
+          queryParameters:
+            next_page_token:
+              role: cursor
+            page_size:
+              role: pageSize
+        response:
+          bodyFields:
+            next_page_token:
+              role: nextCursor
+- target: $.paths['/archive_files'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: meetings
+          bodyFields:
+            total_records:
+              role: totalCount
+      description: If Zoom clamps to to the current time, reuse the response to value along with next_page_token;
+        this extension has no role for copying non-pagination response filters.
+- target: $.paths['/archive_files/download_audit'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: meetings
+- target: $.paths['/meetings/{meetingId}/recordings/analytics_details'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: analytics_details
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/meetings/{meetingId}/recordings/registrants'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: registrants
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/users/{userId}/recordings'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: meetings
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/devices'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: devices
+- target: $.paths['/devices/groups'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: groups
+- target: $.paths['/h323/devices'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: devices
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/meetings/{meetingId}/registrants'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: registrants
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/past_meetings/{meetingId}/participants'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: participants
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/users/{userId}/meetings'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: meetings
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/report/activities'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: activity_logs
+- target: $.paths['/report/disclaimer'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: disclaimer_records
+- target: $.paths['/report/history_meetings'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: history_meetings
+- target: $.paths['/report/meeting_activities'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: meeting_activity_logs
+- target: $.paths['/report/meetings/{meetingId}/participants'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: participants
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/report/operationlogs'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: operation_logs
+- target: $.paths['/report/remote_support'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: remote_support_logs
+- target: $.paths['/report/telephone'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: telephony_usage
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/report/upcoming_events'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: upcoming_events
+- target: $.paths['/report/users'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: users
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/report/users/{userId}/meetings'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: meetings
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/report/webinars/{webinarId}/participants'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: participants
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/sip_phones/phones'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: phones
+- target: $.paths['/meetings/meeting_summaries'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: summaries
+- target: $.paths['/users/{userId}/meeting_summaries'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: summaries
+- target: $.paths['/past_webinars/{webinarId}/absentees'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: registrants
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/past_webinars/{webinarId}/participants'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: participants
+          bodyFields:
+            total_records:
+              role: totalCount
+- target: $.paths['/webinars/{webinarId}/registrants'].get
+  update:
+    x-pagination:
+    - scheme: tokenCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: registrants
+          bodyFields:
+            total_records:
+              role: totalCount

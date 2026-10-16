@@ -1,0 +1,58 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developer.box.com/guides/api-calls/pagination/marker-based
+# Endpoint contracts: https://raw.githubusercontent.com/box/box-openapi/5b055e333a802b10b8ca90fcc513643836dd92b4/openapi/openapi-v2026.0.json
+overlay: 1.0.0
+info:
+  title: Box 2026.0 workflow and item-query markers
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/84d76796923210d5e972c22c22f834a061290fbd/APIs/box.com/2026.0/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      queryMarker:
+        type: pageToken
+        autoDetect: false
+        description: Copy the opaque next_marker unchanged into marker. Stop when it is null, empty or
+          absent. Preserve the required box-version header, query predicate, parameters, sorting and selected
+          fields. The workflow listing is beta and unavailable on a free developer account. Do not retain
+          markers as durable sync checkpoints.
+        request:
+          queryParameters:
+            marker:
+              role: cursor
+            limit:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: entries
+          bodyFields:
+            next_marker:
+              role: nextCursor
+      bodyMarker:
+        type: pageToken
+        autoDetect: false
+        description: Copy the opaque next_marker unchanged into marker. Stop when it is null, empty or
+          absent. Preserve the required box-version header, query predicate, parameters, sorting and selected
+          fields. The workflow listing is beta and unavailable on a free developer account. Do not retain
+          markers as durable sync checkpoints.
+        request:
+          bodyFields:
+            marker:
+              role: cursor
+            limit:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: entries
+          bodyFields:
+            next_marker:
+              role: nextCursor
+- target: $.paths['/automate_workflows'].get
+  update:
+    x-pagination:
+    - scheme: queryMarker
+- target: $.paths['/query'].post
+  update:
+    x-pagination:
+    - scheme: bodyMarker

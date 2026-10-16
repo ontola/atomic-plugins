@@ -23,6 +23,7 @@ import {
   verifyCapability,
   verifyRequest,
 } from './mock-proxy-auth.mjs';
+import { mockInbox } from './mock-proxy-inbox.mjs';
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -203,6 +204,8 @@ export function mockProxy({
 
     return caller;
   };
+
+  const inbox = mockInbox({ authenticate, connections, standing, now });
 
   const listFor = owner => ({
     owner,
@@ -439,6 +442,32 @@ export function mockProxy({
       }
     }
 
+    // The webhook inbox's consumer routes (mock-proxy-inbox.mjs, #369).
+    const consumed = await inbox.route(req, url, readBody);
+    if (consumed)
+      return json(consumed.status, consumed.body, {
+        'Cache-Control': 'no-store',
+      });
+
+    // Test-side inbox driver and view: a verified delivery for every
+    // subscription on a connection, and the subscriptions' state.
+    if (url.pathname === '/__mock/inbox' && req.method === 'GET')
+      return json(200, { subscriptions: inbox.state() });
+
+    if (url.pathname === '/__mock/inbox/deliver' && req.method === 'POST') {
+      const text = (await readBody(4 * 1024 * 1024))?.toString('utf8');
+      if (text === undefined) return json(413, {});
+      let command;
+
+      try {
+        command = JSON.parse(text);
+      } catch {
+        return json(400, { error: 'Invalid delivery' });
+      }
+
+      return json(200, { routed: inbox.deliver(command) });
+    }
+
     // Management, signed by the owner.
     const management =
       url.pathname === '/connections' ||
@@ -664,6 +693,16 @@ export function mockProxy({
 
       if (!Object.hasOwn(instances, platform)) return json(404, {});
       const fixture = fixtures[platform];
+
+      // As the real proxy does (catalog.rs `allows`): a relayed path must
+      // start with the base path of the document's `servers[0].url` and is
+      // sent upstream as is. A path without it is "not in the catalog".
+      const serverUrl = fixture.document?.servers?.[0]?.url;
+      const basePath = serverUrl
+        ? new URL(serverUrl).pathname.replace(/\/+$/, '')
+        : '';
+      if (basePath && !`/${rest}`.startsWith(`${basePath}/`))
+        return json(404, { error: 'method or path is not in the catalog' });
       let input = {};
 
       if (fixture.jsonBody && body.length) {
@@ -684,11 +723,15 @@ export function mockProxy({
         : {};
       // A fixture may answer asynchronously, or never (to simulate a lost
       // response; see the Clockify fixture's `applyThenDrop`).
+      // The fifth argument says which connection the request came through,
+      // so a fixture can keep per-connection state (a deliberate outage
+      // that each test's own connection meets at the same point).
       const result = await instances[platform].request(
         req.method,
         upstream,
         input,
         forwarded,
+        { connection: row.connection_id },
       );
 
       return json(result.status, result.body, result.headers ?? {});

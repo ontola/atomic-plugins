@@ -620,7 +620,7 @@ describe('rendering hooks (ui/coverage.ts)', () => {
 
     expect(note.getAttribute('role')).toBe('note');
     expect(note.textContent).toBe(
-      'Not loaded: 16 Sep 00:00 – 14:00. No complete read of Clockify covers this time, so it is not shown as “did not work”.',
+      'Not loaded yet: 16 Sep 00:00 – 14:00. Clockify has not been read for this time, so entries there may be missing; it is not shown as “did not work”.',
     );
   });
 

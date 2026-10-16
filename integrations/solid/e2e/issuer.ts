@@ -7,14 +7,26 @@
  * `/<name>/profile/card` — and mints DPoP-bound access tokens in process,
  * the way an issuer would after a client-credentials grant. Keys are fresh
  * ES256 pairs per run; every identity is invented.
+ *
+ * The signing key stays the same for a whole Playwright run when
+ * `startIssuer` gets a `keyFile`: a retry runs in a new worker, which starts
+ * this issuer again on the same origin, while the lane's atomic-server keeps
+ * the JWKS it fetched for that issuer and refetches it for an unknown `kid`
+ * at most once a minute (`JWKS_REFETCH_MS` in its `route_dpop.rs`). A real
+ * issuer does not rotate its key between two of a client's requests, so a
+ * fresh key per attempt failed every retry with 401 "no key of the issuer
+ * has this `kid`" (CI run 37057638058, 2026-10-02).
  */
 import {
   createHash,
+  createPrivateKey,
+  createPublicKey,
   generateKeyPairSync,
   randomUUID,
   sign,
   type KeyObject,
 } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 
 const b64url = (data: Buffer | string) =>
@@ -31,12 +43,13 @@ class Es256 {
   readonly privateKey: KeyObject;
   readonly jwk: Jwk;
 
-  constructor() {
-    const { privateKey, publicKey } = generateKeyPairSync('ec', {
-      namedCurve: 'P-256',
-    });
-    this.privateKey = privateKey;
-    const { kty, crv, x, y } = publicKey.export({ format: 'jwk' }) as Jwk;
+  constructor(privateKey?: KeyObject) {
+    this.privateKey =
+      privateKey ??
+      generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey;
+    const { kty, crv, x, y } = createPublicKey(this.privateKey).export({
+      format: 'jwk',
+    }) as Jwk;
     this.jwk = { kty, crv, x, y };
   }
 
@@ -70,12 +83,43 @@ export interface TestIssuer {
   close(): Promise<void>;
 }
 
-/** Listens on `origin` (`http://127.0.0.1:<port>`) until closed. */
-export async function startIssuer(origin: string): Promise<TestIssuer> {
-  const url = new URL(origin);
-  const issuer = url.origin;
+/**
+ * The issuer's signing key and its `kid`: read from `keyFile` if an earlier
+ * attempt of this run wrote it, else made and written there.
+ */
+function signingKey(keyFile?: string): { signing: Es256; kid: string } {
+  if (keyFile && existsSync(keyFile)) {
+    const { pkcs8, kid } = JSON.parse(readFileSync(keyFile, 'utf8')) as {
+      pkcs8: string;
+      kid: string;
+    };
+
+    return { signing: new Es256(createPrivateKey(pkcs8)), kid };
+  }
+
   const signing = new Es256();
   const kid = `test-${randomUUID()}`;
+
+  if (keyFile) {
+    const pkcs8 = signing.privateKey.export({ format: 'pem', type: 'pkcs8' });
+    writeFileSync(keyFile, JSON.stringify({ pkcs8, kid }), { mode: 0o600 });
+  }
+
+  return { signing, kid };
+}
+
+/**
+ * Listens on `origin` (`http://127.0.0.1:<port>`) until closed. `keyFile`
+ * keeps the signing key across the attempts of one run (see above); pass a
+ * path that is new for each run.
+ */
+export async function startIssuer(
+  origin: string,
+  keyFile?: string,
+): Promise<TestIssuer> {
+  const url = new URL(origin);
+  const issuer = url.origin;
+  const { signing, kid } = signingKey(keyFile);
   const storages = new Map<string, string>();
   const webid = (name: string) => `${issuer}/${name}/profile/card#me`;
 

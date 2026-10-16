@@ -195,6 +195,8 @@ suite('pill', () => {
           message: 'x',
           reconnect: true,
           problem: { kind: 'reauth', message: 'x' },
+          failedAt: at,
+          phase: 'read',
         },
       }),
     ).toMatchObject({ text: 'Reconnect needed', tone: 'neg' });
@@ -206,6 +208,8 @@ suite('pill', () => {
           message: 'x',
           reconnect: false,
           problem: { kind: 'network', message: 'x' },
+          failedAt: at,
+          phase: 'read',
         },
       }),
     ).toMatchObject({ text: 'Error', tone: 'neg' });

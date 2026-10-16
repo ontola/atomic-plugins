@@ -1,0 +1,5 @@
+{
+  "//": "Only so Playwright loads this folder's spec as an ES module (the spec imports ES modules). google-tasks has no package.json at its root: certify.mjs would treat one as a sandbox package; the app’s version is in app/package.json.",
+  "private": true,
+  "type": "module"
+}

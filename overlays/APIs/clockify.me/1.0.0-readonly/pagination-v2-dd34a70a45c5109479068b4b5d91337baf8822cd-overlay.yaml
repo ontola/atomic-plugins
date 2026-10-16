@@ -1,0 +1,31 @@
+# Reviewed 2026-10-08 against the pinned OAD and https://docs.clockify.me/.
+# This read-only OAD declares one collection; projects and users are absent.
+overlay: 1.0.0
+info:
+  title: Clockify read-only time-entry pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dd34a70a45c5109479068b4b5d91337baf8822cd/APIs/clockify.me/1.0.0-readonly/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      timeEntryPages:
+        type: pageNumber
+        autoDetect: false
+        description: >-
+          Start at page 1 and increment by one, preserving workspaceId, userId,
+          start, end and the requested page-size. The defaults are page 1 and
+          page-size 50. The JSON response is the item array, with no envelope,
+          next token or total count. An empty array ends traversal; no additional
+          completion header is required by this pinned OAD. Page numbers are not
+          durable sync checkpoints, and concurrent edits can shift page contents.
+        request:
+          queryParameters:
+            page:
+              role: page
+            page-size:
+              role: pageSize
+- target: "$.paths['/v1/workspaces/{workspaceId}/user/{userId}/time-entries'].get"
+  update:
+    x-pagination:
+    - scheme: timeEntryPages

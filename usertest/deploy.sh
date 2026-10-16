@@ -18,6 +18,19 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 [ -f "$HERE/out/catalog.json" ] ||
   { echo "no usertest/out/catalog.json; run node usertest/catalog.mjs first" >&2; exit 1; }
 
+# Before copying anything: no app module may change under a version the
+# droplet already serves (an unbumped app, or a build without
+# USERTEST_LOG_URL replacing a logged one), and an unlogged build
+# (catalog.mjs --no-log) is never deployed. check-live compares the built
+# catalog with the droplet's own copy. Only a definite absence (the NONE
+# marker below) is a first deploy; an ssh failure or a read error stops here.
+[ ! -e "$HERE/out/UNLOGGED" ] ||
+  { echo "usertest/out was built with --no-log (out/UNLOGGED): rebuild with USERTEST_LOG_URL" >&2; exit 1; }
+live=$(ssh -n "$@" "$TARGET" 'f=/srv/catalog/catalog.json; if [ -e "$f" ]; then cat "$f"; else echo NONE; fi') ||
+  { echo "could not read the droplet's catalog.json over ssh: deploy stopped before copying" >&2; exit 1; }
+printf '%s\n' "$live" | node "$HERE/check-live.mjs" - "$HERE/out" ||
+  { echo "deploy stopped before copying: see above" >&2; exit 1; }
+
 # COPYFILE_DISABLE and --no-xattrs keep macOS tar from adding ._ files and
 # extended attributes that GNU tar on the server warns about.
 (cd "$HERE/out" && COPYFILE_DISABLE=1 tar --no-xattrs -czf - catalog.json apps samples) |

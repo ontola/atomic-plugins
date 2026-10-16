@@ -14,7 +14,11 @@
  * atomic-server comes from one of two places:
  *
  *   - by default, the binary at $ATOMIC_SERVER_CHECKOUT/target/e2e/atomic-server,
- *     built from source (AGENTS.md, "Shared pinned atomic-server build");
+ *     built from source (AGENTS.md, "Shared pinned atomic-server build").
+ *     When the SessionStart hook's stamp next to it names another commit
+ *     than the checkout is at, it is refused as stale (binaryProblem), with
+ *     the full build lines; a stampless build is trusted, with a warning
+ *     that says how to stamp it;
  *   - with ATOMIC_SERVER_IMAGE set (e.g.
  *     `ghcr.io/ontola/atomic-server-e2e:$(cat .atomic-server-ref)`), that
  *     image, run with `docker run` on the same port. Everything else is
@@ -51,8 +55,38 @@ import {
   root,
 } from './lanes.mjs';
 
-export const serverCheckout = () =>
-  process.env.ATOMIC_SERVER_CHECKOUT ?? '/tmp/atomic-server';
+/**
+ * The atomic-server checkout the lanes use: ATOMIC_SERVER_CHECKOUT when set
+ * and not empty (CI and the cloud hook set it; `ATOMIC_SERVER_CHECKOUT=''`
+ * counts as unset). Otherwise this pin's per-SHA checkout,
+ * `~/.cache/atomic-plugins/atomic-server/<.atomic-server-ref>`, when that
+ * directory exists (one checkout per SHA, docs/agents/build-vps.md), and
+ * `/tmp/atomic-server` when it does not.
+ */
+export const serverCheckout = ({
+  env = process.env,
+  home = env.HOME,
+  pin = () => readFileSync(resolve(root, '.atomic-server-ref'), 'utf8').trim(),
+} = {}) => {
+  if (env.ATOMIC_SERVER_CHECKOUT) return env.ATOMIC_SERVER_CHECKOUT;
+
+  if (home) {
+    let sha;
+
+    try {
+      sha = pin();
+    } catch {
+      sha = undefined;
+    }
+
+    if (sha && /^[0-9a-f]{40}$/.test(sha)) {
+      const perSha = resolve(home, '.cache/atomic-plugins/atomic-server', sha);
+      if (existsSync(perSha)) return perSha;
+    }
+  }
+
+  return '/tmp/atomic-server';
+};
 
 /** The image to run atomic-server from instead of a local binary, if any. */
 export const serverImage = () => process.env.ATOMIC_SERVER_IMAGE || undefined;
@@ -84,6 +118,26 @@ export function serverEnv(ports, store) {
     ATOMIC_INTEGRATION_FRONTEND_ORIGIN: `http://localhost:${ports.atomicServer}`,
   };
 }
+
+/**
+ * The address a lane's host-side atomic-server binds: ATOMIC_IP when the
+ * caller set it (it wins, e.g. the cloud hook's `0.0.0.0`), else loopback.
+ * Without it atomic-server binds `::`, every interface, and announces
+ * "Anyone who can reach this node can create a Drive" on a machine with a
+ * public address. Only for the local binary: inside the image the server must
+ * bind `0.0.0.0` (the Dockerfile's ENV), and dockerRunArgs publishes the port
+ * on 127.0.0.1 only.
+ */
+export const bindAddress = (env = process.env) => env.ATOMIC_IP || '127.0.0.1';
+
+/**
+ * The dev-server's bind address: DEV_SERVER_HOST when set, else loopback. With
+ * the image, the server in the container fetches the dev-server through
+ * `host.docker.internal` (the ontology lane), which is the host's bridge
+ * address, not loopback, so it listens on all interfaces then.
+ */
+export const devServerHost = (env = process.env) =>
+  env.DEV_SERVER_HOST || (env.ATOMIC_SERVER_IMAGE ? '0.0.0.0' : '127.0.0.1');
 
 /**
  * The origin plugin routes would be served under (`--routes-origin`): a
@@ -201,6 +255,87 @@ export function dockerRunArgs({
 // Not link-atomic-server.mjs's pinnedRef(): that module imports this one.
 const readPin = () =>
   readFileSync(resolve(root, '.atomic-server-ref'), 'utf8').trim();
+
+/**
+ * The stamp .claude/hooks/session-start.sh writes next to the e2e binary
+ * once a build finished: the commit it was built from. Absent for a build
+ * made by hand.
+ */
+export const BUILD_STAMP = 'target/e2e/.built-for-atomic-plugins';
+
+/**
+ * How to build the e2e binary in `checkout`: ci.yml's build-server steps as
+ * the SessionStart hook runs them (the browser WASM bundle first, which the
+ * data-browser embeds, then the server), so a stale binary is never
+ * "fixed" with the cargo line alone.
+ */
+export const buildInstructions = checkout =>
+  [
+    `  cd ${checkout}`,
+    `  (cd wasm && CARGO_ENCODED_RUSTFLAGS='--cfg'$'\\x1f''getrandom_backend="wasm_js"' wasm-pack build --target web --out-dir pkg --no-opt && mkdir -p ../browser/data-browser/public/wasm && cp pkg/atomic_wasm.js pkg/atomic_wasm_bg.wasm ../browser/data-browser/public/wasm/)`,
+    `  SKIP_WASM_BUILD=1 VITE_E2E=true cargo build --profile e2e -p atomic-server --no-default-features --features wasm-plugins`,
+    `  git rev-parse HEAD > ${BUILD_STAMP}`,
+  ].join('\n');
+
+/** HEAD of the git checkout at `checkout`, or undefined when it has none. */
+export function checkoutHead(checkout) {
+  const result = spawnSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], {
+    encoding: 'utf8',
+  });
+
+  return result.status === 0 ? result.stdout.trim() : undefined;
+}
+
+/**
+ * Why the local e2e binary cannot be run, or undefined: it does not exist,
+ * or its stamp says it was built from another commit than the checkout is
+ * at now (after a pin bump moved the checkout, say), which would test the
+ * wrong host without a word. A binary without a stamp is trusted. `head`
+ * is the checkout's commit (tests pass one; callers let it be read).
+ */
+export function binaryProblem({
+  checkout,
+  binary = resolve(checkout, 'target/e2e/atomic-server'),
+  head = checkoutHead(checkout),
+}) {
+  if (!existsSync(binary))
+    return (
+      `${binary} does not exist. Build it first:\n${buildInstructions(checkout)}\n` +
+      'Or point ATOMIC_SERVER_CHECKOUT at a checkout that already has one, or set ATOMIC_SERVER_IMAGE to run the published image instead.'
+    );
+  const stampFile = resolve(checkout, BUILD_STAMP);
+  if (!existsSync(stampFile) || head === undefined) return undefined;
+  const stamp = readFileSync(stampFile, 'utf8').trim();
+  if (!stamp || stamp === head) return undefined;
+
+  return (
+    `${binary} was built from ${stamp.slice(0, 12)} (${stampFile}), but ${checkout} is at ${head.slice(0, 12)}: ` +
+    `that binary is a stale host. Rebuild it:\n${buildInstructions(checkout)}\n` +
+    `Or delete ${stampFile} to run it anyway.`
+  );
+}
+
+/**
+ * A warning for a local e2e binary that has no stamp, or undefined. Such a
+ * binary is still run (binaryProblem trusts it), but nothing can tell
+ * whether it was built from the commit the checkout is at now, so a moved
+ * checkout would test a stale host without a word. The warning says how to
+ * write the stamp once the binary is known to match.
+ */
+export function binaryWarning({
+  checkout,
+  binary = resolve(checkout, 'target/e2e/atomic-server'),
+  head = checkoutHead(checkout),
+}) {
+  const stampFile = resolve(checkout, BUILD_STAMP);
+  if (!existsSync(binary) || existsSync(stampFile)) return undefined;
+
+  return (
+    `${binary} has no stamp (${stampFile}), so serve.mjs cannot tell which commit it was built from` +
+    `${head ? ` (the checkout is at ${head.slice(0, 12)})` : ''}. ` +
+    `If you built it from that commit, write the stamp: git -C "${checkout}" rev-parse HEAD > "${stampFile}"; otherwise tell whoever built it`
+  );
+}
 
 /** The named volume that holds one label's store when running the image. */
 export const storeVolume = label => `atomic-plugins-lane-store-${label}`;
@@ -425,12 +560,14 @@ export async function bringUp({
     const problem = imagePinProblem(image, readPin());
     if (problem) console.warn(`warning: ${problem}`);
     pullImage(image);
-  } else if (!existsSync(binary)) {
+  } else {
     // Checked up front: spawn's ENOENT surfaces asynchronously, so without this
-    // the caller waits out the full readiness timeout before seeing the cause.
-    throw new Error(
-      `${binary} does not exist. Build it first:\n  cd ${serverCheckout()} && cargo build --profile e2e -p atomic-server --no-default-features --features wasm-plugins\nOr point ATOMIC_SERVER_CHECKOUT at a checkout that already has one, or set ATOMIC_SERVER_IMAGE to run the published image instead.`,
-    );
+    // the caller waits out the full readiness timeout before seeing the cause;
+    // and a binary whose stamp names another commit would run without a word.
+    const problem = binaryProblem({ checkout: serverCheckout(), binary });
+    if (problem) throw new Error(problem);
+    const warning = binaryWarning({ checkout: serverCheckout(), binary });
+    if (warning) console.warn(`warning: ${warning}`);
   }
 
   await assertFree(ports, config);
@@ -476,6 +613,7 @@ export async function bringUp({
     );
   } else {
     start('atomic-server', binary, routeArgs, {
+      ATOMIC_IP: bindAddress(),
       ...serverEnv(ports, resolve(serverCheckout(), `.lane-store/${label}`)),
       ...laneServerEnv(laneEnv, ports),
     });
@@ -505,6 +643,7 @@ export async function bringUp({
     ['integrations/tooling/dev-server.mjs'],
     {
       DEV_SERVER_PORT: String(ports.devServer),
+      DEV_SERVER_HOST: devServerHost(),
       // Serve every drive app entry enabled, so an e2e can install an app
       // the published catalog still keeps disabled until its launch
       // (dev-server.mjs enableAppEntries).

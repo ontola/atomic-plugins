@@ -21,14 +21,16 @@
  * one round trip; it is a declared limit, not handled.
  *
  * A relay call that throws on the PATCH may or may not have reached Notion:
- * that row is "unknown", and the batch stops. A refusal by the proxy or a
- * rate limit also stops the batch.
+ * that row is "unknown", and the batch stops. So is a 5xx answer (a gateway
+ * may answer 502 or 504 after Notion applied the PATCH). A refusal by the
+ * proxy or a rate limit also stops the batch; those wrote nothing.
  */
 import {
   notionFieldValue,
   notionPropertyValue,
   type JSONValue as LensValue,
 } from '../devonian/notion/index.js';
+import { BLOCKED_MESSAGE, isBlockedByNotion } from './errors.js';
 import {
   BASELINE_SHORTNAME,
   nameForTitle,
@@ -40,8 +42,14 @@ import {
   type FieldChange,
   type RowChange,
 } from './changes.js';
-import type { Schema } from './record.js';
-import type { HostProxy, JSONValue, PluginStore } from './store.js';
+import { hostValueFor } from './options.js';
+import type { Column, Schema } from './record.js';
+import type {
+  HostProxy,
+  JSONValue,
+  PluginResource,
+  PluginStore,
+} from './store.js';
 import { atomic } from './sync.js';
 import { PLATFORM, proxyRefusal } from './transport.js';
 
@@ -51,11 +59,19 @@ export type SendOutcome = { subject: string; name: string } & (
   | { status: 'changed'; notion: Record<string, JSONValue | undefined> }
   /** Archived, in trash, or no longer shared with the integration. */
   | { status: 'gone' }
-  /** Not sent: the value cannot be written, or Notion refused it. */
-  | { status: 'refused'; message: string }
-  /** Not sent, and the batch stopped (connection, rate limit, no answer). */
+  /**
+   * Not sent: the value cannot be written, or Notion refused it. With
+   * `written`, the opposite: Notion applied the PATCH, but the row here
+   * could not be updated from its answer; the next sync reads it back.
+   */
+  | { status: 'refused'; message: string; written?: true }
+  /** Not sent, and the batch stopped (a proxy refusal, a rate limit). */
   | { status: 'failed'; message: string }
-  /** The PATCH got no answer: Notion may or may not have applied it. */
+  /**
+   * The PATCH got no usable answer (none, or a 5xx a gateway may send after
+   * Notion applied it): Notion may or may not have applied it. The batch
+   * stops; the next sync settles the row (`changes.ts` `isSettled`).
+   */
   | { status: 'unknown'; message: string }
 );
 
@@ -75,6 +91,15 @@ const notionMessage = (status: number, body: unknown) => {
     ? `Notion answered ${status}: ${text}`
     : `Notion answered ${status}`;
 };
+
+/**
+ * `notionMessage`, plus that retrying won't help when Notion marked the 429
+ * as blocked (`isBlockedByNotion`).
+ */
+const blockedMessage = (status: number, body: unknown) =>
+  status === 429 && isBlockedByNotion(body)
+    ? `${notionMessage(status, body).replace(/\.?$/, '.')} ${BLOCKED_MESSAGE}`
+    : notionMessage(status, body);
 
 /** A page's raw property by stable id. */
 const property = (page: unknown, id: string) =>
@@ -174,7 +199,8 @@ export async function sendChanges({
       report({
         ...who,
         status: 'failed',
-        message: notionMessage(current.status, current.body),
+        // The GET is where a blocked integration is usually refused first.
+        message: blockedMessage(current.status, current.body),
       });
       break;
     }
@@ -236,10 +262,24 @@ export async function sendChanges({
       break;
     }
 
-    if (answer.status === 429 || answer.status >= 500) {
+    if (answer.status === 429) {
       report({
         ...who,
         status: 'failed',
+        // Blocked by Notion is permanent, not a limit to wait out.
+        message: blockedMessage(answer.status, answer.body),
+      });
+      break;
+    }
+
+    // A 5xx may come from a gateway after Notion applied the PATCH (502,
+    // 504), so it is not "nothing was written": unknown, like a lost answer.
+    if (answer.status >= 500) {
+      report({
+        ...who,
+        status: 'unknown',
+        // Short ("Notion answered 502[: message]"): the review's own prefix
+        // already says it is unknown.
         message: notionMessage(answer.status, answer.body),
       });
       break;
@@ -265,6 +305,7 @@ export async function sendChanges({
       report({
         ...who,
         status: 'refused',
+        written: true,
         message: `Sent to Notion, but this row could not be updated here: ${message(error)}. The next sync reads it back.`,
       });
       continue;
@@ -274,6 +315,22 @@ export async function sendChanges({
   }
 
   return outcomes;
+}
+
+/**
+ * Writes a lens value (an option id or ids for a select column) into a host
+ * cell as the host holds it (Tag subjects, `options.ts`), or removes it.
+ */
+function setCell(
+  row: PluginResource,
+  schema: Schema,
+  column: Column | undefined,
+  value: JSONValue | undefined,
+): void {
+  if (!column) return;
+  const host = hostValueFor(column, value, schema.options);
+  if (host === undefined) row.remove(column.subject);
+  else row.set(column.subject, host);
 }
 
 /**
@@ -296,12 +353,9 @@ async function confirm(
   for (const field of change.fields) {
     const found = notionValue(page, field);
     const value = 'value' in found ? found.value : field.after;
-    const column = schema.columns.get(field.shortname);
     if (value === undefined) delete baseline.fields[field.shortname];
     else baseline.fields[field.shortname] = value;
-    if (column)
-      if (value === undefined) row.remove(column.subject);
-      else row.set(column.subject, value);
+    setCell(row, schema, schema.columns.get(field.shortname), value);
     if (field.id === TITLE_ID) row.set(atomic.name, nameForTitle(value));
   }
 
@@ -339,10 +393,7 @@ export async function resolveConflict(
   // the title that row value may have come from a rename of the row, so the
   // column is written either way and stays in step with the name.
   const kept = keep === 'notion' ? value : field.after;
-  const column = schema.columns.get(field.shortname);
-  if (column)
-    if (kept === undefined) row.remove(column.subject);
-    else row.set(column.subject, kept);
+  setCell(row, schema, schema.columns.get(field.shortname), kept);
   if (field.id === TITLE_ID) row.set(atomic.name, nameForTitle(kept));
 
   row.set(baselineColumn.subject, JSON.stringify(baseline));
@@ -358,11 +409,8 @@ export async function discardChange(
   const row = await store.getResource(change.subject);
 
   for (const field of change.fields) {
-    const column = schema.columns.get(field.shortname);
     const value = field.before;
-    if (column)
-      if (value === undefined) row.remove(column.subject);
-      else row.set(column.subject, value);
+    setCell(row, schema, schema.columns.get(field.shortname), value);
     if (field.id === TITLE_ID) row.set(atomic.name, nameForTitle(value));
   }
 

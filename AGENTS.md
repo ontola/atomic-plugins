@@ -20,11 +20,17 @@ node integrations/tooling/link-atomic-server.mjs
 ```
 
 This shallow-fetches atomic-server at `.atomic-server-ref` into
-`$ATOMIC_SERVER_CHECKOUT` (default `/tmp/atomic-server`, the default
-`run-lane.mjs`/`serve.mjs` also use; one checkout serves every worktree). It
+`$ATOMIC_SERVER_CHECKOUT` (default: this pin's
+`~/.cache/atomic-plugins/atomic-server/<sha>` when that directory exists,
+else `/tmp/atomic-server`; an empty `ATOMIC_SERVER_CHECKOUT=''` counts as
+unset; `run-lane.mjs`/`serve.mjs` use the same default;
+one checkout serves every worktree on that pin). It
 then symlinks `browser` and `integrations/node_modules`, and runs `pnpm
 install --frozen-lockfile` in its `browser/` (pnpm 10, per its
-`packageManager`). It refuses to move a checkout that has uncommitted changes.
+`packageManager`). It refuses to move a checkout that has uncommitted changes,
+apart from the two files atomic-server's build regenerates
+(`BUILD_OUTPUT_PATHS` in `integrations/tooling/server-build.mjs`): when only
+those changed, it restores them and moves the checkout.
 Re-run it after `.atomic-server-ref` changes. `--check` verifies the layout
 without changing anything, and `run-lane.mjs` warns when `browser/` points at
 a checkout on some other commit. After that:
@@ -69,9 +75,17 @@ in [`integrations/READINESS.md`](integrations/READINESS.md).
    paging, and optionally a lens from the npm `devonian` package for the
    mapping. `pets/app/` (syncables), `notion/app/` (syncables plus a
    Devonian `AtomicLens`) and `timesheets/app/` (its own Clockify client)
-   are this shape. No host UI installs a drive app from the catalog yet
-   ([#94](https://github.com/ontola/atomic-plugins/issues/94)); their E2Es
-   install test-side.
+   are this shape. A drive app may head its view with the shared sync-status
+   card in `integrations/sync-status/` (Decision Inbox Q-084, status-only;
+   `timesheets/app/` does, from 0.7.0), which its build inlines like the
+   ontology resolver. At the pin, Integrations → Drive apps installs a drive app
+   from a catalog entry that has `app-module` (atomic-server#1689;
+   [#94](https://github.com/ontola/atomic-plugins/issues/94), closed), and the
+   lane e2es install through that UI with the lane's dev-server standing in
+   for GitHub Pages. Only the `pets` entry is `enabled: true`, so the
+   published catalog offers Pets alone; the other app entries are
+   `enabled: false` and are not listed. The design of that UI is tracked in
+   [#89](https://github.com/ontola/atomic-plugins/issues/89).
 2. **Server-executed sandbox plugins** — a bundled `plugin.js` with a
    `manifest` and a `run(ctx)`, executed server-side in a QuickJS/WASM
    sandbox against scoped `ctx.query`/`ctx.read`/`ctx.http`/`ctx.config`.
@@ -120,9 +134,13 @@ buildable and publishable TypeScript package (own `package.json`,
 `pnpm-lock.yaml`, `tsconfig.json`) migrated in from the standalone
 `localthought/devonian` repo, full commit history included via `git
 subtree`. It publishes to npm as `devonian`. Two plugins use it:
-`integrations/notion/` depends on the published npm version (exact version
-in its `package.json`), and `integrations/issue-tracker/devonian/github-issues/`
-imports this folder's source through a Vitest alias. A plugin's own lens lives in
+`integrations/notion/` and `integrations/issue-tracker/app/` depend on the
+published npm version (exact versions in their `package.json`), and the lens
+prototypes in `integrations/issue-tracker/devonian/` and
+`integrations/timesheets/devonian/` test against the npm version their
+plugin's `app/package.json` pins; those in `integrations/bookmarks/` and
+`integrations/solid/` still import this folder's source through a Vitest
+alias. A plugin's own lens lives in
 its plugin folder, at `integrations/<plugin>/devonian/<platform>/`, and
 imports `devonian` as a package, never by relative path into `devonian/src`;
 no lens is left inside the package. See [`devonian/AGENTS.md`](devonian/AGENTS.md)
@@ -189,9 +207,10 @@ standalone `localthought/overlays` repo, full commit history included via
 `git subtree`. GitHub Pages publishes this repository's `main` from its root
 (the root `.nojekyll` keeps files byte-for-byte), so `overlays/<path>` is
 served at `https://ontola.github.io/atomic-plugins/overlays/<path>` —
-`catalog/2026-10-02.json` references its overlays by those URLs, and
-`integration-proxy`'s default `CATALOG_PATH` is that folder's
-`catalog/2026-10-02.json`. Dated catalogs and OAD-revision overlay filenames
+the dated catalogs under `catalog/` reference their overlays by those URLs,
+and `integration-proxy`'s default `CATALOG_PATH` is one of them
+(`catalog/2026-10-02-auth-profiles.json` since #258; 0.2.4 and
+localthought.io use `catalog/2026-10-02.json`). Dated catalogs and OAD-revision overlay filenames
 are immutable; a new overlay does not change an existing catalog selection.
 The unversioned catalog was removed after the verified localthought.io switch
 on 2026-10-02. See
@@ -221,7 +240,8 @@ commit history included via `git subtree` (#115). These are the extensions
 the rest of this repo implements: `overlays/` declares them for real
 providers, `syncables/` reads Pagination Schemes and CRUD Causality, and
 `integration-proxy/` reads `x-oauth-authentication-details` (the OAuth
-Authentication Scheme Details draft) and `x-api-key-details` (API Key
+Authentication Scheme Details draft), `x-authentication-profiles`
+(Authentication Profiles, #258) and `x-api-key-details` (API Key
 Details, #121). The Authenticated Principal operations
 in `overlays/` were for the tenant-identity login #54 removed; the proxy no
 longer reads them. A new extension, or a change to
@@ -230,12 +250,11 @@ with a row in [`openapi-extensions/README.md`](openapi-extensions/README.md);
 an overlay or the proxy then implements it, ideally in a later commit of the
 same PR. Spec versions are the `**Spec version:**` line of each README. The
 old repo is not archived from here; that, and pointing it at this folder,
-is Michiel's call. Its CI workflow (Python 3.11, the validators' own tests
-plus the example documents) waits at
-[`openapi-extensions/.github/workflows/openapi-extensions-ci.yml`](openapi-extensions/.github/workflows/openapi-extensions-ci.yml),
-where GitHub doesn't run it: moving it to the root `.github/workflows/`
-needs a push with the token's `workflow` scope, which agent sessions lack
-(`git mv openapi-extensions/.github/workflows/openapi-extensions-ci.yml .github/workflows/`). Like
+is Michiel's call. Its CI workflow,
+[`.github/workflows/openapi-extensions-ci.yml`](.github/workflows/openapi-extensions-ci.yml)
+(Python 3.11), runs every spec folder's `test_*.py` and each `validate.py`
+over its examples, discovered rather than listed, so a new spec needs no
+workflow change. Like
 the rest of the repository, Pages serves the folder as-is at
 `https://ontola.github.io/atomic-plugins/openapi-extensions/<path>`, but no
 catalog or overlay refers to those URLs; link the specs by repository path.
@@ -267,15 +286,19 @@ limit and its comment in the same commit. See
 The shared row classes of [#177](https://github.com/ontola/atomic-plugins/issues/177)
 (event, issue, time entry, bank transaction), which several plugins sync into
 so that a plugin's view works on any table of that class. `ontology/` holds
-only the generated term files, which the same Pages publish serves at
-`https://ontola.github.io/atomic-plugins/ontology/<path>`, each file at its
-own subject. `ontology-kit/` holds everything else: `base.json` (the one place
-the base URL is written), `source.json`, `ontology.mjs` (`build` and `check`),
-the generated subject constants `terms.mjs`, and the strict field resolver
-`resolver.mjs` that plugin views bundle. Never edit `ontology/` or
-`terms.mjs` by hand: edit `source.json` or `base.json` and run
-`node ontology-kit/ontology.mjs build`. A term file that is on `main` is never
-changed or deleted, apart from a base move; CI's
+only generated files: the term files, and the shared lens catalog under
+`ontology/lenses/` (Q-089; decided by Michiel in Decision Inbox Q-106,
+2026-10-08, see [`ontology-kit/LENSES.md`](ontology-kit/LENSES.md)). The same
+Pages publish
+serves them at `https://ontola.github.io/atomic-plugins/ontology/<path>`, each
+file at its own subject. `ontology-kit/` holds everything else: `base.json`
+(the one place the base URL is written), `source.json`, `lenses.json`,
+`ontology.mjs` (`build` and `check`), the generated subject constants
+`terms.mjs`, the strict field resolver `resolver.mjs` and the lens
+interpreter `lens.mjs` that plugins bundle. Never edit `ontology/` or
+`terms.mjs` by hand: edit `source.json`, `lenses.json` or `base.json` and run
+`node ontology-kit/ontology.mjs build`. A file under `ontology/` that is on
+`main` is never changed or deleted, apart from a base move; CI's
 `ontology.mjs check --published origin/main` enforces that. While the base is
 on github.io, every catalog entry that uses it must be `enabled: false`, which
 the same check enforces. See [`ontology-kit/README.md`](ontology-kit/README.md).
@@ -295,6 +318,24 @@ on #177 (question 12).
   distinction) — keep that language when writing catalog copy or docs.
 
 ## Agent collaboration
+
+### Keep going
+
+Once Michiel authorizes a task, keep going until the agreed outcome is complete.
+Carry the work through implementation, conflict resolution, required checks,
+fixes, and PR completion within the existing authorization. A status update,
+passing local tests, or opening a draft PR is not a stopping point when necessary
+work remains. Do not wait for another "go" between these steps.
+
+An explicit request from Michiel to pause or stop takes precedence: pause promptly
+and preserve unfinished work for resumption.
+
+Otherwise, pause only when further progress requires a user decision, missing
+access, an external dependency, or an action outside the existing authorization. State the
+specific blocker, who can remove it, and what remains; continue independent work
+where possible. Existing merge gates and publication permissions still apply.
+Completing an agreed part of a larger issue does not authorize unrelated work or
+closing that issue while its remaining steps are outstanding.
 
 Several Claude Code sessions and their subagents work on this repo at the
 same time. These are the working agreements between them.
@@ -345,8 +386,17 @@ below and #227 disagree, #227 is newer.
   `integrations/README.md`). Moving shared code out of plugin folders needs
   the user's decision. `ontology/` and `ontology-kit/` are such shared code,
   approved by Michiel on #177: shared-class terms, subject constants, the
-  field resolver and class-to-class lenses belong there, while a plugin's
-  provider-specific terms and code stay in its own folder.
+  field resolver and the shared lens catalog belong there. The catalog may
+  hold declarative provider-record-to-class lenses as well as class-to-class
+  ones (Decision Inbox Q-106, 2026-10-08); a plugin's provider-specific
+  terms and code, code lenses included, stay in its own folder.
+  `integrations/sync-status/` is the other approved shared code (Decision
+  Inbox Q-084, status-only): the sync-status card a drive app renders above
+  its data (`card.ts`, `card.css`, with their tests and the `sync-status`
+  lane), and nothing wider: no UI kit, no fake host. An app maps its own
+  state onto the card's `SyncStatus` in its own folder
+  (`timesheets/app/ui/status.ts`) and lists `integrations/sync-status/**`
+  in its lane's `paths`.
 - Never merge ontola/atomic-server PRs; they are reviewed by its
   maintainer. Pin `.atomic-server-ref` to a commit SHA instead, which may be
   on an unmerged branch.
@@ -371,7 +421,9 @@ if [ ! -x "$DIR/target/e2e/atomic-server" ]; then
     && cargo bin wasm-pack build --target web --out-dir pkg --no-opt \
     && cp pkg/atomic_wasm.js pkg/atomic_wasm_bg.wasm ../browser/data-browser/public/wasm/)
   (cd "$DIR" && SKIP_WASM_BUILD=1 VITE_E2E=true cargo build --profile e2e \
-    -p atomic-server --no-default-features --features wasm-plugins)
+    -p atomic-server --no-default-features --features wasm-plugins \
+    && git rev-parse HEAD > target/e2e/.built-for-atomic-plugins)
+  node -e "import('./integrations/tooling/server-build.mjs').then(m => m.restoreBuildOutputs(process.argv[1]))" "$DIR"
 fi
 export ATOMIC_SERVER_CHECKOUT=$DIR
 node integrations/tooling/link-atomic-server.mjs
@@ -382,8 +434,23 @@ it, apart from `pnpm install` in `browser/`. `run-lane.mjs` and `serve.mjs`
 read the same `ATOMIC_SERVER_CHECKOUT`, so keep it exported while you run
 lanes.
 
+- Lane servers listen on loopback. `serve.mjs` sets `ATOMIC_IP=127.0.0.1` for
+  the local binary unless `ATOMIC_IP` is already set (it wins), and starts
+  the dev-server on `127.0.0.1` (`DEV_SERVER_HOST` overrides). Don't rely on
+  a firewall, and don't make a lane peer in Docker reach the host through
+  `host.docker.internal`: use `--network host`. The image route is
+  unchanged (`0.0.0.0` inside, published on `127.0.0.1`).
 - Treat `$DIR` as read-only once it's built. Never commit in it or change
   its checkout, because other sessions may be using it at the same moment.
+  A branch with another pin uses that SHA's own `$DIR`, never this one.
+- The cargo build's last line writes the stamp `serve.mjs` checks: it
+  refuses a binary whose stamp names another commit than its checkout. A
+  binary without a stamp is trusted, so always write it.
+- The `node -e` line restores the two tracked files the data-browser build
+  regenerates (`BUILD_OUTPUT_PATHS` in `integrations/tooling/server-build.mjs`:
+  `browser/data-browser/src/chunks/Website/runtime/search-view.html` and
+  `website-runtime.min.js` next to it). The binary embeds its own built copy,
+  so this changes nothing in it, and it leaves the checkout clean.
 - If you need atomic-server changes, make them in a separate worktree on a
   branch.
 - Delete old SHAs with `git -C ~/gh/ontola/atomic-server worktree remove`
@@ -497,7 +564,14 @@ In order, it:
 - exports `ATOMIC_SERVER_CHECKOUT=$HOME/.cache/atomic-plugins/atomic-server`
   and, because cloud containers have no IPv6, `ATOMIC_IP=0.0.0.0` through
   `$CLAUDE_ENV_FILE`. Without that, atomic-server exits with "Cannot bind to
-  endpoint :::<port>: Address family not supported by protocol";
+  endpoint :::<port>: Address family not supported by protocol.
+  Since `serve.mjs` now defaults to `127.0.0.1` this export is no longer
+  needed for the lanes (an IPv4 loopback address needs no IPv6; not verified
+  in the cloud). The hook still sets it, so cloud lane servers bind
+  `0.0.0.0`; changing that is left to a session that can test in the cloud;
+- restores the two tracked files atomic-server's build regenerates
+  (`BUILD_OUTPUT_PATHS` in `integrations/tooling/server-build.mjs`) before
+  linking, and again after a build;
 - runs `link-atomic-server.mjs` (its `pnpm install` included), builds
   `@tomic/lib`, and installs every plugin lockfile, as CI does;
 - installs Playwright's Chromium for `browser/e2e`. The proxy blocks

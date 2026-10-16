@@ -1,6 +1,6 @@
 {
   "name": "syncables",
-  "version": "0.18.0",
+  "version": "0.24.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ontola/atomic-plugins.git",
@@ -54,9 +54,10 @@
     "lint": "eslint .",
     "test": "vitest run unit --config __tests__/vitest.config.ts",
     "test:coverage": "vitest run unit --config __tests__/vitest.config.ts --coverage.enabled --coverage.all",
-    "prettier": "prettier \"{src,__{tests}__}/**/*.{ts,mts}\" --config .prettierrc --write",
-    "prettier:check": "prettier \"{src,__{tests}__}/**/*.{ts,mts}\" --config .prettierrc --check",
+    "prettier": "prettier \"{src,__tests__}/**/*.{ts,mts}\" scripts/changelog.mjs --config .prettierrc --write",
+    "prettier:check": "prettier \"{src,__tests__}/**/*.{ts,mts}\" scripts/changelog.mjs --config .prettierrc --check",
     "test:watch": "vitest unit",
+    "changelog": "node scripts/changelog.mjs",
     "prepare": "npm run build:release"
   },
   "author": "Michiel de Jong <michiel@unhosted.org>",

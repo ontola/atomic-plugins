@@ -1,0 +1,52 @@
+# Google Tasks collections for generic Syncables reads. The list of task
+# lists is the root collection; each task list supplies the tasklist path
+# value for its paginated task collection. The task schema retains Google's
+# optional `parent` id on child task records.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/7ca47c73cf2308c9812692b482b3713b397bc88c/APIs/googleapis.com/tasks/v1/openapi.yaml
+info:
+  title: Google Tasks v1 task-list and task read collections
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        taskList:
+          schema:
+            $ref: '#/components/schemas/TaskList'
+          identity:
+            urlTemplate: /tasks/v1/users/@me/lists/{tasklist}
+            bindings:
+              tasklist:
+                field: id
+          collections:
+            taskLists:
+              urlTemplate: /tasks/v1/users/@me/lists
+        task:
+          schema:
+            $ref: '#/components/schemas/Task'
+          identity:
+            urlTemplate: /tasks/v1/lists/{tasklist}/tasks/{task}
+            bindings:
+              task:
+                field: id
+          collections:
+            tasks:
+              urlTemplate: /tasks/v1/lists/{tasklist}/tasks
+  - target: $.paths['/tasks/v1/users/@me/lists'].get
+    update:
+      x-crud:
+        action: list
+        resource: taskList
+        collection: taskLists
+  - target: $.paths['/tasks/v1/lists/{tasklist}/tasks'].get
+    update:
+      x-crud:
+        action: list
+        resource: task
+        collection: tasks
+  - target: $.paths['/tasks/v1/lists/{tasklist}/tasks/{task}'].get
+    update:
+      x-crud:
+        action: read
+        resource: task

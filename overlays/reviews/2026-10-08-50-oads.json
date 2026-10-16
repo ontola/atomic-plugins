@@ -1,0 +1,744 @@
+{
+  "completed_on": "2026-10-08",
+  "baseline_commit": "739dc20e1164882aa17873e4b2055e0bf432f0f6",
+  "completion_commit": "aeb91d2581393b92a44d1282a3019c06b3b809b2",
+  "additional_oad_count": 50,
+  "evidence_scope": "Historical publication byte checks and pinned document review; no live provider certification or catalog opt-in.",
+  "additional_oads": [
+    {
+      "name": "asana",
+      "sha": "b58c91d9f59c6a10178916e7948793809edae46d",
+      "path": "APIs/asana.com/1.0/openapi.yaml",
+      "overlay": "APIs/asana.com/1.0/pagination-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml"
+    },
+    {
+      "name": "confluence",
+      "sha": "5e659825c92ed8d1284b63cdc84a94a0c51d7217",
+      "path": "APIs/atlassian.com/confluence-v2/2.0.0/openapi.yaml",
+      "overlay": "APIs/atlassian.com/confluence-v2/2.0.0/pagination-5e659825c92ed8d1284b63cdc84a94a0c51d7217-overlay.yaml"
+    },
+    {
+      "name": "box",
+      "sha": "84d76796923210d5e972c22c22f834a061290fbd",
+      "path": "APIs/box.com/2026.0/openapi.yaml",
+      "overlay": "APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml"
+    },
+    {
+      "name": "clickup",
+      "sha": "88ea4994e816563201c2069526252475d77e853f",
+      "path": "APIs/clickup.com/v3/version/openapi.yaml",
+      "overlay": "APIs/clickup.com/v3/version/pagination-88ea4994e816563201c2069526252475d77e853f-overlay.yaml"
+    },
+    {
+      "name": "clockify",
+      "sha": "dd34a70a45c5109479068b4b5d91337baf8822cd",
+      "path": "APIs/clockify.me/1.0.0-readonly/openapi.yaml",
+      "overlay": "APIs/clockify.me/1.0.0-readonly/pagination-v2-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml"
+    },
+    {
+      "name": "figma",
+      "sha": "f9b511f8ad2a8c19004af2a38815ab808dd18a98",
+      "path": "APIs/figma.com/0.43.0/openapi.yaml",
+      "overlay": "APIs/figma.com/0.43.0/pagination-f9b511f8ad2a8c19004af2a38815ab808dd18a98-overlay.yaml"
+    },
+    {
+      "name": "github",
+      "sha": "7782419eb8c981c9dd28379e41a43ca3186f4758",
+      "path": "APIs/github.com/api.github.com.2022-11-28/1.1.4/openapi.yaml",
+      "overlay": "APIs/github.com/api.github.com.2022-11-28/1.1.4/pagination-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml"
+    },
+    {
+      "name": "google_directory",
+      "sha": "fdc294bd8f2520f4cef3491726d86b603b5cf946",
+      "path": "APIs/googleapis.com/admin/directory_v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/admin/directory_v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml"
+    },
+    {
+      "name": "google_reports",
+      "sha": "5e5d2369ea3e91b9b09193dd9928f628612369d3",
+      "path": "APIs/googleapis.com/admin/reports_v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/admin/reports_v1/pagination-5e5d2369ea3e91b9b09193dd9928f628612369d3-overlay.yaml"
+    },
+    {
+      "name": "google_blogger",
+      "sha": "091431739208d017c11b0b0589ab33293f8b3690",
+      "path": "APIs/googleapis.com/blogger/v3/openapi.yaml",
+      "overlay": "APIs/googleapis.com/blogger/v3/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml"
+    },
+    {
+      "name": "google_books",
+      "sha": "7418a665c934a78c5ef05e66a35d21d6dda87c62",
+      "path": "APIs/googleapis.com/books/v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/books/v1/pagination-v2-7418a665c934a78c5ef05e66a35d21d6dda87c62-overlay.yaml"
+    },
+    {
+      "name": "google_calendar",
+      "sha": "32237fa5d14aa887dc9f3923395dac971e00a36c",
+      "path": "APIs/googleapis.com/calendar/v3/openapi.yaml",
+      "overlay": "APIs/googleapis.com/calendar/v3/pagination-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml"
+    },
+    {
+      "name": "google_chat",
+      "sha": "fdc294bd8f2520f4cef3491726d86b603b5cf946",
+      "path": "APIs/googleapis.com/chat/v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/chat/v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml"
+    },
+    {
+      "name": "google_classroom",
+      "sha": "780ef441b8d6134229c8b8ef75eb3ec8a0218e7f",
+      "path": "APIs/googleapis.com/classroom/v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/classroom/v1/pagination-v2-780ef441b8d6134229c8b8ef75eb3ec8a0218e7f-overlay.yaml"
+    },
+    {
+      "name": "google_drive",
+      "sha": "a7dd2d8b4f5f50794e51afd84c539c2e61a182fc",
+      "path": "APIs/googleapis.com/drive/v3/openapi.yaml",
+      "overlay": "APIs/googleapis.com/drive/v3/pagination-v2-a7dd2d8b4f5f50794e51afd84c539c2e61a182fc-overlay.yaml"
+    },
+    {
+      "name": "google_driveactivity",
+      "sha": "2fd9a6a4cccac6dbc988c98fc12bf8b0732015f4",
+      "path": "APIs/googleapis.com/driveactivity/v2/openapi.yaml",
+      "overlay": "APIs/googleapis.com/driveactivity/v2/pagination-2fd9a6a4cccac6dbc988c98fc12bf8b0732015f4-overlay.yaml"
+    },
+    {
+      "name": "google_drivelabels",
+      "sha": "98a453ea8cce0b5723f2f95d376720c304632d23",
+      "path": "APIs/googleapis.com/drivelabels/v2/openapi.yaml",
+      "overlay": "APIs/googleapis.com/drivelabels/v2/pagination-v2-98a453ea8cce0b5723f2f95d376720c304632d23-overlay.yaml"
+    },
+    {
+      "name": "google_forms",
+      "sha": "091431739208d017c11b0b0589ab33293f8b3690",
+      "path": "APIs/googleapis.com/forms/v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/forms/v1/pagination-v2-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml"
+    },
+    {
+      "name": "google_gmail",
+      "sha": "f34c235dd04bee41b091108dd52c07d1415a54b9",
+      "path": "APIs/googleapis.com/gmail/v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/gmail/v1/pagination-f34c235dd04bee41b091108dd52c07d1415a54b9-overlay.yaml"
+    },
+    {
+      "name": "google_keep",
+      "sha": "091431739208d017c11b0b0589ab33293f8b3690",
+      "path": "APIs/googleapis.com/keep/v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/keep/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml"
+    },
+    {
+      "name": "google_businessinfo",
+      "sha": "a68633bd9b84af444f424d6a03f24450b84129ef",
+      "path": "APIs/googleapis.com/mybusinessbusinessinformation/v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/mybusinessbusinessinformation/v1/pagination-v2-a68633bd9b84af444f424d6a03f24450b84129ef-overlay.yaml"
+    },
+    {
+      "name": "google_people",
+      "sha": "091431739208d017c11b0b0589ab33293f8b3690",
+      "path": "APIs/googleapis.com/people/v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/people/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml"
+    },
+    {
+      "name": "google_storage",
+      "sha": "f29c692c20956b05daf223ad8f641e9a9bd6dfb4",
+      "path": "APIs/googleapis.com/storage/v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml"
+    },
+    {
+      "name": "google_tasks",
+      "sha": "7ca47c73cf2308c9812692b482b3713b397bc88c",
+      "path": "APIs/googleapis.com/tasks/v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/tasks/v1/pagination-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml"
+    },
+    {
+      "name": "google_vault",
+      "sha": "98a453ea8cce0b5723f2f95d376720c304632d23",
+      "path": "APIs/googleapis.com/vault/v1/openapi.yaml",
+      "overlay": "APIs/googleapis.com/vault/v1/pagination-98a453ea8cce0b5723f2f95d376720c304632d23-overlay.yaml"
+    },
+    {
+      "name": "google_youtube",
+      "sha": "fdc294bd8f2520f4cef3491726d86b603b5cf946",
+      "path": "APIs/googleapis.com/youtube/v3/openapi.yaml",
+      "overlay": "APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml"
+    },
+    {
+      "name": "hubspot_audit-logs",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/audit-logs/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/audit-logs/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_campaigns-public-api",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/campaigns-public-api/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/campaigns-public-api/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_conversations",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/conversations/v3/openapi.yaml",
+      "overlay": "APIs/hubspot.com/conversations/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_custom-objects",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/custom-objects/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/custom-objects/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_events",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/events/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/events/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_files",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/files/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/files/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_hubdb",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/hubdb/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/hubdb/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_imports",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/imports/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/imports/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_lists",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/lists/v3/openapi.yaml",
+      "overlay": "APIs/hubspot.com/lists/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_marketing-emails",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/marketing-emails/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/marketing-emails/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_marketing-events",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/marketing-events/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/marketing-events/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_multicurrency",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/multicurrency/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/multicurrency/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_pages",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/pages/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/pages/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_posts",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/posts/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/posts/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_sequences",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/sequences/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/sequences/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_url-redirects",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/url-redirects/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/url-redirects/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "hubspot_user-provisioning",
+      "sha": "b5dcaabe7e10736356fd0dc73d45bd6fecd26370",
+      "path": "APIs/hubspot.com/user-provisioning/2026-03/openapi.yaml",
+      "overlay": "APIs/hubspot.com/user-provisioning/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+    },
+    {
+      "name": "mastodon",
+      "sha": "d8048ab7bf03d49cfc766ce25e7b955f415d5d87",
+      "path": "APIs/mastodon.local/1.0/openapi.yaml",
+      "overlay": "APIs/mastodon.local/1.0/pagination-d8048ab7bf03d49cfc766ce25e7b955f415d5d87-overlay.yaml"
+    },
+    {
+      "name": "squareup",
+      "sha": "e15e761285c715a9035dee558ff40c8f3bd3f796",
+      "path": "APIs/squareup.com/2.0/openapi.yaml",
+      "overlay": "APIs/squareup.com/2.0/pagination-v2-e15e761285c715a9035dee558ff40c8f3bd3f796-overlay.yaml"
+    },
+    {
+      "name": "twilio_accounts",
+      "sha": "fdc294bd8f2520f4cef3491726d86b603b5cf946",
+      "path": "APIs/twilio.com/twilio_accounts_v1/1.55.0/openapi.yaml",
+      "overlay": "APIs/twilio.com/twilio_accounts_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml"
+    },
+    {
+      "name": "twilio_conversations",
+      "sha": "fdc294bd8f2520f4cef3491726d86b603b5cf946",
+      "path": "APIs/twilio.com/twilio_conversations_v1/1.55.0/openapi.yaml",
+      "overlay": "APIs/twilio.com/twilio_conversations_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml"
+    },
+    {
+      "name": "twilio_messaging",
+      "sha": "fdc294bd8f2520f4cef3491726d86b603b5cf946",
+      "path": "APIs/twilio.com/twilio_messaging_v1/1.55.0/openapi.yaml",
+      "overlay": "APIs/twilio.com/twilio_messaging_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml"
+    },
+    {
+      "name": "zendesk",
+      "sha": "bd4e4a2d9aa77933be201b08f290ccc4fbdf6bc8",
+      "path": "APIs/zendesk.com/support/2.0.0/openapi.yaml",
+      "overlay": "APIs/zendesk.com/support/2.0.0/pagination-bd4e4a2d9aa77933be201b08f290ccc4fbdf6bc8-overlay.yaml"
+    },
+    {
+      "name": "zoom",
+      "sha": "a0a144cfdcb49bbfdc01459d6ca012dcf01307f1",
+      "path": "APIs/zoom.us/meetings/2/openapi.yaml",
+      "overlay": "APIs/zoom.us/meetings/2/pagination-a0a144cfdcb49bbfdc01459d6ca012dcf01307f1-overlay.yaml"
+    }
+  ],
+  "publication_batches": [
+    {
+      "pr": "https://github.com/ontola/atomic-plugins/pull/351",
+      "merge": "047e00d26b2557548a1bd0c784983748c866be57",
+      "publication_run": "https://github.com/ontola/atomic-plugins/actions/runs/37479319884",
+      "verified_files": [
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/atlassian.com/confluence-v2/2.0.0/pagination-5e659825c92ed8d1284b63cdc84a94a0c51d7217-overlay.yaml",
+          "bytes": 8187,
+          "sha256": "dd1e21f891dbcbb0d606ddce9ab3599fc9d66db2eed01b780cfd305dc23d802d",
+          "relative": "APIs/atlassian.com/confluence-v2/2.0.0/pagination-5e659825c92ed8d1284b63cdc84a94a0c51d7217-overlay.yaml"
+        },
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/figma.com/0.43.0/pagination-f9b511f8ad2a8c19004af2a38815ab808dd18a98-overlay.yaml",
+          "bytes": 4624,
+          "sha256": "94c72f662c238a4da5faf858dafbb7f0c56f524bbb1e22b4cd18ac62c85dc65d",
+          "relative": "APIs/figma.com/0.43.0/pagination-f9b511f8ad2a8c19004af2a38815ab808dd18a98-overlay.yaml"
+        },
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/clickup.com/v3/version/pagination-88ea4994e816563201c2069526252475d77e853f-overlay.yaml",
+          "bytes": 3069,
+          "sha256": "5519497918bf43f4573511f883c593914e60efdad8185cc04d6802df1ac5b527",
+          "relative": "APIs/clickup.com/v3/version/pagination-88ea4994e816563201c2069526252475d77e853f-overlay.yaml"
+        },
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json",
+          "bytes": 8313,
+          "sha256": "6920eec4ee65fca8648b213ee8c5cf404e45b2b2b765d23f5b5b6fac4357a950",
+          "relative": "catalog/2026-10-02.json"
+        },
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json",
+          "bytes": 8317,
+          "sha256": "2319c657f71931640d824d65d72cf5b20e98ad17bb7dc8d12449c7348e54a0c8",
+          "relative": "catalog/2026-10-02-auth-profiles.json"
+        }
+      ]
+    },
+    {
+      "pr": "https://github.com/ontola/atomic-plugins/pull/352",
+      "merge": "bacf7d7d7d7be47f73a0765add1d5436e08e4925",
+      "publication_run": "https://github.com/ontola/atomic-plugins/actions/runs/37480622644",
+      "verified_files": [
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/files/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "sha256": "7cbe054a79a18b1d69925cd4d71dadf0e70ad6455801f2d0e4bfee6552b29722",
+          "bytes": 1473,
+          "relative": "APIs/hubspot.com/files/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+        },
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/hubdb/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "sha256": "962b4ab2025bcde770f68a7a3a96eb2f39687453cdfd443e761d63b3c860753c",
+          "bytes": 2154,
+          "relative": "APIs/hubspot.com/hubdb/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+        },
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/posts/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "sha256": "6dc30762fef8103946fa07219c78de9ff1244ce273f2cb1b17420610947b5047",
+          "bytes": 1701,
+          "relative": "APIs/hubspot.com/posts/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+        },
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/conversations/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "sha256": "832630e8390e9d0fbb29807c119a400930ae23d82da98ebd0bb9790173456dfe",
+          "bytes": 2475,
+          "relative": "APIs/hubspot.com/conversations/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+        },
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/lists/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "sha256": "2b0d63fb11db68cdd2657513af3ec01f0928667397a51caf7df359f5588d30e4",
+          "bytes": 1696,
+          "relative": "APIs/hubspot.com/lists/v3/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml"
+        },
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json",
+          "sha256": "6920eec4ee65fca8648b213ee8c5cf404e45b2b2b765d23f5b5b6fac4357a950",
+          "bytes": 8313,
+          "relative": "catalog/2026-10-02.json"
+        },
+        {
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json",
+          "sha256": "2319c657f71931640d824d65d72cf5b20e98ad17bb7dc8d12449c7348e54a0c8",
+          "bytes": 8317,
+          "relative": "catalog/2026-10-02-auth-profiles.json"
+        }
+      ]
+    },
+    {
+      "pr": "https://github.com/ontola/atomic-plugins/pull/353",
+      "merge": "3bc6d5633ba65c8a9a56ea8db16ee97782bdf318",
+      "publication_run": "https://github.com/ontola/atomic-plugins/actions/runs/37482807191",
+      "verified_files": [
+        {
+          "relative": "APIs/asana.com/1.0/pagination-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/asana.com/1.0/pagination-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml",
+          "bytes": 7879,
+          "sha256": "b2d0e4f2015579ac035bd1e9d9a4af05160ac6ff19c482f2c2709279df9bbb5a"
+        },
+        {
+          "relative": "APIs/zendesk.com/support/2.0.0/pagination-bd4e4a2d9aa77933be201b08f290ccc4fbdf6bc8-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/zendesk.com/support/2.0.0/pagination-bd4e4a2d9aa77933be201b08f290ccc4fbdf6bc8-overlay.yaml",
+          "bytes": 4881,
+          "sha256": "2bd8dbf630d19019b1ed15fec5d4a98620527a174ac6ec4afad9a0687e227edc"
+        },
+        {
+          "relative": "APIs/squareup.com/2.0/pagination-v2-e15e761285c715a9035dee558ff40c8f3bd3f796-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/squareup.com/2.0/pagination-v2-e15e761285c715a9035dee558ff40c8f3bd3f796-overlay.yaml",
+          "bytes": 20974,
+          "sha256": "27eeb9e8940b2b495f3934b933934a5d8627fdefca6b1e7fe1e5fe3f2d779721"
+        },
+        {
+          "relative": "APIs/zoom.us/meetings/2/pagination-a0a144cfdcb49bbfdc01459d6ca012dcf01307f1-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/zoom.us/meetings/2/pagination-a0a144cfdcb49bbfdc01459d6ca012dcf01307f1-overlay.yaml",
+          "bytes": 8487,
+          "sha256": "1afb859e82e586bc6e3cfbf4a05b9601a73e03791212163922aba6578e8ad6b8"
+        },
+        {
+          "relative": "APIs/mastodon.local/1.0/pagination-d8048ab7bf03d49cfc766ce25e7b955f415d5d87-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/mastodon.local/1.0/pagination-d8048ab7bf03d49cfc766ce25e7b955f415d5d87-overlay.yaml",
+          "bytes": 3436,
+          "sha256": "634d278b71d9e5f2db48b8d5dc46ba511147c7fd9ab50941400178aea4d2dc5e"
+        },
+        {
+          "relative": "catalog/2026-10-02.json",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json",
+          "bytes": 8313,
+          "sha256": "6920eec4ee65fca8648b213ee8c5cf404e45b2b2b765d23f5b5b6fac4357a950"
+        },
+        {
+          "relative": "catalog/2026-10-02-auth-profiles.json",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json",
+          "bytes": 8317,
+          "sha256": "2319c657f71931640d824d65d72cf5b20e98ad17bb7dc8d12449c7348e54a0c8"
+        }
+      ]
+    },
+    {
+      "pr": "https://github.com/ontola/atomic-plugins/pull/354",
+      "merge": "35ab0af34e466d49dad36277ad396418b017817f",
+      "publication_run": "https://github.com/ontola/atomic-plugins/actions/runs/37490828929",
+      "verified_files": [
+        {
+          "relative": "APIs/googleapis.com/drive/v3/pagination-v2-a7dd2d8b4f5f50794e51afd84c539c2e61a182fc-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/drive/v3/pagination-v2-a7dd2d8b4f5f50794e51afd84c539c2e61a182fc-overlay.yaml",
+          "bytes": 3526,
+          "sha256": "2d26cc45d0708843df5e8ab7a8190a04028ea9e3b87898a5c6f1ef328ee793eb"
+        },
+        {
+          "relative": "APIs/googleapis.com/gmail/v1/pagination-f34c235dd04bee41b091108dd52c07d1415a54b9-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/gmail/v1/pagination-f34c235dd04bee41b091108dd52c07d1415a54b9-overlay.yaml",
+          "bytes": 2847,
+          "sha256": "41905f6303455921c66c820924d566cfc6532652bb21a070b57d964fb8d96344"
+        },
+        {
+          "relative": "APIs/googleapis.com/people/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/people/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+          "bytes": 3578,
+          "sha256": "5ab891822c292b953c69f638ee4f3e4214a7926e6d2702a411c18162a921513d"
+        },
+        {
+          "relative": "APIs/googleapis.com/tasks/v1/pagination-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/tasks/v1/pagination-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml",
+          "bytes": 1803,
+          "sha256": "b1d35144770aca5e58b6142ad14c5882c6a44d38fe0ec4b3e8916734ad2dedb6"
+        },
+        {
+          "relative": "APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/youtube/v3/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "bytes": 3324,
+          "sha256": "a218da0a2598221946d639fcb49ef74033ba8e966eedfceac95b3c13c08e8001"
+        },
+        {
+          "relative": "APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/storage/v1/pagination-f29c692c20956b05daf223ad8f641e9a9bd6dfb4-overlay.yaml",
+          "bytes": 2646,
+          "sha256": "11e37178a377f793bf7156df3afc78ca811af5fa633fb2ceaa72efd3af331b86"
+        },
+        {
+          "relative": "catalog/2026-10-02.json",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json",
+          "bytes": 8313,
+          "sha256": "6920eec4ee65fca8648b213ee8c5cf404e45b2b2b765d23f5b5b6fac4357a950"
+        },
+        {
+          "relative": "catalog/2026-10-02-auth-profiles.json",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json",
+          "bytes": 8317,
+          "sha256": "2319c657f71931640d824d65d72cf5b20e98ad17bb7dc8d12449c7348e54a0c8"
+        }
+      ]
+    },
+    {
+      "pr": "https://github.com/ontola/atomic-plugins/pull/358",
+      "merge": "7edbe592987f6b89ca6f58c2aed862c553697fc7",
+      "publication_run": "https://github.com/ontola/atomic-plugins/actions/runs/37741077828",
+      "verified_files": [
+        {
+          "relative": "APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/box.com/2026.0/pagination-84d76796923210d5e972c22c22f834a061290fbd-overlay.yaml",
+          "bytes": 2221,
+          "sha256": "5153a02d9c942f53809c9b67947b1323103b04e3f93fc1dd5f102b97c78ada5f"
+        },
+        {
+          "relative": "APIs/github.com/api.github.com.2022-11-28/1.1.4/pagination-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/github.com/api.github.com.2022-11-28/1.1.4/pagination-7782419eb8c981c9dd28379e41a43ca3186f4758-overlay.yaml",
+          "bytes": 2001,
+          "sha256": "2d4bc8a3cab3fb133da6390e69491bcca6e68d0cfbf29a588fb70579027ca432"
+        },
+        {
+          "relative": "APIs/twilio.com/twilio_conversations_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/twilio.com/twilio_conversations_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "bytes": 5933,
+          "sha256": "391515d93b215ded4c05b9c5d108b883134b66e75a49c71896f46601dcca35d5"
+        },
+        {
+          "relative": "APIs/twilio.com/twilio_messaging_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/twilio.com/twilio_messaging_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "bytes": 2996,
+          "sha256": "5f2e9582181ce694068b553c464284e8d50e5852d564594b1a81883a79dad000"
+        },
+        {
+          "relative": "APIs/twilio.com/twilio_accounts_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/twilio.com/twilio_accounts_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "bytes": 1501,
+          "sha256": "528e1dec6461c7d1314352702463fdabbe7eebe4402c9b63cf808c05de1bc2c7"
+        },
+        {
+          "relative": "APIs/clockify.me/1.0.0-readonly/pagination-v2-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/clockify.me/1.0.0-readonly/pagination-v2-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml",
+          "bytes": 1318,
+          "sha256": "ac0c1855e981d068d865019300d5afb3783a29b8d29f88c2d4a9af27a9030d35"
+        },
+        {
+          "relative": "catalog/2026-10-02.json",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json",
+          "bytes": 8313,
+          "sha256": "6920eec4ee65fca8648b213ee8c5cf404e45b2b2b765d23f5b5b6fac4357a950"
+        },
+        {
+          "relative": "catalog/2026-10-02-auth-profiles.json",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json",
+          "bytes": 8317,
+          "sha256": "2319c657f71931640d824d65d72cf5b20e98ad17bb7dc8d12449c7348e54a0c8"
+        }
+      ]
+    },
+    {
+      "pr": "https://github.com/ontola/atomic-plugins/pull/359",
+      "merge": "1bf53f26b4e98d735ce43853783ef49ad233de32",
+      "publication_run": "https://github.com/ontola/atomic-plugins/actions/runs/37741682851",
+      "verified_files": [
+        {
+          "relative": "APIs/googleapis.com/chat/v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/chat/v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "bytes": 2299,
+          "sha256": "494b9173bf05d55d04766afba4ba30dcc27fa881802a0a8dcbba35002e316439"
+        },
+        {
+          "relative": "APIs/googleapis.com/classroom/v1/pagination-v2-780ef441b8d6134229c8b8ef75eb3ec8a0218e7f-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/classroom/v1/pagination-v2-780ef441b8d6134229c8b8ef75eb3ec8a0218e7f-overlay.yaml",
+          "bytes": 4867,
+          "sha256": "47c632a8b52fb06356c9fcf4891d231aaa055649d57a14c2d7f54da56e0970b5"
+        },
+        {
+          "relative": "APIs/googleapis.com/calendar/v3/pagination-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/calendar/v3/pagination-v2-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml",
+          "bytes": 3532,
+          "sha256": "58061b8d8429d41d8b71b2aec8f2b4c51c71768258731b37477746c049b10e1d"
+        },
+        {
+          "relative": "APIs/googleapis.com/blogger/v3/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/blogger/v3/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+          "bytes": 2670,
+          "sha256": "d45c7ce81ce0eeb7092339ddde43a569ab92a57732d7832259a380c89521a375"
+        },
+        {
+          "relative": "APIs/googleapis.com/driveactivity/v2/pagination-2fd9a6a4cccac6dbc988c98fc12bf8b0732015f4-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/driveactivity/v2/pagination-2fd9a6a4cccac6dbc988c98fc12bf8b0732015f4-overlay.yaml",
+          "bytes": 1511,
+          "sha256": "c21a4b7ed2b8ac1c4c9ee078504b3214d8f5596560227c6a0746304ae8c5243d"
+        },
+        {
+          "relative": "APIs/googleapis.com/forms/v1/pagination-v2-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/forms/v1/pagination-v2-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+          "bytes": 1492,
+          "sha256": "0d129e97af81d6dffc1c2fc75c64205ceef36f6138647dfe8903be9accae40f3"
+        },
+        {
+          "relative": "APIs/googleapis.com/keep/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/keep/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
+          "bytes": 1477,
+          "sha256": "93d752342613dcaaa638bbfc98412775683c710c9b43f0f9ac285e6ceea8e63c"
+        },
+        {
+          "relative": "APIs/googleapis.com/books/v1/pagination-v2-7418a665c934a78c5ef05e66a35d21d6dda87c62-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/books/v1/pagination-v2-7418a665c934a78c5ef05e66a35d21d6dda87c62-overlay.yaml",
+          "bytes": 1642,
+          "sha256": "8556233ed0158ae672d1650245c6e40e87c934aaf1f0a53d003adaf14a949999"
+        },
+        {
+          "relative": "catalog/2026-10-02.json",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json",
+          "bytes": 8313,
+          "sha256": "6920eec4ee65fca8648b213ee8c5cf404e45b2b2b765d23f5b5b6fac4357a950"
+        },
+        {
+          "relative": "catalog/2026-10-02-auth-profiles.json",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json",
+          "bytes": 8317,
+          "sha256": "2319c657f71931640d824d65d72cf5b20e98ad17bb7dc8d12449c7348e54a0c8"
+        }
+      ]
+    },
+    {
+      "pr": "https://github.com/ontola/atomic-plugins/pull/360",
+      "merge": "aeb91d2581393b92a44d1282a3019c06b3b809b2",
+      "publication_run": "https://github.com/ontola/atomic-plugins/actions/runs/37742435326",
+      "verified_files": [
+        {
+          "relative": "APIs/hubspot.com/pages/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/pages/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 2163,
+          "sha256": "87ce74f4e7d4787d595a12923ebbbfb38d4e90f9c8a52ac20e2e9cbf553244c6"
+        },
+        {
+          "relative": "APIs/hubspot.com/url-redirects/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/url-redirects/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 1414,
+          "sha256": "e3b872bccfc31b4c6ba5de705c520fe038f162d10c828e472fc11902354f02f3"
+        },
+        {
+          "relative": "APIs/hubspot.com/user-provisioning/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/user-provisioning/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 1441,
+          "sha256": "4759859fe12a4a3a1d319aa2b1d9f3bd95ac3286b6ed32b31d18e1cb096999c7"
+        },
+        {
+          "relative": "APIs/hubspot.com/events/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/events/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 1484,
+          "sha256": "c780b536cb6e49bd1563724f670ba146ecac672cc1777cc0da4df5b46e0c512d"
+        },
+        {
+          "relative": "APIs/hubspot.com/audit-logs/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/audit-logs/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 1761,
+          "sha256": "81bc7bdbc766372ecf081caeb5eb66c1324bc1a3fdc9b826ce1db427988aa8eb"
+        },
+        {
+          "relative": "APIs/hubspot.com/sequences/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/sequences/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 1443,
+          "sha256": "d4956972e4aceb1623fe847d9a2ef7f7e10b916891c44025a1409a55824f4643"
+        },
+        {
+          "relative": "APIs/hubspot.com/marketing-emails/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/marketing-emails/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 1654,
+          "sha256": "791b9460ef37e07cd703ce402476e5b73f741621b8f074701eacae883b4d2de0"
+        },
+        {
+          "relative": "APIs/hubspot.com/multicurrency/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/multicurrency/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 1443,
+          "sha256": "47bf2f4540711691e8b2eb08ecbe5dc5777e956215362083ec174910823c756f"
+        },
+        {
+          "relative": "APIs/hubspot.com/marketing-events/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/marketing-events/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 1994,
+          "sha256": "d7b119bbbc6f70e19ec2aa81270d08ef818fb8898ad41607bd39dff78894d441"
+        },
+        {
+          "relative": "APIs/hubspot.com/campaigns-public-api/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/campaigns-public-api/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 1640,
+          "sha256": "b81e0d75ef83edf514fd5c55c40674dfa70da2207210faac86edec1d4da9bd2c"
+        },
+        {
+          "relative": "APIs/hubspot.com/custom-objects/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/custom-objects/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 1525,
+          "sha256": "d2e29418c3e4888e19fc0c393d5c0828d03bc063891c30f8162af187a41cc698"
+        },
+        {
+          "relative": "APIs/hubspot.com/imports/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/hubspot.com/imports/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
+          "bytes": 1560,
+          "sha256": "d70c88e70dfdfd36878a5f5e7a3409d15f7aef36d0fc5badcdb46e0544854699"
+        },
+        {
+          "relative": "APIs/googleapis.com/admin/directory_v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/admin/directory_v1/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+          "bytes": 5543,
+          "sha256": "42abf8dcc2f5de650d203f79049ebd0dee83e713d8a1a7e86d319cc9403c56cd"
+        },
+        {
+          "relative": "APIs/googleapis.com/admin/reports_v1/pagination-5e5d2369ea3e91b9b09193dd9928f628612369d3-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/admin/reports_v1/pagination-5e5d2369ea3e91b9b09193dd9928f628612369d3-overlay.yaml",
+          "bytes": 2552,
+          "sha256": "59750a04ab0e46f1a48a70cdd0d5b769362b9b09c72c9f6d3db6184c6dedf618"
+        },
+        {
+          "relative": "APIs/googleapis.com/vault/v1/pagination-98a453ea8cce0b5723f2f95d376720c304632d23-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/vault/v1/pagination-98a453ea8cce0b5723f2f95d376720c304632d23-overlay.yaml",
+          "bytes": 2358,
+          "sha256": "b835b08ba0cff23ef61aedc5e3f0a3b5559d5ffd7eddea838ce63bba9b41b09f"
+        },
+        {
+          "relative": "APIs/googleapis.com/drivelabels/v2/pagination-v2-98a453ea8cce0b5723f2f95d376720c304632d23-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/drivelabels/v2/pagination-v2-98a453ea8cce0b5723f2f95d376720c304632d23-overlay.yaml",
+          "bytes": 2040,
+          "sha256": "2578fbefb55803107ed1f5c5bfb2aaefb14710ae2e1aab70061ccb45c91c3188"
+        },
+        {
+          "relative": "APIs/googleapis.com/mybusinessbusinessinformation/v1/pagination-v2-a68633bd9b84af444f424d6a03f24450b84129ef-overlay.yaml",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/APIs/googleapis.com/mybusinessbusinessinformation/v1/pagination-v2-a68633bd9b84af444f424d6a03f24450b84129ef-overlay.yaml",
+          "bytes": 2295,
+          "sha256": "2c5d646c4b8fd640a25104bf06e2c0a0f2e3e47c1e9388112c3fa9c88cc5a4cb"
+        },
+        {
+          "relative": "catalog/2026-10-02.json",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02.json",
+          "bytes": 8313,
+          "sha256": "6920eec4ee65fca8648b213ee8c5cf404e45b2b2b765d23f5b5b6fac4357a950"
+        },
+        {
+          "relative": "catalog/2026-10-02-auth-profiles.json",
+          "url": "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json",
+          "bytes": 8317,
+          "sha256": "2319c657f71931640d824d65d72cf5b20e98ad17bb7dc8d12449c7348e54a0c8"
+        }
+      ]
+    }
+  ]
+}

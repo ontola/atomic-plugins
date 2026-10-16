@@ -1,0 +1,85 @@
+# Source: https://developers.notion.com/reference/intro#pagination
+# Source: https://developers.notion.com/reference/post-search
+# Checked against this pinned OAD and provider documentation, not a live account.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/0c8e229623efdcc1d4ab50111d17bcca3214a899/APIs/notion.com/2026-03-11/openapi.yaml
+info:
+  title: Notion list envelopes with explicit POST and GET cursor fields
+  version: 2.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        bodyCursorPages:
+          type: pageToken
+          autoDetect: false
+          description: Send next_cursor as start_cursor on the next request. Omit start_cursor
+            on the first request; null or absent next_cursor marks the last page. Preserve
+            the original filters and sorts.
+          request:
+            bodyFields:
+              start_cursor:
+                role: pageToken
+              page_size:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: results
+            bodyFields:
+              next_cursor:
+                role: nextPageToken
+        queryCursorPages:
+          type: pageToken
+          autoDetect: false
+          description: Send next_cursor as start_cursor on the next request. Omit start_cursor
+            on the first request; null or absent next_cursor marks the last page. Preserve
+            the original filters and sorts.
+          request:
+            queryParameters:
+              start_cursor:
+                role: pageToken
+              page_size:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: results
+            bodyFields:
+              next_cursor:
+                role: nextPageToken
+      schemas:
+        NotionCursorListBody:
+          allOf:
+            - $ref: '#/components/schemas/JsonObject'
+            - type: object
+              properties:
+                start_cursor:
+                  type: string
+                  description: Opaque next_cursor from the previous page; omit on the first
+                    request.
+                page_size:
+                  type: integer
+                  minimum: 1
+                  maximum: 100
+      requestBodies:
+        NotionCursorListRequest:
+          required: false
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotionCursorListBody'
+  - target: $.paths['/search'].post
+    update:
+      requestBody:
+        $ref: '#/components/requestBodies/NotionCursorListRequest'
+      x-pagination:
+        - scheme: bodyCursorPages
+  - target: $.paths['/data_sources/{data_source_id}/query'].post
+    update:
+      requestBody:
+        $ref: '#/components/requestBodies/NotionCursorListRequest'
+      x-pagination:
+        - scheme: bodyCursorPages
+  - target: $.paths['/views'].get
+    update:
+      x-pagination:
+        - scheme: queryCursorPages

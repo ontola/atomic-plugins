@@ -1,0 +1,74 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/chat/api/reference/rest/v1/spaces/list
+overlay: 1.0.0
+info:
+  title: Google chat reviewed collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/fdc294bd8f2520f4cef3491726d86b603b5cf946/APIs/googleapis.com/chat/v1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include nextPageToken
+          and the item array. Keep resource parents, filter, ordering and page size fixed. Space listing
+          is limited to spaces visible to the caller; pagination does not widen membership or permissions.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/v1/spaces'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: spaces
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/{parent}/members'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: memberships
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/{parent}/messages'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: messages
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/{parent}/reactions'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: reactions
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize

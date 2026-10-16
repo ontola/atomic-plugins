@@ -1,0 +1,13 @@
+{
+  "note": "Synthetic GitHub App delivery: fake ids, fake owner, signed with the fake secret in test_validate.py. Not a recorded delivery.",
+  "headers": [
+    ["X-GitHub-Delivery", "00000000-0000-4000-8000-000000000002"],
+    ["X-GitHub-Event", "installation_repositories"],
+    ["Content-Type", "application/json"],
+    [
+      "X-Hub-Signature-256",
+      "sha256=6518c6facb45451730f3b37b59894a20b4d6abc328e246e9a61715edc1d74a5d"
+    ]
+  ],
+  "body": "{\"action\":\"removed\",\"installation\":{\"id\":1000001,\"node_id\":\"IN_fixture1000001\"},\"repository_selection\":\"selected\",\"repositories_added\":[],\"repositories_removed\":[{\"id\":2000002,\"node_id\":\"R_fixture2000002\",\"name\":\"fixture-repo\",\"full_name\":\"fixture-owner/fixture-repo\",\"private\":true},{\"id\":2000003,\"node_id\":\"R_fixture2000003\",\"name\":\"fixture-other\",\"full_name\":\"fixture-owner/fixture-other\",\"private\":true}],\"sender\":{\"login\":\"fixture-user\",\"id\":5000005,\"type\":\"User\"}}"
+}

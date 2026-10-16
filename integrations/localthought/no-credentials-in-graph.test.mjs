@@ -38,9 +38,19 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { gitIgnored } from '../tooling/lanes.mjs';
 
 const integrationsRoot = fileURLToPath(new URL('..', import.meta.url));
 
@@ -81,12 +91,22 @@ export function findCredentialLeaks(file, source) {
   return leaks;
 }
 
-function shippedSources(dir) {
-  return readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+function shippedSources(dir, base = integrationsRoot) {
+  const entries = readdirSync(dir, { withFileTypes: true });
+  // Gitignored output (Playwright's `test-results/`, build folders) is not
+  // shipped source. A tracked file is never reported as ignored, so this
+  // does not weaken the scan of committed code.
+  const ignored = gitIgnored(
+    entries.map(entry => entry.name),
+    dir,
+  );
+
+  return entries.flatMap(entry => {
+    if (ignored.has(entry.name)) return [];
     const path = join(dir, entry.name);
     if (entry.isDirectory())
-      return SKIPPED_DIRS.has(entry.name) ? [] : shippedSources(path);
-    const file = relative(integrationsRoot, path).split(sep).join('/');
+      return SKIPPED_DIRS.has(entry.name) ? [] : shippedSources(path, base);
+    const file = relative(base, path).split(sep).join('/');
 
     return SOURCE.test(file) && !NOT_SHIPPED.test(file) ? [file] : [];
   });
@@ -139,6 +159,22 @@ test('allows a non-secret connection reference', () => {
     ),
     [],
   );
+});
+
+test('the walk skips gitignored output folders but still reads tracked files', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'creds-walk-'));
+
+  try {
+    spawnSync('git', ['init', '-q'], { cwd: dir });
+    writeFileSync(join(dir, '.gitignore'), 'test-results/\n');
+    mkdirSync(join(dir, 'test-results'));
+    writeFileSync(join(dir, 'test-results', 'trace.js'), "'x-connection-code'");
+    writeFileSync(join(dir, 'tracked.js'), "'x-connection-code'");
+
+    assert.deepEqual(shippedSources(dir, dir), ['tracked.js']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('the walk reaches plugin sources, so it is not silently empty', () => {

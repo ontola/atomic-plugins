@@ -91,7 +91,11 @@ the install review's route-write approval for `sharesFolder`.
 All from atomic-server's plugin-routes work (ontola/atomic-plugins#167),
 plus the pieces added on atomic-server branch `claude/plugin-ocm-host`
 (on top of `claude/plugin-fediverse-host`), as folded into pin candidate16
-with the route field `fetches` below. No pin contains them yet:
+with the route field `fetches` below. The current pin, candidate19
+(`a12b74a`), contains them (`ocm.spec.ts` passes there, see
+[Against a real Nextcloud](#against-a-real-nextcloud)); a pin before
+candidate16 does not. `ES256` keys, which Nextcloud sends, are the exception
+and are not in the pin. The pieces:
 
 - **OCM key discovery for `auth: http-signature`** (new). A request whose
   RFC 9421 signature carries `tag="ocm"` is verified the OCM way: exactly

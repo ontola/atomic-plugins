@@ -152,6 +152,23 @@ describe('controller for the timesheet views', () => {
     });
   });
 
+  it('keeps a failed sync while the settings sheet is open, and gives it back on cancel', async () => {
+    const { store, proxy } = await configured();
+    const controller = await ready(store);
+    proxy.fixture.state.failures = { count: 1, status: 401 };
+    await controller.sync();
+
+    const setup = await controller.openSettings();
+    expect(setup).toMatchObject({
+      kind: 'setup',
+      last: { ok: false, problem: { kind: 'reauth' } },
+    });
+    expect(controller.cancelSettings()).toMatchObject({
+      kind: 'ready',
+      last: { ok: false, problem: { kind: 'reauth' } },
+    });
+  });
+
   it('cancels the settings form back to ready without saving', async () => {
     const { store } = await configured();
     const controller = await ready(store);

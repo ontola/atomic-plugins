@@ -290,18 +290,27 @@ function preview(
       h(
         'div',
         { id: 'money-apply-note' },
-        banner({
-          tone: 'info',
-          title: 'Import this file from the Bank statements importer',
-          text: `Apps can't run the importer yet, so this check changes nothing. Open the importer's Import tab and choose ${sheet.file.name} there: it proposes the same ${plural(fresh.length, 'new transaction', 'new transactions', locale)}.`,
-          action: state.importer
-            ? button('Open the importer', {
-                onClick: actions.openImporter,
-                key: 'open-importer',
-              })
-            : undefined,
-          details: state.openFailure,
-        }),
+        state.source === 'importer' || state.source === undefined
+          ? banner({
+              tone: 'info',
+              title: 'Import this file from the Bank statements importer',
+              text: `Apps can't run the importer yet, so this check changes nothing. Open the importer's Import tab and choose ${sheet.file.name} there: it proposes the same ${plural(fresh.length, 'new transaction', 'new transactions', locale)}.`,
+              action: state.importer
+                ? button('Open the importer', {
+                    onClick: actions.openImporter,
+                    key: 'open-importer',
+                  })
+                : undefined,
+              details: state.openFailure,
+            })
+          : banner({
+              tone: 'info',
+              title: "This table can't be imported into from here",
+              text:
+                state.source === 'shared'
+                  ? "This host can't let an app edit another table's rows, so this check changes nothing. Open Money on its own Bank transactions table to import there."
+                  : 'This app has no ontology of its own on this host, so it has nowhere to keep what it needs for imports. This check changes nothing.',
+            }),
       ),
     );
 
@@ -310,7 +319,10 @@ function preview(
       banner({
         tone: 'neg',
         title: "The import didn't go through",
-        text: 'Nothing was saved. Try again, or import the file from the importer’s page.',
+        text:
+          state.source === 'importer'
+            ? 'Nothing was saved. Try again, or import the file from the importer’s page.'
+            : 'Try again: transactions saved before the failure are recognised and not written twice.',
         details: sheet.failure,
       }),
     );
@@ -334,7 +346,9 @@ function preview(
           }),
           button(
             sheet.applying
-              ? 'Importing…'
+              ? sheet.progress
+                ? `Importing ${count(sheet.progress.done, locale)} of ${count(sheet.progress.total, locale)}…`
+                : 'Importing…'
               : `Import ${plural(fresh.length, 'transaction', 'transactions', locale)}`,
             {
               variant: 'primary',

@@ -16,8 +16,34 @@ authoritative):
   Michiel: …" on #227; don't number questions yourself.
 - **Never merge into atomic-server `develop`.** Only the trekmeester (Joep's
   agent) does, in batches.
+- **atomic-server freeze (Michiel, 2026-10-01).** No new atomic-server PRs;
+  only shepherd the open ones. (It also said no new pin candidates; Decision
+  Inbox Q-104 lifted that part on 2026-10-08.) A host need becomes an
+  **issue for Joep** on atomic-server (for example atomic-server#1952), drafted
+  in the worker's report. Atomic-plugins stays on the current pin. The
+  coordinator session can't file in ontola/atomic-server, so it collects the
+  drafts on #227 for someone with access (see
+  [Issue drafts for Joep](#issue-drafts-for-joep)).
+  One-off exception (Michiel in chat, 2026-10-08, relayed by the VPS
+  coordinator): candidate20, candidate19 plus atomic-server#2069's two
+  commits, may become the pin for user testing ("Even if we can't merge this
+  to develop, you can merge it to our pin so we can start user testing for
+  it"). The freeze otherwise stands.
 - **Pin bumps** (`.atomic-server-ref` → a candidate) are pre-approved. See
   [pins.md](pins.md).
+- **Standing OKs for deploys, candidates and releases** (Decision Inbox, both
+  answered "Yes, standing OK as worded" on 2026-10-08):
+  - **Q-104:** deploy to user testing (the catalog, the moderator and the
+    atomic-server image), after checking on the server that no session is in
+    progress ([usertest-droplet.md](usertest-droplet.md)), and build and tag
+    new atomic-server pin candidates ([pins.md](pins.md)).
+  - **Q-105:** npm releases (syncables, devonian, …) and integration-proxy
+    crates.io releases, and proxy deploys to Heroku, only from merged,
+    Opus-reviewed, CI-green `main`, following the recipes, and named in the
+    next status report ([proxy-release.md](proxy-release.md)). Heroku deploys
+    go through the coordinator's worker, which holds the Heroku access.
+
+  Nothing else in these rules changes, and the rest of the freeze stands.
 - **Never `git commit --no-verify`.** Fix or report a failing hook. This repo
   has no git hooks of its own (no `core.hooksPath`, nothing in `.git/hooks`
   as cloned). Rule 5's "Fresh Worktrees" warm-up is not in this repo's
@@ -45,7 +71,9 @@ authoritative):
 Since 2026-09-30 ([#227 comment](https://github.com/ontola/atomic-plugins/issues/227#issuecomment-5911922325)):
 
 - **Light work** (CI triage, reviews, small fixes, rule-12 merges, pin bumps):
-  the coordinator, through its own sub-agents.
+  the coordinator, through its own sub-agents. Since 2026-10-02 the
+  coordinator runs on the build VPS `claude-build`, not in the cloud
+  (Q-064; see [build-vps.md](build-vps.md)); its workers share that machine.
 - **Heavy or long work** (anything that builds atomic-server or runs its e2e,
   multi-hour features): a **temporary session** started by the coordinator
   with a brief. It posts a pickup on #227, does its one piece of work, pushes,
@@ -55,6 +83,61 @@ Since 2026-09-30 ([#227 comment](https://github.com/ontola/atomic-plugins/issues
 
 Report one comment per milestone on #227: what landed (PR and issue numbers),
 what's next, what's blocked or needs a decision. Keep it short.
+
+## Worktrees
+
+- A worker makes an early WIP commit on its branch (within about 15 minutes
+  of its first edits), so its worktree is never mistaken for an empty one.
+- Remove a worktree only after its worker has reported. Never
+  `git worktree remove --force --force`: the second `--force` overrides the
+  lock a live worker's session holds, and deletes its uncommitted work.
+  A plain `git worktree remove` (or one `--force`) is enough for a finished
+  one.
+- Delete a finished worktree's `target/` first if it has one (see "Disk"
+  under [Gotchas](#gotchas)).
+
+## Issue drafts for Joep
+
+Host needs found while the atomic-server freeze is in force, drafted on #227
+on 2026-10-02 for someone with ontola/atomic-server access to file as written.
+Check whether one was filed before drafting a new one.
+
+| # | Title | Comment |
+| --- | --- | --- |
+| 1 | Plugin manifest: accept an optional `subject` on destination properties and classes (optional, low priority since #287) | [comment](https://github.com/ontola/atomic-plugins/issues/227#issuecomment-5956793767) |
+| 2 | Plugin routes: verify ES256 (P-256) JWKs for OCM signatures, and take the signer domain from `keyid` | [comment](https://github.com/ontola/atomic-plugins/issues/227#issuecomment-5956793767) |
+| 3 | Plugin routes: one-segment path wildcards in delivery operations | [comment](https://github.com/ontola/atomic-plugins/issues/227#issuecomment-5956793767) |
+| 4 | Plugin routes: sign key fetches for `auth: http-signature` (authorized fetch) | [comment](https://github.com/ontola/atomic-plugins/issues/227#issuecomment-5956793767) |
+| 5 | WebFinger by actor URL is never routed to a plugin | [comment](https://github.com/ontola/atomic-plugins/issues/227#issuecomment-5957551120) |
+| 6 | (Minor) host-meta takes its scheme from the connection | [comment](https://github.com/ontola/atomic-plugins/issues/227#issuecomment-5957551120) |
+| 7 | TLS certificates for host names bound with `/bind-drive` | [comment](https://github.com/ontola/atomic-plugins/issues/227#issuecomment-5958060279) |
+| 8 | Signed proxy requests can collide with themselves in the same millisecond | [comment](https://github.com/ontola/atomic-plugins/issues/227#issuecomment-5958959871) |
+
+Earlier, atomic-server#1952 (record app connections for server-side use) was
+filed the same way. The update on draft 1 is in
+[this comment](https://github.com/ontola/atomic-plugins/issues/227#issuecomment-5957770752).
+
+## Opt-in real-peer e2es
+
+Specs that run against a real peer implementation in Docker (or Ruby), skipped
+unless their variable is set. None of them runs in CI, so their results are
+declared evidence from a local run, not a gate. All start containers, so
+[the Docker rules](build-vps.md#docker-on-the-shared-host) apply, and each
+runs under the heavy lock (the e2e tier does).
+
+| Peer | Variable | Run | Documented in |
+| --- | --- | --- | --- |
+| Nextcloud 35 (OCM, #138, PR #256) | `OCM_NEXTCLOUD_E2E=1`; `OCM_NEXTCLOUD_PORT` (default 18443) | `node integrations/tooling/run-lane.mjs open-cloud-mesh --tier e2e` | `integrations/open-cloud-mesh/README.md`, "Against a real Nextcloud"; `e2e/nextcloud.spec.ts` |
+| Mastodon (#137) | `FEDIVERSE_MASTODON_E2E=1`; `FEDIVERSE_MASTODON_PORT`; `FEDIVERSE_MASTODON_KEEP=1` | `node integrations/tooling/run-lane.mjs fediverse --tier e2e` | `integrations/fediverse/README.md`, "Against a real Mastodon" |
+| Akkoma (#137, PR #286) | `FEDIVERSE_AKKOMA_E2E=1`; `FEDIVERSE_AKKOMA_PORT` (default 19953); `FEDIVERSE_AKKOMA_KEEP=1` | same lane | `integrations/fediverse/README.md`, "Against a real Akkoma" |
+| Bluesky PDS (AT Protocol, PR #288) | `ATPROTO_PDS_E2E=1` | `node integrations/tooling/run-lane.mjs atproto --tier e2e` | `integrations/atproto/README.md`; `e2e/pds.ts` |
+| remoteStorage api-test-suite | `REMOTESTORAGE_API_SUITE=<checkout of remotestorage/api-test-suite>`; `REMOTESTORAGE_API_SUITE_RUBY=local` to use `bundle` from `PATH` instead of Docker | see `integrations/remotestorage/README.md`, "remoteStorage API test suite" | `integrations/remotestorage/README.md` |
+
+Every one of these lanes runs on the plugin-routes server build
+(AGENTS.md, "The plugin-routes feature build"), which `run-lane.mjs` selects from
+`pluginRoutes` in `lanes.json`. Nothing tests these variables, so read the
+spec's header comment for the current ports and image tags before relying on
+the table.
 
 ## Worker checks
 
@@ -81,7 +164,8 @@ in CI; see [usertest-server.md](usertest-server.md)).
 
 The rules each worker got, beyond the checks: fetch `origin/main` first; plan
 before code; keep a plugin inside its folder (shared code only in
-`integrations/tooling/`, `ontology/`, `ontology-kit/`); `// @wc-ignore-file`
+`integrations/tooling/`, `ontology/`, `ontology-kit/` and, for the
+sync-status card, `integrations/sync-status/`); `// @wc-ignore-file`
 on every `.ts`; hedged "declared, not verified" wording in docs; heavy runs
 (atomic-server builds, e2e) one at a time.
 

@@ -97,11 +97,20 @@ export function timesheetFromMirror(input: SourceInput): Timesheet {
 
   let running = 0;
   let breaks = 0;
+  const uneditable = { locked: 0, customFields: 0 };
 
   for (const r of records) {
     if (r.fields.type === 'BREAK') {
       if (inWindow(r)) breaks++;
     } else if (r.fields.start && !r.fields.end) running++;
+    else if (inWindow(r)) {
+      if (r.fields.isLocked === true) uneditable.locked++;
+      if (
+        Array.isArray(r.fields.customFieldValues) &&
+        r.fields.customFieldValues.length
+      )
+        uneditable.customFields++;
+    }
   }
 
   const entries: TimeEntry[] = projectEntries(
@@ -159,6 +168,7 @@ export function timesheetFromMirror(input: SourceInput): Timesheet {
     entries,
     running,
     breaks,
+    uneditable,
     ...(window ? { window } : {}),
     ...(lastChecked ? { lastChecked } : {}),
     weekStart: weekStartOf(input.weekStart),

@@ -1,0 +1,98 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/calendar/api/v3/reference/events/list
+overlay: 1.0.0
+info:
+  title: Google calendar reviewed collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32237fa5d14aa887dc9f3923395dac971e00a36c/APIs/googleapis.com/calendar/v3/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: 'Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include nextPageToken
+          and the item array. Full listing only: omit syncToken. nextSyncToken is a checkpoint for a later
+          incremental sync, not the next page. Preserve calendar, time bounds, recurrence expansion, deleted/hidden
+          selection and ordering. Page items, not the ancillary defaultReminders array. Watch registration
+          is outside this variant.'
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/calendars/{calendarId}/acl'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+      description: 'Full listing only: omit syncToken. nextSyncToken belongs to a later sync; follow only
+        nextPageToken in this traversal.'
+- target: $.paths['/calendars/{calendarId}/events'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+      description: 'Full listing only: omit syncToken. nextSyncToken belongs to a later sync; follow only
+        nextPageToken in this traversal.'
+- target: $.paths['/calendars/{calendarId}/events/{eventId}/instances'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+      description: 'Full listing only: omit syncToken. nextSyncToken belongs to a later sync; follow only
+        nextPageToken in this traversal.'
+- target: $.paths['/users/me/calendarList'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+      description: 'Full listing only: omit syncToken. nextSyncToken belongs to a later sync; follow only
+        nextPageToken in this traversal.'
+- target: $.paths['/users/me/settings'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+      description: 'Full listing only: omit syncToken. nextSyncToken belongs to a later sync; follow only
+        nextPageToken in this traversal.'

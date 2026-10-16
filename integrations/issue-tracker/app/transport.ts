@@ -1,5 +1,6 @@
 // @wc-ignore-file
-import type { HostProxy } from './store.js';
+import { throughRateLimits, type RateLimitOptions } from './rateLimit.js';
+import type { HostProxy, HostProxyResponse } from './store.js';
 
 /** The integration proxy's platform id for GitHub issues. */
 export const PLATFORM = 'github-issues';
@@ -102,10 +103,15 @@ export function proxyRefusal(response: {
  * `path` comes from the GitHub adapter as `/repos/{owner}/{name}/issues…`
  * with its query string; it is split into the relay's `path` and `query`,
  * and anything outside `/repos/` is refused before it reaches the host.
+ *
+ * A GitHub rate limit (`rateLimit.ts`) is waited out when short and the
+ * request repeated; a long one throws a `RateLimitError` with `notSent`,
+ * so a write's journal entry is dropped and the write is sent next pass.
  */
 export function relayDispatch(
   proxy: HostProxy,
   connectionId: string,
+  rateLimits: RateLimitOptions = {},
 ): Dispatch {
   return async (path, { method, body }) => {
     const url = new URL(path, 'https://api.github.com');
@@ -123,26 +129,36 @@ export function relayDispatch(
       );
     }
 
-    let response;
+    const once = async (): Promise<HostProxyResponse> => {
+      let response: HostProxyResponse;
 
-    try {
-      response = await proxy.request({
-        platform: PLATFORM,
-        connectionId,
-        path: url.pathname,
-        method: method as 'GET' | 'POST' | 'PATCH' | 'DELETE',
-        ...(url.search ? { query: Object.fromEntries(url.searchParams) } : {}),
-        ...(body === undefined ? {} : { body }),
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw Object.assign(new Error(message), {
-        notSent: NOT_SENT.some(pattern => pattern.test(message)),
-      });
-    }
+      try {
+        response = await proxy.request({
+          platform: PLATFORM,
+          connectionId,
+          path: url.pathname,
+          method: method as 'GET' | 'POST' | 'PATCH' | 'DELETE',
+          ...(url.search
+            ? { query: Object.fromEntries(url.searchParams) }
+            : {}),
+          ...(body === undefined ? {} : { body }),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw Object.assign(new Error(message), {
+          notSent: NOT_SENT.some(pattern => pattern.test(message)),
+        });
+      }
 
-    const refused = proxyRefusal(response);
-    if (refused) throw refused;
+      // The proxy's own refusal first: its 403s carry an `error` code and
+      // are never GitHub's rate limit.
+      const refused = proxyRefusal(response);
+      if (refused) throw refused;
+
+      return response;
+    };
+
+    const response = await throughRateLimits(once, rateLimits);
 
     return {
       status: response.status,
@@ -177,19 +193,24 @@ export const REPOSITORY_PAGES = 5;
 export async function listRepositories(
   proxy: HostProxy,
   connectionId: string,
+  rateLimits: RateLimitOptions = {},
 ): Promise<Repository[]> {
   const out: Repository[] = [];
 
   for (let page = 1; page <= REPOSITORY_PAGES; page++) {
-    const response = await proxy.request({
-      platform: PLATFORM,
-      connectionId,
-      path: '/user/repos',
-      method: 'GET',
-      query: { per_page: '100', page: String(page), sort: 'updated' },
-    });
-    const refused = proxyRefusal(response);
-    if (refused) throw refused;
+    const response = await throughRateLimits(async () => {
+      const answer = await proxy.request({
+        platform: PLATFORM,
+        connectionId,
+        path: '/user/repos',
+        method: 'GET',
+        query: { per_page: '100', page: String(page), sort: 'updated' },
+      });
+      const refused = proxyRefusal(answer);
+      if (refused) throw refused;
+
+      return answer;
+    }, rateLimits);
     if (response.status < 200 || response.status >= 300)
       throw new Error(`GitHub list_repositories returned ${response.status}`);
     const body =

@@ -1,0 +1,134 @@
+/* The sync-status card (card.ts). Colours and radius from the --pl-* tokens
+ * of the #89 plugin CSS, with light fallbacks for an app that has none. An
+ * app's build minifies this (esbuild's CSS minifier, via `?raw`). */
+.ss {
+  display: grid;
+  gap: 6px;
+  padding: 10px 14px;
+  border: 1px solid var(--pl-hair, #dddddd);
+  border-radius: var(--pl-radius, 9px);
+  background: var(--pl-surface, #ffffff);
+  color: var(--pl-text, #000000);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.ss p,
+.ss ul {
+  margin: 0;
+}
+.ss-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.ss-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.ss-head b {
+  font-weight: 600;
+}
+.ss-dot {
+  width: 8px;
+  height: 8px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--pl-muted, #666666);
+}
+.ss[data-tone='ok'] .ss-dot {
+  background: var(--pl-pos, #2f8f5b);
+}
+.ss[data-tone='warn'] .ss-dot {
+  background: var(--pl-warn, #f5a623);
+}
+.ss[data-tone='neg'] .ss-dot {
+  background: var(--pl-neg, #cf5b5b);
+}
+.ss[data-tone='busy'] .ss-dot {
+  background: var(--pl-accent, #1b50d8);
+  animation: ss-pulse 1.2s ease-in-out infinite;
+}
+@keyframes ss-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+.ss-muted {
+  color: var(--pl-muted, #666666);
+  font-variant-numeric: tabular-nums;
+}
+.ss-mode {
+  color: var(--pl-muted, #666666);
+}
+.ss-list {
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+.ss-list > li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 10px;
+}
+.ss-list b {
+  font-weight: 600;
+}
+.ss-problem {
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: color-mix(
+    in srgb,
+    var(--pl-warn, #f5a623) 14%,
+    var(--pl-surface, #ffffff)
+  );
+}
+.ss-problem[data-tone='neg'] {
+  background: color-mix(
+    in srgb,
+    var(--pl-neg, #cf5b5b) 10%,
+    var(--pl-surface, #ffffff)
+  );
+}
+.ss details {
+  flex-basis: 100%;
+  font-size: 12.5px;
+  color: var(--pl-muted, #666666);
+}
+.ss summary {
+  cursor: pointer;
+  width: max-content;
+}
+.ss-items {
+  display: block;
+  margin: 2px 0 0 16px;
+  padding: 0;
+  list-style: disc;
+}
+.ss-items li {
+  display: list-item;
+}
+.ss-btn {
+  font: inherit;
+  color: inherit;
+  padding: 3px 10px;
+  border: 1px solid var(--pl-border, #cccccc);
+  border-radius: 6px;
+  background: var(--pl-surface, #ffffff);
+  cursor: pointer;
+}
+.ss-btn[disabled] {
+  opacity: 0.55;
+  cursor: default;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ss[data-tone='busy'] .ss-dot {
+    animation: none;
+  }
+}

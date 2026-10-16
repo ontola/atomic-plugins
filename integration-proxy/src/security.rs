@@ -9,10 +9,10 @@ use rand::RngCore;
 use tokio::sync::RwLock;
 use tokio_postgres::Client;
 
-type ConnectionDriver =
+pub(crate) type ConnectionDriver =
     Pin<Box<dyn std::future::Future<Output = Result<(), tokio_postgres::Error>> + Send>>;
 
-async fn connect_once(database_url: &str) -> Result<(Client, ConnectionDriver), String> {
+pub(crate) async fn connect_once(database_url: &str) -> Result<(Client, ConnectionDriver), String> {
     let tls = native_tls::TlsConnector::new().map_err(|e| e.to_string())?;
     let tls = postgres_native_tls::MakeTlsConnector::new(tls);
     let (client, connection) = tokio_postgres::connect(database_url, tls)
@@ -68,6 +68,8 @@ const REFRESH_LEASE_SECONDS: f64 = 30.0;
 /// Schema, created idempotently at startup. The tables of the tenant era
 /// (`oauth_states`, `connection_codes`) are no longer read or written; they
 /// are left in place rather than dropped, see the README's flag-day notes.
+pub(crate) const SCHEMA_LOCK: i64 = 7_316_186_474_691_124_077;
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS used_challenges (nonce TEXT PRIMARY KEY, expires_at TIMESTAMPTZ NOT NULL);
 CREATE INDEX IF NOT EXISTS used_challenges_expires_at_idx ON used_challenges (expires_at);
@@ -105,7 +107,38 @@ CREATE TABLE IF NOT EXISTS app_runtimes (
   PRIMARY KEY (owner, agent)
 );
 CREATE INDEX IF NOT EXISTS app_runtimes_app_idx ON app_runtimes (owner, app);
+CREATE TABLE IF NOT EXISTS key_check_limits (
+  bucket TEXT NOT NULL,
+  slot INTEGER NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  PRIMARY KEY (bucket, slot)
+);
+CREATE INDEX IF NOT EXISTS key_check_limits_expires_at_idx ON key_check_limits (expires_at);
+CREATE TABLE IF NOT EXISTS retired_agents (
+  agent TEXT PRIMARY KEY,
+  successor TEXT NOT NULL,
+  retired_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 ";
+
+/// Why [`Security::transfer_owner`] moved nothing.
+#[derive(Debug)]
+pub enum TransferError {
+    /// The old or the new id is already retired.
+    Retired,
+    /// The old id has webhook subscriptions that are not closed.
+    Blocked,
+    /// The move would collide with something the new id already holds (a
+    /// runtime with the same agent); the whole statement was undone.
+    Conflict,
+    Database(String),
+}
+
+/// What a transfer moved.
+pub struct Transferred {
+    pub connections: i64,
+    pub runtimes: i64,
+}
 
 /// A pending provider authorization, from `/connect/authorize` to the
 /// provider's callback.
@@ -193,7 +226,72 @@ fn db_error(error: tokio_postgres::Error) -> String {
 #[derive(Clone)]
 pub struct Security {
     database: Arc<RwLock<Arc<Client>>>,
+    /// Dedicated connections for the owner writes that must not race a key
+    /// transfer (#410): each runs in a transaction holding the owners'
+    /// advisory locks ([`lock_owners`]).
+    owner_writes: Arc<crate::webhooks::pool::Pool>,
+    pub(crate) device_pool: Arc<crate::webhooks::pool::Pool>,
     encryption_key: [u8; 32],
+    /// `HMAC-SHA256(ENCRYPTION_KEY, KEY_CHECK_SUBKEY_LABEL)`: the key of the
+    /// key-check buckets, so the encryption key itself is used only by
+    /// XChaCha20-Poly1305.
+    key_check_key: [u8; 32],
+    /// `HMAC-SHA256(ENCRYPTION_KEY, IDEMPOTENCY_SUBKEY_LABEL)`, the key of
+    /// [`Security::connection_idempotency_key`], derived once.
+    idempotency_key: [u8; 32],
+}
+
+const KEY_CHECK_SUBKEY_LABEL: &[u8] = b"integration-proxy-key-check-limit-v1";
+
+/// The error text of an owner write refused because the owner was retired
+/// by a key transfer; callers answer `agent_retired`.
+pub const OWNER_RETIRED: &str = "owner retired";
+
+/// Takes the transaction-scoped advisory lock of each owner, in sorted
+/// order so two transactions locking the same pair cannot deadlock. The
+/// key is `hashtextextended(owner, 0)` in PostgreSQL's single advisory-lock
+/// key space, shared with the schema setup lock and the device store's
+/// allocation lock (fixed keys): a collision with one of them, or between
+/// two owners, only makes unrelated transactions wait for each other. Every
+/// write that creates or changes what an owner holds (a connection, a
+/// runtime, a delegation) and every transfer take these locks first, so a
+/// transfer and such a write never interleave: the write either commits
+/// before the transfer moves things, or sees the owner retired.
+async fn lock_owners(tx: &tokio_postgres::Transaction<'_>, owners: &[&str]) -> Result<(), String> {
+    let mut owners = owners.to_vec();
+    owners.sort_unstable();
+    owners.dedup();
+    for owner in owners {
+        tx.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            &[&owner],
+        )
+        .await
+        .map_err(db_error)?;
+    }
+    Ok(())
+}
+
+async fn retired_in(tx: &tokio_postgres::Transaction<'_>, agents: &[&str]) -> Result<bool, String> {
+    let agents: Vec<String> = agents.iter().map(|agent| agent.to_string()).collect();
+    tx.query_one(
+        "SELECT EXISTS (SELECT 1 FROM retired_agents WHERE agent = ANY($1))",
+        &[&agents],
+    )
+    .await
+    .map(|row| row.get(0))
+    .map_err(db_error)
+}
+const IDEMPOTENCY_SUBKEY_LABEL: &[u8] = b"integration-proxy-idempotency-key-v1";
+
+fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+    use hmac::{Hmac, Mac};
+    let mut mac =
+        <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
+    for part in parts {
+        mac.update(part);
+    }
+    mac.finalize().into_bytes().into()
 }
 
 impl Security {
@@ -212,13 +310,14 @@ impl Security {
             let driver = tokio::spawn(setup_connection);
             let transaction = setup.transaction().await.map_err(db_error)?;
             transaction
-                .query_one(
-                    "SELECT pg_advisory_xact_lock($1)",
-                    &[&7_316_186_474_691_124_077_i64],
-                )
+                .query_one("SELECT pg_advisory_xact_lock($1)", &[&SCHEMA_LOCK])
                 .await
                 .map_err(db_error)?;
             transaction.batch_execute(SCHEMA).await.map_err(db_error)?;
+            transaction
+                .batch_execute(crate::device::store::SCHEMA)
+                .await
+                .map_err(db_error)?;
             transaction.commit().await.map_err(db_error)?;
             drop(setup);
             let _ = driver.await;
@@ -228,15 +327,39 @@ impl Security {
         let database = Arc::new(RwLock::new(Arc::new(client)));
         spawn_reconnect_supervisor(database_url.to_string(), database.clone(), connection);
         Ok(Self {
+            device_pool: Arc::new(crate::webhooks::pool::Pool::new(database_url, 4)),
             database,
+            owner_writes: Arc::new(crate::webhooks::pool::Pool::new(database_url, 4)),
+            key_check_key: hmac_sha256(&encryption_key, &[KEY_CHECK_SUBKEY_LABEL]),
+            idempotency_key: hmac_sha256(&encryption_key, &[IDEMPOTENCY_SUBKEY_LABEL]),
             encryption_key,
         })
+    }
+
+    /// `HMAC-SHA256(ENCRYPTION_KEY, label)`: a key for one purpose, so the
+    /// encryption key itself serves only XChaCha20-Poly1305 (as with the
+    /// key-check buckets' subkey).
+    pub(crate) fn derive_subkey(&self, label: &[u8]) -> [u8; 32] {
+        hmac_sha256(&self.encryption_key, &[label])
+    }
+
+    /// An `Idempotency-Key` as a no-credential connection sends it upstream:
+    /// base64url (unpadded) of `HMAC-SHA256(subkey, connection_id ‖ 0 ‖
+    /// key)` under `derive_subkey(IDEMPOTENCY_SUBKEY_LABEL)`. Stable for one
+    /// connection and key, so a retry matches; different across connections,
+    /// so tenants sharing the provider's key space never collide; and the
+    /// caller's key cannot be read back from it.
+    pub fn connection_idempotency_key(&self, connection_id: &str, key: &[u8]) -> String {
+        URL_SAFE_NO_PAD.encode(hmac_sha256(
+            &self.idempotency_key,
+            &[connection_id.as_bytes(), b"\0", key],
+        ))
     }
 
     /// The client currently backing this connection. Held only for the
     /// duration of one query: a reconnect replaces the shared client without
     /// invalidating a client already in hand.
-    async fn client(&self) -> Arc<Client> {
+    pub(crate) async fn client(&self) -> Arc<Client> {
         self.database.read().await.clone()
     }
 
@@ -258,6 +381,119 @@ impl Security {
             .map_err(db_error)?;
         let rows = database.execute("INSERT INTO used_challenges (nonce, expires_at) VALUES ($1, NOW() + INTERVAL '10 minutes') ON CONFLICT DO NOTHING", &[&nonce]).await.map_err(db_error)?;
         Ok(rows == 1)
+    }
+
+    /// Whether `nonce` is recorded and not yet expired, without recording
+    /// it.
+    pub async fn nonce_used(&self, nonce: &str) -> Result<bool, String> {
+        let row = self
+            .client()
+            .await
+            .query_opt(
+                "SELECT 1 FROM used_challenges WHERE nonce = $1 AND expires_at > NOW()",
+                &[&nonce],
+            )
+            .await
+            .map_err(db_error)?;
+        Ok(row.is_some())
+    }
+
+    /// Spends a signed request's replay key, as [`Self::consume_nonce`] does,
+    /// but also refuses it while `legacy_key` is recorded: that is the same
+    /// request's key in the earlier format, written by an older proxy
+    /// instance during a rolling deploy. Never writes `legacy_key`.
+    pub async fn consume_request(&self, key: &str, legacy_key: &str) -> Result<bool, String> {
+        let database = self.client().await;
+        database
+            .execute("DELETE FROM used_challenges WHERE expires_at <= NOW()", &[])
+            .await
+            .map_err(db_error)?;
+        let rows = database
+            .execute(
+                "INSERT INTO used_challenges (nonce, expires_at) \
+                 SELECT $1, NOW() + INTERVAL '10 minutes' \
+                 WHERE NOT EXISTS (SELECT 1 FROM used_challenges WHERE nonce = $2) \
+                 ON CONFLICT DO NOTHING",
+                &[&key, &legacy_key],
+            )
+            .await
+            .map_err(db_error)?;
+        Ok(rows == 1)
+    }
+
+    /// The `key_check_limits` bucket of one client network and platform: a
+    /// hex HMAC-SHA256 of both under a subkey derived from `ENCRYPTION_KEY`
+    /// (`HMAC(ENCRYPTION_KEY, "integration-proxy-key-check-limit-v1")`), so
+    /// the address cannot be read back from a row or a log line, nor found
+    /// by hashing every IPv4 address without the key. (The platform is
+    /// logged next to the bucket on purpose.)
+    pub fn key_check_bucket(&self, platform: &str, network: &str) -> String {
+        hmac_sha256(
+            &self.key_check_key,
+            &[platform.as_bytes(), b"\0", network.as_bytes()],
+        )
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+    }
+
+    /// Takes one of `bucket`'s `limit` key checks. Each is a row
+    /// `(bucket, slot)` for one of the slots `1..=limit`, kept for `window`
+    /// after it was taken, so at most `limit` checks are made in any
+    /// `window` (a sliding window), across instances and concurrent
+    /// requests: the primary key lets only one request take a slot. `None`
+    /// when a check was taken; otherwise the seconds until a slot frees.
+    pub async fn take_key_check_allowance(
+        &self,
+        bucket: &str,
+        limit: u32,
+        window: Duration,
+    ) -> Result<Option<u64>, String> {
+        let limit = i32::try_from(limit).unwrap_or(i32::MAX);
+        let window = window.as_secs_f64();
+        let database = self.client().await;
+        database
+            .execute(
+                "DELETE FROM key_check_limits WHERE expires_at <= NOW()",
+                &[],
+            )
+            .await
+            .map_err(db_error)?;
+        // Each pass takes the lowest free (or expired, not yet swept) slot,
+        // finds every slot taken, or loses that slot to a concurrent
+        // request and tries again; there are only `limit` slots to lose.
+        for _ in 0..=limit {
+            let taken = database
+                .execute(
+                    "INSERT INTO key_check_limits (bucket, slot, expires_at) \
+                     SELECT $1, s, NOW() + make_interval(secs => $3) \
+                     FROM generate_series(1, $2) AS s \
+                     WHERE NOT EXISTS (SELECT 1 FROM key_check_limits k \
+                       WHERE k.bucket = $1 AND k.slot = s AND k.expires_at > NOW()) \
+                     ORDER BY s LIMIT 1 \
+                     ON CONFLICT (bucket, slot) DO UPDATE SET expires_at = EXCLUDED.expires_at \
+                     WHERE key_check_limits.expires_at <= NOW()",
+                    &[&bucket, &limit, &window],
+                )
+                .await
+                .map_err(db_error)?;
+            if taken == 1 {
+                return Ok(None);
+            }
+            let row = database
+                .query_one(
+                    "SELECT COUNT(*), EXTRACT(EPOCH FROM MIN(expires_at) - NOW())::float8 \
+                     FROM key_check_limits WHERE bucket = $1 AND expires_at > NOW()",
+                    &[&bucket],
+                )
+                .await
+                .map_err(db_error)?;
+            let (count, next_free): (i64, Option<f64>) = (row.get(0), row.get(1));
+            if count >= i64::from(limit) {
+                return Ok(Some(next_free.unwrap_or(1.0).ceil().max(1.0) as u64));
+            }
+        }
+        Ok(Some(1))
     }
 
     pub fn seal(&self, plaintext: &[u8], associated_data: &[u8]) -> Result<String, String> {
@@ -397,15 +633,148 @@ impl Security {
         let label_envelope = label
             .map(|label| self.seal(label.as_bytes(), &connection_label_aad(&connection_id)))
             .transpose()?;
+        let mut client = self.owner_writes.get().await?;
+        let tx = client.transaction().await.map_err(db_error)?;
+        lock_owners(&tx, &[owner]).await?;
+        if retired_in(&tx, &[owner]).await? {
+            return Err(OWNER_RETIRED.into());
+        }
+        tx.execute(
+            "INSERT INTO agent_connections (connection_id, platform, owner, envelope, label_envelope) VALUES ($1,$2,$3,$4,$5)",
+            &[&connection_id, &platform, &owner, &envelope, &label_envelope],
+        )
+        .await
+        .map_err(db_error)?;
+        tx.commit().await.map_err(db_error)?;
+        Ok(connection_id)
+    }
+
+    /// Test-only: points a connection at `owner` directly, as a row stranded
+    /// before the owner locks existed would be.
+    #[cfg(test)]
+    pub(crate) async fn force_owner_for_tests(&self, connection_id: &str, owner: &str) {
         self.client()
             .await
             .execute(
-                "INSERT INTO agent_connections (connection_id, platform, owner, envelope, label_envelope) VALUES ($1,$2,$3,$4,$5)",
-                &[&connection_id, &platform, &owner, &envelope, &label_envelope],
+                "UPDATE agent_connections SET owner = $2 WHERE connection_id = $1",
+                &[&connection_id, &owner],
             )
             .await
-            .map_err(db_error)?;
-        Ok(connection_id)
+            .unwrap();
+    }
+
+    /// Test-only: adds a delegation without the owner checks.
+    #[cfg(test)]
+    pub(crate) async fn force_delegation_for_tests(&self, connection_id: &str, agent: &str) {
+        self.client()
+            .await
+            .execute(
+                "INSERT INTO connection_delegations (connection_id, agent) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+                &[&connection_id, &agent],
+            )
+            .await
+            .unwrap();
+    }
+
+    /// Whether `agent` was retired by a transfer (#410).
+    pub async fn is_retired(&self, agent: &str) -> Result<bool, String> {
+        self.client()
+            .await
+            .query_opt("SELECT 1 FROM retired_agents WHERE agent = $1", &[&agent])
+            .await
+            .map(|row| row.is_some())
+            .map_err(db_error)
+    }
+
+    /// Moves `from`'s connections and runtimes to `to` and retires `from`,
+    /// in one statement, so either all of it happens or none: a collision
+    /// (a runtime `to` already has) undoes the retirement too. Refused when
+    /// either id is retired. Delegations are keyed by connection and app
+    /// agent and need no change.
+    ///
+    /// One transaction, holding both owners' advisory locks ([`lock_owners`])
+    /// and the old owner's connection rows (`FOR UPDATE`): retirement is
+    /// checked under the locks, so of two concurrent transfers A→B and B→C
+    /// the second sees the first's retirement; a connection, runtime or
+    /// delegation write of either owner waits for it; and a webhook
+    /// subscription (which takes its connection row `FOR SHARE`) either
+    /// committed before the open-subscriptions check, which then refuses
+    /// the transfer, or finds the connection moved. The subscriptions table
+    /// is checked whenever it exists, also with the webhook inbox off.
+    pub async fn transfer_owner(&self, from: &str, to: &str) -> Result<Transferred, TransferError> {
+        let database = |error: tokio_postgres::Error| {
+            if error.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
+                TransferError::Conflict
+            } else {
+                TransferError::Database(db_error(error))
+            }
+        };
+        let mut client = self
+            .owner_writes
+            .get()
+            .await
+            .map_err(TransferError::Database)?;
+        let tx = client.transaction().await.map_err(database)?;
+        lock_owners(&tx, &[from, to])
+            .await
+            .map_err(TransferError::Database)?;
+        if retired_in(&tx, &[from, to])
+            .await
+            .map_err(TransferError::Database)?
+        {
+            return Err(TransferError::Retired);
+        }
+        tx.execute(
+            "SELECT 1 FROM agent_connections WHERE owner = $1 ORDER BY connection_id FOR UPDATE",
+            &[&from],
+        )
+        .await
+        .map_err(database)?;
+        let open: bool = tx
+            .query_one(
+                "SELECT to_regclass('webhook_subscriptions') IS NOT NULL",
+                &[],
+            )
+            .await
+            .map_err(database)?
+            .get(0);
+        if open
+            && tx
+                .query_one(
+                    "SELECT EXISTS (SELECT 1 FROM webhook_subscriptions WHERE owner = $1 AND state <> 'closed')",
+                    &[&from],
+                )
+                .await
+                .map_err(database)?
+                .get::<_, bool>(0)
+        {
+            return Err(TransferError::Blocked);
+        }
+        tx.execute(
+            "INSERT INTO retired_agents (agent, successor) VALUES ($1, $2)",
+            &[&from, &to],
+        )
+        .await
+        .map_err(database)?;
+        let connections = tx
+            .execute(
+                "UPDATE agent_connections SET owner = $2 WHERE owner = $1",
+                &[&from, &to],
+            )
+            .await
+            .map_err(database)?;
+        let runtimes = tx
+            .execute(
+                "UPDATE app_runtimes SET owner = $2 WHERE owner = $1",
+                &[&from, &to],
+            )
+            .await
+            .map_err(database)?;
+        tx.commit().await.map_err(database)?;
+        Ok(Transferred {
+            connections: connections as i64,
+            runtimes: runtimes as i64,
+        })
     }
 
     /// Reads a live connection without marking it used; the caller has not
@@ -540,38 +909,60 @@ impl Security {
             .map_err(db_error)
     }
 
-    /// Adds (or relabels) a delegation. The caller has checked ownership.
+    /// Adds (or relabels) a delegation of a connection `owner` owns, under
+    /// the owner's lock. `false` when the connection is not `owner`'s (any
+    /// more): nothing is written.
     pub async fn put_delegation(
         &self,
         connection_id: &str,
+        owner: &str,
         agent: &str,
         label: Option<&str>,
-    ) -> Result<(), String> {
-        self.client()
-            .await
+    ) -> Result<bool, String> {
+        let mut client = self.owner_writes.get().await?;
+        let tx = client.transaction().await.map_err(db_error)?;
+        lock_owners(&tx, &[owner]).await?;
+        if retired_in(&tx, &[owner]).await? {
+            return Err(OWNER_RETIRED.into());
+        }
+        let rows = tx
             .execute(
-                "INSERT INTO connection_delegations (connection_id, agent, label) VALUES ($1,$2,$3) ON CONFLICT (connection_id, agent) DO UPDATE SET label = EXCLUDED.label",
-                &[&connection_id, &agent, &label],
+                "INSERT INTO connection_delegations (connection_id, agent, label)
+                 SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM agent_connections WHERE connection_id = $1 AND owner = $4)
+                 ON CONFLICT (connection_id, agent) DO UPDATE SET label = EXCLUDED.label",
+                &[&connection_id, &agent, &label, &owner],
             )
             .await
-            .map(|_| ())
-            .map_err(db_error)
+            .map_err(db_error)?;
+        tx.commit().await.map_err(db_error)?;
+        Ok(rows == 1)
     }
 
+    /// Removes a delegation of a connection `owner` owns, under the owner's
+    /// lock; `false` when there was none (or the connection is not
+    /// `owner`'s).
     pub async fn delete_delegation(
         &self,
         connection_id: &str,
+        owner: &str,
         agent: &str,
     ) -> Result<bool, String> {
-        self.client()
-            .await
+        let mut client = self.owner_writes.get().await?;
+        let tx = client.transaction().await.map_err(db_error)?;
+        lock_owners(&tx, &[owner]).await?;
+        if retired_in(&tx, &[owner]).await? {
+            return Err(OWNER_RETIRED.into());
+        }
+        let rows = tx
             .execute(
-                "DELETE FROM connection_delegations WHERE connection_id = $1 AND agent = $2",
-                &[&connection_id, &agent],
+                "DELETE FROM connection_delegations d WHERE d.connection_id = $1 AND d.agent = $2
+                 AND EXISTS (SELECT 1 FROM agent_connections c WHERE c.connection_id = $1 AND c.owner = $3)",
+                &[&connection_id, &agent, &owner],
             )
             .await
-            .map(|rows| rows == 1)
-            .map_err(db_error)
+            .map_err(db_error)?;
+        tx.commit().await.map_err(db_error)?;
+        Ok(rows == 1)
     }
 
     /// Registers `agent` as a runtime of installation `app` for `owner`
@@ -584,15 +975,19 @@ impl Security {
         app: &str,
         label: Option<&str>,
     ) -> Result<(), String> {
-        self.client()
-            .await
-            .execute(
-                "INSERT INTO app_runtimes (owner, agent, app, label) VALUES ($1,$2,$3,$4) ON CONFLICT (owner, agent) DO UPDATE SET app = EXCLUDED.app, label = EXCLUDED.label",
-                &[&owner, &agent, &app, &label],
-            )
-            .await
-            .map(|_| ())
-            .map_err(db_error)
+        let mut client = self.owner_writes.get().await?;
+        let tx = client.transaction().await.map_err(db_error)?;
+        lock_owners(&tx, &[owner]).await?;
+        if retired_in(&tx, &[owner]).await? {
+            return Err(OWNER_RETIRED.into());
+        }
+        tx.execute(
+            "INSERT INTO app_runtimes (owner, agent, app, label) VALUES ($1,$2,$3,$4) ON CONFLICT (owner, agent) DO UPDATE SET app = EXCLUDED.app, label = EXCLUDED.label",
+            &[&owner, &agent, &app, &label],
+        )
+        .await
+        .map_err(db_error)?;
+        tx.commit().await.map_err(db_error)
     }
 
     pub async fn delete_runtime(&self, owner: &str, agent: &str) -> Result<bool, String> {
@@ -836,6 +1231,82 @@ pub(crate) mod tests {
             .expect("query after reconnect"));
     }
 
+    #[test]
+    fn hmac_sha256_matches_rfc_4231() {
+        // RFC 4231, test case 2.
+        let mac = hmac_sha256(b"Jefe", &[b"what do ya want ", b"for nothing?"]);
+        let hex: String = mac.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            hex,
+            "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+        );
+    }
+
+    /// A no-credential connection's `Idempotency-Key` is an HMAC under its
+    /// own derived subkey: per connection, stable, never the caller's key.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn idempotency_keys_are_namespaced_per_connection_under_a_derived_subkey() {
+        let security = crate::test_support::security().await;
+        let subkey = hmac_sha256(&security.encryption_key, &[IDEMPOTENCY_SUBKEY_LABEL]);
+        assert_eq!(security.idempotency_key, subkey);
+        assert_ne!(subkey, security.key_check_key);
+        let key = security.connection_idempotency_key("conn-a", b"create-1");
+        assert_eq!(
+            key,
+            URL_SAFE_NO_PAD.encode(hmac_sha256(&subkey, &[b"conn-a", b"\0", b"create-1"]))
+        );
+        assert_eq!(
+            key,
+            security.connection_idempotency_key("conn-a", b"create-1")
+        );
+        assert_ne!(
+            key,
+            security.connection_idempotency_key("conn-b", b"create-1")
+        );
+        assert_ne!(
+            key,
+            security.connection_idempotency_key("conn-a", b"create-2")
+        );
+        // The separator keeps (id, key) pairs from running together.
+        assert_ne!(
+            security.connection_idempotency_key("ab", b"c"),
+            security.connection_idempotency_key("a", b"bc")
+        );
+    }
+
+    /// The key-check buckets are keyed by a subkey derived from
+    /// `ENCRYPTION_KEY`, never by the encryption key itself.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn key_check_buckets_use_a_derived_subkey() {
+        let security = crate::test_support::security().await;
+        let subkey = hmac_sha256(&security.encryption_key, &[KEY_CHECK_SUBKEY_LABEL]);
+        assert_eq!(security.key_check_key, subkey);
+        assert_ne!(security.key_check_key, security.encryption_key);
+        let hex = |mac: [u8; 32]| mac.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let bucket = security.key_check_bucket("clockify", "198.51.100.7");
+        assert_eq!(
+            bucket,
+            hex(hmac_sha256(&subkey, &[b"clockify", b"\0", b"198.51.100.7"]))
+        );
+        assert_ne!(
+            bucket,
+            hex(hmac_sha256(
+                &security.encryption_key,
+                &[b"clockify", b"\0", b"198.51.100.7"]
+            ))
+        );
+        assert_ne!(
+            bucket,
+            security.key_check_bucket("clockify", "198.51.100.8")
+        );
+        assert_ne!(
+            bucket,
+            security.key_check_bucket("clockify-x", "198.51.100.7")
+        );
+    }
+
     #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
     async fn nonces_are_single_use() {
@@ -884,7 +1355,7 @@ pub(crate) mod tests {
 
         // 89 idle days: still there. 90: gone, and swept with its delegations.
         security
-            .put_delegation(&a, "atomic:agent:app", None)
+            .put_delegation(&a, &owner, "atomic:agent:app", None)
             .await
             .unwrap();
         admin
@@ -950,7 +1421,7 @@ pub(crate) mod tests {
             Standing::None
         );
         security
-            .put_delegation(&id, &app, Some("Plugin"))
+            .put_delegation(&id, &owner, &app, Some("Plugin"))
             .await
             .unwrap();
         assert_eq!(
@@ -993,7 +1464,7 @@ pub(crate) mod tests {
         assert_eq!(runtimes.len(), 1);
         assert!(runtimes[0].last_used_at.is_some());
         // Revoking the delegation cuts off the app and its runtime at once.
-        assert!(security.delete_delegation(&id, &app).await.unwrap());
+        assert!(security.delete_delegation(&id, &owner, &app).await.unwrap());
         assert_eq!(
             security.standing(&id, &owner, &app).await.unwrap(),
             Standing::None
@@ -1002,7 +1473,10 @@ pub(crate) mod tests {
             security.standing(&id, &owner, &node).await.unwrap(),
             Standing::None
         );
-        security.put_delegation(&id, &app, None).await.unwrap();
+        security
+            .put_delegation(&id, &owner, &app, None)
+            .await
+            .unwrap();
         assert!(security.delete_runtime(&owner, &node).await.unwrap());
         assert_eq!(
             security.standing(&id, &owner, &node).await.unwrap(),

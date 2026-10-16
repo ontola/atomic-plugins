@@ -14,40 +14,11 @@
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
+import { cssRawPlugin } from '../../sync-status/build.mjs';
 
 const path = relative => fileURLToPath(new URL(relative, import.meta.url));
-
-/**
- * `import css from './x.css?raw'` (as Vite reads it in the tests) embeds the
- * stylesheet as a string, minified by esbuild's CSS minifier first.
- */
-const minifiedCss = esbuild => ({
-  name: 'minified-css-text',
-  setup(bundle) {
-    bundle.onResolve({ filter: /\.css\?raw$/ }, args => ({
-      path: fileURLToPath(
-        new URL(
-          args.path.slice(0, -'?raw'.length),
-          `file://${args.resolveDir}/`,
-        ),
-      ),
-      namespace: 'css-text',
-    }));
-    bundle.onLoad({ filter: /.*/, namespace: 'css-text' }, async args => {
-      const { code } = await esbuild.transform(
-        readFileSync(args.path, 'utf8'),
-        {
-          loader: 'css',
-          minify: true,
-        },
-      );
-
-      return { contents: code, loader: 'text' };
-    });
-  },
-});
 
 /** Bundles in memory; writes only when `outfile` is given. */
 export async function build({ outfile } = {}) {
@@ -76,7 +47,10 @@ export async function build({ outfile } = {}) {
       // plugin was built against; devonian exports the same function.
       '@integration-host/plugin-reconcile': 'devonian',
     },
-    plugins: [minifiedCss(esbuild)],
+    // `import css from './x.css?raw'` (as Vite reads it in the tests) embeds
+    // the stylesheet as a string, minified by esbuild's CSS minifier first;
+    // the shared sync-status card's `card.css?raw` comes through it too.
+    plugins: [cssRawPlugin(esbuild)],
     logLevel: 'silent',
   });
   const text = result.outputFiles[0].text;

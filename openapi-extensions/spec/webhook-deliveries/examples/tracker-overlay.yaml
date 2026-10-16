@@ -1,0 +1,44 @@
+overlay: 1.0.0
+info:
+  title: Example Tracker shared application hook (illustrative)
+  version: 1.0.0
+# Adds a minimal x-webhook-deliveries to tracker.yaml with its own declaration
+# removed: only the shared application hook, no revocations. test_validate.py
+# applies it and validates the result.
+actions:
+  - target: $
+    update:
+      x-webhook-deliveries:
+        verificationProfiles:
+          appHook:
+            algorithm: hmac-sha256
+            signedContent: rawBody
+            signature:
+              {
+                in: header,
+                name: Tracker-Signature,
+                prefix: 'v1=',
+                encoding: hex,
+              }
+            secret: { source: operatorConfigured }
+        delivery:
+          id: { in: header, name: Tracker-Delivery }
+          redelivery: sameId
+          eventType: $request.body#/kind
+          action: $request.body#/change
+        sources:
+          project:
+            key: $request.body#/project/id
+            access:
+              operation: { method: get, path: '/projects/{projectId}' }
+              key: $response.body#/id
+        hooks:
+          sharedApplication: { verificationProfile: appHook }
+        events:
+          task:
+            source: project
+            resources:
+              - resource: task
+                bindings:
+                  projectId: $request.body#/project/id
+                  taskId: $request.body#/task/id

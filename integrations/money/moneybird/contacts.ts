@@ -1,11 +1,10 @@
 // @wc-ignore-file
 /**
- * Which Moneybird contact fields become typed columns, and how. This is the
- * whole of what the read-only milestone (atomic-plugins#102) imports: one
- * collection, contacts, of one chosen administration. Every other field of
- * `contact` in the OpenAPI document (addresses beyond the city, SEPA and
- * credit-card fields, contact people, notes, custom fields, events) is left
- * out on purpose; so are all other collections.
+ * Which Moneybird contact fields become typed columns, and how (the first
+ * collection of atomic-plugins#102; hours.ts and mutations.ts map the other
+ * two). Every other field of `contact` in the OpenAPI document (addresses
+ * beyond the city, SEPA and credit-card fields, contact people, notes,
+ * custom fields, events) is left out on purpose.
  */
 import type { Contact } from './read.js';
 
@@ -29,6 +28,22 @@ const text = (key: string, name: string, description: string) => ({
   datatype: `${DATATYPE}string`,
 });
 
+/** Moneybird's `updated_at`, kept on every imported row (contacts, hours, mutations). */
+export const UPDATED_AT: ContactField = text(
+  'updated_at',
+  'Updated in Moneybird',
+  'Moneybird updated_at, the exact ISO 8601 string it sent.',
+);
+
+/** Moneybird's record `version`, on contacts and financial mutations. */
+export const VERSION: ContactField = {
+  key: 'version',
+  shortname: 'moneybird-version',
+  name: 'Version',
+  description: 'Moneybird record version; changes with every edit there.',
+  datatype: `${DATATYPE}integer`,
+};
+
 export const CONTACT_FIELDS: ContactField[] = [
   text('id', 'Moneybird ID', 'Moneybird contact identifier, as sent.'),
   text(
@@ -50,18 +65,8 @@ export const CONTACT_FIELDS: ContactField[] = [
     description: 'Archived in Moneybird.',
     datatype: `${DATATYPE}boolean`,
   },
-  text(
-    'updated_at',
-    'Updated in Moneybird',
-    'Moneybird updated_at, the exact ISO 8601 string it sent.',
-  ),
-  {
-    key: 'version',
-    shortname: 'moneybird-version',
-    name: 'Version',
-    description: 'Moneybird record version; changes with every edit there.',
-    datatype: `${DATATYPE}integer`,
-  },
+  UPDATED_AT,
+  VERSION,
 ];
 
 /** The row's identity: administration and contact id, stable across reads. */

@@ -116,6 +116,15 @@ export class SyncState {
     await this.flush();
   }
 
+  /**
+   * Sets another property on the same resource (the time of the last
+   * successful pass, `github-last-sync`), written with the next `flush`.
+   */
+  stamp(property: string, value: string): void {
+    this.resource.set(property, value);
+    this.dirty = true;
+  }
+
   /** Whether the state has changes `flush` has not written yet. */
   get isDirty(): boolean {
     return this.dirty;

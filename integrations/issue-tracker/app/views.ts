@@ -7,6 +7,8 @@
 import {
   describe,
   describeHeld,
+  PAUSED_NOTE,
+  SYNC_NOTE,
   type Ready,
   type RepositoryListing,
   type ViewState,
@@ -35,6 +37,8 @@ import {
   type Layout,
   type Marker,
 } from './model.js';
+import { renderSyncStatus } from '../../sync-status/card.js';
+import { syncStatusFor } from './status.js';
 import type { ConflictField, IssueRow, Side, Status } from './sync.js';
 import type { Repository } from './transport.js';
 import { h, icon, type Child } from './ui/dom.js';
@@ -101,10 +105,17 @@ export interface Ui {
   canDisconnect?: boolean;
   /** Asking to confirm "Remove from board" (state 13). */
   confirmRemove?: boolean;
+  /**
+   * The name of the table shown when the app didn't make it (`controller
+   * .foreign()`); absent on the app's own table.
+   */
+  table?: string;
   /** Rows to highlight after new data arrived. */
   flash: Set<string>;
   /** Seconds until the automatic retry after a transient failure. */
   retryIn?: number;
+  /** When that retry runs (epoch ms), for the card's "retrying at HH:MM". */
+  retryAt?: number;
   now: number;
 }
 
@@ -132,7 +143,22 @@ export interface Actions {
   sendAgain(subject: string): void;
   /** "Publish to GitHub" for a local-only row (#177 Q6). */
   publish(subject: string): void;
+  /** "Sync this table to GitHub" on a table the app didn't make (#177 item 14). */
+  syncTable(): void;
+  /** Back to not synced, before a repository was chosen there. */
+  notNow(): void;
+  /** Shows a row in the host (`store.openResource`), to complete it there. */
+  openRow?(subject: string): void;
 }
+
+/** A row's title as the board shows it; an incomplete one has none. */
+const titleOf = (row: IssueRow) => row.title || '(no title)';
+
+/** The warning tag of a row missing a required field (#177). */
+const incompleteTag = (row: IssueRow) =>
+  row.incomplete
+    ? h('span', { class: 'incomplete-tag' }, row.incomplete)
+    : null;
 
 const GLYPH: Record<Status, Glyph> = {
   Todo: 'todo',
@@ -262,8 +288,8 @@ function connBar(state: Ready, ui: Ui, actions: Actions): HTMLElement {
         ? h('span', { class: 'mono acct' }, state.repository)
         : h('span', { class: 'acct' }, 'GitHub'),
       // A phone-width bar keeps to the repository and its actions; the
-      // pill already says when it last synced.
-      ui.size === 's' && !held ? null : h('span', null, connectionLine(state)),
+      // line repeats the repository when idle, so only the busy words show.
+      ui.size === 's' && !busy ? null : h('span', null, connectionLine(state)),
     ],
     [
       held && !state.last?.result.held.some(x => x.unconfirmed)
@@ -400,7 +426,7 @@ function bannerNode(
   ui: Ui,
   actions: Actions,
 ): HTMLElement | null {
-  const model = bannerFor(state, ui.confirmRemove);
+  const model = bannerFor(state, ui.confirmRemove, ui.table === undefined);
   if (!model || state.kind !== 'ready') return null;
 
   const run = ({
@@ -447,6 +473,58 @@ function bannerNode(
 
 // ---------------------------------------------------------------- setup
 
+/**
+ * An Issue table the app didn't make, not synced (or paused): the offer to
+ * sync it, or why it can't be synced from here.
+ */
+function otherTable(
+  state: Extract<ViewState, { kind: 'other-table' }>,
+  ui: Ui,
+  actions: Actions,
+): HTMLElement {
+  const name = ui.table ?? 'This table';
+  const paused = state.reason === PAUSED_NOTE;
+
+  return empty(
+    paused ? 'paused' : 'inbox',
+    paused
+      ? `Syncing ${name} with GitHub is paused.`
+      : `${name} isn’t synced with GitHub.`,
+    paused
+      ? 'This app may no longer edit this table’s rows, or keep its GitHub issue numbers on them. Allow editing again to go on. Nothing is sent or written while it is paused.'
+      : (state.reason ??
+          (state.canSync
+            ? SYNC_NOTE
+            : 'This Atomic Server can’t let an app edit another table’s rows, so it can’t be synced from here. Nothing was changed.')),
+    state.canSync
+      ? button(
+          state.asking
+            ? 'Waiting for you to allow editing…'
+            : paused
+              ? 'Allow editing again'
+              : 'Sync this table to GitHub',
+          () => actions.syncTable(),
+          {
+            kind: 'primary',
+            disabled: !!state.asking,
+            'data-key': 'sync-table',
+          },
+        )
+      : undefined,
+    true,
+  );
+}
+
+/** "Not now" on the setup screens of a table the app didn't make. */
+function notNow(ui: Ui, actions: Actions): HTMLElement | null {
+  return ui.table === undefined
+    ? null
+    : button('Not now', () => actions.notNow(), {
+        kind: 'ghost',
+        'data-key': 'not-now',
+      });
+}
+
 function noProxy(): HTMLElement {
   return empty(
     'server',
@@ -457,7 +535,7 @@ function noProxy(): HTMLElement {
   );
 }
 
-function sources(state: ViewState, actions: Actions): HTMLElement {
+function sources(state: ViewState, ui: Ui, actions: Actions): HTMLElement {
   const connecting = state.kind === 'connecting';
   const row = (
     name: string,
@@ -485,11 +563,19 @@ function sources(state: ViewState, actions: Actions): HTMLElement {
     h(
       'div',
       { class: 'onboard' },
-      h('h2', null, 'Bring your issues into this drive'),
+      h(
+        'h2',
+        null,
+        ui.table === undefined
+          ? 'Bring your issues into this drive'
+          : `Sync ${ui.table} with GitHub`,
+      ),
       h(
         'p',
         { class: 'lede' },
-        'Pick where your issues live today. They stay there; this board mirrors them into an Atomic table you can link, search and query.',
+        ui.table === undefined
+          ? 'Pick where your issues live today. They stay there; this board mirrors them into an Atomic table you can link, search and query.'
+          : 'The repository’s issues are added to this table as rows; the rows already here stay here until you publish them. Nothing is sent to GitHub until you review it.',
       ),
       h(
         'ul',
@@ -531,6 +617,7 @@ function sources(state: ViewState, actions: Actions): HTMLElement {
           ? 'Confirm the connection in the bar Atomic Server shows above this app.'
           : 'Connecting opens a confirmation bar from Atomic Server, then your provider’s sign-in. This app never sees your password or token.',
       ),
+      connecting ? null : notNow(ui, actions),
     ),
   );
 }
@@ -661,7 +748,13 @@ function chooseRepository(
     h(
       'div',
       { class: 'onboard' },
-      h('h2', null, 'Which repository?'),
+      h(
+        'h2',
+        null,
+        ui.table === undefined
+          ? 'Which repository?'
+          : `Which repository should ${ui.table} sync with?`,
+      ),
       body,
       state.error
         ? h('p', { class: 'field-error', role: 'alert' }, state.error)
@@ -706,13 +799,16 @@ function chooseRepository(
           h(
             'li',
             null,
-            'Nothing is ever deleted on GitHub. One app syncs one repository.',
+            ui.table === undefined
+              ? 'Nothing is ever deleted on GitHub. One app syncs one repository.'
+              : 'Nothing is ever deleted, on GitHub or in this table. This table syncs with one repository, and never switches.',
           ),
         ),
       ),
       h(
         'div',
         { class: 'actions-row' },
+        busy ? null : notNow(ui, actions),
         button(
           busy ? `Setting up ${state.settingUp}…` : `Import ${target}`,
           () => choice && actions.choose(choice),
@@ -805,7 +901,8 @@ function card(
   marks: Map<string, Marker>,
   actions: Actions,
 ): HTMLElement {
-  const movable = canMove(state) && !state.busy;
+  // An incomplete row is not moved here: nothing of it is synced (#177).
+  const movable = canMove(state) && !state.busy && !row.incomplete;
   const menuId = `move:${row.subject}`;
   const open = ui.menu === menuId;
   const selected =
@@ -849,7 +946,8 @@ function card(
           : null,
         marker(marks.get(row.subject)),
       ),
-      h('span', { class: 'card-title' }, row.title),
+      h('span', { class: 'card-title' }, titleOf(row)),
+      incompleteTag(row),
       row.labels.length || row.comments.length
         ? h('span', { class: 'card-foot' }, chipsFor(row, 3), commentCount(row))
         : null,
@@ -1072,7 +1170,8 @@ function list(state: Ready, ui: Ui, actions: Actions): HTMLElement {
                         short(row.updatedAt, ui.now),
                       ),
                     ),
-                    h('span', { class: 'row-title' }, row.title),
+                    h('span', { class: 'row-title' }, titleOf(row)),
+                    incompleteTag(row),
                     row.labels.length || row.comments.length
                       ? h(
                           'span',
@@ -1082,7 +1181,9 @@ function list(state: Ready, ui: Ui, actions: Actions): HTMLElement {
                         )
                       : null,
                   ),
-                  open ? moveMenu(row, actions, movable) : null,
+                  open
+                    ? moveMenu(row, actions, movable && !row.incomplete)
+                    : null,
                 );
               }),
             )
@@ -1501,7 +1602,7 @@ function issueDetail(
       statusControl(
         row.status,
         s => s !== row.status && actions.move(row.subject, s, 'menu'),
-        !movable || !!state.busy,
+        !movable || !!state.busy || !!row.incomplete,
       ),
       h('span', { class: 'd-k' }, 'Labels'),
       h(
@@ -1524,6 +1625,24 @@ function issueDetail(
     row.statusAsIs
       ? h('p', { class: 'ro-note' }, icon('info', 14), `${asIsText(row)}.`)
       : null,
+    row.incomplete
+      ? h(
+          'div',
+          { class: 'ro-note', 'data-key': 'incomplete-note' },
+          icon('warn', 14),
+          h(
+            'span',
+            null,
+            `${row.incomplete}. ${bound ? 'Nothing of it is sent to GitHub, and GitHub’s changes to it are not applied, until it is complete.' : 'It is not sent to GitHub until it is complete.'} Give it a title here, or fill the Name column in the table.`,
+          ),
+          actions.openRow
+            ? button('Open row', () => actions.openRow!(row.subject), {
+                sm: true,
+                'data-key': 'open-row',
+              })
+            : null,
+        )
+      : null,
     row.localOnly
       ? h(
           'div',
@@ -1537,7 +1656,7 @@ function issueDetail(
           button('Publish to GitHub', () => actions.publish(row.subject), {
             sm: true,
             kind: 'primary',
-            disabled: !!state.busy,
+            disabled: !!state.busy || !!row.incomplete,
             'data-key': 'publish',
           }),
         )
@@ -1701,6 +1820,7 @@ function reviewDetail(
 ): HTMLElement[] {
   const held = state.last?.result.held ?? [];
   const n = held.length;
+  const incomplete = (state.last?.result.rows ?? []).filter(r => r.incomplete);
 
   return [
     detailBar('Waiting to send', mode, actions),
@@ -1724,6 +1844,15 @@ function reviewDetail(
             'ol',
             { class: 'review' },
             held.map(x => h('li', null, describeHeld(x))),
+          )
+        : null,
+      incomplete.length
+        ? h(
+            'p',
+            { class: 'fine', 'data-key': 'review-incomplete' },
+            `Not synced until complete: ${incomplete
+              .map(r => `${refOf(r)} ${titleOf(r)} (${r.incomplete})`)
+              .join('; ')}.`,
           )
         : null,
     ),
@@ -1969,26 +2098,35 @@ export function page(
   actions: Actions,
 ): HTMLElement[] {
   const top = appHeader(state, ui, actions);
+  // The shared sync-status card (Q-084) first in every view of a table:
+  // the last sync and what it did, whether edits go back to GitHub, what
+  // waits or failed to send, what is left out, and a problem's next step.
+  const statusCard = () =>
+    renderSyncStatus(
+      top.ownerDocument,
+      syncStatusFor({
+        state,
+        now: ui.now,
+        ...(ui.retryAt ? { retryAt: ui.retryAt } : {}),
+        onReview: () => actions.open({ kind: 'review' }, 'ss-review'),
+        onSync: () => actions.sync(),
+        ...(actions.openRow
+          ? { onOpenRow: (subject: string) => actions.openRow!(subject) }
+          : {}),
+      }),
+      { now: ui.now, buttonClass: 'btn sm' },
+    );
 
-  if (state.kind === 'no-proxy') return [top, noProxy()];
+  if (state.kind === 'no-proxy') return [top, statusCard(), noProxy()];
   if (state.kind === 'other-table')
-    return [
-      top,
-      empty(
-        'inbox',
-        'This Issue table was not made by this app.',
-        'Syncing an existing table with GitHub is not built yet. Open the GitHub issues app itself to see and sync its own table. Nothing was changed here.',
-        undefined,
-        true,
-      ),
-    ];
+    return [top, statusCard(), otherTable(state, ui, actions)];
   if (state.kind === 'loading')
     return [
       top,
       h('p', { class: 'lede', style: 'padding:24px 16px' }, 'Loading…'),
     ];
   if (state.kind === 'not-connected' || state.kind === 'connecting')
-    return [top, sources(state, actions)];
+    return [top, sources(state, ui, actions)];
   if (state.kind === 'choose-repository')
     return [
       top,
@@ -1999,6 +2137,7 @@ export function page(
   const main = h(
     'div',
     { class: 'split-main' },
+    statusCard(),
     bannerNode(state, ui, actions),
     toolbar(state, ui, layout, actions),
     emptyContent(state, ui, actions) ??

@@ -23,7 +23,7 @@ this repository's production code.** That includes:
   `localthought/overlays`).
 - Consumer `selection` objects (query overrides, OAuth security scheme
   choice) for a specific catalog entry —
-  those are also authored in `../overlays/catalog/2026-10-02.json`.
+  those are also authored in a dated catalog under `../overlays/catalog/`.
 
 If you find yourself wanting to add any of the above, stop — the right place
 is an OpenAPI document or Overlay Specification document in `../overlays/`,
@@ -38,7 +38,7 @@ those instead of teaching this crate how to author a platform's data.
 The rule above is about *authoring* platform data and *branching on* platform
 identity in runtime code — not about testing. A test — especially an
 `#[ignore]`d one gated behind a real network fetch — that loads a real catalog
-(the checked-in `../overlays/catalog/2026-10-02.json` via `Catalog::load_checked_in`, or
+(the checked-in default dated catalog under `../overlays/catalog/` via `Catalog::load_checked_in`, or
 a pinned historical `localthought/overlays` revision) and asserts facts about the
 *composed result* (e.g. "the composed Moneybird document has N collections",
 "every provider has non-empty OAuth scopes") is the correct way to prove the
@@ -60,7 +60,7 @@ The line: a test may *read and assert against* pinned platform data. Runtime
 - Validate the *shape* of a catalog entry generically (e.g. "every OAuth
   provider has at least one scope") without depending on which platform it
   came from.
-- Reference the GitHub Pages URL of `../overlays/catalog/2026-10-02.json` as the
+- Reference the GitHub Pages URL of a dated catalog under `../overlays/catalog/` as the
   default `CATALOG_PATH` (`src/config.rs`) — that's an opaque pointer, not
   platform knowledge.
 - Assert platform-specific facts about a pinned fixture in a test, to prove
@@ -77,15 +77,16 @@ The line: a test may *read and assert against* pinned platform data. Runtime
 ## Making a platform-specific fix
 
 1. Make the change as an OpenAPI document or Overlay Specification document
-   in `../overlays/`, with its own validation there, and update
-   `../overlays/catalog/2026-10-02.json` in the same PR if the platform's list of
-   overlays changes.
+   in `../overlays/`, with its own validation there. Dated catalogs are
+   immutable: if the platform's list of overlays or its selection changes,
+   publish a new dated catalog under `../overlays/catalog/` in the same PR.
 2. `Overlays CI` and this crate's `default_catalog_*` tests validate the
    checked-in catalog before merge. Optionally add or extend a test here that
    asserts the newly composed document looks right — that's welcome.
 3. After merge, `Overlays published` confirms GitHub Pages serves it; then
-   restart the service. `src/config.rs`'s `DEFAULT_CATALOG_PATH` does not
-   change.
+   restart the service. A new dated catalog takes effect when
+   `src/config.rs`'s `DEFAULT_CATALOG_PATH` (next release) or a deployment's
+   `CATALOG_PATH` names it.
 
 Do not add a step that teaches this repo how to author the platform's data,
 and do not make runtime `src/` code behave differently for one platform.

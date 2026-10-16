@@ -203,9 +203,11 @@ deployment or live account writes have been performed as part of this work.
 
 ## Todoist tasks lens
 
-The `devonian-todoist` catalog entry connects the proxy's `todoist` platform
-through the same generic flow, with a read-only Devonian lens
-(`../issue-tracker/todoist.ts`) on the way in. The proxy's Todoist catalog only grants
+The `todoist` catalog entry used to connect the proxy's `todoist` platform
+through the same generic flow (as `devonian-todoist`), with a read-only lens
+(`../issue-tracker/todoist.ts`) on the way in; since that flow's removal the
+lens's host is the Todoist drive app, `../issue-tracker/todoist-app/`, and
+the entry installs that app. The proxy's Todoist catalog only grants
 `data:read`, so the lens has no write direction and the folder's Sync panel
 has no "preview edits" step: closing, editing or creating an issue locally
 is never sent to Todoist.

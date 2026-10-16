@@ -1,0 +1,97 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://docs.joinmastodon.org/api/guidelines/#paginating-through-api-responses
+overlay: 1.0.0
+info:
+  title: Mastodon relationship and saved-status Link pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/d8048ab7bf03d49cfc766ce25e7b955f415d5d87/APIs/mastodon.local/1.0/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      linkedArrays:
+        type: nextLink
+        autoDetect: false
+        description: 'Follow only rel="next" in the RFC 8288 Link header, preserving the returned limit
+          and internal IDs. The body is the item array. Stop when no next relation is present. Never derive
+          a continuation from an exposed account or status ID: follow and favourite IDs may be private.'
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+        response:
+          headers:
+            Link:
+              role: nextLink
+- target: $.paths['/api/v1/accounts/{id}/followers'].get.responses['200']
+  update:
+    headers:
+      Link:
+        description: RFC 8288 pagination links. Follow the next relation; IDs may identify internal relationships
+          rather than the returned entities.
+        schema:
+          type: string
+- target: $.paths['/api/v1/accounts/{id}/following'].get.responses['200']
+  update:
+    headers:
+      Link:
+        description: RFC 8288 pagination links. Follow the next relation; IDs may identify internal relationships
+          rather than the returned entities.
+        schema:
+          type: string
+- target: $.paths['/api/v1/blocks'].get.responses['200']
+  update:
+    headers:
+      Link:
+        description: RFC 8288 pagination links. Follow the next relation; IDs may identify internal relationships
+          rather than the returned entities.
+        schema:
+          type: string
+- target: $.paths['/api/v1/mutes'].get.responses['200']
+  update:
+    headers:
+      Link:
+        description: RFC 8288 pagination links. Follow the next relation; IDs may identify internal relationships
+          rather than the returned entities.
+        schema:
+          type: string
+- target: $.paths['/api/v1/bookmarks'].get.responses['200']
+  update:
+    headers:
+      Link:
+        description: RFC 8288 pagination links. Follow the next relation; IDs may identify internal relationships
+          rather than the returned entities.
+        schema:
+          type: string
+- target: $.paths['/api/v1/favourites'].get.responses['200']
+  update:
+    headers:
+      Link:
+        description: RFC 8288 pagination links. Follow the next relation; IDs may identify internal relationships
+          rather than the returned entities.
+        schema:
+          type: string
+- target: $.paths['/api/v1/accounts/{id}/followers'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/api/v1/accounts/{id}/following'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/api/v1/blocks'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/api/v1/mutes'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/api/v1/bookmarks'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays
+- target: $.paths['/api/v1/favourites'].get
+  update:
+    x-pagination:
+    - scheme: linkedArrays

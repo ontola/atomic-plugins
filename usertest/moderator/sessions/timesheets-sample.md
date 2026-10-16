@@ -11,8 +11,9 @@ The tester already agreed to the recording before this started; don't ask again.
 3. Task: "How many hours did Alex work yesterday, and how many of them were billable?"
 4. Task: "What did Alex work on for the webshop this week, and when?"
 5. Task: "Now look at the last two weeks."
-6. Task: "Stop this app from reading the time tracker, but keep what it already copied."
-7. Wrap up: ask what was most confusing, what they liked, and whether they would use this with their own Clockify, and for what. Then thank them and say they can close the windows.
+6. Task: "Alex's 'Product page layout' entry yesterday should say 'Product page layout and copy'. Change it here, and get that change into the time tracker." Afterwards ask whether they would trust this with their real timesheet, and why.
+7. Task: "Stop this app from reading the time tracker, but keep what it already copied."
+8. Wrap up: ask what was most confusing, what they liked, and whether they would use this with their own Clockify, and for what. Then thank them and say they can close the windows.
 
 After the thank-you, end your final message with the exact token [END] on its own. Never write [END] earlier.
 
@@ -28,10 +29,12 @@ What success looks like, never to be said:
 - Task 3: the Week grid's day total and the billable split.
 - Task 4: the Projects view, or the entry drawer from the grid.
 - Task 5: the settings sheet, switching the window to 30 days.
-- Task 6: Disconnect in settings. The copied rows stay.
+- Task 6: they open the entry (the grid or the drawer) and edit its description. The edit shows at once, but it is held under "Changes to send" until they press "Send 1 to Clockify". Whether they find that list, and understand it, is the main question. The sample account keeps the sent change, so a reload shows the new text.
+- Task 7: Disconnect in settings. The copied rows stay.
 
 Known limits (only new detail about them is a finding):
 
+- Editing a time range ("Edit a time range…") and "Sync this table to Clockify" (a table the app did not make) are not tasks here. The range edit is not covered by the sample account's own tests, so if a tester tries one and it fails, say so in the finding rather than assuming it is the app.
 - Tags, tasks and rates are not copied, and only the user's own entries are.
 - After a reload the app can briefly lose its settings.
 - A fresh install of the sample app starts over from the same invented entries.

@@ -1,0 +1,40 @@
+# Swagger 2.0 revision of pagination-4d66b23dc5948016b50e79b944a0b084c7000da7-overlay.yaml.
+# The pinned OAD has no `components`, so the paginationSchemes map is the root
+# `x-paginationSchemes` vendor extension (overlays/README.md, "Swagger 2.0 documents");
+# operation targets are unchanged. Composition is checked against the pinned
+# OAD; live-provider behavior is not certified.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/4d66b23dc5948016b50e79b944a0b084c7000da7/APIs/cambase.io/1.0/swagger.yaml
+info:
+  title: CamBase API Pagination Schemes
+  version: 2.0.0
+actions:
+- target: "$"
+  update:
+    x-paginationSchemes:
+      pageNumber:
+        type: pageNumber
+        request:
+          queryParameters:
+            page:
+              role: page
+- target: "$.paths['/api/v1/models.json'].get"
+  update:
+    x-pagination:
+    - scheme: pageNumber
+- target: "$.paths['/api/v1/models/search.json'].get"
+  update:
+    x-pagination:
+    - scheme: pageNumber
+- target: "$.paths['/api/v1/recorders.json'].get"
+  update:
+    x-pagination:
+    - scheme: pageNumber
+- target: "$.paths['/api/v1/recorders/search.json'].get"
+  update:
+    x-pagination:
+    - scheme: pageNumber
+- target: "$.paths['/api/v1/vendors.json'].get"
+  update:
+    x-pagination:
+    - scheme: pageNumber

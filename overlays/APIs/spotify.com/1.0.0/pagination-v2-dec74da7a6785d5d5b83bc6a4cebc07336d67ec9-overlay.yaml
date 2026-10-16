@@ -1,0 +1,184 @@
+# Source: https://developer.spotify.com/documentation/web-api/concepts/api-calls
+# Source: https://developer.spotify.com/documentation/web-api/reference/get-categories
+# Source: https://developer.spotify.com/documentation/web-api/reference/get-followed
+# Source: https://developer.spotify.com/documentation/web-api/reference/get-recently-played
+# Checked against this pinned OAD and provider documentation, not a live account.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dec74da7a6785d5d5b83bc6a4cebc07336d67ec9/APIs/spotify.com/1.0.0/openapi.yaml
+info:
+  title: Spotify single-collection next links and nested item envelopes
+  version: 2.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        linkedItems:
+          type: nextLink
+          autoDetect: false
+          description: Follow the returned next URL without rebuilding its cursor, offset,
+            market or other query parameters. Null or absent next marks the last page. Page-size
+            limits depend on the endpoint and access mode.
+          request:
+            queryParameters:
+              limit:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: items
+            bodyFields:
+              next:
+                role: nextLink
+        linkedAlbums:
+          type: nextLink
+          autoDetect: false
+          description: Follow the returned next URL without rebuilding its cursor, offset,
+            market or other query parameters. Null or absent next marks the last page. Page-size
+            limits depend on the endpoint and access mode.
+          request:
+            queryParameters:
+              limit:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: albums.items
+            bodyFields:
+              albums.next:
+                role: nextLink
+        linkedArtists:
+          type: nextLink
+          autoDetect: false
+          description: Follow the returned next URL without rebuilding its cursor, offset,
+            market or other query parameters. Null or absent next marks the last page. Page-size
+            limits depend on the endpoint and access mode.
+          request:
+            queryParameters:
+              limit:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: artists.items
+            bodyFields:
+              artists.next:
+                role: nextLink
+        linkedCategories:
+          type: nextLink
+          autoDetect: false
+          description: Follow the returned next URL without rebuilding its cursor, offset,
+            market or other query parameters. Null or absent next marks the last page. Page-size
+            limits depend on the endpoint and access mode.
+          request:
+            queryParameters:
+              limit:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: categories.items
+            bodyFields:
+              categories.next:
+                role: nextLink
+        linkedPlaylists:
+          type: nextLink
+          autoDetect: false
+          description: Follow the returned next URL without rebuilding its cursor, offset,
+            market or other query parameters. Null or absent next marks the last page. Page-size
+            limits depend on the endpoint and access mode.
+          request:
+            queryParameters:
+              limit:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: playlists.items
+            bodyFields:
+              playlists.next:
+                role: nextLink
+      schemas:
+        SpotifyPagingCategories:
+          allOf:
+            - $ref: '#/components/schemas/PagingObject'
+            - type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/CategoryObject'
+  - target: $.components.responses.PagedCategories.content['application/json'].schema.properties
+    update:
+      categories:
+        $ref: '#/components/schemas/SpotifyPagingCategories'
+  - target: $.paths['/albums/{id}/tracks'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/artists/{id}/albums'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/audiobooks/{id}/chapters'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/browse/categories'].get
+    update:
+      x-pagination:
+        - scheme: linkedCategories
+  - target: $.paths['/browse/categories/{category_id}/playlists'].get
+    update:
+      x-pagination:
+        - scheme: linkedPlaylists
+  - target: $.paths['/browse/featured-playlists'].get
+    update:
+      x-pagination:
+        - scheme: linkedPlaylists
+  - target: $.paths['/browse/new-releases'].get
+    update:
+      x-pagination:
+        - scheme: linkedAlbums
+  - target: $.paths['/me/albums'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/me/audiobooks'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/me/episodes'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/me/following'].get
+    update:
+      x-pagination:
+        - scheme: linkedArtists
+  - target: $.paths['/me/player/recently-played'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/me/playlists'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/me/shows'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/me/top/{type}'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/me/tracks'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/playlists/{playlist_id}/tracks'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/shows/{id}/episodes'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems
+  - target: $.paths['/users/{user_id}/playlists'].get
+    update:
+      x-pagination:
+        - scheme: linkedItems

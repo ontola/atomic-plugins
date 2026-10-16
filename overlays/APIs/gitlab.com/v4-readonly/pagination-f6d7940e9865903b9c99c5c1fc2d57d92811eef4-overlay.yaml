@@ -1,0 +1,54 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/f6d7940e9865903b9c99c5c1fc2d57d92811eef4/APIs/gitlab.com/v4-readonly/openapi.yaml
+info:
+  title: GitLab API v4 pagination schemes
+  version: 1.0.0
+  description: >-
+    Follow GitLab's RFC 8288 Link rel=next URL for list traversal, retaining
+    the returned query, filters, and ordering. GitLab's REST documentation
+    also describes page/per_page and X-Next-Page; some pagination headers may
+    be absent on GitLab.com. Checked 2026-10-08.
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        linkedArrays:
+          type: nextLink
+          description: Follow only the Link rel=next URL returned by GitLab.
+          autoDetect:
+            matchQueryParams: false
+            matchBodyFields: false
+            matchHeaders: true
+            requireAll: false
+          request:
+            queryParameters:
+              per_page:
+                role: pageSize
+                description: Requested number of results; GitLab defaults to 20 and allows up to 100.
+          response:
+            headers:
+              Link:
+                role: nextLink
+                description: RFC 8288 Link header; follow the URL with rel="next" when present.
+  - target: $.paths['/projects'].get
+    update:
+      x-pagination:
+        - scheme: linkedArrays
+  - target: $.paths['/projects'].get.responses['200']
+    update:
+      headers:
+        Link:
+          description: RFC 8288 pagination links, including rel="next" when another page is available.
+          schema:
+            type: string
+  - target: $.paths['/projects/{id}/issues'].get
+    update:
+      x-pagination:
+        - scheme: linkedArrays
+  - target: $.paths['/projects/{id}/issues'].get.responses['200']
+    update:
+      headers:
+        Link:
+          description: RFC 8288 pagination links, including rel="next" when another page is available.
+          schema:
+            type: string

@@ -6,9 +6,11 @@
  * `view` and renders nothing on import. One module: its stylesheet is
  * injected by `createApp` as one `<style>` element.
  *
- * On open it shows the rows already in the drive at once, then syncs in the
- * background when the last sync is unknown or older than 15 minutes
- * (DESIGN.md §7), and again on "Sync now".
+ * On open it reads the rows already in the drive (to compare them with their
+ * baselines, `changes.ts`), then syncs in the background when the last sync
+ * is unknown or older than 15 minutes (DESIGN.md §7), and again on "Sync
+ * now". What it renders is a sync-status view (#177 Q9): the rows are
+ * browsed and edited in the host's table.
  */
 import {
   createController,
@@ -28,16 +30,6 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     sync: () => void controller?.sync(),
     connect: () => void controller?.connect(),
     // Host operations since atomic-server 007869464, each feature-detected.
-    ...(store.openExternal
-      ? {
-          openExternal: async (url: string) => {
-            // `cancelled` is the person's answer, not a failure to fall back from.
-            await store.openExternal!(url);
-
-            return true;
-          },
-        }
-      : {}),
     ...(store.openResource
       ? {
           openTable: () => {

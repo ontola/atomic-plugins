@@ -75,8 +75,11 @@ pub fn signed_url(base_url: &str, path_and_query: &str) -> String {
 #[derive(Debug)]
 pub struct Verified {
     pub agent: AgentId,
-    /// The key to spend in `used_challenges`; see [`crate::security::Security::consume_nonce`].
+    /// The key to spend in `used_challenges`; see [`crate::security::Security::consume_request`].
     pub replay_key: String,
+    /// The same request's key in the format before this change, which named
+    /// no agent. Only checked, never written; see [`legacy_replay_key`].
+    pub legacy_replay_key: String,
 }
 
 /// Verifies a request's v2 signature: version, agent id, key binding,
@@ -120,15 +123,35 @@ pub fn verify(
         return Err(ApiError::BadSignature);
     }
     Ok(Verified {
+        replay_key: replay_key(&agent, &message),
+        legacy_replay_key: legacy_replay_key(&message),
         agent,
-        replay_key: replay_key(&message),
     })
 }
 
-/// A value for `used_challenges` that is unique per signed message. Keyed on
-/// the message rather than the signature, so a second valid encoding of the
-/// same signature cannot slip past it.
-pub fn replay_key(message: &str) -> String {
+/// A value for `used_challenges` that is unique per signer and signed message.
+///
+/// Keyed on the message rather than the signature, so a second valid encoding
+/// of the same signature cannot slip past it, and on the canonical agent id
+/// (derived from the public key, whichever spelling the request used), so two
+/// agents that sign the same method, URL, timestamp and body make two
+/// requests: neither collides with the other, and nobody can spend another
+/// agent's key in advance. A canonical id never contains `\n`, so the hashed
+/// input is unambiguous.
+pub fn replay_key(agent: &AgentId, message: &str) -> String {
+    format!(
+        "atomic-request-v2-agent:{}",
+        sha256_hex(format!("{}\n{message}", agent.as_str()).as_bytes())
+    )
+}
+
+/// The key 0.2.4 and earlier spent: the message alone, no agent. A proxy
+/// instance still on that version during a rolling deploy writes these; this
+/// version refuses a request whose legacy key is still recorded, so a request
+/// accepted just before the deploy cannot be accepted again just after it.
+/// Such rows expire ten minutes after they were written, after which this
+/// check never matches, so it can be removed in a later release.
+pub fn legacy_replay_key(message: &str) -> String {
     format!("atomic-request-v2:{}", sha256_hex(message.as_bytes()))
 }
 
@@ -145,7 +168,10 @@ pub async fn authenticate(
     let path_and_query = uri.path_and_query().map_or(uri.path(), |p| p.as_str());
     let url = signed_url(&state.base_url, path_and_query);
     let verified = verify(headers, method.as_str(), &url, body, crate::now_ms())?;
-    match security.consume_nonce(&verified.replay_key).await {
+    match security
+        .consume_request(&verified.replay_key, &verified.legacy_replay_key)
+        .await
+    {
         Ok(true) => Ok(verified.agent),
         Ok(false) => Err(ApiError::Replayed),
         Err(_) => Err(ApiError::Unavailable),
@@ -166,7 +192,7 @@ pub fn test_headers(
         (AGENT_HEADER, agent.id()),
         (PUBLIC_KEY_HEADER, agent.public_key()),
         (TIMESTAMP_HEADER, timestamp_ms.to_string()),
-        (SIGNATURE_HEADER, agent.sign(message.as_bytes())),
+        (SIGNATURE_HEADER, agent.sign_v2(message.as_bytes())),
         (VERSION_HEADER, "2".to_string()),
     ]
 }
@@ -369,15 +395,52 @@ mod tests {
         }
     }
 
-    /// Golden vectors shared with atomic-server (`lib/src/authentication_v2_vectors.json`
-    /// on its `claude/atomic-signature-v2` branch, copied verbatim), so the
-    /// signer and this verifier cannot drift apart unnoticed.
+    const VECTORS: &str = include_str!("../tests/fixtures/atomic-request-v2-vectors.json");
+    const VECTORS_SOURCE: &str =
+        include_str!("../tests/fixtures/atomic-request-v2-vectors.source.json");
+
+    /// The vendored vectors are atomic-server's file at the commit
+    /// `tests/fixtures/atomic-request-v2-vectors.source.json` names, byte for
+    /// byte (its SHA-256), and, where an atomic-server checkout is at hand
+    /// (`ATOMIC_SERVER_CHECKOUT`, as the lanes set it), still equal to that
+    /// checkout's copy. A set `ATOMIC_SERVER_CHECKOUT` without that file is a
+    /// failure, not a skip: a checkout that moved or lost the file would
+    /// otherwise pass silently. Not tied to `.atomic-server-ref`: a pin bump
+    /// does not run this suite, and the vectors rarely change.
+    #[test]
+    fn the_vendored_v2_vectors_are_atomic_servers_recorded_file() {
+        let source: serde_json::Value = serde_json::from_str(VECTORS_SOURCE).unwrap();
+        assert_eq!(
+            sha256_hex(VECTORS.as_bytes()),
+            source["sha256"].as_str().unwrap(),
+            "the vendored copy was edited; refresh it from the pin together with its source note"
+        );
+        let checkout = std::env::var("ATOMIC_SERVER_CHECKOUT").unwrap_or_default();
+        if !checkout.trim().is_empty() {
+            let path = std::path::Path::new(&checkout).join(source["path"].as_str().unwrap());
+            let upstream = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+                panic!(
+                    "ATOMIC_SERVER_CHECKOUT is set, but {} cannot be read ({error}); unset it or point it at an atomic-server checkout",
+                    path.display()
+                )
+            });
+            assert_eq!(
+                upstream,
+                VECTORS,
+                "{} differs from the vendored copy",
+                path.display()
+            );
+        }
+    }
+
+    /// Golden vectors shared with atomic-server, which signs with
+    /// `lib/src/authentication.rs` and `browser/lib/src/authentication.ts`:
+    /// every one verifies here, the message is built byte for byte the same,
+    /// and signing it again with the vector's key gives the same signature,
+    /// so signer and verifier cannot drift apart unnoticed.
     #[test]
     fn atomic_server_v2_vectors_verify_here() {
-        let vectors: serde_json::Value = serde_json::from_str(include_str!(
-            "../tests/fixtures/atomic-request-v2-vectors.json"
-        ))
-        .unwrap();
+        let vectors: serde_json::Value = serde_json::from_str(VECTORS).unwrap();
         let vectors = vectors["vectors"].as_array().unwrap();
         assert!(!vectors.is_empty());
         for vector in vectors {
@@ -405,17 +468,109 @@ mod tests {
                 ),
                 (VERSION_HEADER, "2".to_owned()),
             ];
-            let verified = verify(&headers(pairs), method, url, body, timestamp)
+            let verified = verify(&headers(pairs.clone()), method, url, body, timestamp)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
             assert_eq!(verified.agent.as_str(), vector["agent"], "{name}");
+
+            // The signing side: the vector's seed gives its public key, and
+            // Ed25519 is deterministic, so `test_headers`, the helper every
+            // signed test request goes through, gives exactly the headers
+            // atomic-server's signer gave: the test signer cannot drift from
+            // the real one unnoticed.
+            let seed: [u8; 32] = agent_id::decode_base64(vector["private_key"].as_str().unwrap())
+                .unwrap()
+                .try_into()
+                .unwrap();
+            let signer = Agent(ed25519_dalek::SigningKey::from_bytes(&seed));
+            assert_eq!(signer.public_key(), vector["public_key"], "{name}");
+            assert_eq!(
+                test_headers(&signer, method, url, timestamp, body),
+                pairs,
+                "{name}"
+            );
+            // The verifier also takes the standard alphabet, padded, which
+            // older clients sent; `test_headers` no longer exercises it.
+            let mut standard = pairs.clone();
+            standard[3].1 = base64::Engine::encode(
+                &base64::engine::general_purpose::STANDARD,
+                agent_id::decode_base64(&pairs[3].1).unwrap(),
+            );
+            assert_ne!(standard[3].1, pairs[3].1, "{name}");
+            verify(&headers(standard), method, url, body, timestamp)
+                .unwrap_or_else(|e| panic!("{name}, standard alphabet: {e:?}"));
+
+            // And the signature covers what it should: another body, method
+            // or URL does not verify.
+            for (other_method, other_url, other_body) in [
+                (method, url, b"x".as_slice()),
+                ("PUT", url, body),
+                (method, "https://proxy.example/other", body),
+            ] {
+                assert_eq!(
+                    verify(
+                        &headers(pairs.clone()),
+                        other_method,
+                        other_url,
+                        other_body,
+                        timestamp
+                    )
+                    .unwrap_err(),
+                    ApiError::BadSignature,
+                    "{name}"
+                );
+            }
         }
     }
 
     #[test]
     fn replay_keys_differ_per_message() {
+        let agent = agent_id::parse(&Agent::new(1).id()).unwrap();
         let a = message("GET", URL, "1", b"");
         let b = message("GET", URL, "2", b"");
-        assert_ne!(replay_key(&a), replay_key(&b));
-        assert_eq!(replay_key(&a), replay_key(&a.clone()));
+        assert_ne!(replay_key(&agent, &a), replay_key(&agent, &b));
+        assert_eq!(replay_key(&agent, &a), replay_key(&agent, &a.clone()));
+    }
+
+    #[test]
+    fn replay_keys_differ_per_agent_but_not_per_spelling() {
+        let one = Agent::new(1);
+        let two = Agent::new(2);
+        // The same method, URL, timestamp and body, signed by two agents.
+        let first = verify(&signed(&one), "POST", URL, b"{}", NOW).unwrap();
+        let second = verify(&signed(&two), "POST", URL, b"{}", NOW).unwrap();
+        assert_ne!(first.replay_key, second.replay_key);
+        // The old format named no agent: the collision this change fixes.
+        assert_eq!(first.legacy_replay_key, second.legacy_replay_key);
+        let signed_message = message("POST", URL, &NOW.to_string(), b"{}");
+        assert_eq!(
+            first.legacy_replay_key,
+            format!(
+                "atomic-request-v2:{}",
+                sha256_hex(signed_message.as_bytes())
+            )
+        );
+
+        // The legacy prefix and the standard base64 alphabet name the same
+        // agent, so they spend the same key: a second spelling of one signed
+        // request cannot slip past.
+        let mut legacy = test_headers(&one, "POST", URL, NOW, b"{}");
+        legacy[0].1 = one.legacy_id();
+        let respelled = verify(&headers(legacy), "POST", URL, b"{}", NOW).unwrap();
+        assert_eq!(respelled.replay_key, first.replay_key);
+        let mut standard = test_headers(&one, "POST", URL, NOW, b"{}");
+        let key = agent_id::decode_base64(&one.public_key()).unwrap();
+        standard[1].1 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &key);
+        standard[0].1 = format!("did:ad:agent:{}", standard[1].1);
+        let respelled = verify(&headers(standard), "POST", URL, b"{}", NOW).unwrap();
+        assert_eq!(respelled.replay_key, first.replay_key);
+
+        // Fixed layout: SHA-256 of the canonical id, a newline, the message.
+        assert_eq!(
+            first.replay_key,
+            format!(
+                "atomic-request-v2-agent:{}",
+                sha256_hex(format!("{}\n{signed_message}", one.id()).as_bytes())
+            )
+        );
     }
 }

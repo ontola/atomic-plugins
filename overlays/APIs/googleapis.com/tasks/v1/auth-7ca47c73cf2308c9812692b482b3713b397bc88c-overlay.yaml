@@ -1,0 +1,195 @@
+# Reviewed 2026-10-06 against the pinned OAD and Google's OAuth 2.0 and Tasks
+# API documentation (https://developers.google.com/identity/protocols/oauth2/
+# web-server, https://developers.google.com/workspace/tasks/reference/rest).
+# For the read-only Google Tasks drive app (ontola/atomic-plugins#355): the
+# same two schemes as Calendar's auth overlay, with the one scope the app
+# needs, https://www.googleapis.com/auth/tasks.readonly.
+#
+# The base document declares its operations with Google's generated
+# `Oauth2`/`Oauth2c` pairs in one requirement, which integration-proxy's
+# Provider::from_document refuses (every operation must accept the selected
+# scheme on its own). Every operation is narrowed to the two schemes here,
+# all with `tasks.readonly`, so the proxy asks Google for exactly that scope.
+# The write operations (insert, patch, update, delete, move, clear) are
+# narrowed to the same read-only scope rather than left out: Catalog::allows()
+# checks path and method only, so the proxy would forward such a call, and
+# Google's own per-scope enforcement on the granted token refuses it (403).
+# No app here calls them; the drive app sends GET only.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/7ca47c73cf2308c9812692b482b3713b397bc88c/APIs/googleapis.com/tasks/v1/openapi.yaml
+info:
+  title: google-tasks OAuth authorization requirements (read-only)
+  version: 1.0.0
+actions:
+- target: $.components.securitySchemes
+  update:
+    googleOnline:
+      type: oauth2
+      x-oauth-authentication-details:
+        authorizationServerMetadata:
+          token_endpoint_auth_methods_supported:
+          - client_secret_post
+          - client_secret_basic
+          code_challenge_methods_supported:
+          - S256
+        authorizationCode:
+          pkce:
+            requirement: optional
+          profile:
+            parameters:
+            - parameter:
+                name: access_type
+                in: query
+                schema:
+                  type: string
+                  enum:
+                  - online
+                  - offline
+              value: online
+            tokenIssuance:
+              refreshToken:
+                presence: never
+      flows:
+        authorizationCode:
+          authorizationUrl: https://accounts.google.com/o/oauth2/v2/auth
+          tokenUrl: https://oauth2.googleapis.com/token
+          scopes:
+            https://www.googleapis.com/auth/tasks.readonly: View your tasks.
+    googleOffline:
+      type: oauth2
+      x-oauth-authentication-details:
+        authorizationServerMetadata:
+          token_endpoint_auth_methods_supported:
+          - client_secret_post
+          - client_secret_basic
+          code_challenge_methods_supported:
+          - S256
+        authorizationCode:
+          pkce:
+            requirement: optional
+          profile:
+            parameters:
+            - parameter:
+                name: access_type
+                in: query
+                schema:
+                  type: string
+                  enum:
+                  - online
+                  - offline
+              value: offline
+            capabilities:
+            - offlineAccess
+            tokenIssuance:
+              refreshToken:
+                presence: conditional
+                conditions:
+                - firstAuthorization
+                description: Google can omit a refresh token after the first authorization.
+      flows:
+        authorizationCode:
+          authorizationUrl: https://accounts.google.com/o/oauth2/v2/auth
+          tokenUrl: https://oauth2.googleapis.com/token
+          scopes:
+            https://www.googleapis.com/auth/tasks.readonly: View your tasks.
+# The three reads the drive app makes.
+- target: $.paths['/tasks/v1/users/@me/lists'].get
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/lists/{tasklist}/tasks'].get
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/lists/{tasklist}/tasks/{task}'].get
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+# The other reads, and every write, narrowed to the same read-only scope (see
+# the header): the proxy needs each operation to name the selected scheme.
+- target: $.paths['/tasks/v1/users/@me/lists/{tasklist}'].get
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/users/@me/lists'].post
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/users/@me/lists/{tasklist}'].delete
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/users/@me/lists/{tasklist}'].patch
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/users/@me/lists/{tasklist}'].put
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/lists/{tasklist}/clear'].post
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/lists/{tasklist}/tasks'].post
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/lists/{tasklist}/tasks/{task}'].delete
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/lists/{tasklist}/tasks/{task}'].patch
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/lists/{tasklist}/tasks/{task}'].put
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly
+- target: $.paths['/tasks/v1/lists/{tasklist}/tasks/{task}/move'].post
+  update:
+    security:
+    - googleOnline:
+      - https://www.googleapis.com/auth/tasks.readonly
+    - googleOffline:
+      - https://www.googleapis.com/auth/tasks.readonly

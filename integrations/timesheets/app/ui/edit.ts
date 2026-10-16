@@ -391,7 +391,9 @@ export function entryEditor(
     }
 
     const edit: EntryEdit = {};
-    const name = description.value.trim();
+    // Untouched, the field holds the description exactly and sends nothing;
+    // typed text is sent as typed (the catalog lens does not trim).
+    const name = description.value;
     if (name !== entry.description) edit.name = name;
     const projectId = projectSelect.value || null;
     if (projectId !== (entry.project?.id ?? null)) edit.projectId = projectId;

@@ -1,0 +1,47 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://api.hubspot.com/public/api/spec/v2/specs/release/75335/version/2026-03
+overlay: 1.0.0
+info:
+  title: HubSpot marketing-events forward pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/marketing-events/2026-03/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardResults:
+        type: pageToken
+        autoDetect: false
+        description: Copy the opaque paging.next.after unchanged into after. Stop only when the next cursor
+          is absent or empty, not from a short or empty page. Preserve limit and all other request scope.
+          The response item array is results; paging.next.link is not used to construct a cursor. Preserve
+          event identifiers, contactIdentifier and participation state. Associated-list and identifier
+          operations without declared paging inputs are outside this application.
+        request:
+          queryParameters:
+            after:
+              role: cursor
+            limit:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: results
+          bodyFields:
+            paging.next.after:
+              role: nextCursor
+- target: $.paths['/marketing/marketing-events/2026-03'].get
+  update:
+    x-pagination:
+    - scheme: forwardResults
+- target: $.paths['/marketing/marketing-events/2026-03/participations/contacts/{contactIdentifier}/breakdown'].get
+  update:
+    x-pagination:
+    - scheme: forwardResults
+- target: $.paths['/marketing/marketing-events/2026-03/participations/{externalAccountId}/{externalEventId}/breakdown'].get
+  update:
+    x-pagination:
+    - scheme: forwardResults
+- target: $.paths['/marketing/marketing-events/2026-03/participations/{marketingEventId}/breakdown'].get
+  update:
+    x-pagination:
+    - scheme: forwardResults

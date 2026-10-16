@@ -1,0 +1,36 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/drive/activity/v2/reference/rest/v2/activity/query
+overlay: 1.0.0
+info:
+  title: Google driveactivity reviewed collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/2fd9a6a4cccac6dbc988c98fc12bf8b0732015f4/APIs/googleapis.com/driveactivity/v2/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include nextPageToken
+          and the item array. Keep the itemName or ancestorName scope, filter, consolidationStrategy and
+          pageSize fixed in the JSON request body. pageSize is a minimum desired number of activities,
+          not an upper limit, so it deliberately has no pageSize role. Consolidated activities are not
+          individual events.
+        request:
+          bodyFields:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/v2/activity:query'].post
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: activities

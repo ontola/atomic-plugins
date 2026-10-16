@@ -10,6 +10,17 @@ import { periodRange, type Period } from './ledger.js';
 const utc = (iso: string) =>
   new Date(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)));
 
+/** Today as a local ISO calendar date: what the period filters count from. */
+export function localToday(): string {
+  const now = new Date();
+
+  return [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
 const fmt = (locale: string | undefined, options: Intl.DateTimeFormatOptions) =>
   new Intl.DateTimeFormat(locale, { timeZone: 'UTC', ...options });
 

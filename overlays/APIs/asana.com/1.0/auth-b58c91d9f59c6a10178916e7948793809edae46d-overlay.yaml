@@ -1,0 +1,67 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/b58c91d9f59c6a10178916e7948793809edae46d/APIs/asana.com/1.0/openapi.yaml
+info:
+  title: Asana read-only OAuth authentication profile
+  version: 1.0.0
+  description: >-
+    Read-only access to the connecting user's workspaces, projects, tasks, and
+    basic user information. Scopes and PKCE support follow Asana's OAuth guide
+    and OAuth scopes reference, checked 2026-10-08.
+actions:
+- target: $.components.securitySchemes
+  update:
+    asanaReadOnlyOAuth:
+      type: oauth2
+      x-oauth-authentication-details:
+        authorizationServerMetadata:
+          code_challenge_methods_supported: [S256]
+        authorizationCode:
+          pkce:
+            requirement: optional
+      flows:
+        authorizationCode:
+          authorizationUrl: https://app.asana.com/-/oauth_authorize
+          tokenUrl: https://app.asana.com/-/oauth_token
+          scopes:
+            workspaces:read: Read accessible workspaces.
+            projects:read: Read accessible projects.
+            tasks:read: Read accessible tasks.
+            users:read: Read basic user information.
+- target: $.paths['/workspaces'].get
+  update:
+    security:
+    - asanaReadOnlyOAuth: [workspaces:read]
+- target: $.paths['/workspaces/{workspace_gid}'].get
+  update:
+    security:
+    - asanaReadOnlyOAuth: [workspaces:read]
+- target: $.paths['/workspaces/{workspace_gid}/projects'].get
+  update:
+    security:
+    - asanaReadOnlyOAuth: [projects:read]
+- target: $.paths['/projects/{project_gid}'].get
+  update:
+    security:
+    - asanaReadOnlyOAuth: [projects:read]
+- target: $.paths['/projects/{project_gid}/tasks'].get
+  update:
+    security:
+    - asanaReadOnlyOAuth: [tasks:read]
+- target: $.paths['/tasks/{task_gid}'].get
+  update:
+    security:
+    - asanaReadOnlyOAuth: [tasks:read]
+- target: $.paths['/users'].get
+  update:
+    security:
+    - asanaReadOnlyOAuth: [users:read]
+- target: $.paths['/users/{user_gid}'].get
+  update:
+    security:
+    - asanaReadOnlyOAuth: [users:read]
+- target: $.components
+  update:
+    x-authentication-profiles:
+      asanaReadOnly:
+        securityScheme: asanaReadOnlyOAuth
+        description: Read the connected user's workspaces, projects, tasks, and basic user records.

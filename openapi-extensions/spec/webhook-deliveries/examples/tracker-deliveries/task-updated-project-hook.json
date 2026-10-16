@@ -1,0 +1,9 @@
+{
+  "note": "Invented Example Tracker delivery to a dedicated project hook, timestamp 2026-10-08T12:00:00Z, signed with the fake secret in test_validate.py.",
+  "headers": [
+    ["Tracker-Delivery", "d-0002"],
+    ["Tracker-Timestamp", "1791460800"],
+    ["Tracker-Signature", "d8GvD3cj4VI4vuKogGA6DVlJrbP/gALpU8FTQhjizds="]
+  ],
+  "body": "{\"kind\":\"task\",\"change\":\"updated\",\"project\":{\"id\":\"p-100\",\"workspace\":\"w-1\"},\"task\":{\"id\":\"t/7\",\"title\":\"Fixture task\"}}"
+}

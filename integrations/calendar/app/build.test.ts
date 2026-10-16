@@ -18,13 +18,13 @@ describe('calendar drive-plugin bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 122,135 bytes (about 119 KiB) with minified JS and CSS
-    // (2026-10-01, 0.2.0: 0.1.4 plus the shared event-v1 class, with
-    // ontology-kit's terms and resolver inlined, the first-open migration
-    // and the read-only view of another table). The limit is that plus
-    // about 10%, rounded up to 132 KiB, so a real growth fails here instead
-    // of passing silently.
-    expect(bytes).toBeLessThan(132 * 1024);
+    // Measured 139,741 bytes (about 136 KiB) with minified JS and CSS
+    // (2026-10-06, 0.3.2: 0.3.1 plus the shared sync-status card and its
+    // mapping, less the sidebar's "Not shown" note and the incomplete-rows
+    // section; 0.3.1 was 129,735 bytes). The limit is that plus about 10%,
+    // rounded up to 150 KiB, so a real growth fails here instead of passing
+    // silently.
+    expect(bytes).toBeLessThan(150 * 1024);
   });
 
   it('carries no credential handling or network access of its own', () => {

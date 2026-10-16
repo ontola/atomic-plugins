@@ -11,6 +11,18 @@ import { units } from '../parser.js';
 const MINUS = '−';
 const SCALE = 5;
 
+/**
+ * What `units()` reads exactly: an optional minus, digits, and at most five
+ * fraction digits, nothing else. The importer only writes such strings, but a
+ * row of the shared class (#177) may be made by hand or by another plugin.
+ */
+const AMOUNT = /^-?\d+(?:\.\d{0,5})?$/;
+
+export const isAmount = (amount: string) => AMOUNT.test(amount);
+
+/** Shown in place of an amount that is not one, which is never summed. */
+export const NOT_AN_AMOUNT = 'Not a valid amount';
+
 /** Inverse of `units()`: 1e-5 units back to a trimmed decimal string. */
 export function fromUnits(value: bigint): string {
   const negative = value < 0n;
@@ -24,7 +36,8 @@ export function fromUnits(value: bigint): string {
   return negative && text !== '0' ? `-${text}` : text;
 }
 
-export const isOut = (amount: string) => units(amount) < 0n;
+/** Money out; never true for something that is not an amount. */
+export const isOut = (amount: string) => isAmount(amount) && units(amount) < 0n;
 
 export const negate = (amount: string) => fromUnits(-units(amount));
 
@@ -105,6 +118,7 @@ export function formatAmount(
   locale?: string,
   { sign = 'always', symbol = true, exact = 'auto' }: FormatOptions = {},
 ): string {
+  if (!isAmount(amount)) return NOT_AN_AMOUNT;
   const parts = split(amount);
   const prefix = parts.negative ? MINUS : sign === 'always' ? '+' : '';
   const digits = currencyDigits(currency);
@@ -173,6 +187,7 @@ export function amountLabel(
   currency: string,
   locale = 'en',
 ): string {
+  if (!isAmount(amount)) return `${NOT_AN_AMOUNT}: ${amount}`;
   const { negative, whole, fraction } = split(amount);
   const signWord = negative ? 'minus' : 'plus';
   let name = currency;
@@ -211,7 +226,10 @@ export interface Totals {
   count: number;
 }
 
-/** In, out and net per account + currency, in first-seen order. */
+/**
+ * In, out and net per account + currency, in first-seen order. A row whose
+ * amount is not one is left out of the sums and the count.
+ */
 export function totals(
   rows: { account: string; currency: string; amount: string }[],
 ): Totals[] {
@@ -227,6 +245,7 @@ export function totals(
   >();
 
   for (const row of rows) {
+    if (!isAmount(row.amount)) continue;
     const key = `${row.account}\u0000${row.currency}`;
     let entry = map.get(key);
 
@@ -257,13 +276,17 @@ export function totals(
   }));
 }
 
-/** Net per currency, currencies sorted by code. Never summed across them. */
+/**
+ * Net per currency, currencies sorted by code. Never summed across them, and
+ * never including something that is not an amount.
+ */
 export function sumByCurrency(
   rows: { currency: string; amount: string }[],
 ): Money[] {
   const map = new Map<string, bigint>();
   for (const row of rows)
-    map.set(row.currency, (map.get(row.currency) ?? 0n) + units(row.amount));
+    if (isAmount(row.amount))
+      map.set(row.currency, (map.get(row.currency) ?? 0n) + units(row.amount));
 
   return [...map.entries()]
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))

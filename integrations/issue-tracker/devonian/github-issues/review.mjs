@@ -25,11 +25,33 @@ export function proposalKey(entity, id, value) {
   return JSON.stringify([entity, id ?? null, value]);
 }
 
-export function reviewGate(port, approved = new Set()) {
+/**
+ * An approval for one row: its subject, the entity and the content of its
+ * proposal key. A proposal key names content, not a row (a create's is
+ * `["issue", null, {…}]`), so an approval that outlives the pass it was
+ * given in must say which row it was for, or a second row with the same
+ * content would be sent unreviewed. The provider id is left out: the row
+ * pins it, and a create applied in part comes back as an update of the
+ * record it made, with the same reviewed content.
+ */
+export function approvalKey(subject, key) {
+  const [entity, , value] = JSON.parse(key);
+
+  return JSON.stringify([subject, entity, value]);
+}
+
+/**
+ * With `subjectOf` (the Bridge's `publishing` record), `approved` holds
+ * `approvalKey(subject, key)` entries and a write passes only for its own
+ * row. Without it, `approved` holds plain proposal keys (content only).
+ */
+export function reviewGate(port, approved = new Set(), subjectOf) {
   const check = (entity, id, value) => {
     const key = proposalKey(entity, id, value);
-    if (!approved.has(key))
-      throw new ReviewRequired({ key, entity, id, value });
+    const ok = subjectOf
+      ? approved.has(approvalKey(subjectOf(), key))
+      : approved.has(key);
+    if (!ok) throw new ReviewRequired({ key, entity, id, value });
   };
 
   return {

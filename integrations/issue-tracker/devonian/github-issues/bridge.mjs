@@ -51,6 +51,8 @@ export class Bridge {
     this.records = copy(snapshot?.records ?? {});
     /** Writes a port held for review in the last pass, by subject. See review.mjs. */
     this.held = new Map();
+    /** The record whose saved operation `attempt` is finishing, for the review gate's `subjectOf`. */
+    this.publishing = undefined;
   }
 
   scope(side, entity) {
@@ -160,10 +162,30 @@ export class Bridge {
    */
   async attempt(subject, record, resumed = false) {
     try {
+      this.publishing = subject;
       await this.finish(subject, record);
       delete record.unconfirmed;
       this.held.delete(subject);
     } catch (error) {
+      // The request was refused before it was applied (`notSent`: the
+      // provider's rate limit, a host refusal before sending), so there is
+      // nothing to confirm: drop the saved operation. The next pass plans
+      // what is still missing from both sides' current state, held for
+      // review like a new write, instead of resuming an operation that may
+      // have reached the provider. An operation may have been applied in
+      // part before the refused request (a create's issue POST before its
+      // status label): a create that got its receipt is bound to the record
+      // it made first, as "It landed" does, so the next pass finds it bound
+      // and plans the rest as an update, rather than importing it as a new
+      // row next to the one that made it.
+      if (error?.notSent) {
+        await this.bindCreated(subject, record);
+        delete record.pending;
+        delete record.unconfirmed;
+        await this.checkpoint();
+        throw error;
+      }
+
       if (error?.name !== 'ReviewRequired') throw error;
       record.pending.held = true;
       if (resumed) record.unconfirmed = true;
@@ -177,7 +199,35 @@ export class Bridge {
         key: error.proposal?.key,
         ...(record.unconfirmed ? { unconfirmed: true } : {}),
       });
+    } finally {
+      this.publishing = undefined;
     }
+  }
+
+  /**
+   * A record whose provider create was applied (the transport holds its
+   * receipt) but whose operation did not complete: binds it to the record
+   * the create made, with the create's values as the baseline (an issue
+   * starts as Todo), so what the operation still owed (a status label, say)
+   * shows as a plain change next pass. Nothing is sent. A record already
+   * bound, or a provider id already bound elsewhere, is left alone.
+   */
+  async bindCreated(subject, record) {
+    const { entity } = record;
+    if (this.id('remote', entity, subject) !== undefined) return;
+    const created = await this.uncertain?.created?.(entity, subject);
+    if (!created) return;
+    const scope = this.scope('remote', entity);
+    if (this.identities.lookup(scope, created.id) !== undefined) return;
+    this.identities.bind(scope, created.id, subject);
+    record.baseline =
+      entity === 'issue'
+        ? {
+            title: created.sent.title,
+            body: created.sent.body ?? '',
+            status: 'Todo',
+          }
+        : { body: created.sent.body ?? '' };
   }
 
   /**

@@ -1,0 +1,26 @@
+# Swagger 2.0 revision of pagination-4d66b23dc5948016b50e79b944a0b084c7000da7-overlay.yaml.
+# The pinned OAD has no `components`, so the paginationSchemes map is the root
+# `x-paginationSchemes` vendor extension (overlays/README.md, "Swagger 2.0 documents");
+# operation targets are unchanged. Composition is checked against the pinned
+# OAD; live-provider behavior is not certified.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/4d66b23dc5948016b50e79b944a0b084c7000da7/APIs/deutschebahn.com/stada/2.2.01/swagger.yaml
+info:
+  title: Deutsche Bahn Station Data (STADA) API Pagination Schemes
+  version: 2.0.0
+actions:
+  - target: "$"
+    update:
+      x-paginationSchemes:
+        offset:
+          type: pageNumber
+          description: >-
+            The Deutsche Bahn STADA API uses offset-based pagination. `offset`
+            sets the starting position for results (default 0) and `limit`
+            controls the maximum number of items returned (default/max 10000).
+          request:
+            queryParameters:
+              offset:
+                role: offset
+              limit:
+                role: pageSize

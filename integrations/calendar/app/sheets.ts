@@ -60,7 +60,12 @@ function status(doc: Document, p: 'sending' | Outcome | undefined): Child {
         '! Unknown whether Google applied it',
       );
     case 'failed':
-      return h(doc, 'span', { class: 'rs fail' }, '! Google refused it');
+      return h(
+        doc,
+        'span',
+        { class: 'rs fail' },
+        p.written ? '! Written, but not saved here' : '! Google refused it',
+      );
     case 'not-sent':
       return h(doc, 'span', { class: 'rs wait' }, 'Not sent');
   }
@@ -73,6 +78,12 @@ const OUTCOME_TEXT: Record<Outcome['status'], string> = {
   failed: 'Google refused it',
   'not-sent': 'Not sent, because an earlier change’s outcome is unknown',
 };
+
+/** The outcome as a sentence, for screen readers. */
+const outcomeText = (o: Outcome) =>
+  o.status === 'failed' && o.written
+    ? 'Written to Google, but the row here could not be updated; the next sync reads it back'
+    : OUTCOME_TEXT[o.status];
 
 export function review(
   ctx: Ctx,
@@ -172,7 +183,7 @@ export function review(
                   doc,
                   'span',
                   { class: 'sr-only' },
-                  `${o.title}: ${OUTCOME_TEXT[o.status]}`,
+                  `${o.title}: ${outcomeText(o)}`,
                 ),
               ),
               o.status === 'stale'
@@ -354,7 +365,11 @@ export function conflicts(
     onChoose: (c: Conflict, field: keyof Projection, choice: Choice) => void;
     onResolve: (c: Conflict) => void;
     onKeep: (c: Conflict) => void;
-    onRemove: (c: Conflict) => void;
+    /**
+     * Absent on a table the app is a view of: a row grant never lets an app
+     * delete rows (atomic-server#1740), so the person deletes it in the table.
+     */
+    onRemove?: (c: Conflict) => void;
     onConfirm: (c: Conflict | undefined) => void;
     /** Present when the host can show a row or the table. */
     onOpenRow?: (c: Conflict) => void;
@@ -464,7 +479,7 @@ export function conflicts(
           { class: 'cf-lost' },
           'This event is no longer in Google Calendar — it was cancelled, became recurring, or you lost access. Your copy here was not deleted.',
         ),
-        confirming === c
+        confirming === c && onRemove
           ? h(
               doc,
               'div',
@@ -504,16 +519,23 @@ export function conflicts(
               doc,
               'div',
               { class: 'chg-ft' },
-              h(
-                doc,
-                'button',
-                {
-                  class: 'btn btn-sm',
-                  'data-key': `remove-${index}`,
-                  onclick: () => onConfirm(c),
-                },
-                'Remove local copy',
-              ),
+              onRemove
+                ? h(
+                    doc,
+                    'button',
+                    {
+                      class: 'btn btn-sm',
+                      'data-key': `remove-${index}`,
+                      onclick: () => onConfirm(c),
+                    },
+                    'Remove local copy',
+                  )
+                : h(
+                    doc,
+                    'span',
+                    { class: 'fine' },
+                    'To remove it, delete the row in the table.',
+                  ),
               h(
                 doc,
                 'button',

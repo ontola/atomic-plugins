@@ -78,6 +78,10 @@ export function pillFor(state: ViewState, now: number): Pill | undefined {
         return { state: 'reauth', text: 'Reconnect needed' };
       if (p?.kind === 'conflict' || p?.kind === 'paused')
         return { state: 'paused', text: 'Sync paused' };
+      if (p?.kind === 'rate-limited')
+        return { state: 'paused', text: 'GitHub rate limit' };
+      if (p?.kind === 'refused')
+        return { state: 'paused', text: 'GitHub refused a change' };
       if (p?.kind === 'failed') return { state: 'error', text: 'Sync failed' };
       if (!state.last?.at) return { state: 'idle', text: 'Not synced yet' };
 
@@ -132,6 +136,11 @@ export const unconfirmed = (state: Ready): Held[] =>
 export function bannerFor(
   state: ViewState,
   confirmingRemove = false,
+  /**
+   * False on a table the app didn't make: a row grant never deletes a row
+   * (atomic-server#1740), so "Remove from board" isn't offered there.
+   */
+  own = true,
 ): BannerModel | undefined {
   if (state.kind !== 'ready') return undefined;
   const p = state.problem;
@@ -187,7 +196,7 @@ export function bannerFor(
         p.missing?.side === 'remote' && p.missing.entity === 'issue';
       const name = ref(p.missing?.local);
 
-      if (issue && confirmingRemove)
+      if (issue && confirmingRemove && own)
         return {
           tone: 'warn',
           icon: 'ghost',
@@ -206,10 +215,20 @@ export function bannerFor(
             tone: 'warn',
             icon: 'ghost',
             title: `${name} is on this board but no longer on GitHub.`,
-            text: 'It may have been deleted or moved to another repository. Nothing on GitHub will change.',
+            text: own
+              ? 'It may have been deleted or moved to another repository. Nothing on GitHub will change.'
+              : 'It may have been deleted or moved to another repository. Nothing on GitHub will change. To remove it here, delete its row in the table.',
             actions: [
               { label: 'Keep here only', action: 'keep-here' },
-              { label: 'Remove from board', action: 'remove', danger: true },
+              ...(own
+                ? [
+                    {
+                      label: 'Remove from board',
+                      action: 'remove' as const,
+                      danger: true,
+                    },
+                  ]
+                : []),
             ],
             details: p.message,
             problem: p,
@@ -349,28 +368,18 @@ function uncertainBanner(u: Uncertain): BannerModel {
 }
 
 /** The connection bar's status line. */
+/**
+ * The connection bar's line: what runs now. The last sync, its time and
+ * the changes waiting to send are the sync-status card's (`status.ts`),
+ * not this bar's; idle, it names the repository.
+ */
 export function connectionLine(state: Ready): string {
-  const held = state.last?.result.held.length ?? 0;
-  const waiting = held
-    ? ` · ${plural(held, 'change')} waiting to send`
-    : state.touched?.length
-      ? ` · ${plural(state.touched.length, 'change')} saving`
-      : '';
   if (state.busy === 'syncing' && !state.last) return 'Importing…';
-  if (state.busy === 'syncing') return `Checking GitHub for changes${waiting}`;
-  if (state.busy === 'sending') return `Sending to GitHub${waiting}`;
+  if (state.busy === 'syncing') return 'Checking GitHub for changes…';
+  if (state.busy === 'sending') return 'Sending to GitHub…';
   if (state.busy === 'resolving') return 'Settling the conflict…';
-  const time = state.last?.at
-    ? new Date(state.last.at).toLocaleTimeString([], {
-        hour: '2-digit',
-        minute: '2-digit',
-      })
-    : '';
-  if (state.problem?.kind === 'conflict' || state.problem?.kind === 'paused')
-    return `Paused${time ? ` at ${time}` : ''}${waiting}`;
-  if (!state.last?.at) return `Not synced yet${waiting}`;
 
-  return `Last sync ${time}${waiting}`;
+  return state.repository;
 }
 
 export type Marker = 'waiting' | 'sending' | 'conflict' | 'unconfirmed';

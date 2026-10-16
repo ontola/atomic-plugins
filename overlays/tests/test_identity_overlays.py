@@ -14,10 +14,51 @@ class IdentityOverlayTests(unittest.TestCase):
 
     def test_all_catalog_platforms_compose(self):
         with tempfile.TemporaryDirectory() as cache:
-            for platform in CATALOG["platforms"]:
-                with self.subTest(platform=platform["name"]):
-                    document, _ = compose(platform["name"], Path(cache))
-                    self.assertTrue(document["paths"])
+            for path in sorted((ROOT / "catalog").glob("*.json")):
+                catalog = json.loads(path.read_text())
+                for platform in catalog["platforms"]:
+                    with self.subTest(catalog=path.name, platform=platform["name"]):
+                        document, _ = compose(platform["name"], Path(cache), catalog)
+                        self.assertTrue(document["paths"])
+
+    def test_discord_authentication_profiles(self):
+        # ontola/atomic-plugins#258: the auth-profiles catalog selects the
+        # discordUser profile of the full OAD (openapi-extensions/spec/
+        # authentication-profiles). Composition only, no live account.
+        catalog = json.loads((ROOT / "catalog/2026-10-02-auth-profiles.json").read_text())
+        config = platform_config("discord", catalog)
+        self.assertEqual(config["selection"], {"authenticationProfile": "discordUser"})
+        with tempfile.TemporaryDirectory() as cache:
+            document, _ = compose("discord", Path(cache), catalog)
+        profiles = document["components"]["x-authentication-profiles"]
+        self.assertEqual(set(profiles), {"discordUser", "discordBot"})
+        self.assertEqual(profiles["discordUser"]["securityScheme"], "discordOAuth")
+        self.assertEqual(profiles["discordBot"]["securityScheme"], "BotToken")
+        schemes = document["components"]["securitySchemes"]
+        for profile in profiles.values():
+            self.assertLessEqual(set(profile), {"securityScheme", "description"})
+            self.assertIn(profile["securityScheme"], schemes)
+
+        def covering(scheme):
+            for path, item in document["paths"].items():
+                for method, operation in item.items():
+                    if method not in {"get", "put", "post", "delete", "options", "head", "patch", "trace"}:
+                        continue
+                    security = operation.get("security", document.get("security"))
+                    for requirement in security or []:
+                        if list(requirement) == [scheme]:
+                            yield method, path, requirement[scheme]
+
+        user = list(covering("discordOAuth"))
+        self.assertEqual(
+            [(method, path) for method, path, _ in user],
+            [("get", "/users/@me"), ("get", "/users/@me/guilds")],
+        )
+        declared = schemes["discordOAuth"]["flows"]["authorizationCode"]["scopes"]
+        scopes = {scope for _, _, required in user for scope in required}
+        self.assertEqual(scopes, {"identify", "guilds"})
+        self.assertLessEqual(scopes, set(declared))
+        self.assertGreater(len(list(covering("BotToken"))), 200)
 
     def test_google_auth_and_identity_overlay(self):
         document = self.composed("google-calendar")

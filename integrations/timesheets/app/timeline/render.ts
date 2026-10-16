@@ -165,19 +165,38 @@ export interface ConflictActions {
   projectRequired: boolean;
 }
 
+/**
+ * The "Not loaded" note over a week: which spans no complete read of
+ * Clockify covers yet, in plain words, with "Sync now" when the app can
+ * (usertest-findings #14: the old wording said what the app knew, not what
+ * to do).
+ */
 export function renderUnknownSpans(
   h: H,
   sheet: Timesheet,
   unknown: Interval[],
+  onSync?: () => void,
 ): HTMLElement | null {
   if (!unknown.length) return null;
 
   return h(
     'div',
     { class: 'unknown', role: 'note', 'aria-label': 'Not loaded' },
-    h('strong', null, 'Not loaded: '),
-    unknown.map(i => spanText(i, sheet.timeZone)).join('; '),
-    '. No complete read of Clockify covers this time, so it is not shown as “did not work”.',
+    h(
+      'p',
+      { style: 'margin:0' },
+      h('strong', null, 'Not loaded yet: '),
+      unknown.map(i => spanText(i, sheet.timeZone)).join('; '),
+      '. Clockify has not been read for this time, so entries there may be missing; it is not shown as “did not work”.',
+      onSync ? ' Sync now to load it.' : '',
+    ),
+    onSync
+      ? button(h, 'Sync now', {
+          variant: 'sec',
+          key: 'unknown-sync',
+          onClick: onSync,
+        })
+      : null,
   );
 }
 

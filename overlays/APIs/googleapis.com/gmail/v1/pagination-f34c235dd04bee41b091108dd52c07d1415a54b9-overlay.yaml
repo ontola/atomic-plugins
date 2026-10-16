@@ -1,0 +1,88 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/gmail/api/reference/rest/v1/users.messages/list
+overlay: 1.0.0
+info:
+  title: Gmail v1 ordinary collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/f34c235dd04bee41b091108dd52c07d1415a54b9/APIs/googleapis.com/gmail/v1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include the continuation
+          and item array. Keep mailbox, query, labels, spam/trash selection and field projections fixed.
+          Message and draft listings contain identifiers, not full message payloads. resultSizeEstimate
+          is not an exact total and is not declared as one. History traversal and watch registration are
+          outside this ordinary list variant.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/gmail/v1/users/{userId}/drafts'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: drafts
+- target: $.paths['/gmail/v1/users/{userId}/messages'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: messages
+- target: $.paths['/gmail/v1/users/{userId}/settings/cse/identities'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: cseIdentities
+- target: $.paths['/gmail/v1/users/{userId}/settings/cse/keypairs'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: cseKeyPairs
+- target: $.paths['/gmail/v1/users/{userId}/threads'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: threads

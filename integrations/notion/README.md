@@ -4,7 +4,8 @@ Everything Notion-specific lives in this folder. atomic-server keeps no
 Notion code (branch `claude/remove-notion-code`). There are two paths:
 
 - **Drive plugin on syncables and Devonian** (`app/`, two-way after
-  review since 0.2.0). This is the direction for #8 and #68: an iframe
+  review since 0.2.0; a sync-status view, not a browsing view, since 0.3.0,
+  per #177 Q9). This is the direction for #8 and #68: an iframe
   plugin that reads Notion through
   `syncables/browser` over the host's integration-proxy relay, and maps it to
   Atomic rows through a Devonian lens (`devonian/notion/`). It is the one
@@ -32,17 +33,40 @@ It is one ES module whose `view({ root, store })` reads through
 proxy. No credential ever reaches the frame.
 
 - `app/main.ts`, `controller.ts`: "Connect Notion" asks the host to connect
-  (`store.proxy.connect`). Once a connection exists, the app shows the rows
-  already in the drive at once (`rows.ts`) and syncs in the background when
-  the last sync is unknown or older than 15 minutes, and on "Sync now". The
-  controller's states (importing, syncing, no databases, reconnect needed,
-  rate limited, failed) are classified by HTTP status (`errors.ts`). The last
-  sync record (counts, per-database schema with option names and colours,
-  grouped warnings) is a JSON string property, `notion-sync-record`, on the
-  data table resource (`record.ts`).
-- `app/view/`, `app/ui/`: the #89 design (`design/DESIGN.md`,
-  `design/mockups.html`): table, board and list views, database chips, side
-  peek, sync details, banners and empty states. `app/ui/` is the shared
+  (`store.proxy.connect`). Once a connection exists, the app reads the rows
+  already in the drive (`rows.ts`, to compare them with their baselines) and
+  syncs in the background when the last sync is unknown or older than 15
+  minutes, and on "Sync now". The controller's states (importing, syncing,
+  no databases, reconnect needed, rate limited, failed) are classified by
+  HTTP status (`errors.ts`). The last sync record (counts, per-database
+  schema with option names and colours, grouped warnings) is a JSON string
+  property, `notion-sync-record`, on the data table resource (`record.ts`).
+- `app/view/`, `app/ui/`: a small **sync-status view** (#177 Q9, since
+  0.3.0): header with the status pill and "Sync now"; a connection bar with
+  the database count, "Sync details" and a menu (Choose pages in Notion,
+  Open data table, Disconnect Notion…); the state's banner; the "N changes
+  not sent to Notion yet" strip with its Review sheet (`view/review.ts`);
+  then, since 0.5.0, the shared sync-status card first
+  (`integrations/sync-status/`, Q-084; the mapping is `view/status.ts`,
+  pure, one unit test per state in `view/status.test.ts`): when the last
+  sync ran and how it went (a failed sync names the last good one), its
+  added/updated/unchanged counts, the row total, whether edits go back
+  ("Edits here are sent to Notion after you review them.", or read-only
+  with the reason when there is no connection or no proxy), the write queue
+  (changes waiting, held back by a conflict or a refused value, the last
+  Send's failures with their reasons, a PATCH that stood but could not be
+  confirmed here, sends without an answer, sends that wrote nothing), the
+  record's warnings and a "N notes from the last sync" line that opens Sync
+  details; and right below it the databases block (`view/parts.ts`,
+  `renderDatabases`): the databases the table syncs with and their row
+  counts, when the last sync ran and how long it took, and an "Open table"
+  button. Notion's writes do not go through syncables' `pendingWrites()`,
+  so the card is fed from the review list and the send outcomes, as in
+  Clockify.
+  People browse and edit the rows with the host's own table and views; the
+  app renders no rows. The #89 browsing views of 0.1.0–0.2.0 (table, board,
+  list, database chips, side peek, search, sort; `design/DESIGN.md`,
+  `design/mockups.html`) were removed in 0.3.0. `app/ui/` is the shared
   plugin shell (`pl-*` tokens mapped from the host's `--t-*` theme), kept
   free of Notion specifics so it can move to a shared kit.
 - `app/transport.ts`: syncables' `Transport` over `store.proxy.request`. It
@@ -65,20 +89,28 @@ proxy. No credential ever reaches the frame.
 - `app/changes.ts`, `app/send.ts`, `app/view/review.ts`: two-way edits
   after review (#8, #177 Q4–Q7), described in
   [Edits and sending them to Notion](#edits-and-sending-them-to-notion).
-- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 133,028 bytes for 0.2.0,
-  including the catalog document, syncables' read path and devonian's Atomic
-  Data API. `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
+- `app/options.ts`: Notion options as the host's select columns and Tags
+  (0.4.0; see the limits below for the shape), and the translation between
+  option ids and Tag subjects that `sync.ts`, `rows.ts` and `send.ts` apply
+  at the host boundary.
+- `app/build.mjs`: `dist/ui.js`, minified (JS and CSS), 179,742 bytes for
+  0.5.6 (179,723 for 0.5.5; 179,518 for 0.5.4) with syncables 0.23.0 (145,070 for 0.5.3; 144,024 for 0.5.2, with syncables 0.21.0; 125,914 for 0.5.1 with devonian 0.9.0 and
+  syncables 0.19.0; 125,712 for 0.5.0; 115,818 for 0.4.2; 113,988 for 0.4.1; 113,536 for 0.4.0; 107,509 for 0.3.0; 133,028 for 0.2.0, with the browsing views), including the catalog
+  document, syncables' read path, devonian's Atomic Data API and the shared
+  sync-status card with its `card.css` (through `cssRawPlugin` from
+  `integrations/sync-status/build.mjs`). `@tomic/lib` is shimmed, as in timesheets (`Datatype` and
   `validateDatatype` only; `build.test.ts` pins both to the real library).
-- Dependencies: `syncables@0.18.0` and `devonian@0.6.1` from npm, exact
+- Dependencies: `syncables@0.23.0` and `devonian@0.9.0` from npm, exact
   versions in `package.json`, locked in `pnpm-lock.yaml`, installed into this
   folder's `node_modules/` (`pnpm install --frozen-lockfile` here; CI's
   "Install plugin npm dependencies" step does it for every
   `integrations/*/pnpm-lock.yaml`). This repo's `syncables/` and `devonian/`
-  sources are not used. Only devonian's `src/atomic/` is imported, by path
-  (`devonian/notion/lens/devonian-atomic.ts`): the package root also exports
-  `DevonianClient`/`DevonianTable`, which import `node:events` and Automerge
-  and cannot go into the bundle, and 0.6.1's `exports` has no subpath for
-  `src/atomic/`.
+  sources are not used. Only devonian's `devonian/atomic` entry point is
+  imported (`devonian/notion/lens/devonian-atomic.ts`), not the package root,
+  which also exports the row API and its Automerge storage. Until 0.5.1 the
+  app used devonian 0.6.1 and reached `src/atomic/` by path, because 0.6.1
+  had no `devonian/atomic` subpath; from 0.6.1 to 0.9.0 that API only gained
+  `AtomicIdentityMap.unbind`, which this app does not call.
 - `catalog/`: the composed catalog document, its provenance and
   `generate.py`. The overlays themselves are in
   `overlays/APIs/notion.com/2026-03-11/`; see [`catalog/README.md`](catalog/README.md).
@@ -97,14 +129,49 @@ What it does not do, and what is not verified:
   list with tombstones yet, #177 H6).
 - A value cleared in Notion (empty number, URL, select) is removed from its
   row on the next import, unless the row changed that field itself (see
-  below). A value the lens cannot read losslessly (formatted text) leaves the
-  row's value as it was, is listed in the warnings, and is never sent.
-- Select, status and multi-select columns hold Notion option ids, which stay
-  stable across renames, rather than option names. The app shows names and
-  colours from the sync record's schema, so a rename shows after one sync
-  without rewriting rows.
+  below). Formatted text (bold, links, mentions, equations…) is imported as
+  its words without the formatting (from 0.5.3, ontola/usertest-findings#19;
+  before, it was left out), is listed in Sync details ("copied as plain
+  text"), and is never sent: the row follows Notion's words unless it was
+  edited here, and then keeps the edit, which the review refuses to send. Any
+  other value the lens cannot read losslessly leaves the row's value as it
+  was and is listed in the warnings.
+- Select, status and multi-select columns are the host's own select
+  columns since 0.4.0 (`app/options.ts`): the Property `isA`
+  SelectProperty, datatype `resourceArray`, `classtype` Tag, `allowsOnly`
+  listing one Tag per Notion option in Notion's order, `max` 1 for select
+  and status. Each Tag is a child of the column's Property with `shortname`
+  (a slug of the option name), `name` (Notion's name), `color` (a hex for
+  Notion's colour name) and `notion-option-id`. The host's table shows the
+  Tags' names as coloured chips and its cell editor offers exactly those
+  Tags; a rename or recolour in Notion updates the Tag on the next sync and
+  rewrites no row, so the value stays keyed by the option id. The lens, the
+  baseline, the review and the send still work in option ids; `options.ts`
+  translates at the host boundary. 0.1.0–0.3.0 stored the ids themselves
+  (the table showed UUIDs); the first 0.4.0 sync upgrades such a column in
+  place and rewrites its rows, and an edit made before that upgrade (a raw
+  id in a cell) is still read as that option, so nothing waiting for review
+  is lost. The pinned host's select cell does not enforce `max`: a status
+  cell given two Tags is held back in the review ("takes one option").
+  Whether the host's chips and cell editor behave as the e2e shows against
+  a real Notion schema is not verified.
 - All shared data sources go into one table, with their columns merged. A
   "Data source" column says where each row came from.
+- The columns are the four fixed ones (Notion page id, Data source, Notion
+  URL, Last edited in Notion) plus one per Notion property the lens
+  projects (`notion-<hex of the property id>`). Nothing else: syncables also
+  derives one term per field of the Page schema (`object`, `id`,
+  `created-time`, `last-edited-time`, `title`, `properties`, `parent`,
+  `url`, `archived`, `in-trash`), and 0.1.0–0.4.0 made a column of each,
+  named by its raw term path (`…/property/object`), always empty
+  ([#303](https://github.com/ontola/atomic-plugins/issues/303)). Since
+  0.4.1 `notionColumns` takes only the projection's own terms, and the
+  first sync of an upgraded install retires such a column: off the class's
+  `recommends` and the ontology's `properties`, then destroyed. Only a
+  Property with exactly that auto-made name and shortname, and only when
+  no current column binds it; a column a person added (another name) and
+  the rows are left alone. Verified in the fake store and the e2e, not on
+  an upgraded live install.
 - The e2e shows the pinned host lets the app add Properties under its
   ontology and add them to its class's `recommends` (it checks the column
   datatypes). Only the fake store covers later edits to them.
@@ -114,15 +181,13 @@ What it does not do, and what is not verified:
   Without it, the app says so and fetches nothing.
 - The e2e runs against the mock proxy (see below). Nothing here has run against live Notion
   or a real proxy.
-- Links ("Open in Notion", URL values) open through `store.openExternal`,
-  which asks the person first; "Open data table" uses `store.openResource`;
+- "Open table" and the menu's "Open data table" use `store.openResource`;
   "Disconnect Notion…" uses `store.proxy.disconnect` (rows are kept); rows
   load with `store.getMany` in batches of 100; the host's `colorScheme` sets
   the app's `color-scheme`. All since atomic-server 007869464, and each is
-  feature-detected: on an older host the app falls back (copyable URL, no
-  menu entry, one `getResource` per row).
-- View choices (database, view, sort) are kept in memory only: the frame is
-  null-origin, where `localStorage` throws.
+  feature-detected: on an older host the app falls back (no Open table
+  button or menu entry, one `getResource` per row). The app opens no links
+  itself since 0.3.0: a row's "Notion URL" column is in the host's table.
 
 ## Edits and sending them to Notion
 
@@ -137,13 +202,19 @@ verified against live Notion or the real integration proxy.
   column. Keys are the column shortnames, which come from Notion's stable
   property ids, so renames on either side leave it as it was. A row imported
   by 0.1.0 has none; its first 0.2.0 sync takes Notion's values (as 0.1.0
-  always did) and writes one.
+  always did) and writes one. The baseline holds option ids for select
+  cells, whatever Tag the cell holds (`options.ts`).
 - **Compare on open.** Whenever the app reads the rows (on open, after a
   table change it is subscribed to, after a sync), it compares each row with
   its baseline (`changes.ts`, no request to Notion). Any difference is an
   edit, wherever it was made: the app's table, another view, another
-  device. A renamed row counts as a title edit. "N changes in M rows not
-  sent to Notion yet" then shows above the rows.
+  device. A renamed row counts as a title edit. "N changes not sent to
+  Notion yet" then shows above the sync-status card, counted in rows and
+  with the same count as the card and the review's Send button
+  (`changes.ts` `writeQueue`): a row the last Send left to the next sync
+  (no usable answer, or written but not confirmed here) is listed in the
+  review with its outcome but not counted as waiting, and Send leaves it
+  alone.
 - **Sync is three-way per field** (`sync.ts`, `compareOnSync`): a field only
   Notion changed takes Notion's value; a field only the row changed is kept
   and stays in the review; a field both changed to the same value is
@@ -168,9 +239,24 @@ verified against live Notion or the real integration proxy.
   baseline and the row advance only from the page Notion answers with.
 - **Limits.** Notion has no conditional page updates (no ETag or If-Match),
   so an edit made in Notion between the GET and the PATCH, one round trip,
-  is overwritten. A PATCH whose answer is lost is reported as "Unknown
-  whether Notion applied it" and the batch stops; the next sync shows what
-  Notion has. A proxy refusal, a 429 or a 5xx also stops the batch. Nothing
+  is overwritten. A PATCH whose answer is lost, or answered with a 5xx (a
+  gateway may answer 502 or 504 after Notion applied it; 0.5.0), is
+  reported as "Unknown whether Notion applied it" and the batch stops; the
+  next sync shows what Notion has, and the card lists the row as sent
+  without an answer, not as waiting, until a sync succeeds (a failed sync
+  keeps that outcome). A proxy refusal or a 429 also stops the batch;
+  those wrote nothing. A 429 whose body says Notion blocked the integration
+  (`additional_data.rate_limit_reason: public_api_request_blocked`, 0.5.4)
+  is permanent: a sync then fails with "Notion has blocked this integration
+  … Retrying won't help. Contact Notion support." and schedules no retry,
+  and a send says the same, whether the PATCH or the GET before it was
+  refused (0.5.5). From 0.5.5 the read transport throws on such an answer,
+  so syncables does not send the request again (it retries a 429 with a
+  short `Retry-After`); from 0.5.6 it then sends nothing more in that sync,
+  so the read stops at the first block instead of requesting every
+  remaining data source once more. `isBlockedByNotion` (`transport.ts`) reads the
+  response body, so it holds whatever syncables makes of the status;
+  fixture scenario `blocked`. Nothing
   is sent while the app is closed (no `afterCommit` hook at the pin).
   Conflicts are kept in memory until the next sync finds them again from
   the baselines. The Notion integration needs Notion's "Update content"
@@ -181,26 +267,40 @@ open, sync merges, send, conflict both ways, archived page, formatted text,
 refused option, lost answer, discard; `app/view.test.ts`'s S15/S16 block)
 and the e2e (below). Not live-verified.
 
+**Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+notion --i-understand-this-writes-to <data source id>` runs this app's
+controller, including a reviewed edit sent as a `PATCH`, against one
+disposable data source and writes evidence; see [The live-check
+kit](../LIVE_TESTING.md#the-live-check-kit).
+
 ## E2E
 
 `e2e/notion.spec.ts` drives the drive plugin the same way the pets spec does:
 an install from the catalog's Drive apps section (the committed
 `apps/notion/<version>/ui.js`, served by the lane's dev-server), then Connect, the
-host's consent bar and the mock proxy's consent page, then the 3 rows in the
-app's own table and their column types. It then walks the #89 states against
-the fixture's scenarios (`setScenario`, `renameOption` drivers): two
-databases, side peek, board, sync details, a renamed option, rate limited,
-failed, nothing shared and revoked access, saving a screenshot of each as a
-test artefact. It runs against the shared mock proxy's
-`notion` fixture (`fixtures/notion/`), so the lane has
-`platforms: ["notion"]` and `tiers: ["live", "e2e"]`. It needs an
-`.atomic-server-ref` with frame capabilities (ontola/atomic-server#1697; the
-pin `11264e83e` has it). Since 0.2.0 it also edits a row's Points from the
-host page (a user's commit), reloads, finds the edit under "Review changes"
-with no Sync, sends it and checks the fixture's page (`getPage` driver);
-then makes a conflict with the `editPage` driver and resolves it with "Use
-Notion's". The fixture applies `PATCH /v1/pages/{id}` as Notion documents it
-(400 for unknown options, archived pages, wrong type keys).
+host's consent bar and the mock proxy's consent page, then the shared
+sync-status card ("Synced", "3 rows in this table", "Edits here are sent to
+Notion after you review them."; later "Sync failed" with the last good sync
+and, after Disconnect, "Read-only: edits here stay in Atomic.") and the
+databases block (the database, no table in the frame), the 3 rows in
+the host's table with their Status and Tags shown by option name (0.4.0),
+and the columns' datatypes and select-column shape. It then walks the app's states
+against the fixture's scenarios (`setScenario`, `renameOption` drivers): a
+second database on the card with its own count, sync details, a renamed
+option (seen in the host's table, then in the Review sheet after a Status
+edit made in the host by setting the option's Tag, then discarded), rate limited, failed, nothing shared and revoked access, "Open
+table", and Disconnect, saving a screenshot of each as a test artefact. It
+runs against the shared mock proxy's `notion` fixture (`fixtures/notion/`),
+so the lane has `platforms: ["notion"]` and `tiers: ["live", "e2e"]`. It
+needs an `.atomic-server-ref` with frame capabilities
+(ontola/atomic-server#1697; the pin `11264e83e` has it). Since 0.2.0 it also
+edits a row's Points from the host page (a user's commit, the way the
+calendar and issue-tracker specs edit rows outside their apps), reloads,
+finds the edit under "Review changes" with no Sync, sends it and checks the
+fixture's page (`getPage` driver); then makes a conflict with the `editPage`
+driver and resolves it with "Use Notion's". The fixture applies
+`PATCH /v1/pages/{id}` as Notion documents it (400 for unknown options,
+archived pages, wrong type keys).
 
 ## Lens (`devonian/notion/`)
 
@@ -215,8 +315,10 @@ Notion property id.
 - Covered: plain title/rich text, number, checkbox, url, email, phone,
   select/status option id, and sorted multi-select option ids.
 - Notion `null` leaves the key absent; `0`, `false` and `[]` are kept.
-- Formatted text, mentions and links are left unprojected and listed in
-  `errors`. So are archived or trashed pages (`in_trash` or `in-trash`).
+- Formatted text, mentions and links are projected as their words without
+  the formatting (from 0.5.3) and listed in `errors`. A value with no plain
+  form at all (a malformed option) is left unprojected and listed, and so
+  are archived or trashed pages (`in_trash` or `in-trash`).
 - The raw `properties` object passes through.
 - It throws on a page outside the given data source, or on a property whose
   type changes during one fetch.
@@ -234,11 +336,15 @@ after the Notion property (`notionColumns`), and data-source titles.
 and keyed by page id.
 
 - `read` (page to row): sets the name, the fixed columns and every projected
-  value; unsets a property Notion holds empty; leaves a property with no
-  lossless plain value alone.
+  value; unsets a property Notion holds empty; sets formatted text (bold,
+  links, mentions, equations…) to its words without the formatting (from
+  0.5.3, ontola/usertest-findings#19: a tester read the skipped note as a
+  lost one; before, it was left out); leaves any other value with no
+  lossless plain form alone.
 - `write` (row to page): the page with each bound property replaced by the
-  row's value and every other property passed through. It throws rather
-  than overwrite formatted text it never read, and refuses to create pages.
+  row's value and every other property passed through. It passes formatted
+  text through when the row holds the same words, and throws rather than
+  overwrite it with anything else; it refuses to create pages.
   Nothing calls it against Notion yet.
 - The lens store uses its own subjects and property URLs under
   `https://notion-lens.invalid`. devonian accepts only HTTP(S) and DID

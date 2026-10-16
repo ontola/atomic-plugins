@@ -1,0 +1,179 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developer.zendesk.com/documentation/api-basics/pagination/paginating-through-lists-using-offset-pagination/
+overlay: 1.0.0
+info:
+  title: Zendesk Support ordinary offset collection links
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/bd4e4a2d9aa77933be201b08f290ccc4fbdf6bc8/APIs/zendesk.com/support/2.0.0/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      linkedCollections:
+        type: nextLink
+        autoDetect: false
+        description: Follow the complete next_page URL, including filters and page size. A null next_page
+          ends traversal. This overlay selects ordinary offset-mode collections with declared page/per_page
+          fields, not cursor-mode or incremental export streams. Offset pagination is limited to the first
+          10000 records by the provider.
+        request: {}
+        response:
+          bodyFields:
+            next_page:
+              role: nextLink
+- target: $.paths['/api/v2/activities'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: activities
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+- target: $.paths['/api/v2/automations'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: automations
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+- target: $.paths['/api/v2/brands'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: brands
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+- target: $.paths['/api/v2/deleted_tickets'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: deleted_tickets
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+- target: $.paths['/api/v2/macros'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: macros
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+- target: $.paths['/api/v2/organization_fields'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: organization_fields
+- target: $.paths['/api/v2/organizations'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: organizations
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+- target: $.paths['/api/v2/resource_collections'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: resource_collections
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+- target: $.paths['/api/v2/tags'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: tags
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+- target: $.paths['/api/v2/tickets/{ticket_id}/audits'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: audits
+- target: $.paths['/api/v2/triggers'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: triggers
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+- target: $.paths['/api/v2/user_fields'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: user_fields
+- target: $.paths['/api/v2/users/{user_id}/organizations'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: organizations
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+- target: $.paths['/api/v2/views'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: views
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize

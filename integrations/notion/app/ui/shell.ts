@@ -1,9 +1,11 @@
 // @wc-ignore-file
 /**
- * The shared plugin shell (#89 DESIGN.md §4): header row (mark, name, source
- * chips, status pill, one primary action), connection bar, banners and empty
- * states. Pure render functions over plain models; no Notion specifics, so
- * they can move to a shared `pl-` kit later. Styles are in `styles.ts`.
+ * The shared plugin shell (#89 DESIGN.md §4): header row (mark, name, status
+ * pill, one primary action), connection bar, menu, banners and empty states.
+ * Pure render functions over plain models; no Notion specifics, so they can
+ * move to a shared `pl-` kit later. Styles are in `styles.ts`. The source
+ * chips, the narrow `<select>` and the copyable-link box went with the
+ * browsing views (#177 Q9).
  */
 import { h, icon, type Child } from './dom.js';
 
@@ -25,22 +27,6 @@ export interface ActionModel {
   size?: 'sm' | 'lg';
   /** Stable key so focus survives a re-render. */
   key?: string;
-}
-
-export interface ChipModel {
-  key: string;
-  label: string;
-  count?: number;
-  icon?: string;
-  pressed: boolean;
-  onClick: () => void;
-}
-
-export interface SelectModel {
-  label: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (value: string) => void;
 }
 
 export function button(doc: Document, action: ActionModel): HTMLButtonElement {
@@ -107,66 +93,12 @@ export function pillElement(doc: Document): HTMLElement {
 export interface HeaderModel {
   mark: string;
   name: string;
-  chips?: ChipModel[];
-  select?: SelectModel;
   /** The persistent `role=status` element from `pillElement`. */
   pill?: HTMLElement;
   action?: ActionModel;
 }
 
 export function renderHeader(doc: Document, model: HeaderModel): HTMLElement {
-  const chips = model.chips?.length
-    ? h(
-        doc,
-        'div',
-        { class: 'pl-chips', role: 'group', 'aria-label': 'Databases' },
-        model.chips.map(chip =>
-          h(
-            doc,
-            'button',
-            {
-              type: 'button',
-              class: 'pl-chip',
-              'aria-pressed': chip.pressed ? 'true' : 'false',
-              'data-key': `chip:${chip.key}`,
-              onclick: () => chip.onClick(),
-            },
-            chip.icon && icon(doc, chip.icon),
-            chip.label,
-            chip.count !== undefined &&
-              h(doc, 'span', { class: 'pl-count' }, chip.count),
-          ),
-        ),
-      )
-    : h(doc, 'div', { class: 'pl-spacer' });
-
-  const select =
-    model.select &&
-    h(
-      doc,
-      'label',
-      { class: 'pl-select' },
-      h(doc, 'span', { class: 'pl-sr' }, model.select.label),
-      h(
-        doc,
-        'select',
-        {
-          'data-key': 'scope-select',
-          onchange: (event: Event) =>
-            model.select!.onChange((event.target as HTMLSelectElement).value),
-        },
-        model.select.options.map(o =>
-          h(
-            doc,
-            'option',
-            { value: o.value, selected: o.value === model.select!.value },
-            o.label,
-          ),
-        ),
-      ),
-      icon(doc, 'chev'),
-    );
-
   return h(
     doc,
     'header',
@@ -178,7 +110,7 @@ export function renderHeader(doc: Document, model: HeaderModel): HTMLElement {
       h(doc, 'span', { class: 'pl-mark', 'aria-hidden': 'true' }, model.mark),
       h(doc, 'h1', { class: 'pl-name', style: 'margin:0' }, model.name),
     ),
-    chips,
+    h(doc, 'div', { class: 'pl-spacer' }),
     h(
       doc,
       'div',
@@ -186,7 +118,6 @@ export function renderHeader(doc: Document, model: HeaderModel): HTMLElement {
       model.pill,
       model.action && button(doc, model.action),
     ),
-    select,
   );
 }
 
@@ -380,77 +311,3 @@ export function renderEmpty(doc: Document, model: EmptyModel): HTMLElement {
 
 export const emptyGlyph = (doc: Document, name: string) =>
   h(doc, 'span', { class: 'pl-empty-glyph' }, icon(doc, name));
-
-/**
- * Opens `url` in a new tab. A frame sandboxed without `allow-popups` (the
- * host's app frame at this pin) gets `null` back; the caller then shows the
- * URL as selectable text with a copy button (`renderCopy`).
- */
-export function openExternal(win: Window, url: string): boolean {
-  try {
-    const opened = win.open(url, '_blank');
-    if (!opened) return false;
-    opened.opener = null;
-
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** A selectable URL with a Copy button, for when a link cannot open. */
-export function renderCopy(
-  doc: Document,
-  text: string,
-  note: string,
-): HTMLElement {
-  const code = h(doc, 'code', {}, text);
-  const status = h(doc, 'span', { class: 'pl-sr', role: 'status' });
-
-  return h(
-    doc,
-    'div',
-    { class: 'pl-copy' },
-    code,
-    h(
-      doc,
-      'button',
-      {
-        type: 'button',
-        class: 'pl-btn is-secondary is-sm',
-        onclick: async () => {
-          status.textContent = (await copyText(doc, text, code))
-            ? 'Copied'
-            : 'Selected: press Ctrl+C or ⌘C to copy';
-        },
-      },
-      'Copy',
-    ),
-    h(doc, 'span', { class: 'pl-sr' }, note),
-    status,
-  );
-}
-
-async function copyText(
-  doc: Document,
-  text: string,
-  el: Element,
-): Promise<boolean> {
-  try {
-    await doc.defaultView?.navigator.clipboard.writeText(text);
-
-    return true;
-  } catch {
-    const selection = doc.getSelection();
-    const range = doc.createRange();
-    range.selectNodeContents(el);
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-
-    try {
-      return doc.execCommand('copy');
-    } catch {
-      return false;
-    }
-  }
-}

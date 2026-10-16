@@ -1,0 +1,114 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list
+overlay: 1.0.0
+info:
+  title: Google Drive v3 ordinary collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/a7dd2d8b4f5f50794e51afd84c539c2e61a182fc/APIs/googleapis.com/drive/v3/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include the continuation
+          and item array. Keep filters and field projections fixed. A fields projection must include nextPageToken
+          and the selected item envelope; comment and reply reads require fields. An incompleteSearch
+          response is not a complete corpus listing. Change feeds, watch registration and deprecated Team
+          Drives are outside this ordinary list variant.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/drives'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: drives
+- target: $.paths['/files'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: files
+- target: $.paths['/files/{fileId}/comments'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: comments
+      description: A fields query is required; include nextPageToken and comments in it.
+- target: $.paths['/files/{fileId}/comments/{commentId}/replies'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: replies
+      description: A fields query is required; include nextPageToken and replies in it.
+- target: $.paths['/files/{fileId}/listLabels'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: labels
+- target: $.paths['/files/{fileId}/permissions'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: permissions
+- target: $.paths['/files/{fileId}/revisions'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: revisions

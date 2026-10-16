@@ -7,7 +7,8 @@
  * colour apply without `prefers-color-scheme` here. Widths use a container
  * query on the app root (`pl-app`), not viewport media queries.
  *
- * Kept free of Notion specifics so it can move to a shared kit later.
+ * Kept free of Notion specifics so it can move to a shared kit later. The
+ * chip, select and copy-box rules went with the browsing views (#177 Q9).
  */
 export const PL_CSS = `
 .pl-app{--pl-bg:var(--t-color-bg-body,#fafafa);--pl-surface:var(--t-color-bg,#fff);--pl-subtle:var(--t-color-bg-1,#f2f2f2);--pl-border:var(--t-color-bg-2,#ccc);--pl-text:var(--t-color-text,#000);--pl-muted:var(--t-color-text-light,#666);--pl-accent:var(--t-color-main,#1b50d8);--pl-accent-soft:var(--t-color-main-selected-bg,#eef2fd);--pl-neg:var(--t-color-alert,#cf5b5b);--pl-warn:var(--t-color-warning,#f5a623);--pl-pos:var(--t-color-success,#2f8f5b);--pl-radius:var(--t-radius,9px);--pl-hair:color-mix(in srgb,var(--pl-border) 55%,transparent);height:100vh;min-height:20rem;container:pl-app/inline-size;display:flex;flex-direction:column;position:relative;background:var(--pl-bg);color:var(--pl-text);font:14px/1.45 var(--t-font-family,system-ui,sans-serif)}
@@ -22,12 +23,6 @@ export const PL_CSS = `
 .pl-mark{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:7px;background:var(--pl-text);color:var(--pl-surface);font:700 15px/1 Georgia,'Times New Roman',serif}
 .pl-mark.is-lg{width:48px;height:48px;border-radius:12px;font-size:28px}
 .pl-name{font:700 15px/1 var(--t-font-family-header,system-ui);letter-spacing:-0.005em}
-.pl-chips{flex:1;min-width:0;display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
-.pl-chip{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border-radius:999px;border:1px solid var(--pl-hair);background:transparent;color:var(--pl-muted);font:inherit;font-size:13px;white-space:nowrap;cursor:pointer}
-.pl-chip:hover{background:var(--pl-subtle);color:var(--pl-text)}
-.pl-chip[aria-pressed='true']{background:var(--pl-accent-soft);border-color:color-mix(in srgb,var(--pl-accent) 45%,transparent);color:var(--pl-text);font-weight:600}
-.pl-chip .ic{width:13px;height:13px}
-.pl-count{font-variant-numeric:tabular-nums;color:var(--pl-muted);font-weight:400;font-size:12px}
 .pl-actions{display:flex;align-items:center;gap:10px;margin-left:auto}
 .pl-pill{display:inline-flex;align-items:center;gap:7px;height:28px;padding:0 11px;border-radius:999px;background:var(--pl-subtle);color:var(--pl-muted);font-size:12.5px;white-space:nowrap}
 .pl-pill .ic{width:14px;height:14px}
@@ -41,9 +36,6 @@ export const PL_CSS = `
 .pl-spin{display:inline-flex}
 .pl-spin .ic{animation:pl-rot 1.1s linear infinite}
 @keyframes pl-rot{to{transform:rotate(360deg)}}
-.pl-select{position:relative;flex-basis:100%;display:flex}
-.pl-select select{appearance:none;width:100%;height:34px;padding:0 32px 0 10px;border:1px solid var(--pl-border);border-radius:8px;background:var(--pl-surface);color:var(--pl-text);font:inherit}
-.pl-select .ic{position:absolute;right:10px;top:9px;color:var(--pl-muted);pointer-events:none}
 .pl-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;height:32px;padding:0 14px;border-radius:var(--pl-radius);border:1px solid transparent;font:600 13.5px/1 var(--t-font-family,system-ui);cursor:pointer;text-decoration:none;white-space:nowrap}
 .pl-btn .ic{width:15px;height:15px}
 .pl-btn.is-primary{background:var(--pl-accent);color:var(--pl-surface)}
@@ -79,7 +71,6 @@ export const PL_CSS = `
 .pl-secondary{margin:0;font-size:12.5px;color:var(--pl-muted);max-width:44ch}
 .pl-steps{margin:4px 0 0;padding:12px 16px 12px 34px;text-align:left;font-size:13px;display:grid;gap:5px;background:var(--pl-surface);border:1px solid var(--pl-hair);border-radius:var(--pl-radius)}
 .pl-app button{font-family:inherit}
-.pl-select{display:none}
 .pl-muted{color:var(--pl-muted)}
 .pl-live{display:contents}
 .pl-menu-wrap{position:relative}
@@ -98,8 +89,6 @@ export const PL_CSS = `
 .pl-banner details{margin-top:6px;font-size:12.5px;color:var(--pl-muted)}
 .pl-banner summary{cursor:pointer}
 .pl-banner pre{margin:6px 0 0;padding:8px 10px;border-radius:6px;background:var(--pl-surface);white-space:pre-wrap;font:11.5px/1.5 ui-monospace,Menlo,monospace}
-.pl-copy{display:flex;align-items:center;gap:6px;margin-top:8px;padding:6px 8px;border:1px solid var(--pl-hair);border-radius:8px;background:var(--pl-subtle);font-size:12.5px}
-.pl-copy code{flex:1;min-width:0;overflow-wrap:anywhere;user-select:all;font:12px/1.4 ui-monospace,Menlo,monospace}
-@container pl-app (max-width:639.98px){.pl-header{padding:10px 12px}.pl-chips{display:none}.pl-select{display:flex}.pl-pill{height:26px;padding:0 9px}.pl-connbar{padding-left:12px}.pl-btn{height:36px}.pl-btn.is-sm{height:32px}.pl-icon-btn{width:44px;height:44px}.pl-cb-hide-narrow{display:none}}
+@container pl-app (max-width:639.98px){.pl-header{padding:10px 12px}.pl-pill{height:26px;padding:0 9px}.pl-connbar{padding-left:12px}.pl-btn{height:36px}.pl-btn.is-sm{height:32px}.pl-icon-btn{width:44px;height:44px}.pl-cb-hide-narrow{display:none}}
 @media (prefers-reduced-motion:reduce){.pl-spin .ic{animation:none}}
 `;

@@ -4,6 +4,7 @@ import { SEEDED_REPOSITORY } from '../fixtures/github-issues/scenario.mjs';
 import {
   classify,
   createController,
+  describe,
   describeHeld,
   type ViewState,
 } from './controller.js';
@@ -24,6 +25,7 @@ import {
   DESCRIPTION,
   IS_A,
   ISSUE_V1,
+  LOCAL_ID,
   NAME,
   PARENT,
   PROPERTIES,
@@ -542,6 +544,8 @@ group(
         property(store, 'github-issue-number'),
         property(store, 'github-source'),
         property(store, 'github-sync-baseline'),
+        // The Bridge's create-recovery key on imported rows (since 0.3.0).
+        LOCAL_ID,
       ]);
       expect(store.resources.get(TABLE)![CLASSTYPE]).toBe(ISSUE_V1);
       // Idempotent: a second open writes neither again.
@@ -672,15 +676,555 @@ group(
       ]);
     });
 
-    it('only shows a notice on an Issue table it did not make', async () => {
+    it('writes nothing on an Issue table it did not make before it is asked to sync it', async () => {
       const store = fakeStore({ table: 'did:ad:someone-elses-table' });
       store.resources.set('did:ad:someone-elses-table', {
         [PARENT]: 'did:ad:drive',
         [CLASSTYPE]: ISSUE_V1,
       });
       const state = await createController(store).start();
-      expect(state.kind).toBe('other-table');
+      expect(state).toEqual({ kind: 'other-table', canSync: true });
       expect(store.writes).toEqual([]);
     });
   },
 );
+
+group('issue-tracker controller: GitHub rate limits', () => {
+  const limit = (store: FakeStore, remaining = 1) => {
+    store.rateLimit = {
+      status: 403,
+      headers: { 'retry-after': '3600' },
+      remaining,
+      writesOnly: true,
+      message: 'You have exceeded a secondary rate limit.',
+    };
+  };
+
+  it('classifies a limit the relay gave up on, with its retry time', () => {
+    const until = Date.now() + 3_600_000;
+    const error = Object.assign(new Error('GitHub is rate-limiting requests'), {
+      notSent: true,
+      rateLimit: { status: 429, until, source: 'retry-after', secondary: true },
+    });
+    expect(classify(error)).toEqual({
+      kind: 'rate-limited',
+      message: 'GitHub is rate-limiting requests',
+      until,
+    });
+  });
+
+  it('a rate-limited send keeps the approved change and sends it on the next sync, without a second review', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    const before = store.calls.length;
+    await controller.edit(subject, { status: 'Done' });
+    limit(store);
+
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({ kind: 'rate-limited' });
+    const until = (failed.problem as { until: number }).until;
+    expect(until).toBeGreaterThan(Date.now() + 3_500_000);
+    expect(failed.failedAt).toBeGreaterThan(0);
+    // One refused write, no repeat: a 3600 s wait is not slept out.
+    expect(
+      store.calls.slice(before).filter(c => (c.method ?? 'GET') !== 'GET'),
+    ).toHaveLength(1);
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'open',
+    );
+    // The change is still listed as waiting; nothing is uncertain.
+    expect(failed.last!.result.held.map(describeHeld)).toEqual([
+      'Update #1: status Todo → Done (close it)',
+    ]);
+    expect(failed.last!.result.held[0].unconfirmed).toBeUndefined();
+
+    // The retry (the timer's `sync`, or Sync now) sends it as approved.
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.held).toEqual([]);
+    expect(after.last!.result.sentToGitHub).toBe(1);
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'closed',
+    );
+  });
+
+  it('a short limit on a write is waited out inside the pass, once', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { status: 'Done' });
+    store.rateLimit = {
+      status: 429,
+      headers: { 'retry-after': '0' },
+      remaining: 1,
+      writesOnly: true,
+    };
+    const limits: unknown[] = [];
+    const seen = createController(store, s => {
+      if (s.kind === 'ready' && s.limited) limits.push(s.limited.until);
+    });
+    await seen.load();
+    // The second controller shares the store; it finds the held change.
+    await seen.sync();
+    const sent = ready(await seen.send());
+    expect(sent.problem).toBeUndefined();
+    expect(sent.limited).toBeUndefined();
+    expect(limits.length).toBeGreaterThan(0);
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'closed',
+    );
+  });
+
+  it('any other outcome drops the carried approval: the change is held again, not sent', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { status: 'Done' });
+    limit(store);
+    ready(await controller.send());
+    store.status = 502;
+    expect(ready(await controller.sync()).problem).toMatchObject({
+      kind: 'failed',
+    });
+    store.status = undefined;
+    const held = ready(await controller.sync());
+    expect(held.problem).toBeUndefined();
+    // Held for review again, as a plain pending change: the refused write
+    // left no saved operation behind, and the 502 stopped the next pass
+    // before it planned one. Nothing was sent.
+    expect(held.last!.result.held).toHaveLength(1);
+    expect(describeHeld(held.last!.result.held[0])).toBe(
+      'Update #1: status Todo → Done (close it)',
+    );
+    expect(held.last!.result.held[0].unconfirmed).toBeUndefined();
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'open',
+    );
+  });
+
+  it('a carried approval is for its row only: a second row with the same content is held, not sent', async () => {
+    const { store, controller } = await bound();
+    const before = store.github.snapshot(SEEDED_REPOSITORY).issues.length;
+    const input = { title: 'Dup', body: 'same words', status: 'Todo' as const };
+    await controller.create(input);
+    limit(store);
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({ kind: 'rate-limited' });
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues).toHaveLength(
+      before,
+    );
+
+    // Another row, same title and body, made while the limit lasts: its
+    // create has the same proposal key, but nobody reviewed it.
+    const { subject: second } = await controller.create(input);
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    const issues = store.github.snapshot(SEEDED_REPOSITORY).issues;
+    expect(
+      issues.filter((i: { title: string }) => i.title === 'Dup'),
+    ).toHaveLength(1);
+    expect(after.last!.result.held).toHaveLength(1);
+    // `local` is the row; `subject` is the Bridge's own record id.
+    expect(after.last!.result.held[0].local).toBe(second);
+    expect(after.last!.result.held[0].unconfirmed).toBeUndefined();
+  });
+
+  it('after a reload, a write GitHub refused is held again as plain pending, never as uncertain, and nothing is sent unreviewed', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { status: 'Done' });
+    limit(store);
+    ready(await controller.send());
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'open',
+    );
+
+    // A reload: the carried approval is gone with the view.
+    const again = createController(store);
+    const loaded = ready(await again.load());
+    // The last completed pass is read back from github-last-sync.
+    expect(loaded.syncedAt).toBeGreaterThan(0);
+    const synced = ready(await again.sync());
+    expect(synced.problem).toBeUndefined();
+    expect(synced.last!.result.held.map(describeHeld)).toEqual([
+      'Update #1: status Todo → Done (close it)',
+    ]);
+    expect(synced.last!.result.held[0].unconfirmed).toBeUndefined();
+    expect(synced.last!.result.uncertain).toEqual([]);
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'open',
+    );
+
+    // Reviewed again, it goes.
+    ready(await again.send());
+    expect(store.github.snapshot(SEEDED_REPOSITORY).issues[0].state).toBe(
+      'closed',
+    );
+  });
+
+  it('an edit made while GitHub rate-limits is held for review, not stuck on a saved operation', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { status: 'Done' });
+    limit(store);
+    ready(await controller.send());
+    // The edit's own sync runs while the limit lasts; a plain sync follows.
+    store.rateLimit = undefined;
+    const edited = ready(await controller.edit(subject, { title: 'Renamed' }));
+    expect(edited.problem).toBeUndefined();
+    expect(edited.last!.result.held).toHaveLength(1);
+    expect(edited.last!.result.held[0].unconfirmed).toBeUndefined();
+    expect(describeHeld(edited.last!.result.held[0])).toMatch(/Renamed|Done/);
+  });
+
+  /** The next `skip` writes pass; the one after is refused for an hour. */
+  const limitAfter = (store: FakeStore, skip: number) => {
+    store.rateLimit = {
+      status: 403,
+      headers: { 'retry-after': '3600' },
+      remaining: 1,
+      writesOnly: true,
+      skip,
+      message: 'You have exceeded a secondary rate limit.',
+    };
+  };
+
+  const issues = (store: FakeStore) =>
+    store.github.snapshot(SEEDED_REPOSITORY).issues as {
+      number: number;
+      title: string;
+      labels: (string | { name: string })[];
+    }[];
+  const labelsOf = (issue: { labels: (string | { name: string })[] }) =>
+    issue.labels.map(l => (typeof l === 'string' ? l : l.name));
+
+  it('a create applied in part (issue made, status label refused) completes on the next sync: one issue, one row, nothing held', async () => {
+    const { store, controller } = await bound();
+    const rowsBefore = ready(controller.state()).last!.result.rows.length;
+    const { subject } = await controller.create({
+      title: 'Half-made',
+      body: 'kept',
+      status: 'Doing',
+    });
+    limitAfter(store, 1);
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({ kind: 'rate-limited' });
+    const made = issues(store).filter(i => i.title === 'Half-made');
+    expect(made).toHaveLength(1);
+    expect(labelsOf(made[0])).toEqual([]);
+
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.held).toEqual([]);
+    expect(after.last!.result.uncertain).toEqual([]);
+    expect(issues(store).filter(i => i.title === 'Half-made')).toHaveLength(1);
+    expect(labelsOf(issues(store).find(i => i.title === 'Half-made')!)).toEqual(
+      ['atomic:doing'],
+    );
+    expect(after.last!.result.rows).toHaveLength(rowsBefore + 1);
+    const row = after.last!.result.rows.find(r => r.subject === subject)!;
+    expect(row.number).toBe(made[0].number);
+    expect(row.status).toBe('Doing');
+    expect(row.localOnly).toBeUndefined();
+    // And the pass after that has nothing left to do.
+    const settled = ready(await controller.sync());
+    expect(settled.last!.result.held).toEqual([]);
+    expect(settled.last!.result.rows).toHaveLength(rowsBefore + 1);
+  });
+
+  it('the same across a reload: the row is bound to the issue it made, the label change is held for review, nothing is duplicated', async () => {
+    const { store, controller } = await bound();
+    const rowsBefore = ready(controller.state()).last!.result.rows.length;
+    const { subject } = await controller.create({
+      title: 'Half-made',
+      body: 'kept',
+      status: 'Blocked',
+    });
+    limitAfter(store, 1);
+    ready(await controller.send());
+    const made = issues(store).find(i => i.title === 'Half-made')!;
+
+    const again = createController(store);
+    await again.load();
+    const synced = ready(await again.sync());
+    expect(synced.problem).toBeUndefined();
+    expect(synced.last!.result.rows).toHaveLength(rowsBefore + 1);
+    expect(issues(store).filter(i => i.title === 'Half-made')).toHaveLength(1);
+    // The rest of the create, as a plain change to review: not uncertain.
+    expect(synced.last!.result.uncertain).toEqual([]);
+    expect(synced.last!.result.held.map(describeHeld)).toEqual([
+      `Update #${made.number}: status Todo → Blocked (add the atomic:blocked label)`,
+    ]);
+    expect(synced.last!.result.held[0].unconfirmed).toBeUndefined();
+
+    ready(await again.send());
+    expect(labelsOf(issues(store).find(i => i.title === 'Half-made')!)).toEqual(
+      ['atomic:blocked'],
+    );
+    const settled = ready(await again.sync());
+    expect(settled.last!.result.held).toEqual([]);
+    expect(settled.last!.result.rows).toHaveLength(rowsBefore + 1);
+    // The issue number reaches the row's column with the completed update.
+    const row = settled.last!.result.rows.find(r => r.subject === subject)!;
+    expect(row.number).toBe(made.number);
+    expect(row.status).toBe('Blocked');
+  });
+
+  it('an update whose fields PATCH applied before its label POST was refused still recovers', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { status: 'Doing' });
+    limitAfter(store, 1);
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({ kind: 'rate-limited' });
+    expect(labelsOf(issues(store)[0])).toEqual(['bug']);
+
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.held).toEqual([]);
+    expect(after.last!.result.uncertain).toEqual([]);
+    expect(labelsOf(issues(store)[0])).toEqual(['bug', 'atomic:doing']);
+    expect(rowByNumber(after, 1).status).toBe('Doing');
+  });
+
+  it('describes the rate limit with its retry time', () => {
+    const until = Date.UTC(2026, 9, 6, 14, 5);
+    expect(
+      describe({
+        kind: 'ready',
+        connectionId: 'c1',
+        repository: 'o/r',
+        problem: { kind: 'rate-limited', message: 'HTTP 429', until },
+      }),
+    ).toMatch(
+      /^GitHub is rate-limiting; retrying at \d{1,2}:\d\d( [AP]M)?\. Changes waiting to send are kept and go out then\. \(HTTP 429\)$/,
+    );
+  });
+});
+
+group('issue-tracker controller: writes GitHub refused (#357)', () => {
+  /** The next write answers 422 with a GitHub-shaped validation body. */
+  const refuse = (
+    store: FakeStore,
+    over: Partial<NonNullable<FakeStore['refuse']>> = {},
+  ) => {
+    store.refuse = {
+      status: 422,
+      remaining: 1,
+      message: 'Validation Failed',
+      errors: [
+        {
+          resource: 'Issue',
+          field: 'title',
+          code: 'custom',
+          message: 'title is too long (maximum is 256 characters)',
+        },
+      ],
+      ...over,
+    };
+  };
+
+  const DETAIL =
+    'Validation Failed; title is too long (maximum is 256 characters)';
+  const writes = (store: FakeStore) =>
+    store.calls.filter(c => (c.method ?? 'GET') !== 'GET').length;
+  const issues = (store: FakeStore) =>
+    store.github.snapshot(SEEDED_REPOSITORY).issues as {
+      number: number;
+      title: string;
+      labels: (string | { name: string })[];
+    }[];
+
+  it('a 422 on an update applies nothing; the change is held again, not uncertain, and its approval is not carried', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { title: 'Renamed here' });
+    refuse(store);
+    const before = writes(store);
+
+    const failed = ready(await controller.send());
+    expect(failed.problem).toEqual({
+      kind: 'refused',
+      message: `GitHub refused update_issue (HTTP 422: ${DETAIL}). Nothing was applied.`,
+      status: 422,
+      detail: DETAIL,
+    });
+    expect(failed.failedAt).toBeGreaterThan(0);
+    expect(writes(store)).toBe(before + 1);
+    expect(issues(store)[0].title).toBe(
+      'Keep the selected calendar after refresh',
+    );
+
+    // The next pass holds it for review again, as a plain pending change:
+    // nothing is sent on its own, nothing is uncertain.
+    const sentBefore = writes(store);
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.uncertain).toEqual([]);
+    expect(after.last!.result.held.map(describeHeld)).toEqual([
+      'Update #1: title “Keep the selected calendar after refresh” → “Renamed here”',
+    ]);
+    expect(after.last!.result.held[0].unconfirmed).toBeUndefined();
+    expect(writes(store)).toBe(sentBefore);
+
+    // Edited and approved, it goes through.
+    await controller.edit(subject, { title: 'Shorter' });
+    const sent = ready(await controller.send());
+    expect(sent.problem).toBeUndefined();
+    expect(sent.last!.result.held).toEqual([]);
+    expect(issues(store)[0].title).toBe('Shorter');
+  });
+
+  it('the same across a reload: never "Uncertain GitHub write", never "may already be there"', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { title: 'Renamed here' });
+    refuse(store);
+    expect(ready(await controller.send()).problem).toMatchObject({
+      kind: 'refused',
+    });
+
+    const reloaded = createController(store);
+    await reloaded.load();
+    const state = ready(await reloaded.sync());
+    expect(state.problem).toBeUndefined();
+    expect(state.last!.result.uncertain).toEqual([]);
+    expect(state.last!.result.held.map(describeHeld)).toEqual([
+      'Update #1: title “Keep the selected calendar after refresh” → “Renamed here”',
+    ]);
+    expect(state.last!.result.held[0].unconfirmed).toBeUndefined();
+    expect(issues(store)[0].title).toBe(
+      'Keep the selected calendar after refresh',
+    );
+  });
+
+  it('a refused create stays a local row and is held as a create again', async () => {
+    const { store, controller } = await bound();
+    const rowsBefore = ready(controller.state()).last!.result.rows.length;
+    const { subject } = await controller.create({
+      title: 'Too long',
+      body: '',
+      status: 'Todo',
+    });
+    refuse(store);
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({ kind: 'refused', status: 422 });
+    expect(issues(store).filter(i => i.title === 'Too long')).toEqual([]);
+
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.uncertain).toEqual([]);
+    expect(after.last!.result.held.map(describeHeld)).toEqual([
+      'Create issue “Too long” (Todo)',
+    ]);
+    expect(after.last!.result.held[0].unconfirmed).toBeUndefined();
+    expect(after.last!.result.rows).toHaveLength(rowsBefore + 1);
+    // Still unbound: no issue number, nothing on GitHub.
+    expect(
+      after.last!.result.rows.find(r => r.subject === subject)!.number,
+    ).toBeUndefined();
+    expect(issues(store).filter(i => i.title === 'Too long')).toEqual([]);
+  });
+
+  it('a create applied in part (issue made, its label refused) binds the row to the issue it made and holds the label as a plain update', async () => {
+    const { store, controller } = await bound();
+    const rowsBefore = ready(controller.state()).last!.result.rows.length;
+    const { subject } = await controller.create({
+      title: 'Half-made',
+      body: 'kept',
+      status: 'Doing',
+    });
+    refuse(store, {
+      skip: 1,
+      errors: [{ resource: 'Label', code: 'invalid', field: 'labels' }],
+    });
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({
+      kind: 'refused',
+      status: 422,
+      detail: 'Validation Failed; labels invalid',
+    });
+    const made = issues(store).filter(i => i.title === 'Half-made');
+    expect(made).toHaveLength(1);
+
+    const after = ready(await controller.sync());
+    expect(after.problem).toBeUndefined();
+    expect(after.last!.result.uncertain).toEqual([]);
+    expect(issues(store).filter(i => i.title === 'Half-made')).toHaveLength(1);
+    expect(after.last!.result.rows).toHaveLength(rowsBefore + 1);
+    // Bound to the issue it made: the rest is a plain update to review.
+    expect(after.last!.result.held.map(describeHeld)).toEqual([
+      `Update #${made[0].number}: status Todo → Doing (add the atomic:doing label)`,
+    ]);
+    expect(after.last!.result.held[0].unconfirmed).toBeUndefined();
+
+    // Approved, it completes: one issue, one row, with its number.
+    const sent = ready(await controller.send());
+    expect(sent.problem).toBeUndefined();
+    expect(
+      issues(store)
+        .find(i => i.title === 'Half-made')!
+        .labels.map(l => (typeof l === 'string' ? l : l.name)),
+    ).toEqual(['atomic:doing']);
+    const settled = ready(await controller.sync());
+    expect(settled.last!.result.held).toEqual([]);
+    expect(settled.last!.result.rows).toHaveLength(rowsBefore + 1);
+    const row = settled.last!.result.rows.find(r => r.subject === subject)!;
+    expect(row.number).toBe(made[0].number);
+    expect(row.status).toBe('Doing');
+  });
+
+  it('a 403 that is not a rate limit keeps the write uncertain, as before: the boundary of NOT_APPLIED', async () => {
+    const { store, controller } = await bound();
+    const subject = rowByNumber(ready(controller.state()), 1).subject;
+    await controller.edit(subject, { title: 'Renamed here' });
+    refuse(store, {
+      status: 403,
+      message: 'Resource not accessible by personal access token',
+      errors: undefined,
+    });
+    const failed = ready(await controller.send());
+    expect(failed.problem).toMatchObject({
+      kind: 'failed',
+      message: 'GitHub update_issue returned 403',
+    });
+    // The saved operation resumes next pass and is flagged for a person.
+    const after = ready(await controller.sync());
+    expect(after.last!.result.held).toHaveLength(1);
+    expect(after.last!.result.held[0].unconfirmed).toBe(true);
+  });
+
+  it('describes the refusal with GitHub’s words and the way out', () => {
+    const problem = classify(
+      Object.assign(
+        new Error(
+          'GitHub refused update_issue (HTTP 404: Not Found). Nothing was applied.',
+        ),
+        { notSent: true, refused: true, status: 404, detail: 'Not Found' },
+      ),
+    );
+    expect(problem).toEqual({
+      kind: 'refused',
+      message:
+        'GitHub refused update_issue (HTTP 404: Not Found). Nothing was applied.',
+      status: 404,
+      detail: 'Not Found',
+    });
+    expect(
+      describe({
+        kind: 'ready',
+        connectionId: 'c1',
+        repository: 'o/r',
+        problem,
+      }),
+    ).toBe(
+      'GitHub refused a change and applied nothing (HTTP 404: Not Found). The change is held for review again: edit it here, then Review and send. Nothing is resent on its own.',
+    );
+    expect(
+      describe({
+        kind: 'ready',
+        connectionId: 'c1',
+        repository: 'o/r',
+        problem: { kind: 'refused', message: 'm', status: 410, detail: '' },
+      }),
+    ).toMatch(/^GitHub refused a change and applied nothing \(HTTP 410\)\./);
+  });
+});

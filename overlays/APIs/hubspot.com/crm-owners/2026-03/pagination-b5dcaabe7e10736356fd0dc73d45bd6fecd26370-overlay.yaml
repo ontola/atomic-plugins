@@ -1,0 +1,35 @@
+# Reviewed 2026-10-05 against the pinned OAD and official documentation.
+# Source: https://developers.hubspot.com/changelog/sunset-v2-owners-api
+# Explicit selections require declared request fields, continuation/count fields and item arrays.
+overlay: 1.0.0
+info:
+  title: HubSpot explicit collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/b5dcaabe7e10736356fd0dc73d45bd6fecd26370/APIs/hubspot.com/crm-owners/2026-03/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      ownerCursorPages:
+        type: pageToken
+        autoDetect: false
+        description: Send paging.next.after as after; stop when paging.next is absent. Keep email and
+          archived filters on subsequent requests.
+        request:
+          queryParameters:
+            after:
+              role: cursor
+            limit:
+              role: pageSize
+        response:
+          bodyFields:
+            paging.next.after:
+              role: nextCursor
+- target: $.paths['/crm/owners/2026-03'].get
+  update:
+    x-pagination:
+    - scheme: ownerCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: results

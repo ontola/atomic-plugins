@@ -137,7 +137,14 @@ describe('controller', () => {
       Object.keys(app)
         .filter(k => store.resources.get(k)?.[PARENT] === ONTOLOGY)
         .sort(),
-    ).toEqual([...Object.values(schema.settings), schema.log.log].sort());
+    ).toEqual(
+      [
+        schema.settings.workspaceId,
+        schema.settings.userId,
+        schema.settings.lookbackDays,
+        schema.log.log,
+      ].sort(),
+    );
     expect(kinds).toEqual([
       'setup',
       'setup',

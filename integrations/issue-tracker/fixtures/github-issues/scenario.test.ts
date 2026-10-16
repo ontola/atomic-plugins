@@ -92,6 +92,66 @@ describe('github-issues fixture drivers', () => {
     });
   });
 
+  it("reset forgets a repository's edits, so the seeded one reseeds", () => {
+    const tracker = githubTracker();
+    const repository = 'atomic-fixture/tracker';
+    const before = tracker.snapshot(repository);
+    tracker.createIssue(repository, { title: 'Extra' });
+    tracker.createComment(repository, 1, { body: 'Extra' });
+    tracker.reset(repository);
+    const after = tracker.snapshot(repository);
+
+    expect(after.issues.map(i => i.title)).toEqual(
+      before.issues.map(i => i.title),
+    );
+    expect(after.comments).toHaveLength(before.comments.length);
+    tracker.createIssue('atomic-fixture/other', { title: 'One' });
+    tracker.reset('atomic-fixture/other');
+    expect(tracker.snapshot('atomic-fixture/other').issues).toEqual([]);
+  });
+
+  it('reset also drops the failures failNext left pending', () => {
+    const tracker = githubTracker({ scenario: 'user-testing' });
+    tracker.failNext(503, 2);
+    tracker.reset('atomic-fixture/other');
+
+    expect(tracker.request('GET', url(`/repos/${WEBSITE}/issues`)).status).toBe(
+      200,
+    );
+  });
+
+  it('failNext can fail only writes, and only one repository', () => {
+    const tracker = githubTracker({ scenario: 'user-testing' });
+    tracker.failNext(422, 1, { writes: true, repository: WEBSITE });
+    const other = 'atomic-fixture/tracker';
+    const patch = (name: string) =>
+      tracker.request('PATCH', url(`/repos/${name}/issues/1`), {
+        title: 'Edited',
+      });
+
+    // Reads, and another repository's writes, go through.
+    expect(tracker.request('GET', url(`/repos/${WEBSITE}/issues`)).status).toBe(
+      200,
+    );
+    expect(patch(other).status).toBe(200);
+    // Then the first write to the repository is refused, as GitHub does.
+    expect(patch(WEBSITE)).toMatchObject({
+      status: 422,
+      body: { message: 'Validation Failed', errors: [{ field: 'title' }] },
+    });
+    expect(patch(WEBSITE).status).toBe(200);
+  });
+
+  it("reset keeps another repository's pending failures", () => {
+    const tracker = githubTracker({ scenario: 'user-testing' });
+    tracker.failNext(503, 1, { repository: WEBSITE });
+    tracker.reset('atomic-fixture/other');
+
+    expect(tracker.request('GET', url(`/repos/${WEBSITE}/issues`)).status).toBe(
+      503,
+    );
+  });
+
   it('failNext answers the next requests with an error, then recovers', () => {
     const tracker = githubTracker({ scenario: 'user-testing' });
     tracker.failNext(503, 2);

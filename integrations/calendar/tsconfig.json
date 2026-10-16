@@ -12,7 +12,13 @@
       "@tomic/lib": ["../../browser/lib/src/index.ts"]
     }
   },
-  "include": ["adapter.ts", "app/*.ts", "app/ui/*.ts", "devonian/**/*.ts"],
+  "include": [
+    "adapter.ts",
+    "app/*.ts",
+    "app/ui/*.ts",
+    "devonian/**/*.ts",
+    "../sync-status/css.d.ts"
+  ],
   "exclude": [
     "app/*.test.ts",
     "app/ui/*.test.ts",

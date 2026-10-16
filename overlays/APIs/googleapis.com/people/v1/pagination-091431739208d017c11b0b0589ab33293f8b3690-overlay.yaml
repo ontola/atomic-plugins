@@ -1,0 +1,98 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/people/api/rest/v1/people.connections/list
+overlay: 1.0.0
+info:
+  title: Google People v1 ordinary collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/091431739208d017c11b0b0589ab33293f8b3690/APIs/googleapis.com/people/v1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: 'Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include the continuation
+          and item array. Keep all request masks, source selections, filters and page size fixed. This
+          is page traversal within a full listing: omit syncToken. nextSyncToken is a checkpoint for a
+          future sync, not a continuation for the next page, and is deliberately not declared by this
+          scheme. Keep required readMask or personFields in the request.'
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/v1/contactGroups'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: contactGroups
+      description: 'Full listing only: omit syncToken. Preserve all masks and filters on every page; nextSyncToken
+        is outside this page traversal.'
+- target: $.paths['/v1/otherContacts'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: otherContacts
+      description: 'Full listing only: omit syncToken. Preserve all masks and filters on every page; nextSyncToken
+        is outside this page traversal.'
+- target: $.paths['/v1/people:listDirectoryPeople'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: people
+      description: 'Full listing only: omit syncToken. Preserve all masks and filters on every page; nextSyncToken
+        is outside this page traversal.'
+- target: $.paths['/v1/people:searchDirectoryPeople'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: people
+      description: 'Full listing only: omit syncToken. Preserve all masks and filters on every page; nextSyncToken
+        is outside this page traversal.'
+- target: $.paths['/v1/{resourceName}/connections'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: connections
+      description: 'Full listing only: omit syncToken. Preserve all masks and filters on every page; nextSyncToken
+        is outside this page traversal.'

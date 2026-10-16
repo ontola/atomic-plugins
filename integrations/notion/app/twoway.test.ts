@@ -17,9 +17,11 @@ import {
 } from './changes.js';
 import { createController, type ViewState } from './controller.js';
 import { fakeStore, fixtureProxy, PARENT, TABLE } from './fakeStore.js';
+import { OPTION_ID_SHORTNAME } from './options.js';
 import { loadSchema } from './record.js';
 import type { HostProxy, JSONValue } from './store.js';
 import { atomic } from './sync.js';
+import { syncStatusFor } from './view/status.js';
 
 const T0 = Date.parse('2026-09-24T12:00:00.000Z');
 const POINTS = notionFieldShortname('n%3D1');
@@ -57,6 +59,11 @@ async function synced(overrides: Partial<HostProxy> = {}) {
 
   const value = (pageId: string, shortname: string) =>
     rowOf(pageId)[1][column(shortname)];
+  /** The Tag subject of a Notion option. */
+  const tagOf = (optionId: string) =>
+    [...store.resources].find(
+      ([, p]) => p[column(OPTION_ID_SHORTNAME)] === optionId,
+    )![0];
   const notion = (pageId: string) =>
     proxy.api.request(
       'GET',
@@ -73,6 +80,7 @@ async function synced(overrides: Partial<HostProxy> = {}) {
     rowOf,
     edit,
     value,
+    tagOf,
     notion,
     patches,
   };
@@ -127,10 +135,11 @@ describe('compare on open', () => {
       version: 1,
       fields: { [POINTS]: 3, [DONE]: false, [TITLE]: 'Launch plan' },
     });
-    // Formatted text was never read, so it has no baseline value.
+    // Formatted text is read as plain text (usertest-findings#19), so its
+    // baseline is those words.
     expect(
       parseBaseline(rowOf(RETRO)[1][column(BASELINE_SHORTNAME)])!.fields,
-    ).not.toHaveProperty(NOTES);
+    ).toMatchObject({ [NOTES]: 'Keep this bold' });
     expect(changesOf(controller.state())).toEqual([]);
   });
 
@@ -206,7 +215,7 @@ describe('compare on open', () => {
 
 describe('review and send', () => {
   it('sends only the changed properties, by property id, and advances the baseline', async () => {
-    const { controller, edit, notion, patches, value, rowOf, column } =
+    const { controller, edit, notion, patches, value, rowOf, column, tagOf } =
       await synced();
     edit(LAUNCH, POINTS, 5);
     edit(LAUNCH, STATUS, SHIPPED);
@@ -230,7 +239,9 @@ describe('review and send', () => {
     ]);
     expect(changesOf(state)).toEqual([]);
     expect(notion(LAUNCH).properties.Points!.number).toBe(5);
-    expect(value(LAUNCH, STATUS)).toBe(SHIPPED);
+    // The host cell holds the option's Tag (options.ts); the raw option id
+    // the edit wrote was read as that option and sent by id.
+    expect(value(LAUNCH, STATUS)).toEqual([tagOf(SHIPPED)]);
     expect(
       parseBaseline(rowOf(LAUNCH)[1][column(BASELINE_SHORTNAME)])!.fields[
         POINTS
@@ -339,7 +350,7 @@ describe('review and send', () => {
 
   it('stops at a PATCH with no answer: unknown, and the rest is not sent', async () => {
     const base = fixtureProxy();
-    const { controller, edit, patches } = await synced({
+    const { controller, edit, patches, rowOf } = await synced({
       request: async request => {
         if (request.method === 'PATCH') {
           await base.request(request);
@@ -359,6 +370,213 @@ describe('review and send', () => {
     // The base proxy's own log: one PATCH reached the fixture.
     expect(base.calls.filter(c => c.method === 'PATCH')).toHaveLength(1);
     expect(patches()).toEqual([]);
+    // The card (Q-084) counts the edit once: the row whose PATCH got no
+    // answer is still listed as a change (its baseline did not advance),
+    // but it is "sent without an answer", not "waiting to send". Only the
+    // row the send never reached waits.
+    expect(syncStatusFor({ state, sources: [], now: T0 }).writes).toEqual({
+      pending: 1,
+      uncertain: 1,
+    });
+    // The strip and the Send button count the same: pressing Send again
+    // sends only the row that waits, leaves the uncertain one to the next
+    // sync, and keeps its outcome, so the card goes on naming it.
+    const again = await controller.send();
+    expect(base.calls.filter(c => c.method === 'PATCH')).toHaveLength(2);
+    expect('outcomes' in again && again.outcomes).toMatchObject([
+      { status: 'unknown', subject: rowOf(LAUNCH)[0] },
+      { status: 'unknown', subject: rowOf(CHANGELOG)[0] },
+    ]);
+    expect(
+      syncStatusFor({ state: again, sources: [], now: T0 }).writes,
+    ).toEqual({ pending: 0, uncertain: 2 });
+    // Nothing left that Send would send: a third press is a no-op.
+    expect(await controller.send()).toBe(again);
+    expect(base.calls.filter(c => c.method === 'PATCH')).toHaveLength(2);
+  });
+
+  it("a PATCH answered 429 public_api_request_blocked fails and says retrying won't help", async () => {
+    const base = fixtureProxy();
+    const blocked = {
+      status: 429,
+      headers: { 'retry-after': '120' },
+      body: {
+        object: 'error',
+        status: 429,
+        code: 'rate_limited',
+        message: 'This request was blocked.',
+        additional_data: { rate_limit_reason: 'public_api_request_blocked' },
+      },
+    };
+    const { controller, edit } = await synced({
+      request: async request =>
+        request.method === 'PATCH' ? blocked : base.request(request),
+    });
+    edit(LAUNCH, POINTS, 5);
+    await controller.refreshRows();
+    const state = await controller.send();
+    expect('outcomes' in state && state.outcomes).toMatchObject([
+      {
+        status: 'failed',
+        message:
+          "Notion answered 429: This request was blocked. Notion answered that this integration's requests are blocked, not just limited for a while. Retrying won't help. Contact Notion support.",
+      },
+    ]);
+  });
+
+  it('the GET before a PATCH answered 429 blocked fails the same way, and sends nothing (0.5.5)', async () => {
+    const base = fixtureProxy();
+    const blocked = {
+      status: 429,
+      headers: { 'retry-after': '120' },
+      body: {
+        object: 'error',
+        status: 429,
+        code: 'rate_limited',
+        message: 'This request was blocked.',
+        additional_data: { rate_limit_reason: 'public_api_request_blocked' },
+      },
+    };
+    let block = false;
+    const { controller, edit, patches } = await synced({
+      request: async request =>
+        block &&
+        request.method === 'GET' &&
+        request.path.startsWith('/v1/pages/')
+          ? blocked
+          : base.request(request),
+    });
+    edit(LAUNCH, POINTS, 5);
+    await controller.refreshRows();
+    block = true;
+    const state = await controller.send();
+    expect('outcomes' in state && state.outcomes).toMatchObject([
+      {
+        status: 'failed',
+        message:
+          "Notion answered 429: This request was blocked. Notion answered that this integration's requests are blocked, not just limited for a while. Retrying won't help. Contact Notion support.",
+      },
+    ]);
+    expect(patches()).toEqual([]);
+  });
+
+  it('a batch stops at a blocked GET: the rows before it are sent, the rows after it not tried (#596 review)', async () => {
+    const base = fixtureProxy();
+    const blocked = {
+      status: 429,
+      headers: { 'retry-after': '120' },
+      body: {
+        object: 'error',
+        status: 429,
+        code: 'rate_limited',
+        message: 'This request was blocked.',
+        additional_data: { rate_limit_reason: 'public_api_request_blocked' },
+      },
+    };
+    let block = false;
+    const { controller, edit } = await synced({
+      request: async request =>
+        block &&
+        request.method === 'GET' &&
+        request.path === `/v1/pages/${CHANGELOG}`
+          ? blocked
+          : base.request(request),
+    });
+    edit(LAUNCH, POINTS, 5);
+    edit(CHANGELOG, POINTS, 1);
+    edit(RETRO, POINTS, 2);
+    await controller.refreshRows();
+    block = true;
+    const before = base.calls.length;
+    const state = await controller.send();
+    expect('outcomes' in state && state.outcomes).toMatchObject([
+      { status: 'sent' },
+      {
+        status: 'failed',
+        message: expect.stringMatching(/Retrying won't help/),
+      },
+    ]);
+    // What reached Notion: row 1's GET and PATCH. Row 2's GET was answered
+    // blocked before it; row 3 was never requested.
+    expect(base.calls.slice(before).map(c => `${c.method} ${c.path}`)).toEqual([
+      `GET /v1/pages/${LAUNCH}`,
+      `PATCH /v1/pages/${LAUNCH}`,
+    ]);
+  });
+
+  it('a 5xx answer to a PATCH is unknown, not "nothing was written"', async () => {
+    const base = fixtureProxy();
+    const gateway = { status: 502, headers: {}, body: 'Bad gateway' };
+    /** When set, every read fails too, so a sync fails. */
+    let readsFail = false;
+    const { controller, edit, patches } = await synced({
+      request: async request =>
+        request.method === 'PATCH' || readsFail
+          ? gateway
+          : base.request(request),
+    });
+    edit(LAUNCH, POINTS, 5);
+    edit(CHANGELOG, POINTS, 1);
+    await controller.refreshRows();
+    const state = await controller.send();
+    // A gateway may answer 502 or 504 after Notion applied the PATCH, so
+    // the row is unknown and the batch stops, as for a lost answer.
+    expect('outcomes' in state && state.outcomes).toMatchObject([
+      {
+        status: 'unknown',
+        // Short: the review's own prefix says it is unknown (`review.ts`).
+        message: 'Notion answered 502',
+      },
+    ]);
+    expect(patches()).toEqual([]);
+    expect(syncStatusFor({ state, sources: [], now: T0 }).writes).toEqual({
+      pending: 1,
+      uncertain: 1,
+    });
+
+    // A failed sync settles nothing, so it keeps the uncertain outcome:
+    // the card still says "sent without an answer", not "waiting".
+    readsFail = true;
+    const failed = await controller.sync();
+    expect(failed.kind).toBe('failed');
+    expect('outcomes' in failed && failed.outcomes).toMatchObject([
+      { status: 'unknown', message: 'Notion answered 502' },
+    ]);
+    expect(
+      syncStatusFor({ state: failed, sources: [], now: T0 }).writes,
+    ).toEqual({ pending: 1, uncertain: 1 });
+
+    // A sync that succeeds reads Notion back and settles it: the PATCH was
+    // never applied here, so the edit is a plain change again.
+    readsFail = false;
+    const synced2 = await controller.sync();
+    expect(synced2.kind).toBe('ready');
+    expect(
+      'outcomes' in synced2 ? synced2.outcomes : undefined,
+    ).toBeUndefined();
+    expect(
+      syncStatusFor({ state: synced2, sources: [], now: T0 }).writes,
+    ).toEqual({ pending: 2 });
+  });
+
+  it('the card holds back a whole row when one of its fields conflicts', async () => {
+    const { controller, edit, proxy, patches } = await synced();
+    edit(LAUNCH, POINTS, 5);
+    edit(LAUNCH, DONE, true);
+    proxy.api.editPage(LAUNCH, { Points: { number: 7 } });
+    const state = await controller.sync();
+    expect(changesOf(state)).toMatchObject([
+      { fields: [{ shortname: DONE }, { shortname: POINTS, conflict: true }] },
+    ]);
+    // Points conflicts and Done is clean, but `sendable` is per row: Send
+    // makes no PATCH, and the card says 1 waiting, 1 held, not "2 waiting,
+    // 1 held".
+    expect(syncStatusFor({ state, sources: [], now: T0 }).writes).toEqual({
+      pending: 1,
+      held: 1,
+    });
+    await controller.send();
+    expect(patches()).toEqual([]);
   });
 
   it('discard puts the row back to the baseline', async () => {
@@ -370,6 +588,144 @@ describe('review and send', () => {
     expect(changesOf(state)).toEqual([]);
     expect(value(LAUNCH, POINTS)).toBe(3);
     expect(rowOf(LAUNCH)[1][atomic.name]).toBe('Launch plan');
+  });
+});
+
+describe('select cells (options.ts)', () => {
+  const DOING = 'b1f5a3c2-0001-4000-8000-000000000002';
+  const DOCS = 'c2e6b4d3-0002-4000-8000-000000000001';
+  const RELEASE = 'c2e6b4d3-0002-4000-8000-000000000002';
+  const TAGS = notionFieldShortname('Tg%5Cq');
+
+  it('an option picked in the host’s select cell is a change by option id, sent by id', async () => {
+    const { controller, edit, tagOf, patches, notion, value } = await synced();
+    edit(LAUNCH, STATUS, [tagOf(SHIPPED)]);
+    edit(LAUNCH, TAGS, [tagOf(DOCS)]);
+    const state = await controller.refreshRows();
+    expect(changesOf(state)).toMatchObject([
+      {
+        fields: [
+          { name: 'Status', before: DOING, after: SHIPPED },
+          { name: 'Tags', before: [DOCS, RELEASE], after: [DOCS] },
+        ],
+      },
+    ]);
+    await controller.send();
+    expect(JSON.parse(patches()[0]!.body!)).toEqual({
+      properties: {
+        '%3AUPp': { status: { id: SHIPPED } },
+        'Tg%5Cq': { multi_select: [{ id: DOCS }] },
+      },
+    });
+    expect(notion(LAUNCH).properties.Status!.status).toMatchObject({
+      id: SHIPPED,
+    });
+    expect(value(LAUNCH, STATUS)).toEqual([tagOf(SHIPPED)]);
+    expect(value(LAUNCH, TAGS)).toEqual([tagOf(DOCS)]);
+  });
+
+  it('a status cell given two Tags is held back: Notion’s status takes one', async () => {
+    const { controller, edit, tagOf, patches } = await synced();
+    edit(LAUNCH, STATUS, [tagOf(DOING), tagOf(SHIPPED)]);
+    const state = await controller.refreshRows();
+    expect(changesOf(state)).toMatchObject([
+      {
+        fields: [
+          {
+            name: 'Status',
+            after: [DOING, SHIPPED],
+            problem: 'holds 2 options; Notion’s Status takes one',
+          },
+        ],
+      },
+    ]);
+    await controller.send();
+    expect(patches()).toEqual([]);
+  });
+
+  it('a Tag cleared in the host is sent as Notion’s empty, and the row is kept empty', async () => {
+    const { controller, edit, patches, notion, value } = await synced();
+    edit(LAUNCH, STATUS, []);
+    await controller.refreshRows();
+    await controller.send();
+    expect(JSON.parse(patches()[0]!.body!)).toEqual({
+      properties: { '%3AUPp': { status: null } },
+    });
+    expect(notion(LAUNCH).properties.Status!.status).toBeNull();
+    expect(value(LAUNCH, STATUS)).toBeUndefined();
+  });
+
+  it('upgrades 0.3.0 columns in place: raw option ids become Tags, and an unsent edit survives', async () => {
+    const { store, controller, column, rowOf, edit, tagOf, value, patches } =
+      await synced();
+    // Put the store in its 0.3.0 shape: string/json columns, raw ids in the
+    // cells, no Tags.
+    const status = store.resources.get(column(STATUS))!;
+    const tags = store.resources.get(column(TAGS))!;
+
+    for (const [property, datatype] of [
+      [status, 'https://atomicdata.dev/datatypes/string'],
+      [tags, 'https://atomicdata.dev/datatypes/json'],
+    ] as const) {
+      property[atomic.datatype] = datatype;
+      property['https://atomicdata.dev/properties/isA'] = [
+        atomic.propertyClass,
+      ];
+      for (const key of [
+        'https://atomicdata.dev/properties/classtype',
+        'https://atomicdata.dev/properties/allowsOnly',
+        'https://atomicdata.dev/properties/max',
+      ])
+        delete property[key];
+    }
+
+    for (const [subject, props] of [...store.resources])
+      if (props[PARENT] === column(STATUS) || props[PARENT] === column(TAGS))
+        store.resources.delete(subject);
+    const raw: Record<string, [string, string[]]> = {
+      [LAUNCH]: [DOING, [DOCS, RELEASE]],
+      [CHANGELOG]: [SHIPPED, []],
+      [RETRO]: ['b1f5a3c2-0001-4000-8000-000000000001', [DOCS]],
+    };
+
+    for (const [pageId, [s, t]] of Object.entries(raw)) {
+      rowOf(pageId)[1][column(STATUS)] = s;
+      rowOf(pageId)[1][column(TAGS)] = t;
+    }
+
+    // An edit made in the table before the upgrade, as 0.3.0 cells held it.
+    edit(LAUNCH, STATUS, SHIPPED);
+    expect(changesOf(await controller.load())).toMatchObject([
+      { fields: [{ name: 'Status', before: DOING, after: SHIPPED }] },
+    ]);
+
+    const state = await controller.sync();
+    expect(store.resources.get(column(STATUS))).toMatchObject({
+      [atomic.datatype]: 'https://atomicdata.dev/datatypes/resourceArray',
+      'https://atomicdata.dev/properties/isA': [
+        atomic.propertyClass,
+        'https://atomicdata.dev/classes/SelectProperty',
+      ],
+      'https://atomicdata.dev/properties/max': 1,
+    });
+    expect(
+      (
+        store.resources.get(column(STATUS))![
+          'https://atomicdata.dev/properties/allowsOnly'
+        ] as string[]
+      ).length,
+    ).toBe(3);
+    expect(value(CHANGELOG, STATUS)).toEqual([tagOf(SHIPPED)]);
+    expect(value(RETRO, TAGS)).toEqual([tagOf(DOCS)]);
+    // The local edit is kept, now as a Tag, and still waits for review.
+    expect(value(LAUNCH, STATUS)).toEqual([tagOf(SHIPPED)]);
+    expect(changesOf(state)).toMatchObject([
+      { fields: [{ name: 'Status', before: DOING, after: SHIPPED }] },
+    ]);
+    await controller.send();
+    expect(JSON.parse(patches()[0]!.body!)).toEqual({
+      properties: { '%3AUPp': { status: { id: SHIPPED } } },
+    });
   });
 });
 

@@ -119,6 +119,8 @@ export class ObservationLog {
 
   private constructor(
     private readonly store: PluginStore,
+    /** Where the log's pointer is kept: the App, or a table's sync binding. */
+    private readonly home: string,
     private readonly fields: CompleteSchema['log'],
     private readonly options: LogOptions,
     private headSubject: string | undefined,
@@ -133,12 +135,13 @@ export class ObservationLog {
     options: LogOptions,
   ): Promise<ObservationLog> {
     const fields = schema.log;
-    const app = await store.getResource(await store.getApp());
-    const headSubject = app.get(fields.log);
+    const home = await store.getResource(schema.home);
+    const headSubject = home.get(fields.log);
 
     if (typeof headSubject !== 'string' || !headSubject)
       return new ObservationLog(
         store,
+        schema.home,
         fields,
         options,
         undefined,
@@ -168,6 +171,7 @@ export class ObservationLog {
 
     return new ObservationLog(
       store,
+      schema.home,
       fields,
       options,
       headSubject,
@@ -186,8 +190,8 @@ export class ObservationLog {
     schema: CompleteSchema,
   ): Promise<Mirror> {
     const fields = schema.log;
-    const app = await store.getResource(await store.getApp());
-    const headSubject = app.get(fields.log);
+    const home = await store.getResource(schema.home);
+    const headSubject = home.get(fields.log);
     if (typeof headSubject !== 'string' || !headSubject) return emptyMirror();
     const head = parse<HeadState>(
       (await store.getResource(headSubject)).get(fields.head),
@@ -344,7 +348,7 @@ export class ObservationLog {
 
   private async ensureHead(): Promise<HeadState> {
     if (this.head) return this.head;
-    const app = await this.store.getResource(await this.store.getApp());
+    const app = await this.store.getResource(this.home);
     const created = await this.store.newResource({
       parent: app.subject,
       propVals: { [NAME]: 'Clockify observation log' },

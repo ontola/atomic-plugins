@@ -75,6 +75,7 @@ export function accessibleName(segment: Segment): string {
   parts.push(`${e.calendar.name} calendar`);
   if (e.pending) parts.push('not sent yet');
   if (e.conflict) parts.push('conflict');
+  if (e.incomplete) parts.push(e.incomplete.toLowerCase());
 
   return parts.join(', ');
 }

@@ -94,6 +94,28 @@ export interface HostProxy {
 /** Whether the host is drawn light or dark (`store.getTheme()`). */
 export type ColorScheme = 'light' | 'dark';
 
+/**
+ * What `store.rowAccess()` answers (atomic-server#1740, #1849): whether this
+ * app may edit the rows of the table it is a view of, and which of its
+ * declared `row-extras` that grant covers.
+ */
+export type RowAccess =
+  | {
+      status: 'granted';
+      grantedBy: string;
+      grantedAt: number;
+      via: string;
+      extras: string[];
+    }
+  | { status: 'none' }
+  /** Not shown as a table's view. */
+  | { status: 'unavailable' };
+
+/** What `store.requestRowAccess()` answers once the person chose. */
+export type RowAccessAnswer =
+  | { status: 'granted' }
+  | { status: 'denied'; reason: string };
+
 export interface PluginStore {
   getApp(): Promise<string>;
   getData(): Promise<DataRef | undefined>;
@@ -127,6 +149,19 @@ export interface PluginStore {
   onThemeChange?(
     handler: (theme: { colorScheme?: ColorScheme }) => void,
   ): () => void;
+  /*
+   * Since atomic-server pin a12b74a (#1740, #1849), feature-detected: "Sync
+   * this table to GitHub" on a table the app didn't make needs both.
+   */
+  /** Whether this app may edit the rows of the table it is a view of. */
+  rowAccess?(): Promise<RowAccess>;
+  /**
+   * Asks the person, in the host's own bar ("Allow editing" / "Not now"),
+   * to let this app edit the table's rows and keep its `row-extras` on them.
+   * Answered straight away when a live grant already covers every extra the
+   * App declares now.
+   */
+  requestRowAccess?(): Promise<RowAccessAnswer>;
 }
 
 export interface ViewArgs {

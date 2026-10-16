@@ -11,3 +11,4 @@ export * from './atomic/Lens.js';
 export * from './background/index.js';
 export * from './reconcileRecord.js';
 export * from './events.js';
+export * from './lenses/index.js';

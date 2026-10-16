@@ -22,6 +22,34 @@
 /** Present means neither undefined, null nor the empty string. */
 const present = value => value !== undefined && value !== null && value !== '';
 
+/** "A", "A and B", "A, B and C". */
+const listOf = names =>
+  names.length <= 1
+    ? names.join('')
+    : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+
+/**
+ * The note a view puts on a row whose required fields are absent (README.md:
+ * such a row is shown as incomplete, never skipped, and never synced until it
+ * is complete): `"Incomplete: missing Name and Day"`. `missing` is
+ * `Reading.missing`; `labels` maps property subjects to the names people see
+ * as column headings, and a property without one is named by the last
+ * segment of its subject (its shortname). Empty `missing` gives `undefined`,
+ * so a caller can spread it in only when there is something to say.
+ *
+ * @param {readonly string[]} missing
+ * @param {Readonly<Record<string, string>>} [labels]
+ * @returns {string | undefined}
+ */
+export function incompleteNote(missing, labels = {}) {
+  if (!Array.isArray(missing)) throw new TypeError('missing must be an array');
+  if (!missing.length) return undefined;
+
+  return `Incomplete: missing ${listOf(
+    missing.map(p => labels[p] ?? p.split('/').filter(Boolean).pop() ?? p),
+  )}`;
+}
+
 function assertClass(klass) {
   if (
     !klass ||

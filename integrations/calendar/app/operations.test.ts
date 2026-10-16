@@ -321,6 +321,9 @@ const TEST_ONLY = new Set([
   'answerNext',
   'throwNext',
   'setTheme',
+  'grant',
+  'revokeGrant',
+  'asked',
 ]);
 
 describe('the app uses every declared operation and nothing undeclared', () => {
@@ -398,6 +401,15 @@ describe('the app uses every declared operation and nothing undeclared', () => {
     await view({ root, store: mounted.store });
     for (let i = 0; i < 4; i++) await tick();
 
+    // "Sync this table" on a table the app is a view of (#177 §6.2 item
+    // 14): the row grant asked for, then the same flow as above.
+    const other = recording(fakeStore({ view: 'other' }));
+    const viewOf = createController(other.store, () => {});
+    await viewOf.load();
+    await viewOf.syncTable();
+    await viewOf.choose(PRIMARY);
+    expect(viewOf.state().kind).toBe('ready');
+
     const declared = {
       store: [
         ...HOST_OPERATIONS.store,
@@ -410,11 +422,21 @@ describe('the app uses every declared operation and nothing undeclared', () => {
       ].sort(),
     };
     const touched = {
-      store: [...new Set([...flow.touched.store, ...mounted.touched.store])]
+      store: [
+        ...new Set([
+          ...flow.touched.store,
+          ...mounted.touched.store,
+          ...other.touched.store,
+        ]),
+      ]
         .filter(key => !TEST_ONLY.has(key))
         .sort(),
       proxy: [
-        ...new Set([...flow.touched.proxy, ...mounted.touched.proxy]),
+        ...new Set([
+          ...flow.touched.proxy,
+          ...mounted.touched.proxy,
+          ...other.touched.proxy,
+        ]),
       ].sort(),
     };
     expect(touched).toEqual(declared);

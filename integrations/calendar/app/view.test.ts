@@ -170,10 +170,30 @@ describe('Calendar views: agenda and week', () => {
     expect(one(root, 'group', 'All-day events').textContent).toContain(
       'Calendar all-day fixture',
     );
-    // Sidebar at 900px and wider, with what was not imported.
-    expect(one(root, 'complementary', 'Calendars').textContent).toContain(
-      '2 recurring events and 1 cancelled event aren’t imported yet.',
+    // Sidebar at 900px and wider; what was not imported is the sync-status
+    // card's (Q-084), first in the main landmark, not the sidebar's.
+    const side = one(root, 'complementary', 'Calendars');
+    expect(side.textContent).not.toContain('recurring');
+    const card = one(root, 'region', 'Sync status');
+    expect(root.querySelector('main')!.firstElementChild).toBe(card);
+    expect(card.textContent).toContain('Synced just now');
+    expect(card.textContent).toContain('3 events from Synthetic');
+    expect(card.textContent).toContain(
+      'Last sync: 3 added, 0 updated, 0 unchanged',
     );
+    expect(card.textContent).toContain(
+      'Edits here are sent to Google Calendar after you review them.',
+    );
+    expect(card.textContent).toContain(
+      '2 events are recurring: not imported yet, so a series is never mapped in part.',
+    );
+    expect(card.textContent).toContain(
+      '1 event is cancelled in Google: counted, not imported, and never treated as a deletion here.',
+    );
+    // No other copy of it: the agenda's note is gone too.
+    await click(one(root, 'button', 'Agenda'));
+    expect(root.querySelectorAll('.ag-note')).toHaveLength(0);
+    expect(byRole(root, 'region', 'Sync status')).toHaveLength(1);
   });
 
   it('switches view with the segmented control and the keyboard', async () => {
@@ -189,6 +209,103 @@ describe('Calendar views: agenda and week', () => {
     key('Escape');
     await settle();
     expect(byRole(root, 'dialog')).toEqual([]);
+  });
+});
+
+describe('Calendar views: an imported calendar with nothing this week (usertest-findings#3)', () => {
+  // The session imported 14 events, all months back, and the app opened on
+  // the current week; the tester read "No events this week" as a failed
+  // import. The empty week names where the events are and jumps there, and
+  // the sync-status card above it still counts what was imported.
+  const emptyWeek = (root: HTMLElement) =>
+    root.querySelector<HTMLElement>('main .center .card');
+
+  it('weeks after the events: names the latest one and jumps back to it', async () => {
+    const { root } = await chosen(1120);
+    vi.setSystemTime(new Date('2026-10-21T12:00:00Z'));
+    await click(root.querySelector<HTMLElement>('[data-key="today"]')!);
+    const empty = emptyWeek(root)!;
+    expect(empty.querySelector('h2')!.textContent).toBe('No events this week');
+    // The timed event (09:30) is the latest of that day's two.
+    expect(empty.querySelector('p')!.textContent).toBe(
+      'Your latest event is Calendar timed fixture on Thursday 24 September.',
+    );
+    const card = one(root, 'region', 'Sync status');
+    expect(card.textContent).toContain(
+      'Last sync: 3 added, 0 updated, 0 unchanged',
+    );
+    expect(byRole(root, 'button', 'Jump to next event')).toHaveLength(0);
+    await click(one(root, 'button', 'Jump to latest event'));
+    expect(emptyWeek(root)).toBeNull();
+    const thursday = one(root, 'region', 'Thursday 24 September');
+    expect(thursday.textContent).toContain('Calendar timed fixture');
+  });
+
+  it('weeks before the events: names the next one and jumps ahead to it', async () => {
+    const { root } = await chosen(1120);
+    vi.setSystemTime(new Date('2026-09-02T12:00:00Z'));
+    await click(root.querySelector<HTMLElement>('[data-key="today"]')!);
+    const empty = emptyWeek(root)!;
+    expect(empty.querySelector('h2')!.textContent).toBe('No events this week');
+    // The fixture's three-day event (10–12 September) comes first.
+    expect(empty.querySelector('p')!.textContent).toBe(
+      'Your next event is Calendar three-day fixture on Thursday 10 September.',
+    );
+    expect(byRole(root, 'button', 'Jump to latest event')).toHaveLength(0);
+    await click(one(root, 'button', 'Jump to next event'));
+    expect(emptyWeek(root)).toBeNull();
+    expect(one(root, 'region', 'Thursday 10 September')).toBeTruthy();
+    expect(one(root, 'group', 'All-day events').textContent).toContain(
+      'Calendar three-day fixture',
+    );
+  });
+});
+
+describe('Calendar views: the same guidance in the agenda (usertest-findings#3)', () => {
+  // The agenda draws the same empty state as the week (main.ts `content`:
+  // the Monday week around the anchor). The Month button opens the host's
+  // own table view, which the app does not draw.
+  const emptyCard = (root: HTMLElement) =>
+    root.querySelector<HTMLElement>('main .center .card');
+
+  it('agenda, weeks after the events: names the latest one and jumps back to its day', async () => {
+    const { root } = await chosen(1120);
+    await click(one(root, 'button', 'Agenda'));
+    vi.setSystemTime(new Date('2026-10-21T12:00:00Z'));
+    await click(root.querySelector<HTMLElement>('[data-key="today"]')!);
+    expect(root.querySelector('.agenda')).toBeNull();
+    // Still the agenda: its day strip is there over the empty state.
+    expect(one(root, 'group', 'Days of this week')).toBeTruthy();
+    const empty = emptyCard(root)!;
+    expect(empty.querySelector('h2')!.textContent).toBe('No events this week');
+    expect(empty.querySelector('p')!.textContent).toBe(
+      'Your latest event is Calendar timed fixture on Thursday 24 September.',
+    );
+    await click(one(root, 'button', 'Jump to latest event'));
+    expect(emptyCard(root)).toBeNull();
+    expect(root.querySelector('.agenda')).toBeTruthy();
+    const day = one(root, 'region', /^Thursday 24/);
+    expect(day.textContent).toContain('Calendar timed fixture');
+  });
+
+  it('agenda on a phone (no Today button; the t key), weeks before the events: names the next one', async () => {
+    const { root } = await chosen(360);
+    expect(root.querySelector('[data-key="today"]')).toBeNull();
+    vi.setSystemTime(new Date('2026-09-02T12:00:00Z'));
+    key('t');
+    await settle();
+    expect(one(root, 'group', 'Days of this week')).toBeTruthy();
+    const empty = emptyCard(root)!;
+    expect(empty.querySelector('h2')!.textContent).toBe('No events this week');
+    expect(empty.querySelector('p')!.textContent).toBe(
+      'Your next event is Calendar three-day fixture on Thursday 10 September.',
+    );
+    await click(one(root, 'button', 'Jump to next event'));
+    expect(emptyCard(root)).toBeNull();
+    expect(root.querySelector('.agenda')).toBeTruthy();
+    expect(one(root, 'region', /^Thursday 10/).textContent).toContain(
+      'Calendar three-day fixture',
+    );
   });
 });
 
@@ -295,6 +412,10 @@ describe('Calendar views: edit, review, send', () => {
     });
     const root = await mount(store, 1120);
     expect(root.textContent).toContain('Not synced with Google Calendar.');
+    const card = one(root, 'region', 'Sync status');
+    expect(card.textContent).toContain('Not synced yet');
+    expect(card.textContent).toContain('1 event in this table');
+    expect(card.textContent).toContain('Read-only: edits here stay in Atomic.');
     expect(byRole(root, 'button', 'Sync now')).toEqual([]);
     expect(byRole(root, 'button', 'Connection menu')).toEqual([]);
     expect(byRole(root, 'button', 'Connect Google Calendar')).toEqual([]);
@@ -303,6 +424,93 @@ describe('Calendar views: edit, review, send', () => {
     const drawer = one(root, 'dialog');
     expect(byRole(drawer, 'button', 'Edit')).toEqual([]);
     expect(store.calls).toEqual([]);
+  });
+
+  it('shows a row missing a required event-v1 field as incomplete, not skipped, with a way to the row (#177)', async () => {
+    const store = fakeStore({ view: 'other' });
+    store.resources.set('did:ad:hand-1', {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [EVENT],
+      [NAME]: 'Planning day',
+      [SHARED.day]: '2026-09-24',
+    });
+    store.resources.set('did:ad:hand-2', {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [EVENT],
+      [NAME]: 'Retro',
+    });
+    store.resources.set('did:ad:hand-3', {
+      [PARENT]: OTHER_TABLE,
+      [IS_A]: [EVENT],
+      [SHARED.day]: '2026-09-24',
+    });
+    const root = await mount(store, 1120);
+    // Listed by the sync-status card, grouped by what is missing, with the
+    // read-only table's wording (nothing about sending).
+    const list = one(root, 'region', 'Sync status');
+    expect(list.textContent).toContain('Read-only: edits here stay in Atomic.');
+    expect(list.textContent).toContain(
+      '1 event is incomplete (missing Day): drawn on no day. Fill the column in the table.',
+    );
+    expect(list.textContent).toContain(
+      '1 event is incomplete (missing Name). Fill the column in the table.',
+    );
+    expect(list.textContent).not.toContain('sent to Google');
+    expect(
+      [...list.querySelectorAll('.ss-items li')].map(li => li.textContent),
+    ).toEqual(['Retro', '(untitled)']);
+    // A row without a Day is drawn on no day; one without a Name is.
+    expect(byRole(root, 'button', /^Retro, /)).toEqual([]);
+    const untitled = one(
+      root,
+      'button',
+      /^\(untitled\), All day, .*, incomplete: missing name$/,
+    );
+    expect(one(root, 'button', /^Planning day, All day, /)).toBeTruthy();
+    // Open row hands the row to the host.
+    await click(byRole(list, 'button', 'Open row')[0]);
+    expect(store.opened.resources).toEqual(['did:ad:hand-2']);
+    await click(untitled);
+    const drawer = one(root, 'dialog');
+    expect(drawer.textContent).toContain('Incomplete: missing Name.');
+    await click(one(drawer, 'button', 'Open row'));
+    expect(store.opened.resources).toEqual(['did:ad:hand-2', 'did:ad:hand-3']);
+    expect(store.calls).toEqual([]);
+    // The first open writes under the App only; the table and its rows stay.
+    expect(
+      store.writes.filter(
+        w =>
+          w.subject === OTHER_TABLE ||
+          store.resources.get(w.subject)?.[PARENT] === OTHER_TABLE,
+      ),
+    ).toEqual([]);
+  });
+
+  it('on an event-v1 table that isn’t its own: Sync this table, choose, import; no Remove local copy (#177 item 14)', async () => {
+    const store = fakeStore({ view: 'other' });
+    const root = await mount(store, 1120);
+    expect(root.textContent).toContain('Rows already here stay here only.');
+    await click(one(root, 'button', 'Sync this table to Google Calendar'), 10);
+    expect(store.asked).toBe(1);
+    expect(
+      one(root, 'heading', 'Which calendar should Team events sync with?'),
+    ).toBeTruthy();
+    expect(one(root, 'button', 'Not now')).toBeTruthy();
+    await click(one(root, 'button', 'Import this calendar'), 10);
+    expect(one(root, 'button', 'Sync now')).toBeTruthy();
+    expect(
+      [...store.resources.values()].filter(p => p[PARENT] === OTHER_TABLE),
+    ).toHaveLength(3);
+    // The table keeps the name it was given.
+    expect(store.resources.get(OTHER_TABLE)![NAME]).toBe('Team events');
+    // A Google event gone: keep it, or delete the row in the table.
+    store.google.cancel('timed');
+    await click(one(root, 'button', 'Sync now'), 10);
+    await click(one(root, 'button', /^1 conflict/), 6);
+    const sheet = one(root, 'dialog');
+    expect(byRole(sheet, 'button', 'Remove local copy')).toEqual([]);
+    expect(sheet.textContent).toContain('delete the row in the table');
+    expect(byRole(sheet, 'button', 'Keep as local event')).toHaveLength(1);
   });
 
   it('a read-only calendar never offers Edit', async () => {
@@ -388,6 +596,22 @@ describe('Calendar views: conflicts and errors', () => {
     const banner = root.querySelector('.banner')!;
     expect(banner.getAttribute('role')).toBe('status');
     expect(banner.textContent).toContain('Couldn’t reach Google.');
+    // The sync-status card names the same failure as the last sync, with
+    // the next step and the last good sync, over the rows that stay; the
+    // banner above keeps the action. The card is never a live region.
+    const card = one(root, 'region', 'Sync status');
+    expect(card.getAttribute('role')).toBeNull();
+    expect(root.querySelector('main')!.firstElementChild).toBe(card);
+    expect(card.getAttribute('data-tone')).toBe('neg');
+    expect(card.textContent).toContain('Sync failed just now');
+    expect(card.textContent).toContain(
+      'Couldn’t reach Google.Check your connection, then retry.Last good sync just now.',
+    );
+    expect(card.textContent).toContain('3 events from Synthetic');
+    expect(card.textContent).toContain(
+      'Edits here are sent to Google Calendar after you review them.',
+    );
+    expect(byRole(root, 'button', 'Retry')).toHaveLength(1);
   });
 });
 

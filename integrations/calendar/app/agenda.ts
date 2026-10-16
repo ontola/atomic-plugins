@@ -90,6 +90,9 @@ function row(ctx: Ctx, segment: Segment): HTMLElement {
         ? h(doc, 'span', { class: 'tagline accent' }, 'Not sent yet')
         : null,
       e.conflict ? h(doc, 'span', { class: 'tagline warn' }, 'Conflict') : null,
+      e.incomplete
+        ? h(doc, 'span', { class: 'tagline warn' }, e.incomplete)
+        : null,
     ),
   );
 
@@ -101,8 +104,6 @@ export function agenda(
   ctx: Ctx,
   events: CalEvent[],
   from: string,
-  /** What was not imported; the sidebar that says so is hidden here. */
-  note?: string,
 ): HTMLElement {
   const { doc } = ctx;
   const days = agendaDays(
@@ -135,6 +136,5 @@ export function agenda(
           : h(doc, 'p', { class: 'ag-none' }, 'No events'),
       ),
     ),
-    note ? h(doc, 'p', { class: 'ag-note' }, note) : null,
   );
 }

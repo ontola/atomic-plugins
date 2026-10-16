@@ -99,6 +99,44 @@ export function notionPlainText(parts: unknown): string | undefined {
   return text;
 }
 
+/**
+ * The words of a Notion rich-text array without its formatting: each part's
+ * `plain_text` (Notion's own flattening of text, mentions and equations),
+ * joined. `undefined` for a value that is not a rich-text array. Lossy, so
+ * it is only ever read, never written back (usertest-findings#19).
+ */
+export function notionTextWithoutFormatting(
+  parts: unknown,
+): string | undefined {
+  if (!Array.isArray(parts)) return undefined;
+  let text = '';
+
+  for (const part of parts) {
+    const p = object(part);
+    const plain =
+      typeof p.plain_text === 'string' ? p.plain_text : object(p.text).content;
+    if (typeof plain !== 'string') return undefined;
+    text += plain;
+  }
+
+  return text;
+}
+
+/**
+ * For a title or rich_text value that `notionFieldValue` cannot read
+ * losslessly (it has formatting, links, mentions or equations): its text
+ * without the formatting. `undefined` for every other value.
+ */
+export function notionFormattedText(
+  type: NotionFieldType,
+  raw: unknown,
+): string | undefined {
+  if (type !== 'title' && type !== 'rich_text') return undefined;
+  if (notionFieldValue(type, raw) !== undefined) return undefined;
+
+  return notionTextWithoutFormatting(raw);
+}
+
 const optionId = (value: unknown): string | undefined => {
   const id = object(value).id;
 
@@ -250,8 +288,9 @@ const normalizeUuid = (value: unknown): string =>
  * - The record name is the plain-text title (`Untitled` when empty).
  * - Archived or trashed pages are left out and listed in `errors`. A page
  *   missing from a fetch never means it should be deleted.
- * - Formatted rich text and malformed option values are left unprojected, and
- *   each one is listed in `errors`. The raw `properties` object passes through
+ * - Formatted rich text is projected as its words without the formatting
+ *   (`notionFormattedText`, from 0.5.3) and listed in `errors`; malformed
+ *   option values are left unprojected and listed too. The raw `properties` object passes through
  *   untouched, as do unsupported types (formula, relation, date, people, files,
  *   ...), so nothing provider-side is lost.
  * - A property id whose type differs between pages in one fetch (the schema
@@ -317,6 +356,21 @@ export function notionProjection(
         );
       if (!known) fields.set(id, { id, name, type: p.type });
       const value = notionFieldValue(p.type, p[p.type]);
+      const formatted =
+        value === undefined
+          ? notionFormattedText(p.type, p[p.type])
+          : undefined;
+
+      // Formatted text is imported without its formatting, and reported, so
+      // the words are there; the app never writes such a value back.
+      if (formatted !== undefined) {
+        errors.push(
+          `Notion page ${row.id} property "${name}" (${p.type}) has formatting; imported as plain text`,
+        );
+        if (formatted !== '') values[notionFieldShortname(id)] = formatted;
+        if (p.type === 'title') title = formatted.trim();
+        continue;
+      }
 
       if (value === undefined) {
         errors.push(
@@ -341,6 +395,7 @@ export function notionProjection(
     description: `Notion property "${field.name}" (${field.type}, id ${field.id}).`,
     requires: [],
     recommends: [],
+    notionType: field.type,
   }));
   if (
     fetched.ontology.terms.some(t =>

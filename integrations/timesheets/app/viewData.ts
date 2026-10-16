@@ -15,8 +15,9 @@ export async function readMirror(
 ): Promise<Mirror> {
   const schema = await findSchema(store);
   const { log, head, observation, snapshot } = schema.log;
-  // No log Properties yet: this app never synced.
-  if (!log || !head || !observation || !snapshot) return emptyMirror();
+  // No log Properties yet, or a table with no sync binding: never synced.
+  if (!schema.home || !log || !head || !observation || !snapshot)
+    return emptyMirror();
 
   return (await ObservationLog.open(store, schema as CompleteSchema, { clock }))
     .mirror;

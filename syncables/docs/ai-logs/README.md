@@ -9,12 +9,12 @@ the sibling project this engine is built for.
 ## What's logged here, and what isn't
 
 syncables has been developed collaboratively with Claude Code (Anthropic),
-an agentic coding assistant, since before this policy took effect. Per the
+and now also Codex (OpenAI), since before this policy took effect. Per the
 policy's own terms for already-ongoing projects, retroactive logging is not
 required — this folder does not attempt to reconstruct every historical
 session. What it does do:
 
-- **Going forward**, each substantive Claude Code session that produces a
+- **Going forward**, each substantive AI-assisted session that produces a
   commit gets a log under [`sessions/`](sessions), redacted per the rules
   below.
 - **Historically**, some commit messages on this project already carry a
@@ -27,9 +27,14 @@ session. What it does do:
   substantive outputs** — the actual asks and the actual answers/code
   changes. They do not reproduce the coding assistant's internal system
   prompt, tool-call plumbing, or other harness scaffolding verbatim: that
-  content is Anthropic product internals rather than project-specific
+  content is coding-assistant product internals rather than project-specific
   "prompts," and dumping it wouldn't add transparency about how *this
   project* was built.
+
+Codex commits retain the historical `Claude-Session` trailer for compatibility
+and also use `Codex-Session`; the session log identifies the actual tool/model.
+A `codex://threads/` session link is local to the maintainer's app. The
+repository log contains the substantive prompts and outputs for other readers.
 
 ## Redaction
 

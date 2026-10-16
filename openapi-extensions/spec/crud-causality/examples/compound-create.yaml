@@ -1,0 +1,118 @@
+openapi: 3.0.3
+info:
+  title: Illustrative compound create
+  version: 1.0.0
+  description: >
+    Synthetic, shaped like GitHub's issues. The create body accepts labels,
+    but the server may silently drop them; labels are then added with a
+    second request, which can be refused after the ticket exists. A ticket's
+    watchers can only be set after it exists.
+servers:
+  - url: https://api.example.com/v1
+components:
+  schemas:
+    Label:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+    Ticket:
+      type: object
+      properties:
+        number: { type: integer }
+        title: { type: string }
+        labels:
+          type: array
+          items: { $ref: '#/components/schemas/Label' }
+        watchers:
+          type: array
+          items: { type: string }
+  crudResources:
+    ticket:
+      schema: { $ref: '#/components/schemas/Ticket' }
+      identity:
+        urlTemplate: /projects/{project}/tickets/{number}
+        bindings: { number: { field: number } }
+      collections:
+        tickets:
+          urlTemplate: /projects/{project}/tickets
+paths:
+  /projects/{project}/tickets:
+    parameters:
+      - { name: project, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: createTicket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title]
+              properties:
+                title: { type: string }
+                labels:
+                  type: array
+                  description: Label names; silently dropped unless the caller may label.
+                  items: { type: string }
+      responses:
+        '201':
+          description: The ticket, with the labels that were applied.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+      x-crud:
+        action: create
+        resource: ticket
+        url: { source: template }
+        addedFields:
+          number: { source: generated, schema: { type: integer } }
+        memberOf: [tickets]
+        followUps:
+          - field: labels
+            create: include
+            itemKey: name
+            operation: addTicketLabels
+            bind:
+              path.number: { from: created, field: number }
+              body.labels: { from: missing, field: labels }
+          - field: watchers
+            create: omit
+            operation: setTicketWatchers
+            bind:
+              path.number: { from: created, field: number }
+              body: { from: planned, field: watchers }
+  /projects/{project}/tickets/{number}/labels:
+    parameters:
+      - { name: project, in: path, required: true, schema: { type: string } }
+      - { name: number, in: path, required: true, schema: { type: integer } }
+    post:
+      operationId: addTicketLabels
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [labels]
+              properties:
+                labels: { type: array, items: { type: string } }
+      responses:
+        '200':
+          description: The ticket's labels.
+      x-crud: { action: update, mode: patch, patchFormat: custom, resource: ticket }
+  /projects/{project}/tickets/{number}/watchers:
+    parameters:
+      - { name: project, in: path, required: true, schema: { type: string } }
+      - { name: number, in: path, required: true, schema: { type: integer } }
+    put:
+      operationId: setTicketWatchers
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: array, items: { type: string } }
+      responses:
+        '204':
+          description: Watchers replaced.
+      x-crud: { action: update, mode: patch, patchFormat: custom, resource: ticket }

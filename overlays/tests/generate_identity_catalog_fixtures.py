@@ -64,12 +64,13 @@ def apply(document, source):
             merge(document, action["update"])
 
 
-def platform_config(name):
-    return next(platform for platform in CATALOG["platforms"] if platform["name"] == name)
+def platform_config(name, catalog=None):
+    catalog = CATALOG if catalog is None else catalog
+    return next(platform for platform in catalog["platforms"] if platform["name"] == name)
 
 
-def compose(name, cache):
-    config = platform_config(name)
+def compose(name, cache, catalog=None):
+    config = platform_config(name, catalog)
     base, base_record = fetch(config["openapi"], cache)
     provenance = [base_record]
     document = yaml.safe_load(base)

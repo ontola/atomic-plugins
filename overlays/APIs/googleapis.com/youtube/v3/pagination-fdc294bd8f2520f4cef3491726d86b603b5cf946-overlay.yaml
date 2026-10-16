@@ -1,0 +1,104 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/youtube/v3/docs/playlistItems/list
+overlay: 1.0.0
+info:
+  title: YouTube v3 ordinary collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/fdc294bd8f2520f4cef3491726d86b603b5cf946/APIs/googleapis.com/youtube/v3/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include the continuation
+          and item array. Keep required part selection, filters, ordering and field projections fixed.
+          Follow only nextPageToken, not prevPageToken. pageInfo.totalResults may be approximate and is
+          not used for termination. Live chat polling and member-update streams are outside this collection
+          variant.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/youtube/v3/commentThreads'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: items
+      description: Use videoId or allThreadsRelatedToChannelId collection filters. Pagination fields are
+        unsupported with id; ID batch reads are outside this application.
+- target: $.paths['/youtube/v3/comments'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: items
+      description: Replies listing with parentId only. Pagination fields are unsupported with id; ID batch
+        reads are outside this application.
+- target: $.paths['/youtube/v3/playlistItems'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: items
+- target: $.paths['/youtube/v3/playlists'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: items
+- target: $.paths['/youtube/v3/search'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: items
+- target: $.paths['/youtube/v3/subscriptions'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: items

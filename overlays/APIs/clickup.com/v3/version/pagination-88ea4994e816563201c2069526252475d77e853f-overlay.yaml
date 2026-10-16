@@ -1,0 +1,99 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developer.clickup.com/reference/getchatmessages
+overlay: 1.0.0
+info:
+  title: ClickUp v3 cursor collections
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/88ea4994e816563201c2069526252475d77e853f/APIs/clickup.com/v3/version/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      cursorPages:
+        type: pageToken
+        autoDetect: false
+        description: Send next_cursor as cursor on the subsequent request, preserving collection filters
+          and content-format parameters. Stop when next_cursor is absent or empty. Use cursor rather than
+          the deprecated next_cursor request parameter on Docs.
+        request:
+          queryParameters:
+            cursor:
+              role: cursor
+            limit:
+              role: pageSize
+        response:
+          bodyFields:
+            next_cursor:
+              role: nextCursor
+- target: $.paths['/api/v3/workspaces/{workspace_id}/chat/channels'].get
+  update:
+    x-pagination:
+    - scheme: cursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/api/v3/workspaces/{workspace_id}/chat/channels/{channel_id}/followers'].get
+  update:
+    x-pagination:
+    - scheme: cursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/api/v3/workspaces/{workspace_id}/chat/channels/{channel_id}/members'].get
+  update:
+    x-pagination:
+    - scheme: cursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/api/v3/workspaces/{workspace_id}/chat/channels/{channel_id}/messages'].get
+  update:
+    x-pagination:
+    - scheme: cursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/api/v3/workspaces/{workspace_id}/chat/messages/{message_id}/reactions'].get
+  update:
+    x-pagination:
+    - scheme: cursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/api/v3/workspaces/{workspace_id}/chat/messages/{message_id}/replies'].get
+  update:
+    x-pagination:
+    - scheme: cursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/api/v3/workspaces/{workspace_id}/chat/messages/{message_id}/tagged_users'].get
+  update:
+    x-pagination:
+    - scheme: cursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/api/v3/workspaces/{workspace_id}/{entity_type}/{entity_id}/attachments'].get
+  update:
+    x-pagination:
+    - scheme: cursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/api/v3/workspaces/{workspace_id}/docs'].get
+  update:
+    x-pagination:
+    - scheme: cursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: docs

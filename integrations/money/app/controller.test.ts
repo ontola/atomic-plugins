@@ -68,6 +68,15 @@ describe('Money controller: loading', () => {
     });
   });
 
+  it('dates a failed load by the injected clock', async () => {
+    const store = fakeStore({ data: 'none' });
+    const controller = createController(store, () => {}, {
+      now: () => 1_790_000_000_000,
+    });
+    await controller.load();
+    expect(controller.state().failedAt).toBe(1_790_000_000_000);
+  });
+
   it('reports progress while many rows load', async () => {
     const store = fakeStore({
       rows: Array.from({ length: 120 }, (_, i) =>
@@ -212,8 +221,10 @@ describe('Money controller: host APIs from the 007869464 pin', () => {
     expect([...store.calls.getMany].sort((a, b) => b - a)).toEqual([
       100, 100, 50,
     ]);
-    // Only the table, its class and properties go one by one.
-    expect(store.calls.get - before).toBeLessThan(40);
+    // Only the table, its class and properties, and the App's own terms
+    // (adopt.ts: the App, its ontology, the importer's class found by
+    // shortname) go one by one; never the rows.
+    expect(store.calls.get - before).toBeLessThan(80);
   });
 
   it('skips a row getMany could not read, and keeps the rest', async () => {

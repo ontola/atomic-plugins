@@ -60,6 +60,26 @@ export function githubTracker({ scenario } = {}) {
   const now = () => new Date().toISOString();
   const api = {
     snapshot: name => structuredClone(repo(name)),
+    /**
+     * Forgets everything done to one repository, so the next request seeds it
+     * afresh (the seeded and user-testing repositories) or finds it empty. A
+     * test calls it first, so a Playwright retry starts from the same state
+     * as the first attempt: the mock proxy outlives an attempt. It also drops
+     * the failures `failNext` left pending for this repository or for any
+     * request: a test that failed before using them up would otherwise hand
+     * them to its retry's first requests. Failures scoped to another
+     * repository stay, so a test running in parallel keeps its own.
+     */
+    reset(name) {
+      repositories.delete(name);
+      const kept = failures.filter(
+        f => f.repository !== undefined && f.repository !== name,
+      );
+      failures.length = 0;
+      failures.push(...kept);
+
+      return { reset: name };
+    },
     createIssue(name, input) {
       const state = repo(name);
       const number = state.issues.length + 1;
@@ -201,9 +221,20 @@ export function githubTracker({ scenario } = {}) {
   const issueRequest = api.request;
 
   api.request = (method, url, input) => {
-    const failure = failures.shift();
+    // The first pending failure this request matches: any request, or only a
+    // write (not GET), or only one repository's, as `failNext` was asked.
+    const at = failures.findIndex(
+      f =>
+        (!f.writes || method !== 'GET') &&
+        (f.repository === undefined ||
+          url.pathname.startsWith(`${PROXY}/repos/${f.repository}/`)),
+    );
 
-    if (failure) return failure;
+    if (at !== -1) {
+      const { status, body } = failures.splice(at, 1)[0];
+
+      return { status, body };
+    }
 
     return url.pathname === `${PROXY}/user/repos`
       ? listRepositories(method, url)
@@ -222,17 +253,43 @@ export function githubTracker({ scenario } = {}) {
   /**
    * The next `count` proxied GitHub requests answer `status` instead: 503 for
    * an outage, 429 or 403 for a rate limit (with GitHub's message), 401 for
-   * revoked access.
+   * revoked access, 422 for a write GitHub refuses. `writes: true` fails only
+   * writes (any method but GET), so the reads of the same pass go through;
+   * `repository: 'owner/name'` fails only that repository's requests, so a
+   * test running in parallel on another one is untouched.
    */
-  api.failNext = (status, count = 1) => {
+  api.failNext = (
+    status,
+    count = 1,
+    { writes = false, repository: only } = {},
+  ) => {
     const message =
       status === 401
         ? 'Bad credentials'
         : status === 403 || status === 429
           ? 'API rate limit exceeded'
-          : 'Service unavailable';
+          : status === 422
+            ? 'Validation Failed'
+            : 'Service unavailable';
+    // A 422 carries GitHub's `errors`, as a refused write does (#357).
+    const errors =
+      status === 422
+        ? [
+            {
+              resource: 'Issue',
+              field: 'title',
+              code: 'custom',
+              message: 'title is too long (maximum is 256 characters)',
+            },
+          ]
+        : undefined;
     for (let i = 0; i < count; i++)
-      failures.push({ status, body: { message } });
+      failures.push({
+        status,
+        body: { message, ...(errors ? { errors } : {}) },
+        writes,
+        repository: only,
+      });
 
     return { pending: failures.length };
   };
@@ -333,6 +390,7 @@ export default {
   // editing on GitHub itself, and GitHub failing.
   drivers: [
     'snapshot',
+    'reset',
     'updateIssue',
     'createIssue',
     'createComment',

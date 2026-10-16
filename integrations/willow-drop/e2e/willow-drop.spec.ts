@@ -15,10 +15,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import {
-  before,
-  createFromCatalog,
-} from '../../../browser/e2e/tests/test-utils';
+import { before } from '../../../browser/e2e/tests/test-utils';
+import { openNewPluginDraft } from '../../tooling/e2e/route-install';
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
 
 // Playwright loads this spec as CommonJS: this folder has no package.json
@@ -141,12 +139,7 @@ test.describe('willow-drop integration', () => {
 });
 
 async function publishBundle(page: Page) {
-  await createFromCatalog(page, 'Plugin');
-  await expect(
-    page
-      .getByRole('main')
-      .getByRole('heading', { name: 'New plugin', level: 1 }),
-  ).toBeVisible({ timeout: 45_000 });
+  await openNewPluginDraft(page);
   await page.evaluate(async source => {
     const store = window.store!;
     const subject = new URL(location.href).searchParams.get('subject')!;

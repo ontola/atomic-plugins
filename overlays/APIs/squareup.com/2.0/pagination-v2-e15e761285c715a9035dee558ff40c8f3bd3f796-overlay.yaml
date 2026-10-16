@@ -1,0 +1,838 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developer.squareup.com/docs/build-basics/common-api-patterns/pagination
+overlay: 1.0.0
+info:
+  title: Square explicit query and body collection cursors
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/e15e761285c715a9035dee558ff40c8f3bd3f796/APIs/squareup.com/2.0/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      queryCursor:
+        type: pageToken
+        autoDetect: false
+        description: Return the opaque response cursor on the next request, keeping filters and sorting.
+          Stop when cursor is absent or empty. Cursors expire after five minutes; page-size limits are
+          operation-specific.
+        request:
+          queryParameters:
+            cursor:
+              role: cursor
+        response:
+          bodyFields:
+            cursor:
+              role: nextCursor
+      bodyCursor:
+        type: pageToken
+        autoDetect: false
+        description: Return the opaque response cursor on the next request, keeping filters and sorting.
+          Stop when cursor is absent or empty. Cursors expire after five minutes; page-size limits are
+          operation-specific.
+        request:
+          bodyFields:
+            cursor:
+              role: cursor
+        response:
+          bodyFields:
+            cursor:
+              role: nextCursor
+      merchantCursor:
+        type: pageToken
+        autoDetect: false
+        description: Return the integer response cursor as the cursor query parameter without incrementing
+          it. Stop when the provider omits cursor. The pinned merchant endpoint has no limit parameter.
+        request:
+          queryParameters:
+            cursor:
+              role: cursor
+              schema:
+                type: integer
+        response:
+          envelope:
+            itemsField: merchant
+          bodyFields:
+            cursor:
+              role: nextCursor
+              schema:
+                type: integer
+- target: $.paths['/v2/bank-accounts'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: bank_accounts
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/bookings'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: bookings
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/bookings/custom-attribute-definitions'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: custom_attribute_definitions
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/bookings/location-booking-profiles'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: location_booking_profiles
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/bookings/team-member-booking-profiles'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: team_member_booking_profiles
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/bookings/{booking_id}/custom-attributes'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: custom_attributes
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/cards'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: cards
+- target: $.paths['/v2/cash-drawers/shifts'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: cash_drawer_shifts
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/cash-drawers/shifts/{shift_id}/events'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: cash_drawer_shift_events
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/catalog/list'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: objects
+- target: $.paths['/v2/catalog/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: objects
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/catalog/search-catalog-items'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/channels'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: channels
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/customers'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: customers
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/customers/custom-attribute-definitions'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: custom_attribute_definitions
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/customers/groups'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: groups
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/customers/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: customers
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/customers/segments'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: segments
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/customers/{customer_id}/custom-attributes'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: custom_attributes
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/devices'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: devices
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/devices/codes'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: device_codes
+- target: $.paths['/v2/disputes'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: disputes
+- target: $.paths['/v2/disputes/{dispute_id}/evidence'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: evidence
+- target: $.paths['/v2/employees'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: employees
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/events'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: events
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/gift-cards'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: gift_cards
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/gift-cards/activities'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: gift_card_activities
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/inventory/batch-retrieve-changes'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: changes
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/inventory/batch-retrieve-counts'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: counts
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/inventory/changes/batch-retrieve'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: changes
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/inventory/counts/batch-retrieve'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: counts
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/inventory/{catalog_object_id}'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: counts
+- target: $.paths['/v2/inventory/{catalog_object_id}/changes'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: changes
+- target: $.paths['/v2/invoices'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: invoices
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/invoices/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: invoices
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/labor/break-types'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: break_types
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/labor/employee-wages'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: employee_wages
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/labor/scheduled-shifts/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: scheduled_shifts
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/labor/shifts/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: shifts
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/labor/team-member-wages'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: team_member_wages
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/labor/timecards/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: timecards
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/labor/workweek-configs'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: workweek_configs
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/locations/custom-attribute-definitions'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: custom_attribute_definitions
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/locations/{location_id}/custom-attributes'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: custom_attributes
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/locations/{location_id}/transactions'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: transactions
+- target: $.paths['/v2/loyalty/accounts/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: loyalty_accounts
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/loyalty/events/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: events
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/loyalty/programs/{program_id}/promotions'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: loyalty_promotions
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/loyalty/rewards/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: rewards
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/merchants'].get
+  update:
+    x-pagination:
+    - scheme: merchantCursor
+- target: $.paths['/v2/merchants/custom-attribute-definitions'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: custom_attribute_definitions
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/merchants/{merchant_id}/custom-attributes'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: custom_attributes
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/online-checkout/payment-links'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: payment_links
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/orders/custom-attribute-definitions'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: custom_attribute_definitions
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/orders/{order_id}/custom-attributes'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: custom_attributes
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/payments'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: payments
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/payouts'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: payouts
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/payouts/{payout_id}/payout-entries'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: payout_entries
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/refunds'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: refunds
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/subscriptions/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: subscriptions
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/subscriptions/{subscription_id}/events'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: subscription_events
+        request:
+          queryParameters:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/team-members/jobs'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: jobs
+- target: $.paths['/v2/team-members/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: team_members
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/terminals/actions/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: action
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/terminals/checkouts/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: checkouts
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/terminals/refunds/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: refunds
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/transfer-orders/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: transfer_orders
+        request:
+          bodyFields:
+            limit:
+              role: pageSize
+- target: $.paths['/v2/vendors/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: vendors
+- target: $.paths['/v2/webhooks/subscriptions'].get
+  update:
+    x-pagination:
+    - scheme: queryCursor
+      overrides:
+        response:
+          envelope:
+            itemsField: subscriptions
+        request:
+          queryParameters:
+            limit:
+              role: pageSize

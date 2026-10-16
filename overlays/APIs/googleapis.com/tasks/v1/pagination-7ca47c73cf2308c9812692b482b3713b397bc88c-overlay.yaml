@@ -1,0 +1,51 @@
+# Reviewed 2026-10-06 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/tasks/reference/rest/v1/tasks/list
+overlay: 1.0.0
+info:
+  title: Google Tasks v1 ordinary collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/7ca47c73cf2308c9812692b482b3713b397bc88c/APIs/googleapis.com/tasks/v1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include the continuation
+          and item array. Keep tasklist, due/completed/updated filters and showCompleted/showHidden/showDeleted
+          flags fixed. Default task filters do not include every completed or hidden task; pagination
+          does not widen the requested scope.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/tasks/v1/lists/{tasklist}/tasks'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: items
+- target: $.paths['/tasks/v1/users/@me/lists'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: items

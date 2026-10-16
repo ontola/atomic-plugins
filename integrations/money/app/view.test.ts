@@ -53,6 +53,151 @@ describe('Money view: first run', () => {
   });
 });
 
+describe('Money view: the shared class (#177)', () => {
+  beforeEach(() => document.head.replaceChildren());
+
+  const mt940Text =
+    ':20:SYNTHETIC\n:25:NL42BUNQ0123456789\n:28C:31/1\n:60F:C260901EUR100,00\n:61:2609020902D12,34NTRFNONREF//TEST-1\n:86:Fixture lunch\n:61:2609030903C20,00NTRFNONREF//TEST-2\n:86:Fixture refund\n:62F:C260903EUR107,66\n';
+
+  const choose = async (root: HTMLElement, name: string, body: string) => {
+    const input = root.querySelector<HTMLInputElement>('input[type="file"]')!;
+    Object.defineProperty(input, 'files', {
+      configurable: true,
+      value: [new File([body], name)],
+    });
+    input.dispatchEvent(new Event('change'));
+    for (let i = 0; i < 10; i++) await settle();
+  };
+
+  it('offers the file on its own empty table after an install, and imports it there', async () => {
+    const store = fakeStore({ data: 'own' });
+    const root = await open(store);
+    expect(text(root.querySelector('.pl-empty h2'))).toBe(
+      'Bring in your bank transactions',
+    );
+    await choose(root, 'bunq.sta', mt940Text);
+    const dialog = root.querySelector('[role="dialog"]')!;
+    const apply = [...dialog.querySelectorAll('button')].find(b =>
+      text(b).startsWith('Import 2'),
+    )!;
+    expect(apply.disabled).toBe(false);
+    expect(apply.getAttribute('aria-describedby')).toBeNull();
+    apply.click();
+    for (let i = 0; i < 10; i++) await settle();
+    expect(root.querySelector('[role="dialog"]')).toBeNull();
+    expect(store.accessRequests).toBe(0);
+    expect(root.querySelectorAll('[data-row]')).toHaveLength(2);
+    expect(text(root.querySelector('.pl-pill'))).toContain('Imported 2');
+    // The card says this view imported them (0.4.4).
+    expect(
+      text(root.querySelector('section[aria-label="Sync status"]')),
+    ).toContain('2 imported here at the last sync');
+    // The statement the app stored: its closing balance in the strip.
+    expect(text(root.querySelector('.m-seg .m-net'))).toMatch(/^€107\.66on/);
+    // Its own rows need no "Allow editing".
+    [...root.querySelectorAll<HTMLElement>('[data-row]')][0].click();
+    expect(root.querySelector('[data-key="allow-editing"]')).toBeNull();
+    expect(text(root.querySelector('.pl-panel'))).not.toContain(
+      'allow it to edit them',
+    );
+  });
+
+  it('says why it cannot import on a host without an App ontology', async () => {
+    const root = await open(fakeStore({ data: 'own', host: 'legacy' }));
+    await choose(root, 'bunq.sta', mt940Text);
+    const note = root.querySelector('#money-apply-note')!;
+    expect(text(note)).toContain('no ontology of its own');
+    expect(
+      [...root.querySelectorAll<HTMLButtonElement>('.m-dialog button')].find(
+        b => text(b).startsWith('Import 2'),
+      )!.disabled,
+    ).toBe(true);
+  });
+
+  it('shows "Not a valid amount" for an amount that is not one, and sums the rest', async () => {
+    const root = await open(
+      fakeStore({
+        data: 'own',
+        rows: [
+          seedRow('-1.50', '2026-09-22'),
+          seedRow('twelve', '2026-09-22'),
+          seedRow('0.123456', '2026-09-22'),
+        ],
+      }),
+    );
+    const table = root.querySelector('table.m-ledger')!;
+    const invalid = [...table.querySelectorAll('.m-amt[data-dir="invalid"]')];
+    expect(invalid.map(text)).toEqual([
+      'Not a valid amount',
+      'Not a valid amount',
+    ]);
+    expect(invalid[0].getAttribute('aria-label')).toMatch(
+      /^Not a valid amount: /,
+    );
+    expect(text(root.querySelector('.m-seg .m-net'))).toBe('−€1.50net');
+  });
+});
+
+describe('Money view: incomplete rows (#177)', () => {
+  it('lists a row missing its amount above the ledger, with Open row, and leaves it out of the strip', async () => {
+    const store = fakeStore({
+      data: 'shared',
+      rows: [
+        seedRow('-1.50', '2026-09-22'),
+        {
+          ...seedRow('-9', '2026-09-22'),
+          'bank-amount': '',
+          'bank-description': 'Forgot the amount',
+        },
+      ],
+    });
+    const root = await open(store);
+    const region = root.querySelector(
+      '[role="region"][aria-label="Incomplete rows"]',
+    )!;
+    expect(text(region)).toContain('1 row is incomplete');
+    const item = region.querySelector('li')!;
+    expect(text(item)).toContain('Forgot the amount');
+    expect(text(item)).toContain('22 Sept');
+    expect(text(item)).toContain('Incomplete: missing Amount');
+    // The ledger and the strip hold the complete row only.
+    expect(root.querySelectorAll('.m-row')).toHaveLength(1);
+    expect(text(root.querySelector('.m-seg .m-net'))).toBe('−€1.50net');
+    expect(
+      text(root.querySelector('[role="tab"][aria-selected="true"]')),
+    ).toMatch(/^Transactions\s*1$/);
+    const button = item.querySelector<HTMLButtonElement>('button')!;
+    expect(text(button)).toBe('Open row');
+    expect(button.getAttribute('aria-label')).toBe(
+      'Open row Forgot the amount',
+    );
+    button.click();
+    await settle();
+    expect(store.opened).toEqual([item.getAttribute('data-incomplete')]);
+  });
+
+  it('with only incomplete rows, lists them above the first-run invitation; no Open row without openResource', async () => {
+    const root = await open(
+      fakeStore({
+        data: 'shared',
+        host: 'legacy',
+        rows: [{ ...seedRow('-9', '2026-09-22'), 'bank-currency': '' }],
+      }),
+    );
+    const region = root.querySelector(
+      '[role="region"][aria-label="Incomplete rows"]',
+    )!;
+    expect(text(region)).toContain('Incomplete: missing Currency');
+    expect(region.querySelector('button')).toBeNull();
+    expect(text(root.querySelector('.pl-empty h2'))).toBe(
+      'Bring in your bank transactions',
+    );
+    expect(text(root.querySelector('[role="status"]'))).toBe(
+      'No transactions yet',
+    );
+  });
+});
+
 describe('Money view: ledger', () => {
   it('renders a captioned table with day row groups and spoken amounts at ≥560px', async () => {
     const root = await open(fakeStore({ rows: sampleRows() }));
@@ -134,15 +279,19 @@ describe('Money view: ledger', () => {
     expect(root.querySelectorAll('.m-row')).toHaveLength(400);
   });
 
-  it('shows new rows from an import without a reload, and says so', async () => {
+  it('shows rows another writer added without a reload, and says they arrived', async () => {
     const store = fakeStore({ rows: sampleRows() });
     const root = await open(store);
     store.addRows([seedRow('-9.99', '2026-09-23')]);
     await settle();
     await settle();
+    // Not this view's import (0.4.4): "arrived", like the card's rows line.
     expect(text(root.querySelector('[role="status"]'))).toBe(
-      'Imported 1 · just now',
+      '1 arrived · just now',
     );
+    expect(
+      text(root.querySelector('section[aria-label="Sync status"]')),
+    ).toContain('1 arrived at the last sync');
     expect(root.querySelectorAll('.m-row')).toHaveLength(15);
   });
 });
@@ -298,6 +447,55 @@ describe('Money view: import sheet', () => {
     await settle();
     expect(applied).toEqual(['bunq.sta']);
     expect(root.querySelector('[role="dialog"]')).toBeNull();
+  });
+});
+
+describe('Money view: the sync-status card (Q-084)', () => {
+  const card = (root: HTMLElement) =>
+    root.querySelector<HTMLElement>('section[aria-label="Sync status"]');
+
+  it('comes first after the tabs on Transactions and Imports, read-only, and not on Sources', async () => {
+    const root = await open(fakeStore({ rows: sampleRows() }));
+    const region = card(root)!;
+    expect(region).not.toBeNull();
+    expect(region.previousElementSibling?.getAttribute('role')).toBe('tablist');
+    expect(text(region)).toContain('Read-only: edits here stay in Atomic.');
+    expect(text(region)).toContain('There is no bank connection');
+    expect(text(region)).toMatch(/\d+ transactions/);
+    // The card is never a live region: the pill stays the one status.
+    expect(region.getAttribute('role')).not.toBe('status');
+    expect(root.querySelectorAll('[role="status"]')).toHaveLength(1);
+    // Its styles ride in the app's one style element.
+    expect(
+      document.querySelector('style#money-app-styles')?.textContent,
+    ).toContain('.ss-head');
+
+    const tabs = [...root.querySelectorAll<HTMLElement>('[role="tab"]')];
+    tabs.find(t => text(t).startsWith('Imports'))!.click();
+    expect(card(root)!.previousElementSibling?.getAttribute('role')).toBe(
+      'tablist',
+    );
+    tabs.find(t => text(t) === 'Sources')!.click();
+    expect(card(root)).toBeNull();
+  });
+
+  it('a failed load: the pill and the card both say the sync failed', async () => {
+    const root = await open(fakeStore({ data: 'none' }));
+    expect(text(root.querySelector('[role="status"]'))).toBe('Sync failed');
+    const region = card(root)!;
+    expect(text(region)).toContain('Sync failed just now');
+    expect(text(region)).toContain("Couldn't load the transactions.");
+  });
+
+  it('on the first run: not synced yet, 0 transactions, above the invitation', async () => {
+    const root = await open(fakeStore());
+    const region = card(root)!;
+    expect(text(region)).toContain('Not synced yet');
+    expect(text(region)).toContain('0 transactions in this table');
+    expect(
+      region.compareDocumentPosition(root.querySelector('.pl-empty')!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
 

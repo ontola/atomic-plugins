@@ -222,6 +222,9 @@ function stub(
     openExternal: async () => true,
     openRow: async () => true,
     disconnect: async () => set({ kind: 'not-connected' }),
+    syncTable: async () => back(),
+    syncedTable: () => undefined,
+    notNow: async () => state,
     names: () => ({
       userName: 'Mira Janssen',
       workspaceName: 'Studio Veldkamp',

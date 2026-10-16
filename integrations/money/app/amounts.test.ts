@@ -8,8 +8,10 @@ import {
   formatAmount,
   fromUnits,
   groupByDay,
+  isAmount,
   isOut,
   negate,
+  NOT_AN_AMOUNT,
   sumByCurrency,
   totals,
 } from './amounts.js';
@@ -159,5 +161,39 @@ describe('no float round-trip', () => {
       'utf8',
     );
     expect(source).not.toMatch(/\bNumber\(|parseFloat|parseInt|Math\./);
+  });
+});
+
+describe('amounts that are not one (#177: rows of the shared class)', () => {
+  const bad = ['twelve', '1,50', '0.123456', ' 1.00', '+1', '', '1e3', '−1'];
+
+  it('accepts exactly what units() reads exactly', () => {
+    for (const ok of ['0', '-0', '12', '-12.3', '1.', '0.00001', '-850.00'])
+      expect(isAmount(ok), ok).toBe(true);
+    for (const amount of bad) expect(isAmount(amount), amount).toBe(false);
+  });
+
+  it('shows a message instead of throwing, and never counts them', () => {
+    for (const amount of bad) {
+      expect(formatAmount(amount, 'EUR', 'en-GB')).toBe(NOT_AN_AMOUNT);
+      expect(amountLabel(amount, 'EUR')).toBe(`${NOT_AN_AMOUNT}: ${amount}`);
+      expect(isOut(amount)).toBe(false);
+    }
+
+    const rows = [
+      { account: 'A', currency: 'EUR', amount: '-1.50' },
+      ...bad.map(amount => ({ account: 'A', currency: 'EUR', amount })),
+    ];
+    expect(totals(rows)).toEqual([
+      {
+        account: 'A',
+        currency: 'EUR',
+        in: '0',
+        out: '-1.5',
+        net: '-1.5',
+        count: 1,
+      },
+    ]);
+    expect(sumByCurrency(rows)).toEqual([{ currency: 'EUR', amount: '-1.5' }]);
   });
 });

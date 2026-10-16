@@ -1,0 +1,39 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/keep/api/reference/rest/v1/notes/list
+overlay: 1.0.0
+info:
+  title: Google keep reviewed collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/091431739208d017c11b0b0589ab33293f8b3690/APIs/googleapis.com/keep/v1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include nextPageToken
+          and the item array. Keep filter and page size fixed. Zero pageSize lets the server choose the
+          upper bound. Concurrent changes yield consistent results or an ABORTED error; do not treat that
+          error as successful completion.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/v1/notes'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: notes
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize

@@ -52,7 +52,7 @@ left to move (#44), and `plugins.spec.ts` now holds only generic tests. The
 The `timesheets` lane now has a new e2e instead (#96):
 `integrations/timesheets/e2e/clockify.spec.ts` drives the timesheets drive
 app through the host proxy relay (atomic-server#1657), with a test-side
-install until #94.
+install (at the pin the host installs from the catalog; #94, closed).
 
 `integrations/tooling/lanes.test.mjs` checks that every declared e2e spec
 exists. Nothing checks that a lane spec is not also still running upstream.

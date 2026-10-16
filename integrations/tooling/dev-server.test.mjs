@@ -14,6 +14,7 @@ import {
   createDevServer,
   enableAppEntries,
   localCatalog,
+  ontologyFile,
   parseEnableApps,
   root,
 } from './dev-server.mjs';
@@ -36,6 +37,14 @@ async function withFixture(fn) {
       'beta-bundle',
     );
     writeFileSync(join(base, 'integrations/beta/catalog.json'), 'not root');
+    // A dependency's own plugin.js (@atproto/crypto ships two) is no bundle.
+    mkdirSync(join(base, 'integrations/beta/e2e/node_modules/dep/dist'), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(base, 'integrations/beta/e2e/node_modules/dep/dist/plugin.js'),
+      'not hosted',
+    );
 
     return await fn(base);
   } finally {
@@ -259,6 +268,97 @@ test('serves the committed ontology terms like Pages, with subjects on its own o
       ])
         assert.equal((await fetch(`${devUrl}${path}`)).status, 404, path);
     });
+  });
+});
+
+test('ontologyFile refuses encoded, backslash and NUL paths itself', () => {
+  // fetch() normalises %2e%2e and backslashes on the client before they
+  // reach the server, so the request-level 404s below do not prove that
+  // ontologyFile refuses them; these call it directly.
+  assert.ok(ontologyFile('/ontology/lenses/v1', root));
+  assert.ok(ontologyFile('/ontology/classes/event-v1', root));
+
+  for (const path of [
+    '/ontology/lenses/%2e%2e',
+    '/ontology/lenses/%2e%2e/%2e%2e/ontology-kit/base.json',
+    '/ontology/lenses/..',
+    '/ontology/lenses/../../ontology-kit/base.json',
+    '/ontology/lenses\\v1',
+    '/ontology\\lenses\\v1',
+    '/ontology/lenses/v1\\..\\..\\ontology-kit',
+    '/ontology/lenses/v1\0',
+    '/ontology/lenses/\0v1',
+    '/ontology/classes/event-v1%00',
+    '/ontology/lenses/V1',
+  ])
+    assert.equal(ontologyFile(path, root), undefined, JSON.stringify(path));
+});
+
+test('serves lens catalog files like terms, subjects on its own origin', async () => {
+  await withFixture(async base => {
+    const published = 'https://vocab.example/ontology';
+    mkdirSync(join(base, 'ontology-kit'), { recursive: true });
+    mkdirSync(join(base, 'ontology/lenses'), { recursive: true });
+    writeFileSync(
+      join(base, 'ontology-kit/base.json'),
+      JSON.stringify({ base: published }),
+    );
+    writeFileSync(
+      join(base, 'ontology/lenses/v1'),
+      JSON.stringify({
+        '@id': `${published}/lenses/v1`,
+        lenses: [`${published}/lenses/shop-thing-v1`],
+      }),
+    );
+    writeFileSync(
+      join(base, 'ontology/lenses/shop-thing-v1'),
+      JSON.stringify({
+        '@id': `${published}/lenses/shop-thing-v1`,
+        target: { class: `${published}/classes/thing-v1` },
+      }),
+    );
+
+    await withServers(base, async ({ devUrl }) => {
+      const release = await fetch(`${devUrl}/ontology/lenses/v1`);
+      assert.equal(release.status, 200);
+      assert.equal(
+        release.headers.get('content-type'),
+        'application/octet-stream',
+      );
+      assert.equal(release.headers.get('access-control-allow-origin'), '*');
+      assert.deepEqual(await release.json(), {
+        '@id': `${devUrl}/ontology/lenses/v1`,
+        lenses: [`${devUrl}/ontology/lenses/shop-thing-v1`],
+      });
+      const lens = await fetch(`${devUrl}/ontology/lenses/shop-thing-v1`);
+      assert.deepEqual(await lens.json(), {
+        '@id': `${devUrl}/ontology/lenses/shop-thing-v1`,
+        target: { class: `${devUrl}/ontology/classes/thing-v1` },
+      });
+
+      for (const path of [
+        '/ontology/lenses/missing-v1',
+        '/ontology/lenses/v1.json',
+        '/ontology/lenses/%2e%2e/%2e%2e/ontology-kit/base.json',
+        '/ontology/lenses/',
+        '/ontology/lenses/a/b',
+      ])
+        assert.equal((await fetch(`${devUrl}${path}`)).status, 404, path);
+    });
+  });
+});
+
+test('serves this repository’s lens catalog release', async () => {
+  await withServers(root, async ({ devUrl }) => {
+    const res = await fetch(`${devUrl}/ontology/lenses/v1`);
+    assert.equal(res.status, 200);
+    const release = await res.json();
+    assert.equal(release['@id'], `${devUrl}/ontology/lenses/v1`);
+    assert.ok(
+      release.lenses.includes(
+        `${devUrl}/ontology/lenses/todoist-task-issue-v1`,
+      ),
+    );
   });
 });
 

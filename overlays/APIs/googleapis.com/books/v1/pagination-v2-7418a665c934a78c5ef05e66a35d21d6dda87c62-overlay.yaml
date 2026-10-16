@@ -1,0 +1,44 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/books/docs/v1/reference/mylibrary/bookshelves/volumes/list
+overlay: 1.0.0
+info:
+  title: Google books reviewed collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/7418a665c934a78c5ef05e66a35d21d6dda87c62/APIs/googleapis.com/books/v1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      shelfOffsets:
+        type: pageNumber
+        autoDetect: false
+        description: Only the two bookshelf-volume list operations are selected. Start at startIndex 0,
+          using a positive maxResults. Advance the offset by the number of returned items; an empty items
+          array ends traversal. Preserve user/shelf scope, query, projection and pre-order selection.
+          totalItems is informational and is not used as a traversal bound. Concurrent changes can shift
+          offsets.
+        request:
+          queryParameters:
+            startIndex:
+              role: offset
+            maxResults:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: items
+- target: $.paths['/books/v1/mylibrary/bookshelves/{shelf}/volumes'].get
+  update:
+    x-pagination:
+    - scheme: shelfOffsets
+      overrides:
+        response:
+          envelope:
+            itemsField: items
+- target: $.paths['/books/v1/users/{userId}/bookshelves/{shelf}/volumes'].get
+  update:
+    x-pagination:
+    - scheme: shelfOffsets
+      overrides:
+        response:
+          envelope:
+            itemsField: items

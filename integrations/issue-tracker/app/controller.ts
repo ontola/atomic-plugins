@@ -1,5 +1,6 @@
 // @wc-ignore-file
 import { endpoint } from '../devonian/github-issues/adapter.js';
+import { approvalKey } from '../devonian/github-issues/review.mjs';
 import { frameStore } from './frameStore.js';
 import { SyncState, type ViewPrefs } from './state.js';
 import type { Overlay } from './frameStore.js';
@@ -30,12 +31,19 @@ import {
   NAME,
   PARENT,
   STATUSES,
-  boundRepository,
+  adoptOwnTable,
+  bindTable,
+  binding,
+  declareRowExtras,
   migrateRows,
   provision,
+  rowExtras,
+  rowExtrasNow,
   showsOwnTable,
+  unbindTable,
   type Tracker,
 } from './tracker.js';
+import { clock, isRateLimitError, type RateLimit } from './rateLimit.js';
 import { listRepositories, PLATFORM, type Repository } from './transport.js';
 
 /**
@@ -76,6 +84,21 @@ export type Problem =
         local?: string;
       };
     }
+  /**
+   * GitHub is rate-limiting (`rateLimit.ts`): the pass stopped so as not to
+   * hammer it; nothing was written by the refused request. `main.ts`
+   * retries at `until`; approved changes stay approved for that retry.
+   */
+  | { kind: 'rate-limited'; message: string; until: number }
+  /**
+   * GitHub refused a write whole (`proxy.mjs` `NOT_APPLIED`: 400, 404, 409,
+   * 410 or 422; #357). Nothing was applied, the journal entry and the saved
+   * operation are gone, and the next pass holds the change for review
+   * again. Not retried on a timer: the same request would be refused again
+   * until the change is edited. `detail` is GitHub's own explanation, and
+   * may be empty.
+   */
+  | { kind: 'refused'; message: string; status: number; detail: string }
   /** Anything else; "Sync now" retries. */
   | { kind: 'failed'; message: string };
 
@@ -92,10 +115,19 @@ export type ViewState =
   | { kind: 'no-proxy' }
   /**
    * Shown on an Issue table the app did not make (it is offered there
-   * because it renders `issue-v1`). Syncing such a table with GitHub is
-   * not built yet (#177 H4, item 14).
+   * because it renders `issue-v1`) that isn't synced, or whose sync is
+   * paused because the row grant lapsed. "Sync this table to GitHub" (#177
+   * §6.2 item 14) is offered when the host can ask for "Allow editing" and
+   * reach the proxy (`canSync`).
    */
-  | { kind: 'other-table' }
+  | {
+      kind: 'other-table';
+      canSync: boolean;
+      /** Waiting for the person to answer the host's "Allow editing" bar. */
+      asking?: boolean;
+      /** Why the last "Sync this table" stopped, or why syncing is paused. */
+      reason?: string;
+    }
   | { kind: 'not-connected' }
   | { kind: 'connecting' }
   | {
@@ -113,6 +145,19 @@ export type ViewState =
       busy?: Busy;
       last?: { at: number; result: PassResult };
       problem?: Problem;
+      /** When `problem` was raised, for "Sync failed 4 min ago". */
+      failedAt?: number;
+      /**
+       * When a pass last completed, from the sync resource's
+       * `github-last-sync` (so it survives a reload); `last.at` once a pass
+       * completed in this view.
+       */
+      syncedAt?: number;
+      /**
+       * While a pass waits out a short GitHub rate limit before repeating
+       * a request (`rateLimit.ts`): until when, for the card.
+       */
+      limited?: { until: number };
       /**
        * Rows edited in this view that no pass has seen yet, so the view can
        * mark them "Waiting to send" before the pass that holds them returns.
@@ -135,7 +180,25 @@ export interface IssueInput {
 
 export interface Controller {
   state(): ViewState;
+  /**
+   * The name of the table shown when it is not the app's own (it was added
+   * as a view of it); undefined on the app's own table. Known after `load`.
+   */
+  foreign(): string | undefined;
   load(): Promise<ViewState>;
+  /**
+   * "Sync this table to GitHub", on a table the app didn't make: asks for
+   * "Allow editing" (covering the app's row extras) when the grant doesn't
+   * cover them, keeps the choice as a binding under the App, then goes on
+   * as on the app's own table: connect, choose a repository, import.
+   */
+  syncTable(): Promise<ViewState>;
+  /**
+   * "Not now" on a table the app didn't make, before a repository was
+   * chosen: back to not synced. The grant stays; the host's tab menu takes
+   * it back.
+   */
+  notNow(): Promise<ViewState>;
   /**
    * `load`, then the step that state needs: the repository list for the
    * picker, or the first sync once a repository is bound. The view's open
@@ -221,9 +284,36 @@ const PAUSED: [RegExp, PausedReason][] = [
   [/^The integration proxy refused the request/, 'other'],
 ];
 
+/** "GitHub refused a change and applied nothing (HTTP 422: Validation Failed; …)." */
+export const refusalText = (p: { status: number; detail: string }): string =>
+  `GitHub refused a change and applied nothing (HTTP ${p.status}${p.detail ? `: ${p.detail}` : ''}).`;
+
+/** The `other-table` state on a table that is bound but whose grant lapsed. */
+export const PAUSED_NOTE =
+  'Syncing with GitHub is paused: this app may no longer edit this table’s rows, or keep its GitHub issue numbers on them. Allow editing again to go on.';
+
+const sentence = (text: string) => text.replace(/\.?$/, '.');
+
+/** `proxyTransport`'s `refusedWrite` (`proxy.mjs`): a write GitHub refused whole. */
+const isRefusedWrite = (
+  error: unknown,
+): error is Error & { refused: true; status: number; detail: string } =>
+  error instanceof Error &&
+  (error as { refused?: unknown }).refused === true &&
+  typeof (error as { status?: unknown }).status === 'number';
+
 export function classify(error: unknown): Problem {
   const e = error as PassError;
   const message = error instanceof Error ? error.message : String(error);
+  if (isRateLimitError(error))
+    return { kind: 'rate-limited', message, until: error.rateLimit.until };
+  if (isRefusedWrite(error))
+    return {
+      kind: 'refused',
+      message,
+      status: error.status,
+      detail: typeof error.detail === 'string' ? error.detail : '',
+    };
   if (e?.subject && Array.isArray(e.fields))
     return {
       kind: 'conflict',
@@ -285,8 +375,25 @@ export function createController(
   let session: Session | undefined;
   let conflict: Problem | undefined;
   let prefs: ViewPrefs = {};
+  /** The name of the table shown, when it is not the app's own. */
+  let foreign: string | undefined;
+  /** The binding of that table, once known (the host's query can lag). */
+  let hint: string | undefined;
+  /** The row extras a grant must cover, once the session knows them. */
+  let extras: string[] | undefined;
   /** Optimistic changes per touched row, re-applied until a pass has seen it. */
   const changes = new Map<string, (row: IssueRow) => IssueRow>();
+  /**
+   * Review approvals a rate-limited send could not use (`rateLimit.ts`), as
+   * `approvalKey(subject, key)`: the next pass, on the retry timer or "Sync
+   * now", sends exactly those rows with exactly that content, without a
+   * second review. Any other outcome clears them; a change edited since has
+   * another key and is held again, and a second row with the same content
+   * is another subject, so it is held too.
+   */
+  let carried: Set<string> | undefined;
+  /** The sync resource's `github-last-sync`, read on open, set per pass. */
+  let syncedAt: number | undefined;
 
   const set = (next: ViewState) => {
     current = next;
@@ -304,7 +411,9 @@ export function createController(
 
   const open = async (repository?: string): Promise<Session> => {
     if (session) return session;
-    const provisioned = await provision(store, repository);
+    const provisioned = await provision(store, repository, hint);
+    if (foreign) hint = provisioned.sync.subject;
+    extras = rowExtras(provisioned.tracker.properties);
     const state = new SyncState(
       provisioned.sync,
       provisioned.tracker.properties.syncState,
@@ -316,6 +425,11 @@ export function createController(
       overlay: new Map(),
     };
     prefs = { ...state.state.view };
+    const stamped = provisioned.sync.get(
+      provisioned.tracker.properties.lastSync,
+    );
+    const at = typeof stamped === 'string' ? Date.parse(stamped) : NaN;
+    syncedAt = Number.isFinite(at) ? at : undefined;
 
     // A table made by 0.1.x: its rows become issue-v1 rows in place, once,
     // through the same frame store the passes use (#177 §5). The sync
@@ -345,6 +459,42 @@ export function createController(
     return session;
   };
 
+  const canSync = () =>
+    !!store.proxy &&
+    typeof store.rowAccess === 'function' &&
+    typeof store.requestRowAccess === 'function';
+
+  /** The `other-table` state, with the offer to sync or the reason it stopped. */
+  const other = (reason?: string) =>
+    set({
+      kind: 'other-table',
+      canSync: canSync(),
+      ...(reason ? { reason } : {}),
+    });
+
+  /**
+   * Whether the person's grant on the table the app is a view of covers its
+   * rows and every row extra. Always true on the app's own table.
+   */
+  const covered = async (): Promise<boolean> => {
+    if (!foreign) return true;
+    if (!store.rowAccess) return false;
+    const access = await store.rowAccess();
+    if (access.status !== 'granted') return false;
+    const wanted = extras ?? (await rowExtrasNow(store));
+
+    return !!wanted && wanted.every(extra => access.extras.includes(extra));
+  };
+
+  /** The grant lapsed since the view opened: say so instead of failing on a write. */
+  const lapsed = async (): Promise<boolean> => {
+    if (await covered().catch(() => false)) return false;
+    session = undefined;
+    other(PAUSED_NOTE);
+
+    return true;
+  };
+
   const passOptions = (
     s: Session,
     connectionId: string,
@@ -358,7 +508,16 @@ export function createController(
     state: s.state,
     overlay: s.overlay,
     onImported: showImported,
+    rateLimits: { now, onLimit: showLimit },
+    lastSyncProperty: s.tracker.properties.lastSync,
   });
+
+  /** A short GitHub rate limit the running pass is waiting out, for the card. */
+  function showLimit(limit: RateLimit | undefined) {
+    if (current.kind !== 'ready' || !current.busy) return;
+    const { limited: _, ...rest } = current;
+    set(limit ? { ...rest, limited: { until: limit.until } } : rest);
+  }
 
   /** When the view last showed imported rows; see `showImported`. */
   let shownAt = 0;
@@ -426,6 +585,7 @@ export function createController(
     serial(async () => {
       if (current.kind !== 'ready' || !store.proxy) return current;
       const ready = current;
+      if (await lapsed()) return current;
       set({ ...ready, busy });
 
       try {
@@ -446,6 +606,7 @@ export function createController(
 
         const result = await work(s, ready);
         conflict = undefined;
+        carried = undefined;
         const after = latest(ready);
         // Rows touched while this pass ran are not in its result yet.
         const touched = (after.touched ?? []).filter(
@@ -454,20 +615,26 @@ export function createController(
         for (const subject of changes.keys())
           if (!touched.includes(subject)) changes.delete(subject);
 
+        if (result) syncedAt = now();
+
         return set({
           kind: 'ready',
           connectionId: ready.connectionId,
           repository: ready.repository,
           ...(result
-            ? { last: { at: now(), result: withChanges(result) } }
+            ? { last: { at: syncedAt!, result: withChanges(result) } }
             : after.last
               ? { last: after.last }
               : {}),
           ...(touched.length ? { touched } : {}),
+          ...(syncedAt ? { syncedAt } : {}),
         });
       } catch (error) {
+        // A row write refused because the grant lapsed during the pass.
+        if (foreign && (await lapsed())) return current;
         const problem = classify(error);
         if (problem.kind === 'conflict') conflict = problem;
+        if (problem.kind !== 'rate-limited') carried = undefined;
         const after = latest(ready);
         let last = after.last;
 
@@ -496,7 +663,9 @@ export function createController(
           repository: ready.repository,
           ...(last ? { last } : {}),
           ...(after.touched?.length ? { touched: after.touched } : {}),
+          ...(syncedAt ? { syncedAt } : {}),
           problem,
+          failedAt: now(),
         });
       }
     });
@@ -544,11 +713,13 @@ export function createController(
     work: (s: Session) => Promise<void>,
   ): Promise<boolean> => {
     try {
+      if (await lapsed()) return false;
       await serial(async () => work(await open(ready.repository)));
 
       return true;
     } catch (error) {
-      set({ ...latest(ready), problem: classify(error) });
+      if (foreign && (await lapsed())) return false;
+      set({ ...latest(ready), problem: classify(error), failedAt: now() });
 
       return false;
     }
@@ -569,13 +740,34 @@ export function createController(
 
   const controller: Controller = {
     state: () => current,
+    foreign: () => foreign,
 
     async load() {
-      if (!(await showsOwnTable(store))) return set({ kind: 'other-table' });
+      let bound: Awaited<ReturnType<typeof binding>>;
+
+      if (!(await showsOwnTable(store))) {
+        const data = await store.getData();
+        const name = (await store.getResource(data!.table)).get(NAME);
+        foreign = typeof name === 'string' && name ? name : 'This table';
+        // Not synced until "Sync this table" made a binding; paused when the
+        // grant no longer covers the rows and the app's row extras.
+        bound = await binding(store, hint);
+        if (!bound) return other();
+        hint = bound.subject;
+        if (!(await covered())) return other(PAUSED_NOTE);
+      } else {
+        // Renders issue-v1 and declares the row extras from the first open,
+        // so "+ Add view" offers the app on other Issue tables. `provision`
+        // does it again and reports a refusal; here it only must not stop
+        // the view from opening.
+        await adoptOwnTable(store).catch(() => {});
+        bound = await binding(store);
+      }
+
       const proxy = store.proxy;
       if (!proxy || typeof proxy.connections !== 'function')
         return set({ kind: 'no-proxy' });
-      const repository = await boundRepository(store);
+      const repository = bound?.repository;
       let stale: string[] = [];
 
       if (repository) {
@@ -597,6 +789,7 @@ export function createController(
         kind: 'ready',
         connectionId: connection.connectionId,
         repository,
+        ...(syncedAt ? { syncedAt } : {}),
       });
     },
 
@@ -630,6 +823,44 @@ export function createController(
       return this.start();
     },
 
+    async syncTable() {
+      if (current.kind !== 'other-table' || current.asking || !current.canSync)
+        return current;
+      set({ ...current, asking: true });
+      let reason: string | undefined;
+
+      try {
+        // The extras first: a grant covers what the App declared when given.
+        extras = await declareRowExtras(store);
+
+        if (!(await covered())) {
+          const answer = await store.requestRowAccess!();
+          if (answer.status !== 'granted') reason = answer.reason;
+          // The host grants what the App declares now; check it covers them.
+          else if (!(await covered()))
+            reason =
+              'The grant doesn’t cover the GitHub issue numbers, sources and baselines the app keeps on rows';
+        }
+
+        if (!reason) hint = await bindTable(store, hint);
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error);
+      }
+
+      if (reason) return other(`Not synced: ${sentence(reason)}`);
+
+      return this.start();
+    },
+
+    async notNow() {
+      if (!foreign) return current;
+      await unbindTable(store, hint);
+      hint = undefined;
+      session = undefined;
+
+      return this.load();
+    },
+
     async disconnect() {
       const proxy = store.proxy;
       if (!proxy?.disconnect || current.kind !== 'ready') return current;
@@ -647,7 +878,9 @@ export function createController(
       try {
         listing = {
           kind: 'listed',
-          repositories: await listRepositories(store.proxy, connectionId),
+          repositories: await listRepositories(store.proxy, connectionId, {
+            now,
+          }),
         };
       } catch (error) {
         listing = {
@@ -705,17 +938,24 @@ export function createController(
 
     sync() {
       return run('syncing', (s, ready) =>
-        runPass(passOptions(s, ready.connectionId, ready.repository)),
+        runPass({
+          ...passOptions(s, ready.connectionId, ready.repository),
+          ...(carried ? { approved: carried } : {}),
+        }),
       );
     },
 
     send() {
       const held = current.kind === 'ready' ? current.last?.result.held : [];
+      const approved = new Set(
+        (held ?? []).map(h => approvalKey(h.subject, h.key)),
+      );
+      carried = approved;
 
       return run('sending', (s, ready) =>
         runPass({
           ...passOptions(s, ready.connectionId, ready.repository),
-          approved: new Set((held ?? []).map(h => h.key)),
+          approved,
         }),
       );
     },
@@ -850,7 +1090,9 @@ export function createController(
 
     removeFromBoard() {
       const gone = missingIssue();
-      if (!gone) return Promise.resolve(current);
+      // A row grant never deletes a row (atomic-server#1740): on a table the
+      // app didn't make, the person deletes it in the table.
+      if (!gone || foreign) return Promise.resolve(current);
 
       return run('resolving', async (s, ready) => {
         const options = passOptions(s, ready.connectionId, ready.repository);
@@ -924,6 +1166,14 @@ function blankRow(subject: string): IssueRow {
 const plural = (n: number, one: string, many = `${one}s`) =>
   `${n} ${n === 1 ? one : many}`;
 
+/** What the `other-table` state says first. */
+export const OTHER_NOTE =
+  'This Issue table wasn’t made by this app and isn’t synced with GitHub.';
+
+/** The `other-table` state's offer, when the host can do it (`canSync`). */
+export const SYNC_NOTE =
+  'Sync it to keep it and one GitHub repository in step: the repository’s issues are added as rows, and edits made here are sent after you review them. Rows already here stay here until you publish them. The app asks you to allow it to edit this table’s rows and to keep each issue’s GitHub number, source and sync baseline on its row.';
+
 export function describe(state: ViewState): string {
   switch (state.kind) {
     case 'loading':
@@ -931,7 +1181,11 @@ export function describe(state: ViewState): string {
     case 'no-proxy':
       return 'This host cannot reach the integration proxy on behalf of an app, so this app cannot sync. Nothing was fetched.';
     case 'other-table':
-      return 'This is an Issue table this app did not make. Syncing it with GitHub is not built yet; open the app itself to sync its own table.';
+      return state.reason
+        ? `${OTHER_NOTE} ${state.reason}`
+        : state.canSync
+          ? `${OTHER_NOTE} ${SYNC_NOTE}`
+          : OTHER_NOTE;
     case 'not-connected':
       return 'Not connected. Connect a GitHub account to sync one repository’s issues and comments with this table.';
     case 'connecting':
@@ -960,6 +1214,10 @@ export function describe(state: ViewState): string {
           return `GitHub no longer accepts this connection. Your issues are still here. Reconnect to continue. (${message})`;
         if (kind === 'paused')
           return `Sync paused: ${message}. Nothing is resent automatically; check the issue on GitHub before syncing again.`;
+        if (kind === 'rate-limited')
+          return `GitHub is rate-limiting; retrying at ${clock(state.problem.until)}. Changes waiting to send are kept and go out then. (${message})`;
+        if (kind === 'refused')
+          return `${refusalText(state.problem)} The change is held for review again: edit it here, then Review and send. Nothing is resent on its own.`;
 
         return `Sync failed: ${message}`;
       }

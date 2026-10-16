@@ -104,11 +104,16 @@ CI and the local runner read:
 The path filter for lane `<id>` is `integrations/<id>/**` by convention, so
 `changes` can generate its `filters:` from this file rather than restating it.
 A lane whose code imports a shared package from source adds an optional
-`paths` array of globs inside `devonian/`, `syncables/` or `reflector/`
-(`lanes.mjs` rejects anything else, in particular another plugin's folder),
-so a change there still runs it: issue-tracker lists `devonian/src/**`
-because `devonian/github-issues/` imports the `devonian` package. Those
-globs also join the `any` filter, since `build-server` is gated on it.
+`paths` array of globs inside `devonian/`, `syncables/`, `reflector/`,
+`ontology/`, `ontology-kit/` or `integrations/sync-status/` (the
+`SHARED_PACKAGES` list in `lanes.mjs`, which rejects anything else, in
+particular another plugin's folder), so a change there still runs it:
+issue-tracker lists `devonian/src/**` because `devonian/github-issues/`
+imports the `devonian` package; timesheets lists
+`integrations/sync-status/**` because its app bundles the shared sync-status
+card, which also has a lane of its own (`sync-status`, typecheck and unit)
+for the card's own tests. Those globs also join the `any` filter, since
+`build-server` is gated on it.
 Add a `lanes.test.mjs` case asserting every directory under `integrations/`
 that is not `tooling/` has a lane entry — that is the check that would have
 caught `calendar/`.
@@ -266,7 +271,9 @@ node integrations/tooling/run-lane.mjs timesheets            # all its tiers
 
 It reads `lanes.json`, computes the ports, and for a server-dependent tier
 calls `serve.mjs` to start atomic-server (from `ATOMIC_SERVER_CHECKOUT`,
-defaulting to the AGENTS.md `/tmp/atomic-server` layout), the mock proxy and
+defaulting to this pin's `~/.cache/atomic-plugins/atomic-server/<sha>` when
+that directory exists, else `/tmp/atomic-server`, as AGENTS.md says), the
+mock proxy and
 the dev-server, waits on all three, runs the tier, and tears down on exit.
 Tiers run cheapest-first, so a lane fails before paying for a server it will
 not reach.
@@ -409,9 +416,12 @@ Rules that keep parallel worktrees from fighting:
 - **Never bump `.atomic-server-ref` from a plugin worktree.** It is a `shared`
   path: it forces every lane to run and invalidates `build-server` for all of
   them. Bump it in its own PR, merge it, rebase the rest.
-- **Share one atomic-server checkout** across worktrees (`ATOMIC_SERVER_CHECKOUT`
-  pointing at a single `/tmp/atomic-server`) so the cargo cache is shared. Only
-  the e2e tier needs exclusive access to it (§3).
+- **Share one atomic-server checkout per pinned SHA** across worktrees
+  (`~/.cache/atomic-plugins/atomic-server/<sha>`, which the tools pick by
+  default when it exists; `ATOMIC_SERVER_CHECKOUT` overrides it) so the cargo
+  cache is shared. Never point a branch with another pin at it
+  (docs/agents/build-vps.md). Only the e2e tier needs exclusive access to it
+  (§3).
 - Per AGENTS.md's worktree note: never bare `git stash`/`git stash pop` — the
   stack is shared across all of these.
 
@@ -463,7 +473,7 @@ Rules that keep parallel worktrees from fighting:
   deleted in atomic-server `4bab16ee6` (in the pin), together with the UI
   they drove (#44). `integrations/timesheets/e2e/clockify.spec.ts` (#96)
   drives the timesheets drive app through `store.proxy` instead, with a
-  test-side install until #94. See
+  test-side install (at the pin the host installs from the catalog; #94, closed). See
   [`HANDOFF-e2e-split.md`](HANDOFF-e2e-split.md).
 - `integrations/money/` has one tier, `e2e` (#95): `money.spec.ts` drives
   the Bank statements importer through atomic-server's generic file entry

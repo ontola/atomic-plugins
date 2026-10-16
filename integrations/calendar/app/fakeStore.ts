@@ -10,6 +10,13 @@
  * lists throws the page's "Connect again" refusal; a revoked one gets the
  * proxy's `403 not_delegated`. A lost response spends nothing: the same
  * connection works on the next call. Test-only; not bundled.
+ *
+ * On `OTHER_TABLE` (an `event-v1` table the app is a view of) writes follow
+ * the pinned host's row grant (atomic-server `app_row_grant.rs`, #1740 and
+ * #1849): none without a grant; with one, only the class's `requires` and
+ * `recommends` plus the `row-extras` the App declared when it was granted,
+ * on rows of that class; never the table itself, never `destroy`.
+ * `rowAccess()` and `requestRowAccess()` answer as view-client.js does.
  */
 import { calendarFixture } from '../fixtures/google-calendar/scenario.mjs';
 import type {
@@ -101,6 +108,12 @@ export interface FakeStore extends PluginStore {
   readonly opened: { external: string[]; resources: string[] };
   /** The person switches the host between light and dark. */
   setTheme(scheme: ColorScheme): void;
+  /** The live row grant on `OTHER_TABLE`: the extras it covers, or none. */
+  readonly grant: { extras: string[] } | undefined;
+  /** Someone takes the grant back in the host's tab menu. */
+  revokeGrant(): void;
+  /** How many times the host asked the person ("Allow editing"). */
+  readonly asked: number;
 }
 
 export function fakeStore({
@@ -108,6 +121,8 @@ export function fakeStore({
   relay = true,
   hostOps = true,
   view = 'own',
+  grant: initialGrant = 'none',
+  answer: answerWith = 'allow',
 }: {
   connected?: boolean;
   relay?: boolean;
@@ -115,6 +130,14 @@ export function fakeStore({
   hostOps?: boolean;
   /** Which table the host hands the app: its own, or another `event-v1` table. */
   view?: 'own' | 'other';
+  /**
+   * The grant on `OTHER_TABLE` before the app opens: none, or "Allow
+   * editing" from Add view before the app declared its row extras
+   * (`columns`, covering none of them).
+   */
+  grant?: 'none' | 'columns';
+  /** What the person answers when the app asks with `requestRowAccess()`. */
+  answer?: 'allow' | 'deny';
 } = {}): FakeStore {
   const opened: FakeStore['opened'] = { external: [], resources: [] };
   let scheme: ColorScheme = 'light';
@@ -169,6 +192,51 @@ export function fakeStore({
     | undefined;
   const connections = connected ? ['c1'] : [];
   const revoked = new Set<string>();
+  let grant: { extras: string[] } | undefined =
+    initialGrant === 'columns' ? { extras: [] } : undefined;
+  let asked = 0;
+
+  /** The App's `row-extras` now. */
+  const declared = () => {
+    const value = resources.get(APP)![ROW_EXTRAS_PROPERTY];
+
+    return Array.isArray(value)
+      ? value.filter((v): v is string => typeof v === 'string')
+      : [];
+  };
+
+  /** Refuses a write the pinned host's row grant would refuse. */
+  const checkGrant = (
+    subject: string,
+    parent: JSONValue,
+    isA: JSONValue,
+    written: string[],
+    op: 'create' | 'save' | 'destroy',
+  ) => {
+    if (subject === OTHER_TABLE)
+      throw new Error('This app may only write its own data.');
+    if (parent !== OTHER_TABLE) return;
+    if (!grant)
+      throw new Error(
+        'This app is a view of this table but may not edit its rows.',
+      );
+    if (op === 'destroy')
+      throw new Error('Letting an app edit rows does not let it delete them.');
+    if (!Array.isArray(isA) || isA.length !== 1 || isA[0] !== EVENT)
+      throw new Error('This app may only edit rows of the table’s row class');
+    const live = declared();
+    const allowed = new Set([
+      ...event.requires,
+      ...event.recommends,
+      ...grant.extras.filter(extra => live.includes(extra)),
+    ]);
+
+    for (const property of written)
+      if (!allowed.has(property))
+        throw new Error(
+          `This app may edit this table's columns and the row data it was allowed to keep, not ${property}`,
+        );
+  };
 
   const wrap = (
     subject: string,
@@ -176,6 +244,7 @@ export function fakeStore({
   ): PluginResource => {
     const props = { ...stored };
     const removed = new Set<string>();
+    const changed = new Set<string>();
 
     return {
       subject,
@@ -186,17 +255,28 @@ export function fakeStore({
       set(property, value) {
         props[property] = value;
         removed.delete(property);
+        changed.add(property);
 
         return this;
       },
       remove(property) {
         delete props[property];
         removed.add(property);
+        changed.delete(property);
 
         return this;
       },
       async save() {
-        const merged = { ...(resources.get(subject) ?? {}), ...props };
+        const before = resources.get(subject) ?? {};
+        checkGrant(
+          subject,
+          before[PARENT],
+          before[IS_A],
+          [...changed, ...removed],
+          'save',
+        );
+        changed.clear();
+        const merged = { ...before, ...props };
         for (const property of removed) delete merged[property];
         removed.clear();
         resources.set(subject, merged);
@@ -205,6 +285,8 @@ export function fakeStore({
         return this;
       },
       async destroy() {
+        const before = resources.get(subject) ?? {};
+        checkGrant(subject, before[PARENT], before[IS_A], [], 'destroy');
         resources.delete(subject);
       },
     };
@@ -328,6 +410,7 @@ export function fakeStore({
         .map(([subject]) => subject);
     },
     async newResource({ parent, isA = [], propVals = {} } = {}) {
+      checkGrant('', parent ?? APP, isA, Object.keys(propVals), 'create');
       const subject = `did:ad:new-${++next}`;
       const stored = { ...propVals, [PARENT]: parent ?? APP, [IS_A]: isA };
       resources.set(subject, stored);
@@ -341,6 +424,46 @@ export function fakeStore({
     setTheme: chosen => {
       scheme = chosen;
       for (const listener of themeListeners) listener({ colorScheme: chosen });
+    },
+    get grant() {
+      return grant;
+    },
+    revokeGrant: () => {
+      grant = undefined;
+    },
+    get asked() {
+      return asked;
+    },
+    async rowAccess() {
+      if (view === 'own') return { status: 'unavailable' as const };
+
+      return grant
+        ? {
+            status: 'granted' as const,
+            grantedBy: 'did:ad:agent-person',
+            grantedAt: 1,
+            via: 'request',
+            extras: grant.extras,
+          }
+        : { status: 'none' as const };
+    },
+    async requestRowAccess() {
+      if (view === 'own')
+        return {
+          status: 'denied' as const,
+          reason: 'This app is not shown as a table view here',
+        };
+      const live = declared();
+      // As rowAccessQuestion: no question when the grant covers the list.
+      if (grant && live.every(extra => grant!.extras.includes(extra)))
+        return { status: 'granted' as const };
+      asked++;
+      if (answerWith === 'deny')
+        return { status: 'denied' as const, reason: 'The person said no' };
+      // A new grant, for the list as the App declares it now.
+      grant = { extras: live };
+
+      return { status: 'granted' as const };
     },
     ...(hostOps
       ? {

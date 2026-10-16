@@ -1,0 +1,106 @@
+# Reviewed 2026-10-05 against the pinned OAD and official documentation.
+# Source: https://developers.intercom.com/docs/build-an-integration/learn-more/rest-apis/pagination
+# Explicit selections require declared request fields, continuation/count fields and item arrays.
+overlay: 1.0.0
+info:
+  title: Intercom explicit collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/4a302a4352fcb52ab0735f4781376c28913d8028/APIs/intercom.com/2.16/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      queryCursorPages:
+        type: pageToken
+        autoDetect: false
+        description: Return pages.next.starting_after in the next request. Stop when pages.next is absent
+          or null. Preserve filters and, for searches, the query and sort body fields.
+        request:
+          queryParameters:
+            starting_after:
+              role: cursor
+            per_page:
+              role: pageSize
+        response:
+          bodyFields:
+            pages.next.starting_after:
+              role: nextCursor
+      bodyCursorPages:
+        type: pageToken
+        autoDetect: false
+        description: Return pages.next.starting_after in the next request. Stop when pages.next is absent
+          or null. Preserve filters and, for searches, the query and sort body fields.
+        request:
+          bodyFields:
+            pagination.starting_after:
+              role: cursor
+            pagination.per_page:
+              role: pageSize
+        response:
+          bodyFields:
+            pages.next.starting_after:
+              role: nextCursor
+- target: $.paths['/macros'].get
+  update:
+    x-pagination:
+    - scheme: queryCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/conversations'].get
+  update:
+    x-pagination:
+    - scheme: queryCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: conversations
+- target: $.paths['/data_connectors'].get
+  update:
+    x-pagination:
+    - scheme: queryCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/data_connectors/{data_connector_id}/execution_results'].get
+  update:
+    x-pagination:
+    - scheme: queryCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/messages/status'].get
+  update:
+    x-pagination:
+    - scheme: queryCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: events
+- target: $.paths['/contacts/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: data
+- target: $.paths['/conversations/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: conversations
+- target: $.paths['/tickets/search'].post
+  update:
+    x-pagination:
+    - scheme: bodyCursorPages
+      overrides:
+        response:
+          envelope:
+            itemsField: tickets

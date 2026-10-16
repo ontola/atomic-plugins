@@ -50,6 +50,12 @@ export interface CalEvent extends Projection {
   day: unknown;
   /** The row's End day (`atomic-calendar-end-day`) as stored, if any. */
   endDay: unknown;
+  /**
+   * "Incomplete: missing Day": a required `event-v1` field is absent. The
+   * row is listed as incomplete, never dropped and never sent; a row without
+   * a Day is drawn on no day (the host view draws it nowhere either).
+   */
+  incomplete?: string;
 }
 
 /** The host view's day key: the first ten characters of the stored Day. */
@@ -69,6 +75,11 @@ export function occupies(event: CalEvent, date: string): boolean {
     return isAllDayOnDate(key, event.endDay, date);
 
   return key !== undefined && key === date;
+}
+
+/** Whether the host view (and so the Agenda and Week) draws `event` anywhere. */
+export function drawn(event: CalEvent): boolean {
+  return firstDay(event) !== undefined;
 }
 
 /** The first day the host view draws `event` on, if it draws it at all. */

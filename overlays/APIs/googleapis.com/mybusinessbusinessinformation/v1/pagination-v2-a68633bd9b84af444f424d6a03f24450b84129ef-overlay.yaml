@@ -1,0 +1,65 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/my-business/reference/businessinformation/rest/v1/accounts.locations/list
+overlay: 1.0.0
+info:
+  title: Google businessinfo collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/a68633bd9b84af444f424d6a03f24450b84129ef/APIs/googleapis.com/mybusinessbusinessinformation/v1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send opaque nextPageToken as pageToken. Stop only when nextPageToken is absent or
+          empty, not when a page is short or empty. If using fields, include nextPageToken and the item
+          array. Preserve account parent, required readMask, category filter, languageCode, regionCode
+          and view when present. Location lists require readMask; attributeMetadata and categories are
+          reference metadata, not locations. Pagination does not add caller access to accounts.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/v1/attributes'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: attributeMetadata
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/categories'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: categories
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+- target: $.paths['/v1/{parent}/locations'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: locations
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+      description: A readMask query is required. Keep the account parent, readMask, filter and orderBy
+        unchanged while paging locations.

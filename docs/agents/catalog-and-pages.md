@@ -8,8 +8,9 @@ GitHub Pages publishes this repository's `main` from its root. A merge to
 - `integrations/catalog.json`, the plugin catalog atomic-server hosts read
   (`https://ontola.github.io/atomic-plugins/integrations/catalog.json`);
 - `apps/<id>/<version>/ui.js`, the drive app modules that catalog installs;
-- `overlays/catalog/2026-10-02.json` and the overlays, which the integration proxy
-  composes when it starts (localthought.io reads it on restart; see
+- the dated catalogs `overlays/catalog/<date>.json` and the overlays, which the
+  integration proxy composes when it starts (each proxy release defaults to
+  one; its `CATALOG_PATH` can name another) (localthought.io reads it on restart; see
   [proxy-release.md](proxy-release.md));
 - `ontology/`, the shared class terms.
 
@@ -35,16 +36,20 @@ change to an app's source:
    ([Publishing a drive app](../../integrations/README.md#publishing-a-drive-app)).
    A file under `apps/` that is on `main` is never changed or deleted.
 2. **User-testing catalog.** Bump the app's entry in `VERSIONS` in
-   `usertest/catalog.mjs`. Otherwise the user-testing server serves new
-   bytes under an old version, and installed apps fail the host's integrity
-   check.
+   `usertest/catalog.mjs`, run `node usertest/catalog.mjs --record` and
+   commit `usertest/builds.json`. Otherwise the user-testing server serves new bytes
+   under an old version, and installed apps fail the host's integrity
+   check; CI's tooling unit tests (`apps.test.mjs`) fail on it.
 
 ## The byte-for-byte checks
 
 - `apps.mjs check` rebuilds each app and compares it with the committed
   `apps/<id>/<version>/ui.js`, and its sha384 with `app-module-integrity`. A
   pin bump that changes esbuild's output makes this fail; the fix is a new
-  version.
+  version. Locally it first runs `pnpm install --frozen-lockfile` in an
+  app's plugin folder or app folder whose lockfile has no `node_modules`
+  yet (`--no-install` skips that), so a fresh worktree needs no manual
+  install step before it.
 - `usertest/check-live.mjs` compares the catalog `usertest/catalog.mjs` just
   built with the user-testing server's live one:
 

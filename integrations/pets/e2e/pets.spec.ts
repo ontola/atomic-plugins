@@ -30,9 +30,13 @@
  */
 import { test, expect, type Page } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
+import { appVersion } from '../../tooling/apps.mjs';
 
-/** The catalog's version of the Pets app (integrations/catalog.json). */
-const VERSION = '0.1.2';
+/**
+ * The catalog's version of the Pets app (integrations/catalog.json), read at
+ * load by `appVersion`, so a version bump needs no edit here.
+ */
+const VERSION = appVersion('pets');
 
 test.describe('pets integration', () => {
   test.beforeEach(before);
@@ -88,9 +92,15 @@ test.describe('pets integration', () => {
 
     // The connection lives at the proxy, owned by the signed-in user and
     // delegated to this app. The page keeps nothing credential-like: not
-    // even the PKCE state of the finished handoff.
-    const [connection] = await proxyConnections('pets');
-    expect(connection.owner).toBe(await signedInAgent(page));
+    // even the PKCE state of the finished handoff. The lane's one mock proxy
+    // outlives a test attempt, so a retry also sees the connection an earlier
+    // attempt's agent made: only this attempt's agent's connections count.
+    const me = await signedInAgent(page);
+    const mine = async () =>
+      (await proxyConnections('pets')).filter(c => c.owner === me);
+    const [connection, ...others] = await mine();
+    expect(connection?.owner).toBe(me);
+    expect(others).toHaveLength(0);
     expect(connection.delegations).toHaveLength(1);
     expect(connection.last_used_at).not.toBeNull();
     expect(await page.evaluate(() => Object.keys(localStorage))).not.toEqual(
@@ -119,7 +129,7 @@ test.describe('pets integration', () => {
       timeout: 30_000,
     });
     expect(page.url()).toBe(appUrl);
-    const again = await proxyConnections('pets');
+    const again = await mine();
     expect(again).toHaveLength(1);
     expect(again[0].delegations.map(d => d.agent)).toEqual(
       connection.delegations.map(d => d.agent),

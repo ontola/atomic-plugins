@@ -1,0 +1,68 @@
+# Read-only Google Tasks OAuth profile for consumers that honor
+# x-authentication-profiles. Unlike the legacy oauthSecurityScheme selection,
+# this profile covers only the three GET operations used by the app.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/7ca47c73cf2308c9812692b482b3713b397bc88c/APIs/googleapis.com/tasks/v1/openapi.yaml
+info:
+  title: Google Tasks v1 read-only OAuth profile
+  version: 2.0.0
+actions:
+  - target: $.components.securitySchemes
+    update:
+      googleTasksReadOnlyOAuth:
+        type: oauth2
+        x-oauth-authentication-details:
+          authorizationServerMetadata:
+            token_endpoint_auth_methods_supported:
+              - client_secret_post
+              - client_secret_basic
+            code_challenge_methods_supported:
+              - S256
+          authorizationCode:
+            pkce:
+              requirement: optional
+            profile:
+              parameters:
+                - parameter:
+                    name: access_type
+                    in: query
+                    schema:
+                      type: string
+                      enum:
+                        - offline
+                  value: offline
+            capabilities:
+              - offlineAccess
+            tokenIssuance:
+              refreshToken:
+                presence: conditional
+                conditions:
+                  - firstAuthorization
+                description: Google can omit a refresh token after the first authorization.
+        flows:
+          authorizationCode:
+            authorizationUrl: https://accounts.google.com/o/oauth2/v2/auth
+            tokenUrl: https://oauth2.googleapis.com/token
+            scopes:
+              https://www.googleapis.com/auth/tasks.readonly: View your tasks.
+  - target: $.components
+    update:
+      x-authentication-profiles:
+        googleTasksReadOnly:
+          securityScheme: googleTasksReadOnlyOAuth
+          description: Read the connected person's Google Tasks.
+  - target: $.paths['/tasks/v1/users/@me/lists'].get
+    update:
+      security:
+        - googleTasksReadOnlyOAuth:
+            - https://www.googleapis.com/auth/tasks.readonly
+  - target: $.paths['/tasks/v1/lists/{tasklist}/tasks'].get
+    update:
+      security:
+        - googleTasksReadOnlyOAuth:
+            - https://www.googleapis.com/auth/tasks.readonly
+  - target: $.paths['/tasks/v1/lists/{tasklist}/tasks/{task}'].get
+    update:
+      security:
+        - googleTasksReadOnlyOAuth:
+            - https://www.googleapis.com/auth/tasks.readonly

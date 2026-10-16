@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createResolver } from './resolver.mjs';
+import { createResolver, incompleteNote } from './resolver.mjs';
 import { classes, properties } from './terms.mjs';
 
 const NAME = 'https://atomicdata.dev/properties/name';
@@ -155,4 +155,33 @@ test('needs shared classes in the shape terms.mjs exports', () => {
     () => createResolver({ classes: [{ subject: ENTRY.subject }] }),
     /terms\.mjs/,
   );
+});
+
+test('incompleteNote names the missing required fields as columns', () => {
+  const EVENT = classes['event-v1'].subject;
+  const r = createResolver({ classes: [classes['event-v1']] });
+  const DAY = properties['atomic-calendar-day'].subject;
+  const labels = { [NAME]: 'Name', [DAY]: 'Day' };
+  const none = r.read({ [NAME]: 'Planning', [DAY]: '2026-09-24' }, EVENT);
+  assert.equal(incompleteNote(none.missing, labels), undefined);
+  const noDay = r.read({ [NAME]: 'Planning' }, EVENT);
+  assert.equal(
+    incompleteNote(noDay.missing, labels),
+    'Incomplete: missing Day',
+  );
+  const empty = r.read({}, EVENT);
+  assert.equal(
+    incompleteNote(empty.missing, labels),
+    'Incomplete: missing Name and Day',
+  );
+  // Without a label, the shortname (the subject's last segment).
+  assert.equal(
+    incompleteNote(empty.missing),
+    'Incomplete: missing name and atomic-calendar-day',
+  );
+  assert.equal(
+    incompleteNote(['a', 'b', 'c'], { a: 'A', b: 'B', c: 'C' }),
+    'Incomplete: missing A, B and C',
+  );
+  assert.throws(() => incompleteNote('x'), TypeError);
 });

@@ -1,6 +1,6 @@
 # OpenAPI CRUD Causality Extension
 
-**Spec version:** 0.3.0
+**Spec version:** 0.8.0
 
 ---
 
@@ -42,6 +42,10 @@ components:
           urlTemplate: /widgets
           envelope:              # Envelope Object — shared with the Pagination Schemes Extension, §5
             itemsField: results
+          listQuery:             # fixed query parameters of every read (§4.2.1), since 0.4.0
+            include: archived
+          listMethod: GET        # GET (default) or POST (§4.2.1), since 0.4.0
+          # listBody: { ... }    # fixed JSON body of a POST read (§4.2.1), since 0.4.0
 
 paths:
   /widgets:
@@ -96,10 +100,33 @@ Describes one kind of object behind the API.
 |-------|------|----------|-------------|
 | `schema` | OAS Schema Object | No | The shape of the object. |
 | `description` | string | No | Human-readable description. |
-| `identity` | `IdentityObject` (§4.1.1) | **Yes** | How an object's canonical URL is structured. |
+| `identity` | `IdentityObject` (§4.1.1) | Conditional | How an object's canonical URL is structured. Required when anything addresses one object of the resource (see below); optional for a list-only resource. Optional since 0.6.0. |
 | `references` | `Record<string, ReferenceObject>` (§4.1.3) | No | Named references from this object's fields to objects of another resource. |
 | `collections` | `Record<string, CollectionObject>` (§4.2) | No | Named collections this resource can be a member of. |
+| `replace` | `ReplaceObject` (§4.8) | No | The API cannot update an object of this resource: a change is made by creating a new object and deleting the old one. Added in 0.7.0. |
+| `unkeyedLists` | `Record<string, UnkeyedListObject>` (§4.9) | No | Array fields of the object whose items have no identity of their own, keyed by the field's dot-path. Added in 0.7.0. |
 | `x-*` | any | No | Extension fields. |
+
+A resource needs an `identity` when an operation or another object
+addresses one of its objects: an operation whose `x-crud` names the resource
+with action `create`, `read`, `update` or `delete` (a create's URL is read
+back through `identity.urlTemplate`, §4.3.2), or a Reference Object (§4.1.3)
+whose `resource` is this resource. A resource that nothing addresses that
+way, one that is only listed, MAY omit `identity` (rule 25).
+
+_Informative:_ other extensions may address an object of a resource too,
+and then rely on its `identity`; a [Write
+Preconditions](../write-preconditions/README.md) source object (§4.4.1
+there) is one. Rule 25 does not check them.
+
+A consumer treats a resource without `identity` as read-only. It reads the
+objects through the resource's collections, and identifies them by nothing
+more than the list items carry: it builds no item URL, reads no object on
+its own (so it cannot check one that a list no longer returns), sends no
+write, and takes no path variable for another collection from the
+resource's objects, since there are no `identity.bindings` to take it from.
+Which item field, if any, the consumer keys its copy by is its own choice;
+this extension states none for such a resource.
 
 #### 4.1.1 Identity Object
 
@@ -167,7 +194,83 @@ Describes one named, ordered group of objects.
 | `urlTemplate` | string | No | URL template for the collection itself, e.g. `/widgets`, or `/users/{userId}/widgets`. |
 | `description` | string | No | Human-readable description. |
 | `envelope` | `EnvelopeObject` | No | Locates the array of items within a collection response body. Identical in shape to, and interchangeable with, the Envelope Object defined by the [Pagination Schemes Extension §4.4.2](../pagination-schemes/README.md#442-envelope-object) — see §5. Defaults to the response body root. |
+| `listMethod` | `GET` \| `POST` | No | Since 0.4.0. The HTTP method of a read of the collection (§4.2.1). Default: `GET`. |
+| `listQuery` | `Record<string, string>` | No | Since 0.4.0. Query parameters every read of the collection sends, with these exact values (§4.2.1). |
+| `listBody` | object | No | Since 0.4.0. Only with `listMethod: POST`. The JSON request body every read of the collection sends (§4.2.1). |
 | `x-*` | any | No | Extension fields. |
+
+#### 4.2.1 Reading a collection
+
+Added in 0.4.0. Many list operations narrow their result by default: GitHub's
+issue list returns open issues unless `state=all` is sent, Google Tasks leaves
+out hidden tasks (among them tasks completed in Google's own apps) unless
+`showHidden=true` is sent, and some APIs list through a `POST` search with a
+fixed filter in the body. One list URL can then hold several collections, each defined by the
+values it fixes. The Collection Object states those values, so that a reader of
+the collection sends the same request as every other reader.
+
+A collection _defines its read_ when its Collection Object has `listMethod`,
+`listQuery` or `listBody`, or one of the earlier `x-list-*` forms below. For
+such a collection, a _read_ is the request, and its follow-up page requests,
+made to the operation at `paths[urlTemplate][listMethod]` with:
+
+1. the path parameters of `urlTemplate`, from the request context (§4.1.2);
+2. every `listQuery` parameter, with exactly its value, as a query parameter;
+3. for `listMethod: POST`, `listBody` as the JSON request body, or no body when
+   `listBody` is absent;
+4. from the operation's pagination scheme, when it has one
+   ([Pagination Schemes](../pagination-schemes/README.md)), only the
+   page-walking request fields (roles `page`, `offset`, `pageToken`, `cursor`
+   and `pageSize`), merged over 2 and 3 for each page; for a `nextLink`
+   scheme, the follow-up requests are the links the scheme's rules allow;
+5. no other query parameter and no other body field. Headers are as the
+   operation and its security scheme define them.
+
+A collection that defines no read keeps its 0.3.0 meaning: a read is the
+collection's `x-crud` `list` operation, wherever it is, called with the path
+parameters only and walked by its pagination scheme's page-walking fields. A
+collection without `urlTemplate` or such an operation has no read described
+here.
+
+A request that carries a pagination field with another role (`syncToken`,
+`previousPageToken`, an `x-` role) is not a read of the collection, even with
+the fixed values: a delta or a backwards page does not return every member.
+Neither is a request with any other parameter (a user's filter, a `since`
+value). Extensions that reason about complete reads, such as
+[Collection Completeness](../collection-completeness/README.md), do not apply
+to those requests.
+
+| Field | Rules |
+|-------|-------|
+| `listMethod` | The operation at `paths[urlTemplate][listMethod]` MUST exist. When an operation declares `x-crud` with `action: list` and this `collection`, it MUST be that operation. |
+| `listQuery` | When present, nonempty. Each key MUST be a query parameter the operation declares (on the operation or its path item), and MUST NOT be one of `urlTemplate`'s path parameters. Each value is a string, sent as-is before percent-encoding; write `'true'`, not `true`. A parameter that repeats or takes an array is not covered in this version. Every query parameter the operation declares `required`, other than a page-walking one, SHOULD be in `listQuery`. |
+| `listBody` | Allowed only with `listMethod: POST`, on an operation that declares a JSON (`application/json`) request body. Its keys follow the request body schema. |
+
+`listQuery` and `listBody` MUST NOT name a field to which the operation's
+pagination scheme gives a role other than `pageSize`; paging owns those fields.
+A `pageSize` field they name is the read's default page size; a consumer MAY
+send another value page by page.
+
+Before 0.4.0, the syncables reader defined the same three things through its
+own Collection Object extensions `x-list-method`, `x-list-query` and
+`x-list-body`. Published overlays that use them stay valid, and a consumer MAY
+keep reading them. They differ from the standard fields in two ways:
+syncables accepts `x-list-method` in any case (`post`), and accepts
+non-string `x-list-query` values, sending their JSON text, and `null` as an
+empty value (Discord's `limit: 200` is sent as `200`, `true` as `true`).
+Rules 14–18 of §8 do not constrain the `x-list-*` forms. A Collection Object SHOULD NOT carry both forms. When it does,
+they combine field by field: `listMethod`, `listQuery` and `listBody` each
+apply when present, and an absent one falls back to its `x-list-*`
+counterpart.
+
+Several collections over one list URL leave three things undescribed in this
+version: an operation's `x-crud.collection` names one collection only, so the
+others are related to the operation through their `urlTemplate` and
+`listMethod` alone; the operation's bare default request (without the fixed
+values) is not a read of any of them unless a collection defines no fixed
+values; and `memberOf` (§4.3) cannot say that a created object joins a
+collection only when it matches that collection's fixed values.
+
 
 ### 4.3 Operation CRUD Object
 
@@ -185,6 +288,8 @@ Placed under the `crud` field of an OAS Operation Object. States the CRUD action
 | `mode` | `replace` \| `patch` | Conditional*** | For `update`: whether the request body replaces the object wholesale or partially modifies it. |
 | `patchFormat` | `PatchFormat` (§4.6) | No | For `update` with `mode: patch`: the patch document format. |
 | `removesFrom` | array of string \| `"*"` | No | For `delete`: collection names the object is removed from. Default: `"*"` (every collection listed in that resource's `memberOf` history). |
+| `followUps` | array of `FollowUpObject` (§4.7.1) | No | For `create` only: fields that may need a follow-up update after the create, in the order they are sent. Added in 0.5.0. |
+| `committedErrors` | array of `CommittedErrorObject` (§4.3.3) | No | For `create` only, and not with `followUps`: `5xx` responses the provider documents as sent only after this request created the object, with where that object's identity is. Added in 0.8.0. |
 | `x-*` | any | No | Extension fields. |
 
 \* Required when `action` is `create`.
@@ -208,12 +313,72 @@ Describes where the newly created object's URL is found.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `source` | `header` \| `bodyField` \| `template` | **Yes** | Where to read the new object's URL from. |
-| `name` | string | Conditional | Header name (if `source: header`) or dot-path to a response body field (if `source: bodyField`). Not used for `template`. |
+| `name` | string | Conditional | Header name (if `source: header`) or dot-path to a response body field (if `source: bodyField`). Required for both since 0.6.0; not used for `template`. |
 | `x-*` | any | No | Extension fields. |
 
 When `source: template`, the URL is derived by substituting the created object's fields (request body plus `addedFields`) into the resource's `identity.urlTemplate` (§4.1.1), using `identity.bindings` (§4.1.2) to know which field fills which variable.
 
+_Informative:_ some consumers read the `Location` header when a `source: header` object names none (the reference `created_identity` and syncables do), for documents written before 0.6.0 required `name` (rule 26).
+
 Regardless of `source`, once the object's URL is known, `identity.bindings` MAY also be read in reverse: match the URL against `identity.urlTemplate` and treat the captured value for each bound `{variable}` as authoritative for the corresponding object field, even if that field isn't otherwise listed in `addedFields`.
+
+#### 4.3.3 Committed Error Object
+
+Added in 0.8.0. A create answered with a `5xx`, or with no response, has an
+unknown outcome: the object may exist, and without an idempotency key a
+client neither sends the create again nor knows which object to bind. Some
+providers document that a particular error response follows a create that was
+applied, and say where the new object's id is. Notion's request limits
+([Retry a write that returns 503](https://developers.notion.com/reference/request-limits)):
+"A write can save its change and still return 503 when Notion runs out of
+time building the response. Repeating that write applies the change twice,
+so read `additional_data.retry_guidance` before you retry. When the change
+was already saved, the guidance tells you to read the object instead." and
+"When the request created a page or a database,
+`additional_data.committed_resource_id` holds the ID of the new object."
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `status` | array of integer HTTP status codes | **Yes** | Nonempty, unique, each 500–599. |
+| `identity` | `Record<string, string>` | **Yes** | Nonempty. Each key is a `{variable}` of the resource's `identity.urlTemplate`; each value is a dot-path (as `url.name`, §4.3.2) into the JSON error body that holds that variable's value. |
+| `description` | string | No | Human-readable description, such as the source of the claim. |
+| `x-*` | any | No | Extension fields. |
+
+A document MUST declare a Committed Error Object only where the provider
+documents both (a) that a response with that status carrying that field is
+sent only after this request created the object, and (b) that the field holds
+the created object's identity. Notion's page and database creates qualify.
+Its block-children append does not: there `committed_resource_id` holds the
+parent block's id, not a created object's. A field that is present whether or
+not the create was applied is not such evidence. A conflict or duplicate
+answer (a `409` "already exists", say) never qualifies; the statuses are
+`5xx` only.
+
+A response matches a Committed Error Object when its status is listed, its
+body is JSON, and every path in `identity` resolves to a usable value: a
+non-empty string with no leading or trailing whitespace, no `/`, `?` or `#`,
+no control character (Unicode category Cc), and not `.` or `..` (which a URL
+resolver would read as a path step), or a non-negative integer, which is used
+in decimal form. A client substitutes a string value into the identity
+template percent-encoded, as any path segment ([RFC 3986 §2.1](https://www.rfc-editor.org/rfc/rfc3986#section-2.1)):
+a `%` or a space in it is encoded, never sent raw. A response with a listed status that
+does not match (the field is absent, blank, or not such a value; a body with
+only `retry_guidance`, say) says nothing: the outcome stays unknown, as
+without this object. The objects are tested in order; the first that matches
+decides.
+
+A client that receives a matching response to a create treats the create as
+applied, not unknown: it MUST NOT send it again. It binds the object to the
+identity the values give. The template's other variables come from the
+create request, its path parameters and body, as §4.3.2 says for
+`source: template`, and from the request context (§4.1.2); when one cannot be
+filled, the create is still applied and not sent again, but the object stays
+unbound.
+
+A create with `followUps` (§4.7) MUST NOT also have `committedErrors` (rule
+32): §4.7.2 treats any `5xx` as an unknown outcome and resumes from a read,
+and this version does not define how a committed match would continue a
+compound create.
 
 ### 4.4 Added Field Object
 
@@ -242,7 +407,205 @@ Describes one field the server sets on create that the client did not supply in 
 | `jsonMergePatch` | [RFC 7396](https://www.rfc-editor.org/rfc/rfc7396) JSON Merge Patch — request body is a partial object merged into the existing one. |
 | `custom` | API-specific partial-update format; describe it in the operation's `description`. |
 
+### 4.7 Compound creates
+
+Added in 0.5.0. Some objects cannot be created with all their fields in one
+request. GitHub's create-issue operation accepts `labels`, but its
+documentation says "Only users with push access can set labels for new
+issues. Labels are silently dropped otherwise"; the labels then take a
+second request, `POST /repos/{owner}/{repo}/issues/{issue_number}/labels`,
+which can be refused after the issue was made. Other APIs take some fields
+only through a separate operation. A _compound create_ is one logical
+create made of the create operation and one or more follow-up updates of the
+created object. Its first request can succeed and a later one fail, which
+leaves the object _partly applied_: it exists, with only some of the fields
+the client meant to give it.
+
+`followUps` on a `create` Operation CRUD Object lists, in order, the fields
+that may need a follow-up, and the operation that sets each.
+
+#### 4.7.1 Follow-up Object
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `field` | string | **Yes** | Dot-path, in the object, to the field this follow-up sets. |
+| `create` | `include` \| `omit` | **Yes** | `include`: the client sends the field in the create body, and the server may silently not apply it, so the client checks the create response (§4.7.2). `omit`: the create body cannot carry the field; the client always sets it with the follow-up. |
+| `itemKey` | string | No | For an array field whose items the response gives as objects but the request names by one of their fields (GitHub's `labels`: names in a request, label objects in a response): dot-path, in a response item, to that field. Values are compared through it. |
+| `operation` | string | **Yes** | The `operationId` of the follow-up. Its `x-crud` is an `update` of the same resource. |
+| `bind` | `Record<string, BindSource>` | **Yes** | How each part of the follow-up request is filled. A key is `path.<name>`, `query.<name>` or `header.<name>` for a parameter of the follow-up operation, `body` for the whole JSON body, or `body.<dot-path>` for one body field. A path parameter of the follow-up operation that is not bound takes the value of the create request's path parameter of the same name, as CRUD Causality §4.1.2 carries request context. |
+| `description` | string | No | Human-readable description. |
+| `x-*` | any | No | Extension fields. |
+
+A BindSource is an object with `from` and `field`:
+
+| `from` | The value is |
+|--------|--------------|
+| `created` | the value at `field` in the object the create made: its response body, with `addedFields` and the identity read back as §4.3.2 says. |
+| `planned` | the value at `field` in the object the client meant to create. |
+| `missing` | of the planned value at `field`, the part the create did not apply (§4.7.2). |
+
+#### 4.7.2 Making a compound create
+
+1. The client sends the create, with every `include` field and without every
+   `omit` field.
+2. A 4xx answer refuses the request: nothing was applied, and the logical
+   create is refused. This holds only where the API applies nothing before
+   it refuses, as HTTP intends; an API that documents a 4xx after which the
+   object may exist (a `409` for a duplicate that an earlier attempt of the
+   same create made, say) makes that answer an unknown outcome. When the
+   outcome is unknown (no answer, a timeout, a 5xx after which the object may
+   exist), the logical create is _uncertain_. The client keeps its planned
+   follow-ups, sends none of them, and MUST NOT send the create again until
+   it has established that the object does not exist (an idempotency key the
+   API honours, or a read that would show it). When it finds the object
+   instead, it continues from step 3 with the object it read as the created
+   object.
+3. When the create succeeds, the object exists. The client determines its
+   identity as §4.3.2 says (the `Location` header, a body field, or the
+   template over the request body and `addedFields`, read from the response). It records the
+   logical create as bound to that identity before it sends anything else,
+   and from then on MUST NOT send the create again for this logical create.
+   When the identity cannot be determined (an empty body where the template
+   needs a field, a missing `Location`), the object exists but is _unbound_:
+   the client MUST NOT send the create again, sends no follow-up, and reports
+   the logical create as unbound until it finds the object by other means
+   (a read of the collection), when it continues from step 4.
+4. For each follow-up in order, the client works out what is missing: the
+   planned value minus what the created object shows at `field`, for
+   `omit` and `include` alike (for an array, the planned items whose value,
+   through `itemKey`, is not among the object's items; for anything else,
+   the planned value unless the object's value equals it). The created
+   object is the create's answer, or, when the client resumes a create
+   (step 2, or a partly applied one), the object it read back; so a
+   follow-up that already applied is not sent again.
+   When nothing is missing (the planned object has no value at `field`, or
+   the create applied all of it), it skips the follow-up. Otherwise it fills
+   the follow-up request by `bind`. A BindSource that resolves to nothing
+   (`from: created` with no value at `field` in the created object, say)
+   leaves the request unresolved: the client MUST NOT send a request with an
+   unresolved value, and treats the follow-up as not sent (step 6). It sends
+   a resolved follow-up and waits for its answer before the next.
+5. When every follow-up succeeded or was skipped, the logical create is
+   applied.
+6. When a follow-up is refused, its outcome is unknown, or it cannot be
+   resolved, the logical create is _partly applied_. The object exists with
+   the create's fields and the follow-ups that succeeded. The client stops
+   there: it does not send the later follow-ups in this attempt, since they
+   may depend on the one that failed, and keeps each as pending, marked
+   `refused`, `unknown` or `notSent`. It MUST keep the object bound (step 3)
+   and MUST NOT report the logical create as either refused or applied. The
+   pending follow-ups are updates of the bound object, which the client
+   sends, retries or puts to review as it does any update. Whether a
+   follow-up whose outcome is unknown may simply be sent again is a property
+   of that operation, outside this section; until the document says, the
+   client reads the object back before sending it again.
+
+The reading of a response in step 4 covers what the response shows. A
+server that answers before it applies a field (an asynchronous label
+assignment, say) needs a later version.
+
+This version covers creates only. An update that takes several requests is
+described by declaring each request as its own `update` (`mode: patch`); its
+partial state is that of independent updates.
+
 ---
+
+### 4.8 Replacing instead of updating
+
+Added in 0.7.0. Some APIs have no update operation for an object, but do
+let a client create one and delete one. Google Keep's API v1 is one: a note
+can be listed, read, created and deleted, never changed. A client that
+wants to change such an object makes a new one with the new values and
+deletes the old one. `replace` on the CRUD Resource Object says this is how
+the resource is changed.
+
+#### 4.8.1 Replace Object
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `blockedBy` | array of `BlockObject` (§4.8.2) | No | Conditions under which an object must not be replaced, because the new object would lose something the API cannot copy (an attachment, its sharing). |
+| `description` | string | No | Human-readable description. |
+| `x-*` | any | No | Extension fields. |
+
+The resource MUST have an `x-crud` create and an `x-crud` delete operation,
+and MUST NOT have an `x-crud` update (rule 27). A replacement is:
+
+1. Read the object as it is now. If any Block Object matches it, do not
+   replace it; the change stays local.
+2. Create a new object with every field of the changed record that the
+   create takes, through the resource's create operation. If the create
+   fails, nothing changed.
+3. Delete the old object through the resource's delete operation.
+
+The new object has a new identity (§4.3.2). A replacement is not atomic:
+between steps 2 and 3 both objects exist, and if step 3 fails the old one
+stays. A consumer that made the new object keeps the old one's identity as
+_retiring_: it retries the delete, and does not take the old object for a
+new one when a read returns it. A delete answered 404 or 410 has done its
+job.
+
+_Informative:_ a replacement changes what other users see as "the same"
+object. Its creation time is new, and anything that pointed at the old
+object (a link, a share, a reminder the API does not return) does not
+point at the new one. A consumer SHOULD replace only when the user changed
+the object, and SHOULD cap how many it replaces in one pass.
+
+#### 4.8.2 Block Object
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `field` | string | **Yes** | Dot-path to a field of the object. |
+| `when` | `present` \| `nonEmpty` | No | `present` (default): matches when the field is there and not `null`. `nonEmpty`: matches when the field is a nonempty array, object or string. |
+| `moreThan` | integer ≥ 0 | No | Matches when the field is an array with more than this many items. Not with `when`. |
+| `except` | object | No | With `moreThan`: items whose fields equal all of these values are not counted. |
+| `description` | string | No | Why such an object cannot be replaced, for the user. |
+| `x-*` | any | No | Extension fields. |
+
+### 4.9 Lists without item identity
+
+Added in 0.7.0. Some objects hold a list whose items have no id: Google
+Keep's `ListItem` is text, a tick and child items, nothing more. Two users
+who change such a list (one moves an item, the other ticks it) can only be
+merged if the client can tell which item is which. `unkeyedLists` names the
+fields that tell, so a consumer can pair the items of two versions of the
+list.
+
+#### 4.9.1 Unkeyed List Object
+
+The key is a dot-path from the object to the array field.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `match` | array of string | **Yes** | Dot-paths into an item, most telling first. Items of two versions of the list are paired on these fields (§4.9.2). |
+| `children` | string | No | Dot-path into an item to the array of its child items, which have the same shape and are paired with the same `match`. One level: a child's own `children` field is not read. |
+| `description` | string | No | Human-readable description. |
+| `x-*` | any | No | Extension fields. |
+
+#### 4.9.2 Pairing items
+
+A consumer that has the list as it was at its last sync (the _baseline_)
+and the list now flattens both, each child right after its parent, and
+pairs the items of the list now with the baseline's in passes. Each pass
+pairs only items neither earlier pass paired:
+
+1. Equal on every `match` field. Among several baseline candidates, the one
+   whose index is nearest wins (the first on a tie).
+2. Equal on the first `match` field.
+3. By position: an item whose nearest paired neighbours before and after it
+   are paired with baseline items `b1` and `b2` takes the first unpaired
+   baseline item between `b1` and `b2` (its first field was edited).
+
+An unpaired baseline item was deleted, and an unpaired item now was added.
+Two items equal on every `match` field, or an item edited and moved
+between two syncs, may pair wrongly or come out as a delete plus an add;
+this is the limit of a list without identity.
+
+_Informative:_ with the items paired, a three-way merge per item and per
+field follows: a field changed on one side takes that side's value; an item
+deleted on one side and edited on the other stays; the order is one side's,
+with the other side's moves applied (the items that are not on a longest
+common subsequence of the baseline's order and the other side's moved).
+syncables' `mergeUnkeyedList` is such a merge.
 
 ## 5. Compatibility with the Pagination Schemes Extension
 
@@ -307,6 +670,8 @@ actions:
     update:
       x-crud: { action: delete, resource: widget, removesFrom: "*" }
 ```
+
+**Swagger 2.0 documents (provisional).** A Swagger (OpenAPI 2.0) document has no `components` object, and its `definitions` may hold only Schema Objects. An overlay for such a document places the same map on the root object as the vendor extension `x-crudResources`; `resource` references in `x-crud` then resolve against it. This keeps the document valid Swagger 2.0 and lets the overlay compose, but tooling support for reading the root member is declared, not verified, and the `components.crudResources` form above stays the normative one.
 
 ---
 
@@ -499,6 +864,89 @@ To resolve the referenced project for the time entry above, reached via `GET /wo
 
 Note the two bindings for the same target variable. `project.identity.bindings.projectId` reads a project's **own** `id` field; `timeEntry.references.project.bindings.projectId` reads the **time entry's** `projectId` field. They fill the same `{projectId}` variable and differ only in which object supplies the value.
 
+### 7.7 Collections defined by fixed request values
+
+```yaml
+components:
+  crudResources:
+    task:
+      identity:
+        urlTemplate: /lists/{listId}/tasks/{taskId}
+        bindings:
+          taskId: { field: id }
+      collections:
+        allTasks:
+          urlTemplate: /lists/{listId}/tasks
+          envelope: { itemsField: items }
+          listQuery:
+            showCompleted: 'true'
+            showHidden: 'true'
+    page:
+      identity:
+        urlTemplate: /pages/{pageId}
+        bindings:
+          pageId: { field: id }
+      collections:
+        searchedPages:
+          urlTemplate: /search
+          listMethod: POST
+          listBody:
+            filter: { property: object, value: page }
+            page_size: 100
+```
+
+A read of `allTasks` for list `L1` is `GET /lists/L1/tasks?showCompleted=true&showHidden=true`,
+plus the page token on later pages. `GET /lists/L1/tasks` alone, the
+operation's default, is not a read of `allTasks`. A read of `searchedPages` is
+`POST /search` with the body above, with the pagination scheme's cursor field
+merged in from the second page on; `page_size` is allowed because the scheme
+gives it the `pageSize` role.
+
+---
+
+### 7.8 Notes that are replaced, with lists without item identity
+
+After Google Keep API v1, where a note cannot be updated:
+
+```yaml
+components:
+  crudResources:
+    note:
+      identity:
+        urlTemplate: /v1/{name}     # name is notes/<id>, as Keep's own path
+        bindings:
+          name: { field: name }
+      collections:
+        notes:
+          urlTemplate: /v1/notes
+          envelope: { itemsField: notes }
+      replace:
+        blockedBy:
+          - field: attachments
+            when: nonEmpty
+            description: The API cannot copy an attachment to a new note.
+          - field: permissions
+            moreThan: 1
+            except: { deleted: true }
+            description: A new note would lose its collaborators.
+      unkeyedLists:
+        body.list.listItems:
+          match: [text.text, checked]
+          children: childListItems
+paths:
+  /v1/notes:
+    post:
+      x-crud: { action: create, resource: note, url: { source: bodyField, name: name } }
+  /v1/{name}:
+    delete:
+      x-crud: { action: delete, resource: note }
+```
+
+A note shared with one other person has two live permissions and is not
+replaced. A note whose list was `[Milk, Eggs ✓]` at the last sync and is
+`[Eggs ✓, Milk]` now pairs both items in the first pass: Milk was moved,
+nothing was edited.
+
 ---
 
 ## 8. Validation
@@ -518,11 +966,98 @@ A conforming implementation MUST enforce:
 11. Every `references.*.resource` (§4.1.3) MUST reference a key that exists in `components.crudResources`.
 12. Every key in a `references.*.bindings` map MUST correspond to a `{variable}` present in the **target** resource's `identity.urlTemplate`.
 13. Every `{variable}` in the target resource's `identity.urlTemplate` that is not a key in the reference's `bindings` SHOULD also appear, with the same name, in the `urlTemplate` of at least one collection the **referring** resource declares under `collections` — i.e. it is carried from request context rather than read off the referring object.
+14. Rules 14–18 apply to the standard fields `listMethod`, `listQuery` and `listBody`; the `x-list-*` forms are a consumer fallback that they do not constrain, so a 0.3.0 document that uses them stays valid. A Collection Object with a standard field MUST have a `urlTemplate`, and the operation at `paths[urlTemplate][method]` MUST exist, where `method` is `listMethod`, else the upper-cased `x-list-method`, else `GET`. `listMethod` MUST be `GET` or `POST`.
+15. When an operation declares `x-crud` with `action: list` and a `collection` with a standard field, that operation MUST be at `paths[urlTemplate][method]`.
+16. `listQuery`, when present, MUST be a nonempty object. Every key MUST be a query parameter declared on that operation or its path item and MUST NOT be a path parameter of `urlTemplate`; every value MUST be a string.
+17. `listBody` MUST be a JSON object, MUST NOT be present unless the read's method is `POST`, and requires the operation to declare an `application/json` request body (in Swagger 2.0, a `body` parameter).
+18. No `listQuery` or `listBody` key may name a field to which the pagination scheme the operation applies explicitly (`x-pagination`, after overrides) gives a role other than `pageSize`. `listBody` keys are compared as dot-paths with the pagination scheme's request `bodyFields` keys, a segment holding a `.` written `["a.b"]` as in Pagination Schemes §4.4.
+19. A Collection Object SHOULD NOT carry both a standard field and its `x-list-*` counterpart.
+20. `followUps` MUST NOT be present unless `action` is `create`, and MUST be a nonempty array.
+21. Every Follow-up Object has `field`, `create` (`include` or `omit`), `operation` and `bind`; `field` and `itemKey` are dot-paths; no two Follow-up Objects of one create have the same `field`.
+22. `operation` MUST be the `operationId` of exactly one operation in the document, whose `x-crud` has `action: update` and the same `resource` as the create.
+23. Every `bind` key is `body`, `body.<dot-path>`, or `path.`, `query.` or `header.` followed by the name of a parameter of the follow-up operation (its own or its path item's); `body` and `body.<…>` need the follow-up operation to declare an `application/json` request body, and `body` excludes every `body.<…>` key. Every BindSource has `from` (`created`, `planned` or `missing`) and a dot-path `field`; `missing` is allowed only when its `field` equals the Follow-up Object's `field`.
+24. Every required path parameter of the follow-up operation is bound by a `path.<name>` key or is a path parameter of the create operation with the same name. Every required query or header parameter of the follow-up operation is bound by a `query.<name>` or `header.<name>` key. Header names compare case-insensitively, here and in rule 23.
+25. A CRUD Resource Object MUST have an `identity` when an operation's `x-crud` names it with action `create`, `read`, `update` or `delete`, or a Reference Object's `resource` names it (§4.1). An Identity Object, where present, MUST have a `urlTemplate` (§4.1.1).
+26. A Url Source Object with `source: header` or `source: bodyField` MUST have a `name` (§4.3.2).
+27. A CRUD Resource Object with `replace` MUST be named by an `x-crud` create and an `x-crud` delete, and MUST NOT be named by an `x-crud` update (§4.8.1).
+28. Every Block Object has a dot-path `field`; `when` is `present` or `nonEmpty`; `moreThan` is an integer ≥ 0 and is not given with `when`; `except` is an object and only given with `moreThan` (§4.8.2).
+29. Every key of `unkeyedLists` is a dot-path. Every Unkeyed List Object has `match`, a nonempty array of distinct dot-paths, and `children`, where present, is a dot-path that is not one of them (§4.9.1).
+30. `committedErrors` MUST NOT be present unless `action` is `create`, and MUST be a nonempty array (§4.3.3).
+31. Every Committed Error Object has a nonempty `status` of unique integers 500–599 and a nonempty `identity` whose keys are `{variable}`s of the resource's `identity.urlTemplate` and whose values are dot-paths.
+32. An Operation CRUD Object MUST NOT have both `committedErrors` and `followUps` (§4.3.3).
+
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paths./widgets.post.x-crud.url`).
 
 ---
 
+## Validator and tests
+
+[`validate.py`](validate.py) checks every rule of §8 for a loaded OpenAPI
+document (OpenAPI 3, or Swagger 2.0 with the root `x-crudResources` of §6).
+The SHOULD rules 6, 10, 13 and 19 are reported as warnings. It also checks
+the value sets the object tables give: a Url Source Object's `source`
+(§4.3.2) and a `patchFormat` from §4.6.
+`addressed_resources` lists the resources rule 25 requires an `identity`
+of, with the operation or reference that addresses each. Rule 8's path
+template syntax is: begins with `/`, no query or fragment, every `{name}`
+closed, not nested, nonempty, and no name twice. Rules 14–18 constrain the
+standard fields only; the `x-list-*` forms are not checked. Each error names
+its location and its rule. It also holds `read_request`, which builds the
+first request of a read (§4.2.1 steps 1–3, with the `x-list-*` fallback),
+and `compound_create` and `continue_compound_create`, a reference
+implementation of §4.7.2 over caller-supplied request functions, with
+`created_identity` reading the created object's identity back as §4.3.2
+says, and `committed_identity`, which reads it from a matching error
+response (§4.3.3) as {template variable: value}, where `created_identity`
+returns {object field: value}. [`examples/widget-lifecycle.yaml`](examples/widget-lifecycle.yaml) is
+§7.1, §7.3, §7.4 and §7.6 as one synthetic document.
+[`examples/compound-create.yaml`](examples/compound-create.yaml) is a
+synthetic document with a compound create.
+[`examples/fixed-query.yaml`](examples/fixed-query.yaml) is a synthetic
+document with a fixed-query `GET` collection and a `POST` search collection.
+`replace_block` and `pair_items` are reference implementations of §4.8.2
+and §4.9.2. [`examples/replaced-notes.yaml`](examples/replaced-notes.yaml)
+is §7.8 as a whole document.
+From the repository root:
+
+```sh
+cd openapi-extensions/spec/crud-causality
+pip install -r requirements.txt
+python3 -m unittest test_validate
+python3 validate.py examples/*.yaml
+```
+
+## Changes
+
+- **0.8.0** (2026-10-15): adds `committedErrors` to a `create` Operation CRUD Object (§4.3.3): `5xx` responses a provider documents as sent only after this request created the object, each naming where the new object's identity is in the error body, as Notion does for a `503` with `additional_data.committed_resource_id`. A matching response makes the create applied, not unknown, and binds the object. Not with `followUps` (rule 32). Validation rules 30–32, `committed_identity` in the validator, an example operation and tests. A document valid under 0.7.0 stays valid and means the same. A 0.7.0 consumer ignores the field and keeps such a create unknown.
+- **0.7.0** (2026-10-15): adds `replace` (§4.8), for a resource the API cannot update: a change is made by creating a new object and deleting the old one, never for an object a Block Object matches. Adds `unkeyedLists` (§4.9), for array fields whose items have no id, with the fields items are paired on and how. Validation rules 27-29, `replace_block` and `pair_items` in the validator, an example (§7.8, `examples/replaced-notes.yaml`) and tests. For Google Keep API v1 (ontola/atomic-plugins#593). A 0.6.0 document stays valid and means the same.
+- **0.6.0** (2026-10-13): `identity` is optional on a resource that nothing addresses one object of (§4.1): no `x-crud` create, read, update or delete names it and no Reference Object targets it. Such a list-only resource is read-only for a consumer, with no record identity beyond what its list items carry. Validation rule 25 states when `identity` is required. A Url Source Object with `source: header` now names its header (rule 26); no published overlay omitted it. The reference validator now checks every rule of §8. A 0.5.0 document stays valid and means the same, with one exception: a Url Source Object with `source: header` and no `name`, which 0.5.0 allowed, now breaks rule 26 (no published overlay in ontola/atomic-plugins has one).
+- **0.5.0** (2026-10-08): adds compound creates (§4.7): `followUps` on a `create` Operation CRUD Object, each naming a field, whether the create body carries it (`include`, possibly silently dropped, or `omit`), the follow-up update that sets it, and how its request is filled (`bind`); the steps of a compound create and its partly-applied state; validation rules 20–24, `compound_create` in the validator, an example and tests. For ontola/atomic-plugins pieces.md K8 (GitHub's issue create and label add). A 0.4.0 document stays valid and means the same.
+- **0.4.0** (2026-10-08): adds `listMethod`, `listQuery` and `listBody` to the
+  Collection Object and defines a read of a collection (§4.2.1), with
+  validation rules 14–19, a validator, an example and tests. They standardise
+  syncables' `x-list-method`, `x-list-query` and `x-list-body`, which
+  combine with them field by field. A collection that defines no read keeps
+  its 0.3.0 meaning, so a 0.3.0 document stays valid and means the same.
+- **0.3.0** and earlier: no change log was kept.
+
 ## Reference Implementation
 
-None yet. The motivating use case is a stateful mock API server, such as [`localthought/syncables`](https://github.com/localthought/syncables), driven entirely by this extension: given `crudResources` and `x-crud` annotations, the server can create objects with server-minted URLs and fields, add them to the right collections, serve single objects and paginated collections, apply replace/patch semantics, and delete objects (removing them from every collection they were added to) — without any hand-written business logic.
+[`syncables`](../../../syncables/README.md) reads `crudResources` and
+`x-crud` for its local copy, a subset of this extension (not the mint and
+request semantics described next). For a resource without `identity`
+(§4.1) it reads the collections, keys its copy by the items' `id` field
+(its default; an item without one, or one returned twice, fails the read),
+builds no item URL, cannot check a record a complete read no longer
+returns (under `absent: removed` it keeps such a record marked
+`unconfirmed`, "the record cannot be checked"; otherwise it removes it),
+throws on `update` and `remove`, and takes no path variable for a nested
+collection from the resource's objects. Unlike §4.1 says, syncables 0.22.0
+(#526) still sends a `create` when the collection's URL has a `POST`
+operation (its heuristic for documents without `x-crud`); #531, for
+syncables 0.22.1, makes it throw there too.
+
+syncables 0.24.0 reads `replace` and `unkeyedLists` (`replaceOf`, `replaceBlock`, `unkeyedListsOf`, `pairItems`, `mergeUnkeyedList`) for a consumer that writes through its own requests; `createApiClient` does not yet replace on `update()`.
+
+Beyond that, no implementation yet. The motivating use case is a stateful mock API server, such as [`localthought/syncables`](https://github.com/localthought/syncables), driven entirely by this extension: given `crudResources` and `x-crud` annotations, the server can create objects with server-minted URLs and fields, add them to the right collections, serve single objects and paginated collections, apply replace/patch semantics, and delete objects (removing them from every collection they were added to) — without any hand-written business logic.

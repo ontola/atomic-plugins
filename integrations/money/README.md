@@ -4,14 +4,24 @@
 
 This needs an atomic-server with the generic file entry point
 (atomic-server#1653: manifest `accepts` and `destination`, and the Import tab
-on a plugin's page; merged as atomic-server#1691). The pinned
-`.atomic-server-ref`, `bc39dac4b`, includes it; see [Verified](#verified).
+on a plugin's page; merged as atomic-server#1691). `bc39dac4b`,
+the pin when this was first verified, includes it; see [Verified](#verified)
+for the pins it was last run against, the current pin `0fa9c07` included
+(0.4.2, 2026-10-08).
+
+The importer below is one of two ways in. Since 0.4.0 the Money app
+(`app/`) also imports statements by itself, into a table of the shared
+`bank-transaction-v1` class, after a catalog install: see
+[Money app](#money-app-app) and [Shared class](#shared-class-bank-transaction-v1).
+The importer stays for drives that use it, and the app works on its table
+as before.
 
 1. **Publish** (once per server, by whoever maintains it): create a Plugin,
    replace its source with this folder's `plugin.js`, name it "Bank
    statements", and choose Code → Publish to integration store. There is no
-   generic path from this repo's catalog to a server's store yet
-   (atomic-plugins#94), so this step is manual.
+   generic path from this repo's catalog to a server's store for sandbox
+   bundles (the catalog install of atomic-plugins#94, closed, covers drive
+   apps only), so this step is manual.
 2. **Find it**: Integrations → Show experimental plugins → Community
    plugins → Bank statements → Open → Create draft.
 3. **Set up**: on the draft's Import tab, choose Set up. This creates the
@@ -52,14 +62,18 @@ No network operations or secrets are declared. File contents are runtime input,
 not plugin source. Proposals and approved transactions contain financial data
 and are handled by the user's AtomicServer; they are not sent to an LLM.
 
-`app/` is a separate drive app (shape 1 in AGENTS.md), the Money view of the
-same Bank transactions table ([design](design/DESIGN.md), #89). It never runs
-in the QuickJS sandbox and never writes imported bank fields: the importer
-above stays their only writer. `app/build.mjs` bundles it to one ES module
-exporting `view({ root, store })`, with no stylesheet file and no network
-code. It reads the table the host points it at (`store.getData()`), finds the
-banking properties through the table's row class, and subscribes to the table
-so rows from a new import appear without a reload.
+`app/` is a separate drive app (shape 1 in AGENTS.md), the Money view of a
+Bank transactions table ([design](design/DESIGN.md), #89). It never runs in
+the QuickJS sandbox. On the importer's table it never writes imported bank
+fields: the importer above stays their only writer there. On a table of the
+shared class `bank-transaction-v1` (its own table after a catalog install,
+or one someone made) it imports statements itself, with the same readers and
+identity rules, through the host's frame store (see
+[Shared class](#shared-class-bank-transaction-v1)). `app/build.mjs` bundles
+it to one ES module exporting `view({ root, store })`, with no stylesheet
+file and no network code. It reads the table the host points it at
+(`store.getData()`), finds the fields through the table's row class, and
+subscribes to the table so rows from a new import appear without a reload.
 
 Amounts are exact signed decimal **strings**, not floating point numbers.
 Opening/closing balances are reconciled with integer arithmetic (up to five
@@ -138,10 +152,18 @@ Browser: `node integrations/tooling/run-lane.mjs money --tier e2e` runs
 
 ## Money app (`app/`)
 
-A drive app (DESIGN.md in [`design/`](design/DESIGN.md), #89) that shows the
+A drive app (DESIGN.md in [`design/`](design/DESIGN.md), #89) that shows a
 Bank transactions table as a ledger. It is a view of the table it is opened
-on (`store.getData()`), so it belongs on the importer's table as an app
-view; the table's own Table tab stays next to it.
+on (`store.getData()`): the table a catalog install gave it, the importer's
+table (added there with Add view), or any table of the shared class
+`bank-transaction-v1`; the table's own Table tab stays next to it. Whose
+table it is decides how an import gets in (`controller.ts` `Source`):
+
+| Table                                                                | Rows read as                                                           | Import                                                                                  | Category and note                              |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| The importer's Bank transactions (`own` to the importer)             | its drive-local `bank-transaction` class, through the lens (`rows.ts`) | through the importer, with the host's review (`store.importer.run`, atomic-server#1774) | after "Allow editing" (atomic-server#1788)     |
+| The app's own table, from a catalog install                          | `bank-transaction-v1`, by published subject                            | the app's own writes (`app/write.ts`), no review step                                   | at once: the table is in the app's own subtree |
+| Another table of `bank-transaction-v1`, through Add view (#177 §3.0) | `bank-transaction-v1`, by published subject                            | the app's own writes, after "Allow editing" (the grant covers its `row-extras`, #1849)  | after "Allow editing"                          |
 
 - **Transactions**: account switcher (account + currency), a strip per
   account + currency (never summed across currencies) with the latest stored
@@ -151,6 +173,74 @@ view; the table's own Table tab stays next to it.
   Uncategorised filters, a day-grouped ledger (a table at 560 px and wider,
   a list of buttons below), 200 rows at a time. Amounts are formatted from
   their exact strings (`app/amounts.ts`); sums use `parser.ts`'s `units()`.
+- **Incomplete rows** (0.4.1; #177, ontology-kit's rule: show an incomplete
+  row, never skip it). A row of the table's class that lacks one of the four
+  required fields (account, currency, amount, value date; absent or the
+  empty string) is listed in an "Incomplete rows" region above the ledger
+  on the Transactions tab, outside its filters, with what it does have, the
+  note ("Incomplete: missing Amount", the columns as the class names them)
+  and, on a host with `openResource`, "Open row" to the row's page, where
+  the column is filled. It is in no balance, total, account list, statement
+  or import check: the controller keeps such rows in `state.incomplete`,
+  apart from `state.rows`, which is all the ledger sums and `check.ts`
+  compares, so an incomplete row with an import's source id is neither
+  "already imported" nor a changed booking; the import writes a new row. A
+  row completed in the host moves into the ledger on the table's next
+  change notification; with only incomplete rows the region sits above the
+  first-run invitation. Children of the table that are not of its class (a
+  View, say) are not rows and are not listed. At the pin the server refuses
+  a commit missing a required property and an empty string is not a date,
+  so on this host such a row has an empty account, currency or amount, or
+  comes from a lens or another writer. A row with all four fields but an
+  amount that is not one stays in the ledger as "Not a valid amount".
+- **The sync-status card (0.4.2, Q-084).** The shared card from
+  [`integrations/sync-status/`](../sync-status/README.md) sits first on the
+  Transactions and Imports tabs (not on Sources, which lists where
+  transactions can come from); `app/status.ts` maps the state onto it, pure,
+  with a test per state in `app/status.test.ts`. What it says, truthfully for
+  an app with no provider: the write-back line is "Read-only: edits here stay
+  in Atomic." in every state, followed by "There is no bank connection:
+  transactions come in from the MT940 and camt.053 files you import, and the
+  category and note you add are saved in this table." (plus, on a table whose
+  rows this app may not edit yet, "Saving a category or note asks you to
+  allow editing first.", or after a refusal, "Editing the rows was refused,
+  so a category or note cannot be saved until you allow it."); the "sync" it
+  dates is the last import: the latest rows that arrived while the view is
+  open ("Synced just now", and the rows line ends "; 2 imported here at
+  the last sync" or "; 2 arrived at the last sync"), else the newest
+  `imported` stamp among the stored statements ("Synced 3 days ago"); the
+  rows line counts the complete rows and the statements they came from ("6
+  transactions from 2 statements"). The arrivals are every new row the
+  table subscription brought in. From 0.4.4 those of the refreshes in the
+  15 s after an import this view applied (its own writes, or the host
+  importer it ran) are "imported here", and the header pill says "Imported
+  2 · just now"; any other writer's (the importer's review in another tab,
+  another device) "arrived", with the pill "2 arrived · 3 min ago". The pill
+  is dated like the card (`ago`), so it ages on each render; before 0.4.4 it
+  read "Imported N · just now" for every arrival and never aged. The card's
+  counts line ("Last sync: N added, N updated, N unchanged") is not used:
+  nothing here counts updated or unchanged rows. A table whose statements are only derived
+  from its rows (an older importer table, a hand-made shared-class table)
+  records no import date, so the card reads "Not synced yet" over the rows
+  and the rows line says "when they were imported is not recorded" rather
+  than inventing a date. Loading and an import's steps show as busy ("Reading
+  the file…", "Importing 3 of 10…"); a load error is the failed sync with
+  when it failed (`state.failedAt`, 0.4.2), "Couldn't load the
+  transactions." and the error, and "Try again.", and the header pill says
+  "Sync failed" too, the card's own word for it (the card's headline is
+  fixed by `card.ts`). `arrived.at` and `failedAt` come from the
+  controller's `now` option (`Date.now` by default), which `mount()`'s
+  `now` feeds; an import that
+  stopped midway is a problem ("The import stopped before every row was
+  written.", the rows written so far are kept, check the same file again).
+  Both error texts end in a period only when the message doesn't already
+  end in `.`, `?` or `!` (load errors since 0.4.2, the stopped import since
+  0.4.3).
+  Incomplete rows are ignored groups by what they miss, named, with "Open
+  row" when the host can show a row and the group has one. The card is a
+  region, not a live region: the header's pill stays the one `role="status"`.
+  Its CSS comes through `cssRawPlugin` from `integrations/sync-status/build.mjs`
+  and is appended to the app's one `<style>` element.
 - **Detail**: the bank's fields read-only with the verbatim narrative;
   category and note (`money-category`, `money-note`) saved on change. The
   host lets an app edit the rows of the table it views only after the
@@ -160,12 +250,17 @@ view; the table's own Table tab stays next to it.
 - **Import statement**: checks a chosen or dropped file in the browser
   with the importer's own readers and identity rules (`app/check.ts`,
   `identity.ts`), shows the reconciliation per statement and what is new,
-  already imported or blocked, or a designed error, and then imports it
-  through the importer with the host's own review (`importer.run`,
-  atomic-server#1774). Nothing is written before Apply there.
+  already imported or blocked, or a designed error, and then imports it:
+  on the importer's table through the importer with the host's own review
+  (`importer.run`, atomic-server#1774); on a `bank-transaction-v1` table by
+  its own writes (`app/write.ts`), one row per new transaction with
+  progress in the button, then one statement row. Nothing is written before
+  Import. A write that fails midway leaves the rows written so far, which
+  the next check of the same file recognises, so a retry writes the rest.
 - **Imports**: the stored statements, with period, opening → closing,
-  entries and import date; on a table without them, one row per statement
-  the transactions came from.
+  entries and import date: the importer's Imported statements table on its
+  table, the app's own (under the App, see below) on a shared-class table;
+  on a table without them, one row per statement the transactions came from.
 - **Sources**: statement files; Moneybird and QuickBooks shown as not
   available yet.
 
@@ -175,28 +270,103 @@ Each host call is feature-detected (`getMany`, `getTheme`/`onThemeChange`,
 one, a pointer to the importer's Import tab instead of Import, the host's
 refusal instead of a save, statements derived from the rows.
 
-Evidence: unit tests with a fake store that models both a current and an
-older host (`app/*.test.ts`), screenshots and axe from
-`app/harness/screenshots.mjs`, and a host E2E test in `e2e/money.spec.ts`
-against `bc39dac4b`: it sets up the importer, installs the built app
-test-side as a new App that renders bank transactions, adds it as a
-read-only view through Add view, imports the synthetic MT940 from inside
-the app through the host's review, checks the strip's closing balance and
-the Imports tab, saves a category after clicking the host's "Allow
-editing", and checks the in-app check (nothing new; a changed transaction
-blocks).
+Evidence: unit tests with a fake store that models a current and an older
+host and the three tables above (`app/*.test.ts`; `app/shared.test.ts` for
+the shared class), screenshots and axe from `app/harness/screenshots.mjs`,
+and the host E2E tests in `e2e/money.spec.ts` (see [Verified](#verified)):
+the second installs the app from the catalog and imports the synthetic
+MT940 and camt.053 into its own table by the app's own writes, checks the
+rows the server holds (class, subjects, exact strings), the strip's closing
+balance and the Imports tab, saves a category with no "Allow editing", and
+checks the in-app check (nothing new; a changed transaction blocks); the
+third sets up the importer, adds the installed app to its table through Add
+view as a read-only view, imports through the host's review, and saves a
+category after clicking the host's "Allow editing".
 
 Catalog: the `money` entry in `integrations/catalog.json` carries the app
 (`app-module` `apps/money/<version>/ui.js`, the same version as this
 package; see [Publishing a drive app](../README.md#publishing-a-drive-app))
-with `enabled: false`, so the Integrations page does not offer it. Not yet
-a working install path, and not tested: at pin `2567fc30b` a catalog
-Install creates the app with a row class and table of its own
-(`createApp`), the importer's table offers under Add view only apps whose
-`renders` lists its row class (`useDriveApps.ts` `appsForClass`), and
-`store.importer.run` refuses an app that is not a view of an importer's
-table (`hostStore.ts`). The E2E adds the Bank transaction class to the
-app's `renders` test-side instead.
+with `enabled: false`, so the Integrations page does not offer it. The gate
+of `ontology-kit/` requires that while the shared ontology's base is on
+github.io (the card's `limitation` says "Waits for the stable ontology
+domain"). The install path itself works since 0.4.0 (the E2E installs from
+the catalog's Drive apps section): a catalog Install creates the app with a
+row class and table of its own (`createApp` without `rowClass`), and on
+every open the app fixes what that leaves out, inside its own subtree
+(`app/adopt.ts`; #177 spike S2): its own table's `classtype` becomes
+`bank-transaction-v1`, so what it imports there are shared rows; its App's
+`renders` lists `bank-transaction-v1` and every importer `bank-transaction`
+class in the drive (found by shortname, since Set up mints it per drive), so
+Add view offers it on the importer's table and on any table of the shared
+class (`useDriveApps.ts` `appsForClass`, exact subject); and its `row-extras`
+name the four bookkeeping Properties below. An importer set up after the
+app's last open is picked up by the next one. Once the host lets a catalog
+entry declare its row classes (#177 H2), the first two steps can go.
+
+## Shared class (`bank-transaction-v1`)
+
+Since 0.4.0 the Money app reads and writes the shared class
+`bank-transaction-v1` from [`ontology/`](../../ontology-kit/README.md)
+(#177 item 8): account, currency, amount (an exact decimal string), value
+date, booking date, description, reference, and the person's own category
+and note, at their published GitHub Pages subjects. The shortnames are money
+0.3.0's, unchanged. No host change was needed: the app writes rows the way
+the calendar, timesheets and issue-tracker apps do at the pin.
+
+- **The importer is unchanged.** Its Set up still mints the drive-local
+  `bank-transaction` class and properties from `bankingSchema()`: a
+  manifest `destination` cannot name a published class at the pin (both
+  manifest validators refuse `subject`; that host change is an issue for
+  Joep, superseding draft PR #252). The app reads that class through a lens
+  (`app/rows.ts` `importerLens`): the class's declared properties by
+  shortname, mapped onto the same fields. The lens's `from` is money's own
+  class, so it lives here, not in `ontology-kit/`.
+- **The app's own terms** (`app/own.ts`), all under the App, the one place
+  it may always write: four Properties in the App's own ontology for the
+  bookkeeping that is not part of the shared class (`bank-source-id`,
+  `bank-fingerprint`, `bank-statement`, `bank-transaction-code`), declared
+  as the App's `row-extras`; a `bank-statement-record` class and an
+  "Imported statements" table under the App, one row per imported statement
+  with its reconciled balances, plus `money-table` (which table its
+  transactions went to). Made on first open, found by shortname and class
+  afterwards; a same-named Property with another datatype is an error.
+- **Identity and dedupe** are the importer's (`identity.ts`): the app's
+  rows carry the same `bank-source-id` and `bank-fingerprint`, so a reimport
+  of an overlapping statement is recognised row by row, a changed booking
+  blocks the file, and a reference-free overlap with an earlier import is
+  refused, before anything is written. Not covered: two copies of the app
+  importing the same file at the same moment can both write a row (the
+  importer's server-side `localId` uniqueness has no equivalent for app
+  writes); the next check shows such a row as "already imported" twice.
+- **Reading is strict.** The shared fields are read by subject only, through
+  `ontology-kit/resolver.mjs`: no lookup by shortname or column. An amount
+  that is not an exact decimal with at most five fraction digits is shown
+  as "Not a valid amount" and left out of every sum; it is never parsed as a
+  float.
+- **A table you make yourself** (#177 item 13). Until New Table's class
+  search finds external classes (#177 H10) or a template uses the shared
+  class (H3), make such a table by pasting the class URL:
+  1. New → Table → "Use existing class", paste
+     `https://ontola.github.io/atomic-plugins/ontology/classes/bank-transaction-v1`
+     into the class field and press Enter (search does not find it; typing
+     or pasting the URL does, #177 spike S3).
+  2. On the new table: Add view → Bank statements (listed once the app has
+     been opened once, see above). Import statement asks for "Allow
+     editing" first; so does saving a category or note.
+
+  Rows you add there need account, currency, amount and value date to be in
+  the ledger; since 0.4.1 a row without one of them is listed as incomplete
+  above it, with "Open row", instead of being skipped (see "Incomplete
+  rows" under [Money app](#money-app-app)). This path has unit tests only;
+  no E2E (the E2E's incomplete row is on the app's own table).
+
+- **Needs GitHub Pages.** The server fetches each shared term once, on first
+  use, and keeps it; the browser fetches it through its local-database
+  worker (#177 spike S1, H1). A drive whose server never fetched a term
+  cannot use it while Pages is down.
+- **An older host** without an App ontology (`default-ontology`), row access
+  or `importer.run` gets the 0.3.0 behaviour: reading, and a pointer to the
+  importer's Import tab.
 
 Build: `node integrations/money/app/build.mjs` (writes `app/dist/ui.js`,
 minified, one module). Screenshots, axe and the render budget:
@@ -204,6 +374,107 @@ minified, one module). Screenshots, axe and the render budget:
 `app/dist/screenshots/`).
 
 ## Verified
+
+At 0.4.3 (`plugin.js` sha256
+`fa91ad60bf341e7e8c8da523be6e11b4ad81a1403a806b4ee895eb941e692bde`, again
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.3/ui.js`, 120,397 bytes; the only change from 0.4.2 is the
+stopped-import message's punctuation, unit-tested in `app/status.test.ts`)
+the money lane's e2e (`e2e/money.spec.ts` and `moneybird.spec.ts`)
+exited 0 on 2026-10-12 against the pin `7dab1ce` (the build VPS's source build);
+its log was lost, so there are no per-test counts for that run.
+Since 2026-10-13 the card after an import that stopped midway is verified
+end to end too: the installed-app test has the host fail the app's second
+`/app-write` (Playwright `page.route`) while it imports two new
+transactions, and checks the sheet's "The import didn't go through" and the
+card's "The import stopped before every row was written." with "The rows
+written so far are kept; …"; then, after the app's copy of the table caught
+up (its Transactions count), the same file checked again proposes the one
+left (New 1), and the import ends with 2 rows. The five money e2e tests, this step included, passed on 2026-10-13 at
+0.4.3 against the pin `7dab1ce` (the build VPS's source build), in 5.5
+minutes. Known limit, found
+that way (#539): the app writes exactly what its preview said was new, so
+checking the file again before the app's copy of the table caught up, or
+pressing Import again in the failed sheet (it keeps the old preview),
+writes the transaction written before the failure a second time; the first
+run of this step ended with that transaction twice. The sheet's
+"transactions saved before the failure are recognised and not written
+twice" holds only for a check made after the app's copy of the table caught
+up.
+
+At 0.4.2 (`plugin.js` sha256
+`2c4005acaaad5ce1fe730009c452fb59c8213f4852711f915b8e12868e39b963`, again
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.2/ui.js`, 120,413 bytes) the five tests of
+`e2e/money.spec.ts` and `moneybird.spec.ts` passed on 2026-10-08 against the
+pin `0fa9c07` (the build VPS's source build of it), in 6.1 minutes. What the
+run adds over 0.4.1: after the MT940 import into the app's own table, the
+sync-status card reads "Synced just now", "2 transactions from 1
+statement; 2 arrived at the last sync", no "Last sync:" counts line, and
+"Read-only: edits here stay in Atomic. There is no bank connection". On a
+table without import dates it is too, since 2026-10-14: a fourth test makes
+a `bank-transaction-v1` table with two rows by hand, adds Money as a
+read-only view, and checks the card's "Not synced yet" headline, "2
+transactions in this table; when they were imported is not recorded", the
+read-only line and "Saving a category or note asks you to allow editing
+first." (the six money e2e tests passed at pin `7dab1ce` in 6.1 minutes).
+After a stopped import it is since 0.4.3 (above). With
+incomplete rows it is: the installed-app test checks the card's ignored
+group for the hand-typed row ("1 transaction is incomplete (missing
+Amount): …", the row under Which, Open row). On the importer's table too:
+the third test checks the card read-only with "Saving a category or note
+asks you to allow editing first.", dated "Synced just now" with "2 arrived
+at the last sync" after the importer's import, and without that sentence
+once editing is allowed. Both passed on 2026-10-12 at the pin `7dab1ce`
+(the five money e2e tests, 5.5 minutes). After a load error it
+is: `e2e/money.spec.ts` (the installed-app test) has the host fail the
+app's `getData` until the host recovers, by failing the page store's read
+of the app's table,
+and checks the pill and the card's "Sync failed", "Couldn't load the
+transactions." with the error and "Try again.", then that Try again loads
+the rows and clears the failure. The five money e2e tests, this step
+included, passed on 2026-10-12 at the pin `e922179` (candidate21, the
+build VPS's source build) in 5.6 minutes, with the 120,413-byte 0.4.2
+module.
+
+At 0.4.1 (`plugin.js` sha256
+`b58eb564459de4c7d73cc06adb89cd9207810e760f9daabb7423983ba5efbf99`, again
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.1/ui.js`, 111,239 bytes) the four tests of
+`e2e/money.spec.ts` and `moneybird.spec.ts` passed on 2026-10-02 against the
+pin `a12b74a` (the build VPS's source build of it), in 4.1 minutes. What the
+run adds over 0.4.0: after the camt.053 import, a `bank-transaction-v1` row
+is committed by hand to the app's own table with an empty Amount (the only
+incomplete row this host can hold, see "Incomplete rows" under
+[Money app](#money-app-app)), and the app lists it through the table
+subscription as "1 row is incomplete" with "Incomplete: missing Amount", the
+Transactions count stays 4, the ledger does not show it, and "Open row"
+leaves the app for that row's page. Not verified: an incomplete row on the
+importer's table (the importer never writes one) or on a hand-made
+shared-class table (unit tests only), and a row completed in the host while
+the app stays open (unit test only).
+
+At 0.4.0 (`plugin.js` sha256
+`693f8535adb8920e92e3358349e635ebce45c4b60e48a38687609ae3015fc7b7`, which is
+0.3.0's bundle with only the manifest's `version` changed; app module
+`apps/money/0.4.0/ui.js`, 108,795 bytes) the three tests of
+`e2e/money.spec.ts` and `moneybird.spec.ts` passed on 2026-10-02 against the
+pin `a12b74a` (the build VPS's source build of it), fetching the shared terms
+from the real GitHub Pages URLs; see the end of this section for the second
+run on the kept lane store. What the run adds over 0.3.0: the app is
+installed from the catalog (not test-side); on its own table it imports the
+synthetic MT940 and camt.053 by its own writes, and the server then holds
+rows of class `bank-transaction-v1` with the published property subjects and
+the exact strings (`-12.34`, `2026-09-02`), its statement rows give the strip
+`€107.66`, a category saves with no "Allow editing" bar, a reimport finds
+nothing new and a changed booking is blocked; and Add view on the importer's
+table offers the installed app (the importer's class found by shortname on
+the app's first open), where the 0.3.0 flow runs unchanged. Not verified by
+an E2E: importing into a hand-made `bank-transaction-v1` table after "Allow
+editing" (unit tests only), and a host that serves the real catalog (the
+lane's dev-server serves the committed `apps/money/0.4.0/ui.js`).
+
+Earlier releases:
 
 `e2e/money.spec.ts` passed on 2026-09-25 against the pinned atomic-server
 `bc39dac4b` (earlier against `007869464`, `11264e83e` and `2f403624e`, which includes #1691,
@@ -248,80 +519,285 @@ check above was on the old host path), an Installation (as opposed to a
 draft), and the host's server-side size refusal through the browser (it has
 a Rust unit test in atomic-server, `uploads_need_a_declaration_and_respect_its_size`).
 
-## Moneybird: read-only contacts (`moneybird/`)
+## Moneybird: read-only contacts, hours and financial mutations (`moneybird/`)
 
 A second, independent thing in this folder (#102): a browser-only drive app,
 the same shape as `integrations/pets/app/`. It is not part of the sandbox
-bundle above and does not touch the Bank transactions table.
+bundle above and does not touch the Bank statements importer's table.
 
-- **Scope.** One collection, contacts, of one administration the person
-  chooses. Every call is a GET through `store.proxy.request`; the
-  connection lives at the integration proxy, owned by the user's agent and
-  delegated to the app's (#54 phase 2). The frame holds no credential and
-  makes no network call of its own (`moneybird/build.test.ts` checks the
-  bundle). Nothing is written to Moneybird.
-- **Deferred.** The catalog card used to advertise contacts, sales invoices,
-  purchase invoices, financial mutations "and the other collections". None of
-  those but contacts is imported. `financial_mutations.json` has no
-  pagination overlay (`overlays/APIs/moneybird.com/v2-readonly/pagination-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml`)
-  and needs a period `filter`, so it is the likely next collection, but it is
-  not attempted here.
+- **Scope.** Three collections of one administration the person chooses,
+  each ticked or not when the administration is chosen: **contacts** (as
+  0.1.x), **hours** (Moneybird time entries) and **financial mutations** (the
+  transactions on its financial accounts). Every call is a GET through
+  `store.proxy.request`; the connection lives at the integration proxy, owned
+  by the user's agent and delegated to the app's (#54 phase 2). The frame
+  holds no credential and makes no network call of its own
+  (`moneybird/build.test.ts` checks the bundle). Nothing is written to
+  Moneybird.
+- **The sync-status card (0.3.0).** The shared card of Decision Inbox Q-084
+  (`integrations/sync-status/`, adopted by Clockify first) comes first in the
+  view, under the heading, in every state but loading and a table the app
+  cannot sync. `moneybird/status.ts` maps the controller's state and its
+  latest sync onto it, pure, with a test per state (`status.test.ts`); the
+  DOM is checked in jsdom (`view.test.ts`). It says, in every state, that the
+  app is read-only: "Read-only: edits here stay in Atomic. Nothing is sent to
+  Moneybird, and the next sync overwrites edits made here in the columns it
+  imports." (the #97 policy as it stands); on a table that is not synced, or
+  whose sync is paused, that nothing here is overwritten either. After a
+  sync: "Synced 2 min ago", "15 rows imported: 5 contacts, 4 time entries,
+  6 mutations", "Last sync: 15 added, 0 updated, 0 unchanged". A collection
+  whose refresh failed is a problem next to the ones that went on
+  ("Contacts: refresh failed. Moneybird answered 503 for contacts page 2. The
+  contacts imported earlier are kept; they last refreshed 3 h ago. Press Sync
+  now to try again."); only when every chosen collection failed does the card
+  say "Sync failed", naming the rows as kept and each collection's last good
+  refresh this app knows. Those times are stored on the App or the binding as
+  `moneybird-last-sync` (see Flow), so they survive a reload: the app syncs on
+  open, and an open whose every collection fails still names the gap, and a
+  table that holds imported rows never reads "Not synced yet" (before this
+  page load's first sync the card shows the stored time, without counts).
+  Skipped records are listed as ignored with their reason and names: a time
+  entry "without a readable start (started_at) in Moneybird: not imported.",
+  a mutation "with an amount Moneybird did not send as a decimal string: not
+  imported, never approximated."; a refresh that wrote nothing but skipped
+  something gets no counts line (it would read "nothing to read"). A wait for
+  Moneybird's rate limit shows while it lasts, counting down (see Rate
+  limits); while a sync runs, the previous sync's failures are not listed,
+  since the running one settles them. After an error on a table the app is
+  not bound to, the note claims only that nothing is sent. The
+  `role="status"` line stays the one live region; while the card holds the
+  same words it is visually hidden, not removed. The card's
+  CSS is embedded by `cssRawPlugin` (`integrations/sync-status/build.mjs`)
+  in `moneybird/build.mjs`; the money lane's `paths` list
+  `integrations/sync-status/**`, so a card change runs this lane too.
+- **Rate limits (0.3.0).** Moneybird announces 150 requests per 300 s per
+  source IP (developer.moneybird.com, "Throttling";
+  `overlays/APIs/moneybird.com/v2-readonly/throttling-*-overlay.yaml`, window
+  algorithm unspecified). The source IP is the integration proxy's, shared by
+  everyone who connects Moneybird through it, so the app's pacing promises
+  nothing; it keeps one import from spending the whole quota at once.
+  `moneybird/throttle.ts` wraps the reader for the whole sync (the three
+  collections share one window): a sliding window of 120 requests per 300 s
+  before the next request waits (a small sync never waits; the period-halving
+  mutations read, up to 200 requests, does), and a `429` retried after
+  `Retry-After` (delay-seconds, digits only, or an IMF-fixdate; anything
+  else, `-1` or `1.5` say, is ignored) when Moneybird sends one, never less
+  than the backoff, else after a backoff of 2 s doubling per retry; one wait
+  is capped at 60 s (a longer `Retry-After` fails the read now, naming the
+  asked wait), and one request is retried at most 5 times, after which the
+  collection fails with "Wait a few minutes, then press Sync now." on the
+  card. While a wait lasts the card is busy with "Moneybird is limiting
+  requests (429): retrying in 4 s…" or "Pacing requests under Moneybird's
+  limit: next in 13 s…", counting down every second.
+  Verified with fake transports and a fake clock only (`throttle.test.ts`);
+  the synthetic fixture never answers 429, and nothing is observed against
+  Moneybird.
+- **Where the rows go.** Contacts fill the table the install made, with a
+  drive-local `Contact` class, as before. Hours and mutations are rows of the
+  shared classes of #177 (`ontology-kit/`), so the other apps' views work on
+  them: the first open makes, under the App, a "Moneybird hours" table
+  (`time-entry-v1`), "Moneybird projects" (`work-project-v1`), "Moneybird
+  people" (`work-person-v1`) and "Moneybird mutations"
+  (`bank-transaction-v1`), found again by `classtype` on later opens
+  (`moneybird/own.ts`). The Clockify timesheets app (0.6.x) can be added to
+  the hours table through "+ Add view" and shows the entries in its week
+  grid; the Money app to the mutations table and shows them in its ledger
+  (both offer themselves on any table of their class; that these two views
+  render Moneybird's rows is declared from their READMEs, not checked by an
+  e2e here). The App's `renders` lists both shared classes and its
+  `row-extras` the six extras below. Where a view is, is decided by the
+  table's class and parent (`moneybird/binding.ts` `layout`), never by the
+  parent alone, since the hours and mutations tables are children of the App
+  too: the install's table (a drive-local class) is the contacts table and
+  carries the collections choice; opened on its own hours or mutations table
+  (Add view offers it there as well), the app syncs only that table's
+  collection into it, with the App's administration and no grant; its
+  projects and people tables are refused with a note. Only the own tables a
+  sync writes are made: the contacts table's view makes the hours (with
+  projects and people) and mutations tables it imports into; a view on a
+  shared-class table makes only the projects and people tables hours link
+  to, never an empty mutations table.
+- **Syncing a table the app didn't make** ([the pattern](../README.md#syncing-a-table-the-app-didnt-make)):
+  added through "+ Add view" on a `time-entry-v1` or `bank-transaction-v1`
+  table of the person's own, the app shows "Not synced with Moneybird" and
+  writes nothing until "Sync this table to Moneybird" is pressed; that asks
+  the host's "Allow editing" (`store.requestRowAccess`), and the grant must
+  cover the row extras. The binding is a resource under the App whose
+  `moneybird-synced-table` names the table and which holds the
+  administration; the one collection that table's class can hold is synced
+  into it (hours there still link to the app's own Projects and People
+  tables). The table itself is never written and no row is ever deleted. A
+  lapsed grant pauses the sync ("Allow editing again"); a table of another
+  class is refused (`moneybird/binding.ts`).
 - **Flow.** Connect Moneybird (host consent bar, then the proxy's own
-  connect page), then choose an administration
-  (`GET /administrations.json`; the choice is
-  stored on the App resource as `moneybird-administration`), then import. It
-  reads `GET /{administration_id}/contacts.json?per_page=100&include_archived=true`
-  and follows `Link: <…>; rel="next"` only within that collection, for at
-  most 200 pages. It reads every page before writing, so a refresh that fails
-  part-way writes nothing and the rows imported earlier stay. The view syncs
-  once each time it opens, and on Sync now.
-- **Identity.** Each row carries `moneybird-source-id` =
-  `moneybird:<administration>:contact:<id>`. A repeated import with no change
-  writes nothing, and two administrations do not collide. A contact changed on
-  Moneybird overwrites the imported columns; local edits to them are not
-  preserved yet (the policy is #97's question). A contact that disappears is
-  kept.
-- **Columns.** `moneybird-id`, `-administration-id`, `-company-name`,
-  `-firstname`, `-lastname`, `-email`, `-city`, `-country`, `-customer-id`,
-  `-updated-at` (the exact ISO string Moneybird sent) as strings;
-  `moneybird-archived` as a boolean; `moneybird-version` as an integer. The
-  row name is the company, else the person, else the id. Null or absent
-  values are left unset.
+  connect page), then choose an administration (`GET /administrations.json`)
+  and the collections (stored on the App, or on the binding, as
+  `moneybird-administration` and `moneybird-collections`; an administration
+  stored by 0.1.x without collections means contacts), then import. From
+  0.3.0 the same resource also carries `moneybird-last-sync`, when each
+  collection last refreshed without error
+  (`contacts:<ISO 8601>,hours:<ISO 8601>`), written once per sync that
+  refreshed anything, for the card: the one write a sync makes besides rows
+  (the live check's S3 excludes exactly that save). Read when the home is
+  known, before any state shows; a time later than now, or not in
+  `toISOString`'s shape, is ignored. The view
+  syncs once each time it opens, and on Sync now, each chosen collection on
+  its own: one that fails is reported next to the others ("contacts: refresh
+  failed: … Rows imported earlier are kept."). Every collection reads
+  everything before writing anything, so a refresh that fails part-way
+  writes nothing and the rows imported earlier stay.
+- **Reads.** Contacts:
+  `GET /{administration_id}/contacts.json?per_page=100&include_archived=true`;
+  hours: `GET /{administration_id}/time_entries.json?per_page=100&filter=period:this_year,state:all`
+  (passing any `filter` replaces Moneybird's defaults entirely, so both keys
+  are spelled out; running timers stay out, as by default). Both follow
+  `Link: <…>; rel="next"` only within their collection, for at most 200
+  pages. Financial mutations: `GET /{administration_id}/financial_accounts.json`
+  once (for the accounts' IBANs), then
+  `GET /{administration_id}/financial_mutations.json?filter=period:this_year`,
+  Moneybird's own period, the same the hours read uses. That list has **no
+  pagination**: the pinned OpenAPI document gives it only `filter` and says
+  it is "limited to 100 financial mutations" (developer.moneybird.com says
+  the same and points at a synchronization API the read-only document does
+  not carry). So an answer with 100 records or more is asked again as the
+  two halves of the civil year (`filter=period:YYYYMMDD..YYYYMMDD`), down to
+  single days, and a single day at the limit is an error ("Nothing was
+  written") rather than a silently incomplete ledger. The halving windows
+  take the civil year in Europe/Amsterdam (`civilYear()`): Moneybird's
+  `this_year` runs on the administration's clock, which the app does not
+  read, so the two agree except, around New Year, for an administration in
+  another time zone. At most 200
+  mutation requests per import (`MAX_MUTATION_REQUESTS`); an administration
+  with a few hundred mutations a year needs about a dozen. No overlay was
+  added for this: a `pageNumber` declaration would claim something Moneybird
+  does not do.
+- **Identity.** Each imported row carries `moneybird-source-id` =
+  `moneybird:<administration>:<collection>:<id>` (`contact`, `time_entry`,
+  `financial_mutation`, `project`, `user`). A repeated import with no change
+  writes nothing, and two administrations do not collide. A record changed
+  on Moneybird overwrites the imported columns, and a column Moneybird no
+  longer sends is removed; local edits to them are not preserved yet (the
+  policy is #97's question). A record that disappears is kept. Rows of the
+  table with another or no identity (the person's own) are left alone.
+- **Columns.** Contacts: `moneybird-id`, `-administration-id`,
+  `-company-name`, `-firstname`, `-lastname`, `-email`, `-city`, `-country`,
+  `-customer-id`, `-updated-at` (the exact ISO string Moneybird sent) as
+  strings; `moneybird-archived` as a boolean; `moneybird-version` as an
+  integer. The row name is the company, else the person, else the id.
+  **Hours** (`time-entry-v1`, by published subject): `name` = description
+  (else "Time entry <id>"), `work-start`/`work-end` = `started_at`/`ended_at`
+  as epoch milliseconds (the class's `timestamp`), `work-billable`,
+  `work-project` and `work-person` = links to the Projects and People rows
+  made from the `project` and `user` objects each entry embeds (named as
+  Moneybird names them; renamed there, renamed here); extras
+  `moneybird-source-id`, `-updated-at`, `-paused-duration` (seconds; the
+  Start–End span includes paused time, the class has no field for it). An
+  entry without a readable `started_at` is counted as skipped, not written.
+  **Mutations** (`bank-transaction-v1`): `bank-account` = the financial
+  account's `identifier` (an IBAN when the bank gives one); when Moneybird
+  lists no such account, `moneybird:<financial_account_id>`, prefixed because
+  a Moneybird id is not a bank's account id, which the class asks for;
+  `bank-currency`, `bank-amount` = Moneybird's `amount` **as the exact
+  decimal string it sent** (never parsed to a float; a value that is not
+  `-?\d+(\.\d{1,5})?` is skipped, never approximated), `bank-value-date` =
+  `date`, `bank-description` = `message` verbatim, `bank-reference` =
+  `account_servicer_transaction_id` else `batch_reference`, `name` = the
+  contra account's name, else the message, else "Mutation <id>"; extras
+  `moneybird-source-id`, `-version`, `-updated-at`, `-state` (unprocessed or
+  processed), `-contra-account`. `bank-booking-date` is not written
+  (Moneybird gives one date); `money-category` and `money-note` are never
+  written. Not imported: the entry's contact and sales invoice; a mutation's
+  payments, ledger account bookings, SEPA fields and settlement state.
+- **Period.** Both hours and mutations ask Moneybird for `period:this_year`,
+  its own default period, by the administration's clock. Earlier years are
+  not imported; a stored choice of period is not built (a product question).
 
-| What                                                  | Fixture (synthetic)                                | Real Moneybird                                                             |
-| ----------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------------------------------- |
-| `administrations.json` list and choice                | verified (unit, host E2E)                          | not verified                                                               |
-| contacts, the fields above, their datatypes           | verified (unit, host E2E)                          | not verified                                                               |
-| `Link` rel="next" pagination, `include_archived`      | verified against the fixture's own pages of 2      | not verified; the page size and headers are as documented, not as observed |
-| repeat import without duplicates, two administrations | verified (unit, host E2E)                          | not verified                                                               |
-| failed refresh keeps rows                             | verified (fixture's synthetic 503; unit, host E2E) | not verified                                                               |
-| 401/403 handling ("reconnect Moneybird")              | unit only                                          | not verified                                                               |
+| What                                                                                                  | Fixture (synthetic)                                                                                  | Real Moneybird                                                             |
+| ----------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `administrations.json` list and choice                                                                | verified (unit, host E2E)                                                                            | not verified                                                               |
+| contacts, the fields above, their datatypes                                                           | verified (unit, host E2E)                                                                            | not verified                                                               |
+| `Link` rel="next" pagination, `include_archived`, the time entries filter                             | verified against the fixture's own pages of 2                                                        | not verified; the page size and headers are as documented, not as observed |
+| hours as `time-entry-v1` rows linked to project and person rows                                       | verified (unit, host E2E against the published Pages subjects)                                       | not verified                                                               |
+| mutations as `bank-transaction-v1` rows, exact amount strings, IBANs                                  | verified (unit, host E2E against the published Pages subjects)                                       | not verified                                                               |
+| the 100-record limit: halving windows, refusing a full day                                            | verified against the fixture's own lowered limit (unit)                                              | not verified; the limit is as documented, not as observed                  |
+| repeat import without duplicates, two administrations, removed columns                                | verified (unit, host E2E)                                                                            | not verified                                                               |
+| one collection failing while the others go on; rows kept                                              | verified (fixture's synthetic 503 on contacts; unit, host E2E)                                       | not verified                                                               |
+| "Sync this table to Moneybird" after Allow editing, binding, pause                                    | verified (unit against the fake grant; host E2E on a hand-made `bank-transaction-v1` table)          | not verified                                                               |
+| 401/403 handling ("reconnect Moneybird")                                                              | unit only                                                                                            | not verified                                                               |
+| the sync-status card: read-only wording, per-collection results, a failed collection, skipped records | verified (unit per state, jsdom; host E2E for the import, the failed refresh and the unsynced table) | not verified; the wording is a default, seen by no user tester yet         |
+| 429 with `Retry-After`, the 60 s cap, 5 retries, pacing under 150/300 s                               | unit only, fake transports and clock                                                                 | not verified; the limit and header are as documented, not as observed      |
 
 **The fixture is synthetic, not recorded.**
 `fixtures/moneybird/synthetic.mjs` is hand-written from the pinned read-only
 OpenAPI document (localthought/openapi-directory@85a61052) and its examples.
-It has invented names and identifiers. `scenario.mjs` serves it to the mock
-proxy (registered as `moneybird` in `localthought/fixtures/index.mjs`). It
-pages by 2 whatever `per_page` asks, and fails every second read of an
-administration on page 2 with 503; both are test behaviour, not claims about
+It has invented names, amounts and identifiers; its time entries and
+mutations are dated in the current civil year in Europe/Amsterdam, because
+the app imports this year's. `scenario.mjs` serves it to the mock proxy (registered as `moneybird`
+in `localthought/fixtures/index.mjs`). It pages contacts and time entries by
+2 whatever `per_page` asks, fails every second read of an administration's
+contacts on page 2 with 503, and answers at most 100 mutations per period
+window (a test lowers that); all three are test behaviour, not claims about
 Moneybird. **A real recording needs someone with a Moneybird test
-administration and API token**; the steps are in `scenario.mjs`'s header.
+administration and API token**; the recorder is ready for them:
+
+```sh
+MONEYBIRD_TOKEN=<API token> node integrations/money/fixtures/moneybird/record.mjs
+```
+
+It makes GET requests only, on the five operations the app reads, as the
+app sends them (`per_page` 2 by default so a few records span pages,
+`include_archived=true`, `period:this_year`), writes `fixtures/moneybird/api/`
+redacted per its exported `REDACTIONS` list (ids to stable 18-digit fakes
+that keep references intact, names, addresses, e-mails, IBANs and messages
+to stable fakes (one fake per real value, so a project nested in several
+time entries keeps one name), the nested arrays the app never reads to
+`[]`, any unrecognised string, and any number other than `version`,
+`budget`, `paused_duration`, `max_transfer_amount` and `child_order`, to
+`"redacted"` and listed in `api/meta.json` by its full path; inside a
+nested object the list does not know (`sepa_fields`, say) everything is
+redacted whatever its field names, and an object key the recorder's
+`FIELDS` list does not know becomes `redacted-key-<n>`, so a field Moneybird
+adds shows up as a redacted key until it is added there), and never writes the token. Once `api/meta.json` exists, `scenario.mjs` replays the
+recording instead of `synthetic.mjs`, with the same page cap, outage and
+mutation cap, and `this_year` meaning the recording's year;
+`moneybird-fixture.test.ts` proves that replay against an invented `api/`
+and, once recorded, checks the recorded rows hold what the app reads and
+were recorded this civil year (the app asks for `period:this_year` by its
+own clock, so a recording goes stale at New Year). `moneybird/moneybird.test.ts`
+and `e2e/moneybird.spec.ts` import `synthetic.mjs`'s names and counts and
+need their expectations updated to the recorded rows. What the recording
+settles is the right-hand column of the table above; nothing in it moves
+until then.
 
 **Install.** From the catalog's Drive apps section, like the other drive
 apps (see [Publishing a drive app](../README.md#publishing-a-drive-app)).
-Version 0.1.0 is published at `apps/moneybird/0.1.0/ui.js`; its version is
-recorded in `moneybird/package.json`, not in this folder's `package.json`
-(that one is the Bank statements importer's). `apps.mjs` finds the app here,
-not at `integrations/moneybird/app/`, through its `APP_FOLDERS` map. The
-`moneybird` catalog entry stays `enabled: false` until a real recording
-exists, so the published catalog does not list it; the lane's dev-server
-serves it enabled for `e2e/moneybird.spec.ts`, which installs it from the
-card. To release a new version, bump `moneybird/package.json` and the
-catalog entry's `version`, then run
-`node integrations/tooling/apps.mjs write moneybird`.
+Version 0.3.0 is published at `apps/moneybird/0.3.0/ui.js` (0.2.0 had no
+sync-status card and no rate-limit handling; 0.1.1 imported contacts only;
+0.1.0 relayed paths without the `/api/v2` base path, which the proxy refuses
+as not in the catalog; all kept because a published file never changes); its
+version is recorded in `moneybird/package.json`, not in
+this folder's `package.json` (that one is the Bank statements importer's).
+`apps.mjs` finds the app here, not at `integrations/moneybird/app/`, through
+its `APP_FOLDERS` map. The `moneybird` catalog entry stays `enabled: false`:
+it bundles the github.io ontology base (`ontology-kit/README.md`, "Gate"),
+and no real recording exists; the lane's dev-server serves it enabled for
+`e2e/moneybird.spec.ts`, which installs it from the card. To release a new
+version, bump `moneybird/package.json` and the catalog entry's `version`,
+then run `node integrations/tooling/apps.mjs write moneybird`.
 
 Tests: the money vitest command above includes `moneybird/*.test.ts`. The
-host E2E is `e2e/moneybird.spec.ts` in the money lane's e2e tier. It first
-passed on 2026-09-24 against atomic-server `2f403624e`, and again on
-2026-10-01 against the pin `a12b74a6783b`, after the connect page's button
-changed with the proxy's 0.2 protocol.
+host E2E is `e2e/moneybird.spec.ts` in the money lane's e2e tier: the full
+journey with all three collections, and the Add view journey on a hand-made
+`bank-transaction-v1` table. It first passed on 2026-09-24 against
+atomic-server `2f403624e`, again on 2026-10-01 against the pin `a12b74a6783b`
+after the connect page's button changed with the proxy's 0.2 protocol, and
+with hours, mutations and the Add view journey on 2026-10-06 against the
+same pin; the 0.3.0 run with the sync-status card assertions is recorded in
+the PR that added them.
+
+**Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
+moneybird --i-understand-this-writes-to <administration id>` runs the Moneybird
+app's controller against one disposable administration (the driver seeds and
+cleans up; the app stays read-only) and checks the `/api/v2` base path (#274)
+against the real API; it imports the contacts collection only. See [The
+live-check kit](../LIVE_TESTING.md#the-live-check-kit).

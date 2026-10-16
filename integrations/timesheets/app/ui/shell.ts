@@ -31,7 +31,12 @@ import type { Timesheet } from '../model/types.js';
 import type { ColorScheme } from '../store.js';
 import { dayList, projectSummary, weekGrid } from '../model/views.js';
 import { button, header, pill, type PillState } from './components.js';
-import { renderConflicts, renderUnknown, unknownIn } from './coverage.js';
+import {
+  renderConflicts,
+  renderIncomplete,
+  renderUnknown,
+  unknownIn,
+} from './coverage.js';
 import { entryDetail, sheet as modal, type Overlay } from './detail.js';
 import { renderChanges } from './edit.js';
 import { rangeEditor } from './rangeEdit.js';
@@ -45,6 +50,7 @@ import {
   loadingPanel,
   noRelay,
   notSynced,
+  syncingTable,
   outsideWindow,
   problemBanner,
   setupError,
@@ -53,7 +59,9 @@ import {
   waiting,
   warningBanner,
 } from './states.js';
+import { hidesTail, syncStatusFor } from './status.js';
 import { duration, runningNote, weekFoot, weekTable } from './week.js';
+import { renderSyncStatus } from '../../../sync-status/card.js';
 
 export type Size = 'narrow' | 'mid' | 'wide';
 type ViewName = 'week' | 'entries' | 'projects';
@@ -168,7 +176,11 @@ export function mountShell(
       case 'loading':
         return ['idle', 'Loading…'];
       case 'local':
-        return ['idle', 'Not synced'];
+        if (state.asking) return ['syncing', 'Waiting for you…'];
+
+        return state.paused
+          ? ['paused', 'Sync paused']
+          : ['idle', 'Not synced'];
       case 'no-proxy':
         return ['paused', 'Offline'];
       case 'not-connected':
@@ -270,7 +282,6 @@ export function mountShell(
     else if (userName)
       items.push(h('span', null, 'Connected as ', h('b', null, userName)));
 
-    const inWindow = sheet ? entriesInWindow(sheet) : 0;
     let progress: HTMLElement | null = null;
 
     if (state.kind === 'syncing' && state.progress) {
@@ -304,18 +315,9 @@ export function mountShell(
       }
     }
 
-    const failed = failure(state);
-
-    if (failed && sheet?.lastChecked)
-      items.push(
-        h(
-          'span',
-          null,
-          'Last synced ',
-          h('b', null, ago(Date.parse(sheet.lastChecked), now())),
-        ),
-      );
-    else if (windowText)
+    // The last sync, its counts and the entry count are the sync-status
+    // card's (`status.ts`), not this bar's.
+    if (windowText)
       items.push(
         h(
           'span',
@@ -327,11 +329,6 @@ export function mountShell(
             ? ''
             : ', your entries only',
         ),
-      );
-
-    if (sheet && state.kind === 'ready' && size === 'wide')
-      items.push(
-        h('span', null, `${inWindow} ${inWindow === 1 ? 'entry' : 'entries'}`),
       );
 
     if (state.kind === 'ready') {
@@ -515,7 +512,29 @@ export function mountShell(
     const content: Child[] = [];
     const failed = failure(state);
     const last = state.kind === 'ready' ? state.last : undefined;
+    const canSyncNow = state.kind === 'ready' || state.kind === 'syncing';
 
+    // The shared sync-status card (Q-084) first: the last sync and what it
+    // did, whether edits go back to Clockify, what waits or failed to send,
+    // what is left out, and the next step for a problem.
+    content.push(
+      renderSyncStatus(
+        doc,
+        syncStatusFor({
+          state,
+          sheet,
+          changes: controller.changes(),
+          // The shell's clock, so a held lease's "until" is judged by the
+          // same time the card's "ago" uses.
+          now: now(),
+          ...(canSyncNow ? { onSync: sync } : {}),
+          ...(controller.canOpen().resource
+            ? { onOpenRow: (id: string) => void controller.openRow(id) }
+            : {}),
+        }),
+        { now: now(), buttonClass: 'btn sec' },
+      ),
+    );
     content.push(
       renderChanges(
         h,
@@ -567,7 +586,13 @@ export function mountShell(
       ),
     );
     if (state.kind === 'no-proxy') content.push(noRelay(h));
-    if (state.kind === 'local') content.push(notSynced(h, state.tableName));
+    if (state.kind === 'local')
+      content.push(
+        notSynced(h, {
+          ...state,
+          onSync: () => void controller.syncTable(),
+        }),
+      );
 
     if (failed)
       content.push(
@@ -639,7 +664,23 @@ export function mountShell(
         : null;
     const unknown =
       ui.view !== 'projects'
-        ? renderUnknown(h, sheet, span, unknownIn(sheet, span))
+        ? renderUnknown(
+            h,
+            sheet,
+            span,
+            unknownIn(sheet, span, { hideTail: hidesTail(state) }),
+            state.kind === 'ready' ? sync : undefined,
+          )
+        : null;
+    const incomplete =
+      ui.view !== 'projects'
+        ? renderIncomplete(
+            h,
+            sheet,
+            controller.canOpen().resource
+              ? id => void controller.openRow(id)
+              : undefined,
+          )
         : null;
     const dayProps = {
       timeZone: sheet.timeZone,
@@ -659,6 +700,7 @@ export function mountShell(
         week.start === currentWeek(sheet).start
           ? runningNote(h, sheet.running)
           : null,
+        incomplete,
         outside,
         unknown,
       );
@@ -708,6 +750,7 @@ export function mountShell(
         );
     } else if (ui.view === 'entries')
       content.push(
+        incomplete,
         outside,
         unknown,
         ...dayCards(h, dayList(sheet.entries, week, sheet.timeZone), dayProps),
@@ -906,12 +949,20 @@ export function mountShell(
 
     const parts: Child[] = [headerRow(state, sheet)];
     let overlay: Overlay | undefined;
+    const synced = controller.syncedTable();
+    const bound =
+      synced &&
+      syncingTable(h, {
+        ...synced,
+        onNotNow: () => void controller.notNow(),
+      });
 
     switch (state.kind) {
       case 'loading':
         parts.push(loadingPanel(h, 'Loading…'));
         break;
       case 'not-connected':
+        if (bound) parts.push(bound);
         parts.push(firstRun(h, () => void controller.connect()));
         break;
       case 'connecting':
@@ -970,6 +1021,7 @@ export function mountShell(
           break;
         }
 
+        if (bound) parts.push(bound);
         const user = state.options?.user;
         if (user)
           parts.push(

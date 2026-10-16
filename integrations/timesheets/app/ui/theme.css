@@ -390,6 +390,12 @@ table.week tfoot th {
   text-align: left;
   font-weight: 600;
 }
+/* The billable row under the day totals: the same numbers' billable part. */
+table.week tfoot tr.bill td,
+table.week tfoot tr.bill th {
+  border-top: 1px solid var(--pl-hair);
+  font-weight: 600;
+}
 table.week tbody th {
   min-width: 170px;
 }
@@ -1029,6 +1035,9 @@ select.sel {
 }
 .unknown strong {
   color: var(--pl-text);
+}
+.unknown > .btn {
+  margin-top: 6px;
 }
 .conflicts {
   padding: 11px 14px;

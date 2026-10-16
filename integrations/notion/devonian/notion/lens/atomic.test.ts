@@ -21,18 +21,53 @@ import {
   notionProjection,
   notionPropertyValue,
 } from './projection.js';
-import type { FetchedPlatform, FetchedRecord, JSONValue } from './types.js';
+import type {
+  FetchedPlatform,
+  FetchedRecord,
+  JSONValue,
+  Term,
+} from './types.js';
 
 const key = notionFieldShortname;
 
+/**
+ * The terms syncables derives from the Page schema of the catalog document
+ * (`readPlatform`'s ontology), at `<document title>/property/<field>`, as the
+ * app's read hands them to the projection next to the `page` class.
+ */
+const PAGE_FIELD_TERMS: Term[] = [
+  ['object', Datatype.STRING],
+  ['id', Datatype.STRING],
+  ['created-time', Datatype.TIMESTAMP],
+  ['last-edited-time', Datatype.TIMESTAMP],
+  ['title', JSON_DATATYPE],
+  ['properties', JSON_DATATYPE],
+  ['parent', JSON_DATATYPE],
+  ['url', Datatype.STRING],
+  ['archived', Datatype.BOOLEAN],
+  ['in-trash', Datatype.BOOLEAN],
+].map(([shortname, datatype]) => ({
+  path: `notion-api-integration-proxy-slice/property/${shortname}`,
+  kind: 'property' as const,
+  shortname: shortname as string,
+  description: `\`${shortname}\` of \`page\`.`,
+  datatype: datatype as Datatype,
+  requires: [],
+  recommends: [],
+}));
+
 /** The fixture pages as syncables hands them to the lens, projected. */
-function projected(raw: unknown[] = pages): FetchedPlatform {
+function projected(
+  raw: unknown[] = pages,
+  platformTerms: readonly Term[] = [],
+): FetchedPlatform {
   return notionProjection(
     {
       platform: 'notion',
       ontology: {
         description: '',
         terms: [
+          ...platformTerms,
           {
             path: 'notion/class/page',
             kind: 'class',
@@ -40,7 +75,7 @@ function projected(raw: unknown[] = pages): FetchedPlatform {
             description: '',
             datatype: JSON_DATATYPE,
             requires: [],
-            recommends: [],
+            recommends: platformTerms.map(t => t.path),
           },
         ],
       },
@@ -99,6 +134,32 @@ describe('notionColumns', () => {
       [key('Tg%5Cq'), 'Tags', JSON_DATATYPE],
       [key('Nt0s'), 'Notes', Datatype.STRING],
     ]);
+  });
+
+  it('makes no column of the platform’s own Page fields (#303)', () => {
+    // syncables' ten Page-schema terms travel with the projection's. Only
+    // the projection's (`urn:atomic:notion:property:<id>`) become columns;
+    // the Page fields a row needs are the fixed columns.
+    const read = projected(pages, PAGE_FIELD_TERMS);
+    expect(read.ontology.terms.filter(t => t.kind === 'property')).toHaveLength(
+      16,
+    );
+    const { columns } = lenses(read);
+    expect(columns).toEqual(lenses().columns);
+    expect(columns.map(c => c.shortname)).toEqual([
+      ...NOTION_FIXED_COLUMNS.map(c => c.shortname),
+      key('title'),
+      key('%3AUPp'),
+      key('BJXS'),
+      key('n%3D1'),
+      key('Tg%5Cq'),
+      key('Nt0s'),
+    ]);
+
+    for (const made of columns) {
+      expect(made.shortname).toMatch(/^notion-/);
+      expect(made.name).not.toMatch(/\/property\//);
+    }
   });
 
   it('falls back to the property id when no page carries a name', () => {

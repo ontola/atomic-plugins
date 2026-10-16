@@ -2,21 +2,37 @@
 /**
  * An in-memory `PluginStore` for tests and the screenshot harness, shaped
  * after view-client.js and atomic-server's `hostStore.ts`:
- * - resources buffer `set`/`remove` until `save`;
+ * - resources buffer `set`/`remove` until `save`; `newResource` writes at once
+ *   and notifies the parent's subscribers, as the host does;
  * - `query` is a property/value match across the whole "drive";
- * - by default the Bank transactions table is *not* beneath the app, as on a
- *   table's app tab, so `save` on a row is refused with the host's message.
- *   `rowsWritable: true` models a host that lets the app write them.
- * It starts with what the importer's Set up creates: banking properties, the
- * Bank transaction class and an empty table. Test-only; not bundled.
+ * - writes outside the App's subtree are refused with the host's message,
+ *   unless they are rows of the table the app is a view of and the person
+ *   allowed editing (`rowsWritable`, or a granted `rowAccess`).
+ * It models the App as the host's `createApp` leaves it: an App of the
+ * drive's App class (whose `renders` and `row-extras` Properties are found
+ * by shortname), with its own ontology (`default-ontology`) holding one class
+ * of its own, and `renders` listing that class. `data` picks the table the
+ * app is opened on:
+ * - `bank`: the importer's table (its drive-local `bank-transaction` class
+ *   and, on a current host, its statements table), as on that table's app tab;
+ * - `own`: the app's own table, of its own class until the app adopts the
+ *   shared one, as after a catalog install;
+ * - `shared`: a table someone made of `bank-transaction-v1`, not the app's;
+ * - `other`: a table of some other class; `none`: no table.
+ * Test-only; not bundled.
  */
 import { entries } from '../identity.js';
 import { parseBankStatement } from '../statement.js';
+import { STATEMENT_CLASS } from './own.js';
 import {
   atomic,
   BANK_FIELDS,
+  BANK_TRANSACTION,
+  EXTRA_FIELDS,
   NOTE_FIELDS,
+  SHARED_SUBJECT,
   STATEMENT_ROW_FIELDS,
+  type SharedField,
   type Shortname,
 } from './rows.js';
 import {
@@ -28,16 +44,43 @@ import {
   type PluginStore,
 } from './store.js';
 
+export const DRIVE = 'did:ad:drive';
 export const APP = 'did:ad:money-app';
+/** The App's own ontology and the class `createApp` minted in it. */
+export const APP_ONTOLOGY = 'did:ad:money-app/ontology';
+export const APP_CLASS_OWN = 'did:ad:money-app/ontology/class/bank-transaction';
+/** The drive's App class and its `renders` and `row-extras` Properties. */
+export const APP_CLASS = 'did:ad:plugin/class/app';
+export const RENDERS = 'did:ad:plugin/property/renders';
+export const ROW_EXTRAS = 'did:ad:plugin/property/row-extras';
 export const IMPORTER = 'did:ad:importer';
+/** The importer's table. */
 export const TABLE = 'did:ad:importer/table';
 /** The importer's second table (atomic-server#1768). */
 export const STATEMENTS = 'did:ad:importer/statements';
-export const STATEMENT_CLASS = 'did:ad:ontology/class/bank-statement-record';
+export const STATEMENT_CLASS_SUBJECT =
+  'did:ad:ontology/class/bank-statement-record';
 export const ONTOLOGY = 'did:ad:ontology';
 export const ROW_CLASS = 'did:ad:ontology/class/bank-transaction';
+/** The app's own table (`data: 'own'`) and a hand-made one (`'shared'`). */
+export const OWN_TABLE = 'did:ad:money-app/table';
+export const SHARED_TABLE = 'did:ad:drive/team-table';
+/** The app's own statement class, once `own.ts` made it. */
+export const OWN_STATEMENT_CLASS = `${APP_ONTOLOGY}/${STATEMENT_CLASS.shortname}`;
+
+/** The importer's drive-local Property for `shortname`. */
 export const property = (shortname: string) =>
   `did:ad:ontology/property/${shortname}`;
+
+/**
+ * The Property a shared-class row carries `shortname` under: the published
+ * subject for a shared field, else the app's own Property, named by its
+ * shortname as this fake's `newResource` does.
+ */
+export const sharedProperty = (shortname: string) =>
+  shortname in SHARED_SUBJECT
+    ? SHARED_SUBJECT[shortname as SharedField]
+    : `${APP_ONTOLOGY}/${shortname}`;
 
 export const REFUSED =
   'This app may only write its own data. Writing here needs rights its key does not have.';
@@ -83,19 +126,36 @@ export const seedRow = (
 /** A stored statement as a test states it, by shortname. */
 export type SeedStatement = Partial<Record<Shortname, string>>;
 
+export type Data = 'bank' | 'none' | 'other' | 'own' | 'shared';
+
 export interface FakeStore extends PluginStore {
-  /** Adds statement rows to the statements table. */
+  /** The table the app is opened on. */
+  readonly table: string;
+  /** The Property `shortname` lives under on this store's rows. */
+  property(shortname: string): string;
+  /** Adds statement rows to the statements table (the importer's, or the
+   * app's own once a load made it). */
   addStatements(rows: SeedStatement[]): string[];
   /** Files handed to `importer.run`, by name. */
   readonly runs: string[];
   /** How often the app asked the person to allow editing. */
   readonly accessRequests: number;
   readonly resources: Map<string, Record<string, JSONValue>>;
+  /** Saves of rows and other data, in order. */
   readonly saves: { subject: string; propVals: Record<string, JSONValue> }[];
+  /** Saves of the App, its ontology and its terms (`adopt.ts`, `own.ts`). */
+  readonly schemaSaves: {
+    subject: string;
+    propVals: Record<string, JSONValue>;
+  }[];
+  /** Resources made with `newResource`, in order. */
+  readonly created: string[];
   /** Adds rows to the table, notifying subscribers of the table. */
   addRows(rows: SeedRow[]): string[];
   /** Fails the next `n` saves with `message`. */
   failSaves(n: number, message?: string): void;
+  /** Fails the next `n` `newResource` calls with `message`. */
+  failCreates(n: number, message?: string): void;
   /** Keeps every `getResource` pending until `release()` runs. */
   hold(): () => void;
   /** Subjects with a live subscription. */
@@ -127,26 +187,76 @@ export function fakeStore({
   answer?: 'grant' | 'deny';
   /** Overrides `importer.run`; by default it imports like the importer. */
   importRun?: (file?: { name: string; text: string }) => Promise<ImporterRun>;
-  /** `legacy`: a host before 007869464, without getMany, theme or openResource. */
+  /** `legacy`: a host before 007869464, without getMany, theme, openResource,
+   * row access, importer.run, or an App ontology of its own. */
   host?: 'current' | 'legacy';
   scheme?: ColorScheme;
   rows?: SeedRow[];
-  /** Whether the class declares money-category and money-note (M-5). */
+  /** Whether the importer's class declares money-category and money-note (M-5). */
   notes?: boolean;
   rowsWritable?: boolean;
-  /** `none`: the app has no table; `other`: a table of some other class. */
-  data?: 'bank' | 'none' | 'other';
+  data?: Data;
 } = {}): FakeStore {
   const resources = new Map<string, Record<string, JSONValue>>();
   const shortnames: string[] = [...BANK_FIELDS, ...(notes ? NOTE_FIELDS : [])];
   const modern = host === 'current';
+  const sharedRows = data === 'own' || data === 'shared';
+  const table =
+    data === 'own' ? OWN_TABLE : data === 'shared' ? SHARED_TABLE : TABLE;
+  const rowProperty = sharedRows ? sharedProperty : property;
   let writable = rowsWritable || (modern && access === 'granted');
   let accessStatus: 'granted' | 'none' | 'unavailable' = access;
   const runs: string[] = [];
   let accessRequests = 0;
 
-  resources.set(APP, {});
-  resources.set(IMPORTER, {});
+  // The drive's App class, and the App as createApp left it.
+  resources.set(DRIVE, {});
+  resources.set(RENDERS, {
+    [atomic.shortname]: 'renders',
+    [atomic.isA]: [atomic.propertyClass],
+  });
+  resources.set(ROW_EXTRAS, {
+    [atomic.shortname]: 'row-extras',
+    [atomic.isA]: [atomic.propertyClass],
+  });
+  resources.set(APP_CLASS, {
+    [atomic.shortname]: 'app',
+    [atomic.isA]: [atomic.classClass],
+    [atomic.recommends]: [RENDERS, ROW_EXTRAS],
+  });
+  resources.set(APP, {
+    [atomic.parent]: DRIVE,
+    [atomic.isA]: [APP_CLASS],
+    [atomic.name]: 'Bank statements',
+    [RENDERS]: [APP_CLASS_OWN],
+    ...(modern ? { [atomic.defaultOntology]: APP_ONTOLOGY } : {}),
+  });
+  resources.set(APP_ONTOLOGY, {
+    [atomic.parent]: APP,
+    [atomic.properties]: [],
+    [atomic.classes]: [APP_CLASS_OWN],
+  });
+  resources.set(APP_CLASS_OWN, {
+    [atomic.parent]: APP_ONTOLOGY,
+    [atomic.isA]: [atomic.classClass],
+    [atomic.shortname]: 'bank-transaction',
+    [atomic.recommends]: [atomic.name],
+  });
+  if (data === 'own')
+    resources.set(OWN_TABLE, {
+      [atomic.parent]: APP,
+      [atomic.isA]: [atomic.tableClass],
+      [atomic.classtype]: APP_CLASS_OWN,
+    });
+  if (data === 'shared')
+    resources.set(SHARED_TABLE, {
+      [atomic.parent]: DRIVE,
+      [atomic.isA]: [atomic.tableClass],
+      [atomic.classtype]: BANK_TRANSACTION,
+    });
+
+  // The importer, its ontology and tables, as its Set up left them.
+  resources.set(IMPORTER, { [atomic.parent]: DRIVE });
   resources.set(ONTOLOGY, { [atomic.parent]: IMPORTER });
 
   for (const shortname of shortnames)
@@ -158,6 +268,7 @@ export function fakeStore({
 
   resources.set(ROW_CLASS, {
     [atomic.parent]: ONTOLOGY,
+    [atomic.isA]: [atomic.classClass],
     [atomic.shortname]: 'bank-transaction',
     [atomic.requires]: [
       'bank-account',
@@ -170,11 +281,12 @@ export function fakeStore({
       .filter(s => !['bank-source-id', 'bank-fingerprint'].includes(s))
       .map(property),
   });
-  resources.set(TABLE, {
-    [atomic.parent]: IMPORTER,
-    [atomic.classtype]:
-      data === 'other' ? 'did:ad:ontology/class/pet' : ROW_CLASS,
-  });
+  if (data === 'bank' || data === 'other')
+    resources.set(TABLE, {
+      [atomic.parent]: IMPORTER,
+      [atomic.classtype]:
+        data === 'other' ? 'did:ad:ontology/class/pet' : ROW_CLASS,
+    });
   if (data === 'other')
     resources.set('did:ad:ontology/class/pet', { [atomic.parent]: ONTOLOGY });
 
@@ -185,7 +297,7 @@ export function fakeStore({
         [atomic.isA]: [atomic.propertyClass],
         [atomic.shortname]: shortname,
       });
-    resources.set(STATEMENT_CLASS, {
+    resources.set(STATEMENT_CLASS_SUBJECT, {
       [atomic.parent]: ONTOLOGY,
       [atomic.shortname]: 'bank-statement-record',
       [atomic.requires]: [
@@ -203,15 +315,19 @@ export function fakeStore({
     });
     resources.set(STATEMENTS, {
       [atomic.parent]: IMPORTER,
-      [atomic.classtype]: STATEMENT_CLASS,
+      [atomic.classtype]: STATEMENT_CLASS_SUBJECT,
     });
   }
 
   const saves: FakeStore['saves'] = [];
+  const schemaSaves: FakeStore['saves'] = [];
+  const created: string[] = [];
   const listeners = new Map<string, Set<() => void>>();
   const subscribed = new Set<string>();
   let failing = 0;
   let failure = REFUSED;
+  let failingCreates = 0;
+  let createFailure = REFUSED;
   let held: Promise<void> | undefined;
   let next = 0;
 
@@ -232,7 +348,14 @@ export function fakeStore({
   };
 
   const isRow = (subject: string) =>
-    resources.get(subject)?.[atomic.parent] === TABLE;
+    resources.get(subject)?.[atomic.parent] === table;
+
+  /** The App, its tables, its ontology and that ontology's terms (`adopt.ts`). */
+  const isSchema = (subject: string) =>
+    subject === APP ||
+    subject === APP_ONTOLOGY ||
+    subject === OWN_TABLE ||
+    resources.get(subject)?.[atomic.parent] === APP_ONTOLOGY;
 
   const wrap = (
     subject: string,
@@ -278,7 +401,7 @@ export function fakeStore({
         const current = { ...(resources.get(subject) ?? {}), ...propVals };
         for (const p of removed) delete current[p];
         resources.set(subject, current);
-        saves.push({ subject, propVals });
+        (isSchema(subject) ? schemaSaves : saves).push({ subject, propVals });
         changed.clear();
         removed.clear();
         notify(subject);
@@ -301,6 +424,7 @@ export function fakeStore({
     klass: string,
     prefix: string,
     seed: Partial<Record<string, string>>[],
+    name: (shortname: string) => string,
   ) => {
     const subjects = seed.map(row => {
       const subject = `${parent}/${prefix}-${++next}`;
@@ -308,7 +432,7 @@ export function fakeStore({
         [atomic.parent]: parent,
         [atomic.isA]: [klass],
         ...Object.fromEntries(
-          Object.entries(row).map(([k, v]) => [property(k), v]),
+          Object.entries(row).map(([k, v]) => [name(k), v]),
         ),
       });
 
@@ -319,15 +443,42 @@ export function fakeStore({
     return subjects;
   };
 
+  /** The app's own statements table, once `own.ts` made it. */
+  const ownStatements = () =>
+    [...resources.entries()].find(
+      ([, props]) =>
+        props[atomic.parent] === APP &&
+        props[atomic.classtype] === OWN_STATEMENT_CLASS,
+    )?.[0];
+
   const store: FakeStore = {
+    table,
+    property: rowProperty,
     resources,
     runs,
+    created,
     get accessRequests() {
       return accessRequests;
     },
-    addStatements: seed =>
-      addUnder(STATEMENTS, STATEMENT_CLASS, 'statement', seed),
+    addStatements: seed => {
+      if (!sharedRows)
+        return addUnder(
+          STATEMENTS,
+          STATEMENT_CLASS_SUBJECT,
+          'statement',
+          seed,
+          property,
+        );
+      const parent = ownStatements();
+      if (!parent)
+        throw new Error('load the app first: it makes its statements table');
+
+      return addUnder(parent, OWN_STATEMENT_CLASS, 'statement', seed, s =>
+        s === 'money-table' ? `${APP_ONTOLOGY}/money-table` : sharedProperty(s),
+      );
+    },
     saves,
+    schemaSaves,
     subscribed,
     calls,
     opened,
@@ -337,25 +488,21 @@ export function fakeStore({
       for (const listener of themeListeners) listener({ colorScheme });
     },
     addRows(seed) {
-      const subjects = seed.map(row => {
-        const subject = `${TABLE}/row-${++next}`;
-        resources.set(subject, {
-          [atomic.parent]: TABLE,
-          [atomic.isA]: [ROW_CLASS],
-          ...Object.fromEntries(
-            Object.entries(row).map(([k, v]) => [property(k), v]),
-          ),
-        });
-
-        return subject;
-      });
-      notify(TABLE);
-
-      return subjects;
+      return addUnder(
+        table,
+        sharedRows ? BANK_TRANSACTION : ROW_CLASS,
+        'row',
+        seed,
+        rowProperty,
+      );
     },
     failSaves(n, message = 'Simulated write failure') {
       failing = n;
       failure = message;
+    },
+    failCreates(n, message = 'Simulated write failure') {
+      failingCreates = n;
+      createFailure = message;
     },
     hold() {
       let release!: () => void;
@@ -371,14 +518,14 @@ export function fakeStore({
       data === 'none'
         ? undefined
         : {
-            table: TABLE,
-            rowClass: resources.get(TABLE)?.[atomic.classtype] as string,
-            ...(modern
+            table,
+            rowClass: resources.get(table)?.[atomic.classtype] as string,
+            ...(modern && data === 'bank'
               ? {
                   tables: {
                     statements: {
                       table: STATEMENTS,
-                      rowClass: STATEMENT_CLASS,
+                      rowClass: STATEMENT_CLASS_SUBJECT,
                     },
                   },
                 }
@@ -397,14 +544,31 @@ export function fakeStore({
         .filter(([, props]) => props[p] === value)
         .map(([subject]) => subject);
     },
-    async newResource({ parent, isA = [], propVals = {} } = {}) {
-      const subject = `${APP}/new-${++next}`;
+    async newResource({ parent = APP, isA = [], propVals = {} } = {}) {
+      await Promise.resolve();
+
+      if (failingCreates > 0) {
+        failingCreates--;
+        throw new Error(createFailure);
+      }
+
+      if (!within(parent) && !(writable && parent === table))
+        throw new Error(REFUSED);
+      // A Property or class is named by its shortname, so tests can predict
+      // the app's own subjects; anything else by a counter.
+      const shortname = propVals[atomic.shortname];
+      const subject =
+        typeof shortname === 'string'
+          ? `${parent}/${shortname}`
+          : `${parent}/new-${++next}`;
       const stored = {
         ...propVals,
-        [atomic.parent]: parent ?? APP,
+        [atomic.parent]: parent,
         [atomic.isA]: isA,
       };
       resources.set(subject, stored);
+      created.push(subject);
+      notify(parent);
 
       return wrap(subject, stored);
     },
@@ -456,7 +620,9 @@ export function fakeStore({
   }
 
   if (modern) {
-    store.rowAccess = async () => ({ status: accessStatus });
+    store.rowAccess = async () => ({
+      status: data === 'own' ? 'unavailable' : accessStatus,
+    });
 
     store.requestRowAccess = async () => {
       accessRequests++;
@@ -470,7 +636,10 @@ export function fakeStore({
 
       return { status: 'denied' as const, reason: 'Not now' };
     };
+  }
 
+  // Only the importer's table has an importer behind it.
+  if (modern && data === 'bank')
     store.importer = {
       async run(args) {
         runs.push(args?.file?.name ?? '(picker)');
@@ -531,10 +700,13 @@ export function fakeStore({
           : { status: 'nothing' };
       },
     };
-  }
 
   if (rows.length) store.addRows(rows);
   if (statements.length) store.addStatements(statements);
 
   return store;
 }
+
+/** The four extras as the app's own Properties, by shortname. */
+export const ownExtras = () =>
+  Object.fromEntries(EXTRA_FIELDS.map(name => [name, sharedProperty(name)]));

@@ -38,6 +38,9 @@ async fn signed<'a>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<Signed<'a>, ApiError> {
+    if headers.contains_key(axum::http::header::AUTHORIZATION) {
+        return Err(ApiError::UnsupportedAuthorization);
+    }
     let security = state.security.as_ref().ok_or(ApiError::Unavailable)?;
     let signer =
         crate::signature::authenticate(state, security, method, uri, headers, body).await?;
@@ -94,6 +97,9 @@ pub async fn list(
 ) -> Response {
     respond(
         async {
+            if let Some(token) = crate::device::bearer(&headers)? {
+                return crate::device::connections(&state, token).await;
+            }
             let signed = signed(&state, &method, &uri, &headers, &body).await?;
             let (connections, runtimes) = signed
                 .security
@@ -124,11 +130,28 @@ pub async fn delete(
         async {
             let signed = signed(&state, &method, &uri, &headers, &body).await?;
             owned(&signed, &connection_id).await?;
-            signed
-                .security
-                .delete_connection(&connection_id, signed.signer.as_str())
-                .await
-                .map_err(|_| ApiError::Unavailable)?;
+            match &state.webhooks {
+                // Its subscriptions end, and the cleanup of hooks this leaves
+                // unused starts, in the same transaction (#369).
+                Some(webhooks) => {
+                    webhooks
+                        .store
+                        .delete_connection(
+                            &connection_id,
+                            signed.signer.as_str(),
+                            crate::webhooks::store::now(),
+                        )
+                        .await
+                        .map_err(|_| ApiError::Unavailable)?;
+                }
+                None => {
+                    signed
+                        .security
+                        .delete_connection(&connection_id, signed.signer.as_str())
+                        .await
+                        .map_err(|_| ApiError::Unavailable)?;
+                }
+            }
             Ok(StatusCode::NO_CONTENT.into_response())
         }
         .await,
@@ -160,11 +183,19 @@ pub async fn add_agent(
                 .map_err(|_| ApiError::BadRequest("body must be {\"agent\", \"label\"?}"))?;
             let delegate = agent(&request.agent)?;
             let label = label(request.label)?;
-            signed
+            if !signed
                 .security
-                .put_delegation(&connection_id, delegate.as_str(), label.as_deref())
+                .put_delegation(
+                    &connection_id,
+                    signed.signer.as_str(),
+                    delegate.as_str(),
+                    label.as_deref(),
+                )
                 .await
-                .map_err(|_| ApiError::Unavailable)?;
+                .map_err(crate::connect::owner_write_error)?
+            {
+                return Err(ApiError::NotOwner);
+            }
             Ok(Json(serde_json::json!({
                 "connection_id": connection_id,
                 "agent": delegate.as_str(),
@@ -192,9 +223,9 @@ pub async fn remove_agent(
             let delegate = agent(&delegate)?;
             signed
                 .security
-                .delete_delegation(&connection_id, delegate.as_str())
+                .delete_delegation(&connection_id, signed.signer.as_str(), delegate.as_str())
                 .await
-                .map_err(|_| ApiError::Unavailable)?;
+                .map_err(crate::connect::owner_write_error)?;
             Ok(StatusCode::NO_CONTENT.into_response())
         }
         .await,
@@ -241,7 +272,7 @@ pub async fn add_runtime(
                     label.as_deref(),
                 )
                 .await
-                .map_err(|_| ApiError::Unavailable)?;
+                .map_err(crate::connect::owner_write_error)?;
             Ok(Json(serde_json::json!({
                 "app": app.as_str(),
                 "agent": runtime.as_str(),
@@ -359,7 +390,10 @@ mod tests {
         .await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         // A delegate cannot delegate further.
-        security.put_delegation(&id, &app.id(), None).await.unwrap();
+        security
+            .put_delegation(&id, &owner.id(), &app.id(), None)
+            .await
+            .unwrap();
         let response = send(
             &app,
             "POST",
@@ -540,5 +574,72 @@ mod tests {
         let response = crate::router(s.clone()).oneshot(replay).await.unwrap();
         assert_eq!(body_json(response).await["error"], "replayed");
         assert!(!security.is_delegated(&id, &attacker.id()).await.unwrap());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_two_agents_may_sign_the_same_request_in_the_same_millisecond() {
+        // The replay record names the agent: the same method, URL, timestamp
+        // and body from two agents are two requests, and one agent cannot
+        // spend the other's in advance. The same agent sending it twice is
+        // still a replay.
+        let security = security().await;
+        let s = state(Some(security.clone()));
+        let one = Agent::new(58);
+        let two = Agent::new(59);
+        let now = crate::now_ms();
+        let request = |agent: &Agent| {
+            crate::test_support::signed_request_at(&s, agent, "GET", "/connections", vec![], now)
+        };
+        let first = request(&one);
+        let replay = crate::test_support::clone_request(&first);
+        for signed in [first, request(&two)] {
+            let response = crate::router(s.clone()).oneshot(signed).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
+        let response = crate::router(s.clone()).oneshot(replay).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body_json(response).await["error"], "replayed");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_request_spent_under_the_old_key_format_is_still_refused() {
+        // Rolling deploy: an instance on the previous release recorded the
+        // request under its agentless key. This release must not accept it
+        // again while that row lives, and must not write such rows itself.
+        let security = security().await;
+        let s = state(Some(security.clone()));
+        let agent = Agent::new(60);
+        let url = crate::signature::signed_url(&s.base_url, "/connections");
+        let legacy_key = |timestamp_ms: u64| {
+            crate::signature::legacy_replay_key(&crate::signature::message(
+                "GET",
+                &url,
+                &timestamp_ms.to_string(),
+                b"",
+            ))
+        };
+        let now = crate::now_ms();
+        let signed =
+            crate::test_support::signed_request_at(&s, &agent, "GET", "/connections", vec![], now);
+        assert!(security.consume_nonce(&legacy_key(now)).await.unwrap());
+        let response = crate::router(s.clone()).oneshot(signed).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(body_json(response).await["error"], "replayed");
+
+        // A fresh request is accepted and leaves no old-format row behind.
+        let later = now + 1;
+        let signed = crate::test_support::signed_request_at(
+            &s,
+            &agent,
+            "GET",
+            "/connections",
+            vec![],
+            later,
+        );
+        let response = crate::router(s.clone()).oneshot(signed).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(security.consume_nonce(&legacy_key(later)).await.unwrap());
     }
 }

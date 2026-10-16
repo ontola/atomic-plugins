@@ -20,14 +20,28 @@ describe('GitHub issues drive-app bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource; keep an eye on the size.
-    // Measured 154,931 bytes (151.3 KiB) on 2026-10-01 for 0.2.0, with the
-    // JS and the embedded stylesheets minified: the shared issue-v1 class,
-    // the bundled ontology-kit terms and resolver, Blocked, Publish to
-    // GitHub and baselines on the rows (#177 item 6). Earlier: 137,315 bytes
+    // Measured 179,673 bytes (175.5 KiB) on 2026-10-13 for 0.4.2, with the
+    // JS and the embedded stylesheets minified: 0.4.1 plus pruning answered
+    // writes from the sync state's journal; the limit is that plus about
+    // 10%, rounded up to whole KiB. Earlier: 179,483 bytes on 2026-10-08 for
+    // 0.4.1: 0.4.0 plus the refused
+    // write problem (#357: a 4xx GitHub refused whole is held for review
+    // again, not uncertain). Earlier: 178,137 bytes on 2026-10-06 for 0.4.0
+    // (0.3.1 plus the shared sync-status card (Q-084), GitHub rate-limit
+    // handling, the retry plan, the github-last-sync stamp and binding a
+    // half-made create);
+    // 162,541 bytes on 2026-10-02 for 0.3.1 (incomplete rows: a row missing
+    // its Name shown, marked, never synced; #177);
+    // 160,628 bytes on 2026-10-02 for 0.3.0 ("Sync this table to GitHub"
+    // on another issue-v1 table, #177 item 14: the row grant, the binding
+    // under the App and its setup copy); 154,931 bytes
+    // on 2026-10-01 for 0.2.0 (the shared issue-v1 class, the bundled
+    // ontology-kit terms and resolver, Blocked, Publish to GitHub and
+    // baselines on the rows, #177 item 6); 137,315 bytes
     // on 2026-10-01 after resolving uncertain creates (#156); 125,472 bytes
     // on 2026-09-24 for the designed board/list/detail UI (#89). The limit is
-    // the latest plus 10%, rounded up to the next KiB.
-    expect(bytes).toBeLessThan(167 * 1024);
+    // the latest plus 10%, rounded up to the next KiB (197,640 -> 194 KiB).
+    expect(bytes).toBeLessThan(194 * 1024);
   });
 
   it('has no storage or network access of its own', () => {

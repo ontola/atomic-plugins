@@ -16,7 +16,10 @@ server with builds").
 
 ## What needs an OK
 
-- **Deploys to the user-testing server** have Michiel's standing OK.
+- **Deploys to user testing** (the catalog, the moderator and the
+  atomic-server image) have Michiel's standing OK, Decision Inbox Q-104
+  (2026-10-08), after checking on the server that no session is in progress
+  ([working-model.md](working-model.md)).
 - **Restarting the moderator or atomic-server ends sessions in progress.**
   Warn on [#227](https://github.com/ontola/atomic-plugins/issues/227) first,
   and restart only when no session is running.
@@ -29,14 +32,17 @@ server with builds").
 | Changed | Deploy | Restart |
 | --- | --- | --- |
 | `usertest/page/` only | `deploy.sh` | none |
-| an app's source | bump `VERSIONS` in `usertest/catalog.mjs`, `catalog.mjs`, `check-live.mjs`, `deploy.sh` | none |
-| `usertest/sample-data/`, or a fixture it imports | bump `SAMPLE_VERSION` in `usertest/catalog.mjs`, `catalog.mjs`, `check-live.mjs`, `deploy.sh` | none |
+| an app's source (or a pin bump that changes its build) | bump `VERSIONS` in `usertest/catalog.mjs`, `catalog.mjs --record` (commit `usertest/builds.json`), `catalog.mjs`, `check-live.mjs`, `deploy.sh` | none |
+| `usertest/sample-data/`, or a fixture it imports | bump `SAMPLE_VERSION` in `usertest/catalog.mjs`, `catalog.mjs --record` (commit `usertest/builds.json`), `catalog.mjs`, `check-live.mjs`, `deploy.sh` | none |
 | `usertest/moderator/` (session plans included) | `deploy.sh` | moderator (`moderator/run.sh`) |
 | `/etc/*.env` on the server | none | the container that reads it |
 | `usertest/collector/` | `deploy.sh` | collector (`collector/run.sh`) |
 | atomic-server version or plugin routes | `deploy.sh` if `server.sh` changed | atomic-server (`server.sh`) |
 
-Say in the PR which row applies.
+Say in the PR which row applies. CI's tooling unit tests rebuild every
+user-testing module and fail when one differs from what its version was
+recorded with in `usertest/builds.json`, so a forgotten bump fails CI
+instead of reaching the droplet.
 
 ## Commands
 
@@ -45,11 +51,52 @@ From a checkout of this repo, set up as in AGENTS.md:
 ```sh
 USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log node usertest/catalog.mjs
 node usertest/check-live.mjs https://catalog.usertest.michielbdejong.com/catalog.json
-sh usertest/deploy.sh root@188.245.144.252   # root: the deploy workflow's key only
+sh usertest/deploy.sh root@188.245.144.252   # checks the server's own catalog.json first
 ssh claude@188.245.144.252 sudo sh /opt/usertest/moderator/run.sh
 ssh claude@188.245.144.252 sudo USERTEST_PLUGIN_ROUTES=read-write sh /opt/usertest/server.sh usertest.michielbdejong.com [<sha>]
 ```
 
+- **On the build VPS** (`usertest.michielbdejong.com`, since 2026-10-02) the
+  catalog and moderator are on the same host, so there is no `ssh` and
+  `deploy.sh` does not apply. From a checkout of `main`:
+
+  ```sh
+  USERTEST_LOG_URL=https://logs.usertest.michielbdejong.com/log node usertest/catalog.mjs &&
+    node usertest/check-live.mjs /srv/catalog/catalog.json usertest/out --served /srv/catalog &&
+    (cd usertest/out && tar -cf - apps samples) | tar -xf - -C /srv/catalog &&
+    cat usertest/out/catalog.json > /srv/catalog/catalog.json
+  ```
+
+  Chained with `&&`, a failed build or check copies nothing. `check-live.mjs`
+  reads the live catalog from a file (or `-` for standard input) as well as
+  a URL; absent passes, unreachable fails (a mistyped path fails, a missing
+  `catalog.json` in `/srv/catalog` is a first deploy, an empty one fails).
+  `--served /srv/catalog` (which must exist) also compares each built module with the `ui.js` already on disk, which
+  catches a version the live catalog no longer lists. `catalog.mjs` refuses
+  to build without a well-formed `USERTEST_LOG_URL` (exit 2) unless
+  `--no-log` says the build is not for deploying; that writes
+  `usertest/out/UNLOGGED`, which `check-live.mjs` refuses. `--record` alone
+  removes its unlogged `catalog.json`.
+
+  `/srv/catalog` itself is owned by root, so `tar` cannot replace
+  `catalog.json` there (it deletes the old file first); the file belongs to
+  `claude`, so it is written in place. Existing app versions stay. `check-live.mjs`
+  runs before the copy: it refuses a module that changed under an existing
+  version, which it can only see while the old one is still live. Build with
+  `USERTEST_LOG_URL`, as the earlier deploys here did (the Calendar modules
+  embed it): a 2026-10-12 build left it out, which changed Calendar's
+  `usertest-12` under the same version until it was rebuilt with it and
+  restored the same day. A moderator change is copied in without the
+  root-owned `node_modules/`, then started (this ends sessions in progress):
+
+  ```sh
+  tar -C usertest/moderator --exclude node_modules -cf - . | tar -xf - -C /opt/usertest/moderator
+  sudo sh /opt/usertest/moderator/run.sh
+  ```
+
+  The other files `deploy.sh` copies (the page, the collector, the
+  Caddyfile, `server.sh`) are root-owned here and need `sudo`; that has not
+  been done on this host.
 - **Env files are read when a container is created.** `moderator/run.sh`
   passes `/etc/anthropic.env`, `/etc/usertest-moderator.env`,
   `/etc/usertest-salt.env` and `/etc/github-findings.env` with `--env-file`,

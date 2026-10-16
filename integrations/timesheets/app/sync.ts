@@ -33,6 +33,7 @@ import {
   planChange,
   setPerson,
   planCreate,
+  retireRow,
   settleCreates,
   sortChanges,
   syncRow,
@@ -50,6 +51,12 @@ export interface SyncResult {
   unchanged: number;
   /** Rows of entries Clockify confirmed deleted (GET by id: 404). */
   removed: number;
+  /**
+   * On a table the app is a view of, which it may not delete rows of: rows
+   * of entries Clockify confirmed deleted, kept as rows of their own (the
+   * app's extras taken off) for the person to delete (`retireRow`).
+   */
+  kept: number;
   /** Rows that differ from what they last agreed on with Clockify: the
    * "Changes to send" list (#123 M3). Nothing is sent without review. */
   review: PendingChange[];
@@ -151,7 +158,9 @@ export const GENERATED_TABLE_NOTE =
  * 4. Bring the table's rows up to date with the mirror: completed
  *    `REGULAR` entries (the lens skips running timers and breaks) are
  *    created or updated by `clockify-entry-id`, and a row whose entry
- *    Clockify confirmed deleted is destroyed. A row edited here keeps its
+ *    Clockify confirmed deleted is destroyed (on a table the app is a view
+ *    of, which it may not delete rows of: kept, with the app's extras taken
+ *    off, `retireRow`). A row edited here keeps its
  *    edit (#177 Q5, reversing #97 answer 2): each row is compared with its
  *    baseline and with Clockify (`writeBack.ts` `syncRow`), and what it
  *    changed comes back as `review`, to be sent only from the app's
@@ -294,6 +303,7 @@ async function projectRows(
     updated: 0,
     unchanged: 0,
     removed: 0,
+    kept: 0,
     review: [] as PendingChange[],
     providerWon: [] as ProviderWon[],
     recovered: [] as Recovered[],
@@ -328,12 +338,15 @@ async function projectRows(
     );
   const boundaries = entryBoundaries(log.mirror);
 
-  const table = await store.getResource(schema.table);
-  const note = table.get(atomic.description);
+  // Only the app's own table: a row grant never writes the table itself.
+  if (schema.own) {
+    const table = await store.getResource(schema.table);
+    const note = table.get(atomic.description);
 
-  if (!note || note === READ_ONLY_TABLE_NOTE || note === ROW_TABLE_NOTE) {
-    table.set(atomic.description, GENERATED_TABLE_NOTE);
-    await table.save();
+    if (!note || note === READ_ONLY_TABLE_NOTE || note === ROW_TABLE_NOTE) {
+      table.set(atomic.description, GENERATED_TABLE_NOTE);
+      await table.save();
+    }
   }
 
   // The Projects table follows Clockify's project list (#177 Q11): a row
@@ -423,9 +436,10 @@ async function projectRows(
   for (const gone of entries.filter(r => r.deletedAt)) {
     const subject = await rowOf(gone.id);
     if (!subject) continue;
-    await (await store.getResource(subject)).destroy();
+    if (await retireRow(await store.getResource(subject), schema))
+      result.removed++;
+    else result.kept++;
     own.delete(subject);
-    result.removed++;
   }
 
   result.review = sortChanges(result.review);

@@ -277,9 +277,12 @@ willow25 0.7.9's `DropDecoder` (`fixtures/verify-drop`), by hand. Rerun on
 by `integrations/tooling/server-build.mjs`): passed, 11 s (the `DropDecoder`
 check was not repeated).
 
-Not verified in CI yet: the lane needs that host branch in the pin, so on the
-current pin (candidate14) the e2e fails at publishing (the `willow` key field
-is unknown there) rather than skipping.
+The lane needs that host branch in the pin. The current pin is candidate19
+(`a12b74a`), which comes after candidate17 and so should carry it, but this
+e2e was last run against candidate17 and has not been re-run on `a12b74a`
+(declared, not verified). On a pin before candidate17 (candidate14, say) the
+e2e fails at publishing (the `willow` key field is unknown there) rather than
+skipping.
 
 Declared, not verified: interoperability with any Willow implementation
 other than willow25 0.7.9 and our own importer; fuel use per signed entry;

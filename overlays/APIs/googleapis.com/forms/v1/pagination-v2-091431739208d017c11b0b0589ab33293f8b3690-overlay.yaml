@@ -1,0 +1,39 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://developers.google.com/workspace/forms/api/reference/rest/v1/forms.responses/list
+overlay: 1.0.0
+info:
+  title: Google forms reviewed collection pagination
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/091431739208d017c11b0b0589ab33293f8b3690/APIs/googleapis.com/forms/v1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      forwardPages:
+        type: pageToken
+        autoDetect: false
+        description: Send the opaque nextPageToken as pageToken on the next request. Stop only when nextPageToken
+          is absent or empty, not when a page is short or empty. If using fields, include nextPageToken
+          and the item array. Keep formId and filter fixed. Zero or unspecified pageSize uses the service
+          default of at most 5000 responses. A response listing omits formId from the individual response
+          objects.
+        request:
+          queryParameters:
+            pageToken:
+              role: cursor
+        response:
+          bodyFields:
+            nextPageToken:
+              role: nextCursor
+- target: $.paths['/v1/forms/{formId}/responses'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        response:
+          envelope:
+            itemsField: responses
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
