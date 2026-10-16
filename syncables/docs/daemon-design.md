@@ -21,9 +21,11 @@ Status checked against repository source on 2026-10-16:
 | Device-authentication backend | Merged in integration-proxy 0.4.0; [contract and operator guide](../../integration-proxy/DEVICE_AUTH.md). Production approval wiring and a successful live CLI/GitHub read remain separate checks. |
 | CLI device test and replication definitions | In draft [PR #567](https://github.com/ontola/atomic-plugins/pull/567), with a [source-install/test guide](https://github.com/ontola/atomic-plugins/blob/codex/syncables-cli-auth-scaffold/syncables/docs/cli.md). Definitions are configuration only. |
 | Local PostgreSQL archive, read cache and recorded-run replay | Implemented in draft #567; [cache/replay guide](https://github.com/ontola/atomic-plugins/blob/codex/syncables-cli-auth-scaffold/syncables/docs/postgres-cache.md). Not yet merged or released as part of this design document. |
+| Content-addressed nested JSON nodes and observed revision history | Planned extension of #567's whole-response deduplication; no node graph or revision browser exists in that stage. |
 | Compact collection coverage and disposable hydration | Planned for the daemon. Existing `ReadCoverage` is narrower than this design. |
+| Selected one-shot incremental fetch, webhook/poll scheduler and offline browser | Planned. The library currently refuses `incrementalSync` pagination schemes; conditional/full reads are not sync-token support. |
 | PostgreSQL outgoing outbox, persistent CLI credentials and launchd service | Planned for the daemon. Existing library outbox persistence is caller-supplied. |
-| Atomic, NextGraph and remoteStorage runtime replication | Planned; configuring a destination does not establish replication. |
+| Atomic, NextGraph, remoteStorage, Jazz and atproto runtime replication | Planned; only the first three have scaffold configuration commands. Configuring a destination does not establish replication. |
 | Retire the source and promote the local copy | Product direction; requires a separate migration plan and implementation. |
 
 Historical mock tests and source/CI evidence do not establish the current
@@ -48,6 +50,11 @@ concurrent claims in one place. Start with logical owner separation and
 composite indexes; introduce physical partitions only when measurements call
 for them.
 
+Continue #567's PostgreSQL archive and executable inside the same package.
+Nested content addressing adds tables and indexes to that storage. All
+commands and schemas below that are not in #567's guides describe proposed
+behavior, not commands available in its scaffold.
+
 ```mermaid
 flowchart LR
   UI[New interface] <--> Memory[Hydrated collections in memory]
@@ -56,7 +63,9 @@ flowchart LR
   Daemon <--> DB[(Laptop PostgreSQL: archive, coverage, outbox)]
   Daemon <--> Proxy[Local Thought proxy]
   Proxy <--> API[Existing provider API]
-  Daemon <--> Backends[Atomic / NextGraph / remoteStorage]
+  Relay[Queued webhook relay] --> Inbox[Durable laptop inbox]
+  Inbox --> Daemon
+  Daemon <--> Backends[Planned replication adapters]
 ```
 
 This diagram is the target architecture. In the current scaffold, a foreground
@@ -103,6 +112,15 @@ status. It should not open approval prompts unattended. Bind local data to the
 verified canonical owner and provider connection, with an explicit grant or
 authorization-context generation for cache reuse.
 
+The #566 handoff reports that the local worker configured Heroku release v97
+and observed health/discovery HTTP 200 with
+`DEVICE_APPROVAL_URL=http://127.0.0.1:11873`. This is attributed operational
+evidence, not a fresh deployment check here. Michiel is testing browser owner
+approval and an authenticated GitHub GET in **API keys (local)**. Keep their
+result separate from mock/direct-public-GitHub tests. The existing owner seed
+stays on the laptop in its approval bridge; neither the CLI nor a cloud worker
+needs it. A loopback test bridge is not the production owner hub.
+
 ## Compressed archive, cache and replay
 
 Inject the archive through Syncables' transport/fetch boundary. Preserve the
@@ -142,6 +160,96 @@ without changing existing transport behavior for other callers.
 Offline replay must not start a restored mutation outbox. Keep payloads alive
 while referenced by coverage, pinned runs or unresolved operations; retention
 and garbage collection require that reference policy before deleting data.
+
+## Content-addressed nested JSON and revisions
+
+Extend the owner-scoped response archive rather than replacing it. Preserve
+the transport's original response text for exact replay; derive a separate
+immutable JSON graph for structural sharing, inspection and history. A raw
+payload hash and a normalized node hash are different identities. Whitespace
+or object-member order can change the former without changing the latter.
+
+Every object and array, including those nested inside arrays, has its own
+hash-table entry. Parent nodes contain typed references to child nodes and
+inline typed scalars. A candidate version-1 encoding is a compact UTF-8 JSON
+tuple with a fixed domain/version prefix, a node kind, and ordered entries:
+
+```json
+["syncables-json-node",1,"object",[["id",["string","123"]],["profile",["ref","sha256:<digest>"]]]]
+```
+
+The implementation must freeze byte-level encoding and publish test vectors
+before recording persistent node hashes:
+
+- Hash canonical node bytes with SHA-256 and identify the encoding version.
+  Sort decoded object keys by UTF-16 code units, preserve array order and
+  length, and specify deterministic string escaping without Unicode
+  normalization. Typed tuples distinguish null, booleans, strings, numbers and
+  child references; provider fields named `$ref` are ordinary object members.
+- Parse numbers losslessly, retaining the JSON number token as a string in a
+  numeric tuple. Version 1 may distinguish `1`, `1.0` and `1e0`; it must never
+  round an integer or silently merge distinct numeric values. Decoding must
+  reconstruct JSON text without passing numeric tokens through JS `Number`.
+- Permit scalar response roots through a typed scalar root node. Define empty
+  objects/arrays, negative zero, escapes and lone surrogates explicitly. Reject
+  duplicate object keys for graph indexing rather than arbitrarily choosing a
+  value. A malformed, duplicate-key or otherwise unsupported JSON response
+  remains archived as raw text, with an explicit indexing error.
+- Key node storage by `(owner, encoding_version, hash)`. Equal content may
+  share nodes across that owner's accounts/collections, but hashes do not
+  authorize access or cross owner boundaries. Verify digest and decoding
+  bounds when loading nodes; cap graph depth, node count and expanded size.
+  Hash and compression codecs have independent versions.
+
+Keep three concepts distinct: remote item identity, content hash and local
+revision identity. Remote identity includes verified owner, provider connection,
+resource and the identity's required parent bindings. A collection alias or
+array position is not a remote item ID; several collections can contain the
+same item. Anonymous nested objects have content identity only unless provider
+metadata gives them a stable identity. Matching them across edits must not be
+guessed from their position.
+
+An observed item revision links that remote identity to a root hash, the
+preceding accepted revision, local sequence, observation time and response/run
+provenance. Provider version/time is additional evidence when available, not
+the local sequence. A change A → B → A creates three revision occurrences but
+only two content graphs. An unchanged observation adds provenance/freshness
+without inventing another content change. Failed, stale or replayed reads must
+not advance live revision heads. A repeated cached response is not a new
+provider observation. Changes in filters or mapping versions are also distinct
+from changes in the raw remote object.
+
+History is locally observed history, not a promise to reconstruct every remote
+edit between polls. A complete list can establish removal from its membership
+scope; confirmed deletion, unavailable and unknown are separate observations.
+Keep the last content revision available after membership removal or deletion.
+Never infer a global deletion from absence in a filtered or partial response.
+
+Do not turn this into a mandatory durable row per hydrated item. Coverage
+continues to point to whole immutable responses and item-array locations. A
+compact response manifest or chunked per-page index can map remote identities
+and item root hashes; its content is derived from the response graph. Compare
+successive manifests to append history for actual changed identities. An
+optional item lookup/head index can accelerate browsing and be rebuilt from
+those manifests and revision observations. Metadata per observed change is
+acceptable; copying a full hydrated record per scan is unnecessary. Measure
+the node/manifest overhead as well as any deduplication benefit.
+
+Publish validated nodes, graph manifests, accepted revision observations and
+coverage/checkpoint changes transactionally. Raw response archival may commit
+first; a crash before indexing then leaves a resumable unindexed response,
+not an advanced sync checkpoint. Retain the existing #567 payload, attempt and
+304/effective-body references. Add versioned migrations and idempotent graph
+backfill; mixed old/raw-only and indexed responses must remain replayable.
+
+GC roots include retained raw responses/manifests, live coverage, retained
+revision history, replay pins, unresolved outbox baselines, pending inbox work
+and destination backfills. Mark reachable descendants within each owner before
+sweeping. Publication and GC need a shared generation/transaction fence so a
+concurrent publisher cannot attach a node after it was swept. Raw-body and
+history retention are separate explicit policies; pruning old raw text can
+forfeit exact replay and must not be silent. Never delete the only evidence
+needed by a pending operation or retained revision.
 
 ## Explicit collections and compact coverage
 
@@ -184,6 +292,145 @@ filtered collection is not by itself evidence that the underlying record was
 deleted. Reuse source coverage across derived collections only where their
 definitions and provider guarantees justify it.
 
+## Configuration and one-shot incremental fetching
+
+Persist desired collection selection separately from mutable checkpoints.
+Definitions resolve the platform/catalog revision, verified account/provider
+connection, resource/collection, parent bindings, remote query/body filters,
+local derived filters/order, sync policy and optional poll interval. Use
+aliases for convenient selection, not as the sole cache or checkpoint key.
+Disabling a collection stops scheduled reads but retains its archive/history.
+
+The proposed `syncables sync` command performs one run of all enabled
+collections; explicit selectors run only those configured scopes:
+
+```sh
+syncables sync
+syncables sync --collection example/personal/projects \
+  --collection example/personal/tasks
+syncables daemon
+```
+
+The foreground `daemon` command waits for configured polls/webhooks until
+stopped; launchd can run that same process later. Validate
+unknown/ambiguous selectors before dispatch. Independent scopes can progress
+despite a failure elsewhere, but return a failing exit status and per-scope
+results. Once a daemon exists it owns the work via local IPC. Before that,
+foreground runs use the same scope leases so two processes cannot race a
+checkpoint. Parent collections may be read for binding discovery; report those
+dependencies and do not silently enable unrelated collections.
+
+Choose strategies from the API's composed metadata/capabilities:
+
+| Strategy | Checkpoint and correctness requirement |
+| --- | --- |
+| Sync token/change feed | Bootstrap all pages, then request changes from the committed token. Follow page tokens within each round and commit the terminal next-sync token only with accepted data. A delta never prunes unchanged members. |
+| Updated-since watermark | Use declared timestamp/filter/order semantics, overlap and stable tie-breakers. Compute the next watermark from provider evidence and a completed read, not the laptop clock; obtain deletion evidence separately. |
+| Conditional reads | Revalidate known representations with ETag/Last-Modified and preserve the exact 304-to-body relationship. This saves transfer but is not a change-feed guarantee. |
+| Full reconciliation | Walk the selected collection when no safe incremental contract exists. Report the full scan; deduplicating stored objects does not make its network fetch incremental. |
+
+Persist checkpoints per owner/connection/auth generation, collection and parent
+scope, source-query fingerprint and relevant API-description/strategy version.
+Changing remote filters, credential visibility or strategy requires
+revalidation/bootstrap. A local derived view can reuse source coverage only
+when its source semantics are unchanged. Persistent auth must not treat a new
+login as the same authorization context without verified evidence.
+
+Keep transient page progress separate from the last committed sync token.
+Stage a bounded round in PostgreSQL without holding a transaction across
+network requests; atomically publish its coverage/revisions/terminal checkpoint
+under the current lease fence. Resume partial paging only where the provider
+guarantees it, otherwise restart from the last committed checkpoint. Errors,
+partial pages or a lost lease cannot advance it. Expired tokens trigger a
+declared bootstrap, keeping the last usable local state until the replacement
+is complete. Scope/token recovery and deletion rules need tests alongside the
+new `incrementalSync` library support; the current reader refuses that scheme.
+
+## Offline hierarchy and revision browsing
+
+Provide an offline command hierarchy using configured platform and account
+aliases, collection scope, then either list options or an item identity:
+
+```sh
+syncables browse
+syncables browse example personal projects
+syncables browse example personal projects --filter 'status = "open"' \
+  --order-by 'updatedAt desc,id asc' --page 2 --page-size 50
+syncables browse example personal projects item-123
+syncables browse example personal projects item-123 list-revision-history
+syncables browse example personal projects item-123 fetch-revision rev-42
+```
+
+These are proposed commands. #567 currently has `auth-test`, `cache` and
+configuration-only `replication` commands, not this browser. Positional item
+IDs are opaque arguments, including quoted IDs containing `/`; nested parent
+scopes must be explicit when a collection alias does not select just one.
+
+Browse only local data; no implicit upstream fetch or restored mutation drain.
+Use a documented, bounded filter grammar, typed comparisons and definition-
+specific null/collation rules. Snapshot the local publication generation for
+ordering/pagination, returning it for subsequent page requests, with a stable
+identity tie-breaker (for example, subsequent commands pass `--snapshot ID`).
+If that snapshot has expired, ask the caller to restart
+paging rather than mixing generations. Uncovered ranges and mixed provider
+observation times remain visible even within one local generation.
+
+Reconstruct rows lazily through coverage/manifests with a bounded decoded cache
+and optional rebuildable query indexes. Missing local coverage is unknown,
+not an empty complete result; do not claim total counts or page boundaries
+that cannot be established. Revision retrieval checks item/owner membership of
+the revision and returns the reconstructed original JSON plus provenance and
+presence state. Historical inspection is read-only, and history remains
+reachable after an item leaves the current filtered collection.
+
+## Polling, webhooks and the durable inbox
+
+The same scheduler runs one-shot and daemon reads. Per-scope jobs record the
+trigger, next due time, attempts and lease fence. Poll intervals are optional;
+webhooks can be used alone, polling alone, or both. Persist retry times and
+honor provider rate limits. After wake/reconnect, re-evaluate due jobs, tokens
+and inbox gaps and coalesce repeated refresh hints for each scope. Retain a
+new hint that arrives during an active read so it causes a later read. Scope
+leases serialize publication, while bounded independent jobs can run in
+parallel. Authentication failures become actionable status.
+
+A queued relay accepts public deliveries while the laptop is asleep and
+forwards them over an outbound agent connection to a loopback receiver. Keep
+the relay behind an adapter; do not implement a second provider sync engine
+inside it. Candidate services and their documented limitations:
+
+- [Webhook Relay replay on reconnect](https://webhookrelay.com/docs/webhooks/replay-on-agent-connect/)
+  recovers deliveries to an offline internal agent within configured lookback
+  and scan limits. [Durable retries](https://webhookrelay.com/docs/webhooks/durable-webhooks/)
+  cover failed delivery attempts separately; configure both for dogfooding.
+- [Hookdeck](https://hookdeck.com/docs/hookdeck-basics) provides durable queues,
+  retries and plan-dependent retention, with [CLI forwarding](https://hookdeck.com/docs/cli)
+  to localhost. Expired queued events are not delivered.
+- Webhook Relay's [HTTP polling endpoint](https://webhookrelay.com/docs/webhooks/polling-webhooks/)
+  marks events delivered when fetched. It cannot by itself guarantee local
+  commit-before-ack across a crash; use a delivery path that acknowledges after
+  local durable acceptance, or explicitly account for the gap and reconcile.
+
+Before a local 2xx acknowledgement, verify ingress authenticity and routing,
+persist the raw event, stable provider/relay delivery identity, receipt time
+and pending work transactionally. Deduplicate by scoped delivery ID, not
+payload hash; two legitimate events may contain identical content. Replay
+original signatures safely: timestamped signatures may expire while queued,
+so use an authenticated relay with trustworthy ingress verification evidence,
+or reject the delayed delivery and reconcile. Do not silently disable signature
+checks. Provider verification challenges and subscription renewals also need
+explicit adapter handling.
+
+Use the existing `InboxConsumer`/`InboxJournal` contract where applicable, and
+adapt external relays to the same journal-before-ack guarantee rather than
+assuming their protocol matches it. Treat events as hints for authoritative
+item/collection reads via `scopedReads`; a delayed webhook body cannot blindly
+replace newer state. Acknowledged-but-unprocessed work survives restarts. Dead
+letters and retry status are inspectable. A retention gap or uncertain replay
+window requests reconciliation; recovery can restore current state but not
+unobserved historical edits. A webhook-only setup still needs a recovery read
+after a known gap, and should report when it cannot establish continuity.
+
 ## Durable outgoing intent
 
 Persist local edits to PostgreSQL **before acknowledging them**. Rebuild a
@@ -224,11 +471,22 @@ inspect, enable/disable and remove destinations, with real observed status.
 | Atomic native sync | Compatible SDK/engine, identities and permissions, signed commits, Loro/version-vector state, subscriptions and reconnect recovery. HTTP imports alone do not establish native replication. |
 | NextGraph native sync | Its SDK or wallet/verifier sidecar, encrypted commit synchronization, document permissions and durable native protocol state. Snapshot exchange alone is insufficient. |
 | remoteStorage | WebFinger discovery from a user address, scoped module authorization, ETag-aware document/listing sync and conflict handling. This is document storage synchronization. |
+| Jazz | Delayed adapter design: explicit CoValue/schema mapping, account/group permissions, stable identities and SDK-owned durable sync state. No configuration/runtime support is claimed. |
+| atproto | Delayed adapter design: records mapped to appropriate lexicons, repository identity/authentication, writes/subscriptions and durable delivery state. A copied JSON response is not native repository synchronization. |
 
 Native SDKs may need durable protocol storage in addition to PostgreSQL.
 Keep that state distinct from disposable hydrated API views and the provider
 mutation outbox. Preserve stable identity/provenance across representations
 and prevent replication echoes from repeatedly creating provider writes.
+
+Each destination independently consumes a durable local publication sequence
+with its own backfill position, delivery outbox and acknowledged checkpoint.
+Commit destination work with source publication; a failed destination then
+does not block source ingestion or lose updates. Fence workers and make replay
+idempotent according to the target protocol. Retain graph/baseline roots while
+a backfill or unresolved delivery needs them. Initially export accepted source
+observations one way; bidirectional editing and authority changes need their
+own policy. Configuration alone must not start replication or imply permission.
 
 ## From a new interface to an authoritative copy
 
@@ -249,10 +507,25 @@ Some provider behaviors cannot be reproduced from the exposed API alone.
 2. Add the local archive/cache and deterministic recorded-run replay.
 3. Prove live device approval and a selected GitHub read independently of the
    mock; wire the trusted browser approval page before calling this complete.
-4. Add versioned definitions, coverage publication and bounded hydration.
-5. Persist outgoing intent and prove conflict/uncertainty recovery.
-6. Add persistent authentication and launchd lifecycle; implement replication
-   backends separately, then plan any source-retirement pilot.
+4. Freeze/test the lossless node encoding, add transactional graph indexing
+   and migrations/backfill over the existing raw archive, and prove revision
+   occurrence/retention/GC rules. Keep old responses replayable.
+5. Add versioned definitions, compact coverage/manifests, bounded hydration and
+   offline hierarchy/history commands without a mandatory row per scanned item.
+6. Add selected one-shot fetches and provider-declared incremental checkpoints,
+   with expiry/bootstrap, scope-change and partial-page recovery.
+7. Add persistent authentication and the shared daemon scheduler, durable
+   webhook inbox and relay adapter. Prove sleep/reconnect/retry behavior, then
+   add the explicit launchd lifecycle around that foreground daemon.
+8. Persist outgoing intent and prove conflict/uncertainty recovery before
+   acknowledging edits; read-only dogfooding does not require provider writes.
+9. Implement replication backends separately; Jazz and atproto follow the
+   existing three planned backends. Plan any source-retirement pilot separately.
+
+Steps 1 and 2 have draft implementation evidence in #567. Step 3 is being
+tested in the laptop worker and is an independent live check, not a reason to
+restart implementation or block documentation. Steps 4 onward are planned;
+they do not claim complete daemon, incremental, browsing or replication support.
 
 Use real PostgreSQL tests for isolation, concurrency, stale claims, transaction
 failure and restart recovery; compare paginated replay without upstream access.
@@ -261,3 +534,16 @@ partial scans, changing membership and mixed times. Discard and rebuild hydrated
 views to verify durability. Measure memory and compression on representative
 invented data, and validate service lifecycle/sleep recovery on macOS. Keep
 live provider evidence separate from fixture and mock results.
+
+Additional acceptance cases: every nested object/array is independently
+addressable; object-key order shares nodes while array reordering changes
+content; large numbers, null/string/ref distinctions and duplicate keys are
+handled without lossy coercion; A → B → A retains three revision occurrences;
+cross-owner hash reuse cannot expose data; graph indexing can resume after a
+raw-only commit; GC races cannot delete newly published/pinned nodes. Test
+checkpoint failure at each publication boundary, expired tokens, changes of
+query/auth scope, duplicate/out-of-order webhooks, commit-before-ack crashes
+and a hint arriving during sync. Paging remains stable while the daemon
+publishes, and incomplete local coverage stays visibly incomplete. Measure
+node/manifests/index/WAL overhead and reconstruction cost alongside compressed
+bytes, rather than assuming nested deduplication is always smaller.
