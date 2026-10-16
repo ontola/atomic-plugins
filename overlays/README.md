@@ -616,6 +616,26 @@ one: the scheduled-event users' `after` row reads "consider only users
 after given user id" (lowercase), not "Consider ...", and its `limit` row
 reads "number of users to return (up to maximum 100)".
 
+[`pagination-v3-9d0d73c6…`](APIs/discord.com/10/pagination-v3-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+(Pagination Schemes 0.10.0) keeps v2, adds `order: ascending` to its scheme
+so a client checks the documented order, and pages
+[List Joined Private Archived Threads](https://docs.discord.com/developers/resources/channel)
+back with `before` from the last thread's `id`, `order: descending`, and
+`has_more` as `hasMore`: "Threads are ordered by their id, in descending
+order" and `before` "returns threads before this id" (§4.3.3 rule (b)).
+[Get Channel Messages](https://docs.discord.com/developers/resources/message)
+stays without a scheme: its "newest to oldest" is an order of time, not of
+the id `before` bounds, and "If the current user is missing the
+READ_MESSAGE_HISTORY permission in the channel, then no messages will be
+returned", so an empty read cannot be told from an empty channel. The
+public and private archived-thread lists are ordered by `archive_timestamp`,
+which is not unique, and stay without one too. No dated catalog selects v3,
+and Pagination Schemes 0.10.0 asks that no overlay declaring `order` be
+published until syncables checks it. `tests/test_discord_pagination_v3.py`
+composes it, runs the validators, and reads synthetic pages with
+`read_item_cursor`, including out-of-order pages that fail. No provider was
+called.
+
 ## Discord throttling
 
 [Discord API v10 throttling](APIs/discord.com/10/throttling-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
