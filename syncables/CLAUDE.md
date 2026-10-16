@@ -628,13 +628,16 @@ unescaped; `overlay-targets.test.ts` applies every overlay under
   make the scheme invalid. The
   client's conditional-cache check treats such an operation as paginated,
   and the mock server answers 500.
-  Only the query-parameter and body-field dimensions are actually
-  implemented — `AutoDetectObject.matchHeaders`/`matchResponseFields` and
-  `RequestPaginationFieldsObject.headerFields` are part of the type surface
-  (mirroring the spec) but nothing reads them yet, so a scheme that can only
-  be auto-detected via a request/response header (e.g. a `Link`-header
-  `nextLink` scheme, like GitHub's) needs an explicit `x-pagination` entry
-  until that's implemented.
+  `matchHeaders` and `matchResponseFields` (§6.3, off by default) are
+  read too: `declaresHeaders` (a success response, `200`-`299` or `2XX`,
+  declares every response `headers` name, case-insensitive) and
+  `declaresResponseFields` (its `application/json` schema has every
+  response `bodyFields` path, `splitPath`, through `properties` and
+  `allOf`; a path `splitPath` refuses counts as present, so the read
+  fails on it rather than reading one page). Only the description is
+  read, so a header it leaves out does not match. Request `headerFields`
+  are part of the type surface but not read. Tests:
+  `unit/pagination/autodetect-response.test.ts`.
 - `items.ts` locates which top-level response property actually holds the
   list of items — the extension itself only describes pagination metadata,
   not where items live, so this excludes whatever fields the scheme claims

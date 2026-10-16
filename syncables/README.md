@@ -28,7 +28,7 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Auto-detection by query parameters, body fields, and (§6.3, when the scheme turns them on) response headers and response fields as the operation's description declares them. Not `incrementalSync`. |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), and Reference Objects resolved to a path (`resolveReference`, §4.1.3). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
@@ -1919,6 +1919,16 @@ const { records, ontology, errors } = await readPlatform(document, {
   invalid, so a typo such as `respnse:` is not silently read as a scheme
   without a response. It refuses an `incrementalSync` scheme, which the
   spec allows, because this client does not implement it.
+  Auto-detection also reads the response dimensions of §6.3 when a
+  scheme turns them on: `matchHeaders` matches an operation one of whose
+  success responses (`200`–`299`, `2XX`) declares every one of the
+  scheme's response `headers` (names compared without case), and
+  `matchResponseFields` one whose success response's JSON schema has
+  every response `bodyFields` path (through `properties` and `allOf`).
+  Only the description is read: an operation whose description does not
+  declare the `Link` header a provider sends is not matched, and is read
+  with one request as before; apply the scheme with an explicit
+  `x-pagination` there.
   An `outcome` passed to `paginate` again starts clean: an earlier walk's
   mark does not carry over.
 - **A cursor read from the last item** (Pagination Schemes 0.9.1
