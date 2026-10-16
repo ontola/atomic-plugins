@@ -50,23 +50,42 @@ jobs:
             syncables:
               - 'syncables/**'
               - '.github/workflows/syncables-ci.yml'
+              - 'integration-proxy/tests/fixtures/device-contract.json'
 
   build:
-    name: Lint, test, build
+    name: Lint, test, build (Node ${{ matrix.node }})
     needs: changes
     if: needs.changes.outputs.syncables == 'true'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', '24', '26']
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: syncables_test
+          POSTGRES_PASSWORD: syncables_test
+          POSTGRES_DB: syncables_cache_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U syncables_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      SYNCABLES_TEST_DATABASE_URL: postgresql://syncables_test:syncables_test@127.0.0.1:5432/syncables_cache_test
     defaults:
       run:
         working-directory: syncables
     steps:
       - uses: actions/checkout@v4
 
-      # Matches package.json's "engines" (>= 22.11 < 23) and "volta" pin
-      # (22.12.0).
+      # Cover the minimum supported major and newer even-numbered releases.
+      # Volta's Node 22 pin is a development default, not a runtime upper bound.
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: syncables/package-lock.json
 

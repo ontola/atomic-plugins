@@ -45,8 +45,17 @@ npx vitest run __tests__/unit/client/client.test.ts --config __tests__/vitest.co
 npx vitest run -t "keeps a local copy in sync" --config __tests__/vitest.config.ts
 ```
 
-This package has no `main.ts`/CLI entrypoint — it's a library (`build/src/index.js`,
-see `package.json` `exports`), so there's no `npm start`.
+The library entrypoints remain `build/src/index.js` and `build/src/browser.js`.
+An isolated CLI executable at `src/cli/main.ts` is exposed as the npm `syncables`
+bin; it is not imported by either library entrypoint. See `docs/cli.md` for the
+authentication/configuration scaffold and `npm run cli:mock` for its local test
+server. There is still no `npm start` or installed daemon.
+
+The additive Node-only `syncables/postgres` subpath implements the optional
+local archive/caching/replay stage (`docs/postgres-cache.md`). Keep it and CLI
+database imports out of root/browser entrypoints. PostgreSQL integration tests
+use `SYNCABLES_TEST_DATABASE_URL`; CI supplies a disposable PostgreSQL 17 service
+for every Node matrix job. With that variable absent, database cases skip.
 
 ## Architecture
 
@@ -1025,8 +1034,8 @@ retention limit and leases on a simulated clock.
   `@typescript-eslint/explicit-function-return-type` as a warning, and a
   vitest plugin scoped to `__tests__/**`. Prettier config (`.prettierrc`) is
   applied via `eslint-config-prettier`, so ESLint won't fight Prettier.
-- Node engine is pinned to `>= 22.11 < 23` (see `package.json`
-  `engines`/`volta`).
+- Node runtime requires `>= 22.11`; CI covers Node 22, 24 and 26. The Volta
+  Node 22 pin is a reproducible development default, not an upper runtime limit.
 
 ## Changelog fragments
 
