@@ -674,16 +674,18 @@ for a completed, a deleted or an inaccessible task; whether `GET /tasks`
 includes tasks of an archived project; and whether "Tasks Completed By
 Completion Date" (up to 3 months) lists every task that left the active
 list by completion, which would tell completion from deletion.
+Discord gets none: its one catalog collection (`/users/@me/guilds`) has no
+item read in the crud overlay, so an absent guild could never be settled.
+
 The published GitHub Issues overlay (#534) says a 410 comes "for every issue
 when issues are turned off" with the body "Issues are disabled for this repo".
 Neither GitHub's reference nor the pinned OAD has that text: the reference
 documents the 410 for a create only. The declaration is unaffected (a 410 is
 `unavailable` either way); the file is published and stays as it is.
+
 `tests/test_completeness_overlays.py`,
 `tests/test_github_issues_completeness.py`,
 `tests/test_github_rest_completeness.py`,
-Discord gets none: its one catalog collection (`/users/@me/guilds`) has no
-item read in the crud overlay, so an absent guild could never be settled.
 `tests/test_calendar_events_completeness.py` and
 `tests/test_todoist_completeness.py` compose each overlay with the
 overlays it needs, run the Collection Completeness and CRUD Causality
