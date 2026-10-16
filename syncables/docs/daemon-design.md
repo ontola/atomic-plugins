@@ -18,7 +18,7 @@ Status checked against repository source on 2026-10-16:
 | Area | Status and reference |
 | --- | --- |
 | API collection reads, local records and write queue | Existing Syncables library; see the [local-first guide](local-first.md). |
-| Device-authentication backend | Merged in integration-proxy 0.4.0; [contract and operator guide](../../integration-proxy/DEVICE_AUTH.md). Production approval wiring and a successful live CLI/GitHub read remain separate checks. |
+| Device-authentication backend and live read-only pilot | Merged in integration-proxy 0.4.0; [contract and operator guide](../../integration-proxy/DEVICE_AUTH.md). The laptop worker reports successful browser approval, bearer connection discovery, a proxied GitHub GET and session revocation on 2026-10-16; see the evidence below. Production owner-hub integration and live refresh testing remain follow-ups. |
 | CLI device test and replication definitions | In draft [PR #567](https://github.com/ontola/atomic-plugins/pull/567), with a [source-install/test guide](https://github.com/ontola/atomic-plugins/blob/codex/syncables-cli-auth-scaffold/syncables/docs/cli.md). Definitions are configuration only. |
 | Local PostgreSQL archive, read cache and recorded-run replay | Implemented in draft #567; [cache/replay guide](https://github.com/ontola/atomic-plugins/blob/codex/syncables-cli-auth-scaffold/syncables/docs/postgres-cache.md). Not yet merged or released as part of this design document. |
 | Content-addressed nested JSON nodes and observed revision history | Planned extension of #567's whole-response deduplication; no node graph or revision browser exists in that stage. |
@@ -28,9 +28,10 @@ Status checked against repository source on 2026-10-16:
 | Atomic, NextGraph, remoteStorage, Jazz and atproto runtime replication | Planned; only the first three have scaffold configuration commands. Configuring a destination does not establish replication. |
 | Retire the source and promote the local copy | Product direction; requires a separate migration plan and implementation. |
 
-Historical mock tests and source/CI evidence do not establish the current
-localthought.io deployment state. Check live discovery and complete an approved
-provider read before describing live device access as working.
+Live evidence below is attributed to **API keys (local)** on 2026-10-16. It
+establishes that tested device-flow contract and read, not continuous deployment
+health, every provider permission or a persistent daemon session. Mock tests
+and source/CI evidence remain separate from this live result.
 
 ## Deployment and package boundaries
 
@@ -84,6 +85,11 @@ The published pilot client ID is `syncables-cli`, with scopes
 for this deployment is `integration-proxy`; configuring it is an operational
 step, not evidence that the browser flow is complete.
 
+Current service branding is **atomic.place**; the service URL and device-flow
+issuer remain `https://localthought.io`. Do not change the issuer/audience or
+signed URLs merely to match the brand name. Historical Local Thought wording
+in source and contract links still refers to this service.
+
 The term **owner hub** in the device-auth contract means a trusted browser
 application that can authenticate the existing Atomic owner and sign approval
 requests with that owner's identity. It is not a separate account the CLI
@@ -112,14 +118,57 @@ status. It should not open approval prompts unattended. Bind local data to the
 verified canonical owner and provider connection, with an explicit grant or
 authorization-context generation for cache reuse.
 
-The #566 handoff reports that the local worker configured Heroku release v97
-and observed health/discovery HTTP 200 with
-`DEVICE_APPROVAL_URL=http://127.0.0.1:11873`. This is attributed operational
-evidence, not a fresh deployment check here. Michiel is testing browser owner
-approval and an authenticated GitHub GET in **API keys (local)**. Keep their
-result separate from mock/direct-public-GitHub tests. The existing owner seed
-stays on the laptop in its approval bridge; neither the CLI nor a cloud worker
-needs it. A loopback test bridge is not the production owner hub.
+### Reported live verification, 2026-10-16
+
+Michiel requested incorporating the handoff from **API keys (local)**, chat
+`01a11a49-4322-7813-aa0d-2f70ada2be33`. Source was verified there at
+[`integration-proxy-v0.4.0`, commit `eec7f752`](https://github.com/ontola/atomic-plugins/blob/eec7f7529a61239ad6adb4e5c285d2e3cc1275e9/integration-proxy/DEVICE_AUTH.md).
+These results were produced on the laptop, not rerun from this cloud worker:
+
+| Check | Reported result |
+| --- | --- |
+| Deployment configuration | Heroku release v97 on 2026-10-15 set only `DEVICE_APPROVAL_URL=http://127.0.0.1:11873`; the registered `syncables-cli` and unrelated configuration were preserved. Health and OAuth discovery returned 200; discovery advertised the device grant and public-client authentication `none`. |
+| Existing owner and provider connection | Atomic-signed `GET /connections` returned 200 with one `github-issues` connection. |
+| Browser authorization | The real public client requested a device grant, the browser followed `/device` to the local bridge, and Michiel explicitly approved that grant after reviewing the client/scopes and selecting the existing connection. |
+| Bearer session | Grant redemption and bearer `GET /connections` succeeded, exposing exactly the approved connection for `connections:read proxy:read`. |
+| Authenticated GitHub read | Proxied `GET /repos/ontola/usertest-findings/issues?per_page=1&state=all` returned 200. Its body was not printed. |
+| Revocation | The CLI revoked its session; subsequent `GET /connections` using that access token returned 401. The test client exited 0. |
+| Local bridge restrictions | Bridge page/module returned 200; an unauthorized `POST /sign` returned 403. |
+
+The reusable components already live under `integration-proxy/`:
+[owner bridge](../../integration-proxy/examples/device-login/owner-bridge.mjs),
+[browser UI](../../integration-proxy/static/device-approval.mjs),
+[outbound example client](../../integration-proxy/examples/device-login/login.mjs)
+and the [device guide](../../integration-proxy/DEVICE_AUTH.md). Do not create a
+second approval protocol in Syncables. This live handoff establishes the
+protocol/example-client pilot; it does not identify a particular packed #567
+executable as the client under test.
+
+The upstream bridge expects `ATOMIC_OWNER_SEED`. The local adaptation instead
+imports the laptop's atomic-drive `atomic.mjs`, calls `openAtomic()` and
+`store.getAgent()`, and uses `agent.getPublicKey()` / `agent.sign(message)`.
+The bootstrap obtains the existing personal identity from macOS Keychain
+internally; no seed was exported, printed or written to a file, and no
+replacement owner was created. It retains Atomic v2 message signing and the
+Host/Origin/CSRF checks, restricted to `POST /device/challenge` and
+`POST /device/approve`. The adaptation and its source manifest remain local,
+not committed upstream.
+
+Evidence retained on the owner's laptop is named
+`device-login-test-2026-10-16.json`, `device-login-approved.png` and
+`integration-proxy-startup-fix-2026-10-15.json`. These are private local evidence
+references, not files available to this cloud executor or committed fixtures.
+Device codes and access/refresh tokens stayed in process memory. The manually
+started bridge was alive at test completion; this does not establish its
+present availability or install a launchd service. A companion local Atomic
+replica was started through its existing launcher for setup inspection.
+
+The CLI needs outbound HTTPS and its device tokens, never the owner's private
+key. Mac loopback, Keychain and the local adapter are not reachable from this
+cloud executor. Production owner-hub integration, durable bridge lifecycle and
+live refresh rotation remain separate follow-ups; the successful test did not
+exercise refresh. This evidence records a completed grant/read/revocation,
+not a request for another approval, wider access or implementation.
 
 ## Compressed archive, cache and replay
 
@@ -506,7 +555,9 @@ Some provider behaviors cannot be reproduced from the exposed API alone.
 1. Preserve package compatibility; test mock login and a read-only API probe.
 2. Add the local archive/cache and deterministic recorded-run replay.
 3. Prove live device approval and a selected GitHub read independently of the
-   mock; wire the trusted browser approval page before calling this complete.
+   mock. The laptop handoff reports this read-only protocol pilot complete,
+   including revocation; production owner-hub wiring and live refresh remain
+   separate from the manually started approval bridge.
 4. Freeze/test the lossless node encoding, add transactional graph indexing
    and migrations/backfill over the existing raw archive, and prove revision
    occurrence/retention/GC rules. Keep old responses replayable.
@@ -522,9 +573,9 @@ Some provider behaviors cannot be reproduced from the exposed API alone.
 9. Implement replication backends separately; Jazz and atproto follow the
    existing three planned backends. Plan any source-retirement pilot separately.
 
-Steps 1 and 2 have draft implementation evidence in #567. Step 3 is being
-tested in the laptop worker and is an independent live check, not a reason to
-restart implementation or block documentation. Steps 4 onward are planned;
+Steps 1 and 2 have draft implementation evidence in #567. Step 3 has the
+attributed laptop live evidence above; it does not establish #567 packed-client
+coverage or production hub/refresh support. Steps 4 onward are planned;
 they do not claim complete daemon, incremental, browsing or replication support.
 
 Use real PostgreSQL tests for isolation, concurrency, stale claims, transaction
