@@ -1,0 +1,57 @@
+# Reviewed 2026-10-12 against the pinned OAD and official provider documentation.
+# Source: https://developers.notion.com/reference/request-limits
+#   "The Notion API enforces two rate limits: a per-connection limit and a per-workspace
+#   limit." Per connection: "600 requests per minute (an average of 10 per second)" on
+#   Business and Enterprise, "180 requests per minute (an average of 3 per second)" on all
+#   other plans; "Rate limits may change". When a limit is exceeded the API answers HTTP 429
+#   with the error code "rate_limited" and a Retry-After header whose value is "an integer
+#   number of seconds"; additional_data.rate_limit_reason names the limit.
+# No limits are declared: the per-connection numbers depend on the workspace's plan, which
+# Throttling does not express, and the per-workspace limit has no published number.
+# v2 of throttling-0c8e2296...: the same header and signal, plus a first signal for the reason
+# public_api_request_blocked, for which Notion says "This connection's API access has been
+# restricted. Retrying won't help. Contact Notion support.": meaning blocked, so a consumer
+# does not retry it.
+# Not declared: 529 service_overload ("Notion is temporarily overloaded. Respect the
+# Retry-After response header and try again later.", https://developers.notion.com/reference/status-codes).
+# Throttling says a response that may follow partial processing, a 5xx in general, is not a
+# throttling signal; a consumer's ordinary 5xx retry handles it (syncables reads its
+# Retry-After for a retryable answer).
+# Needs Throttling 0.4.0-draft (openapi-extensions/spec/throttling: blocked).
+overlay: 1.0.0
+info:
+  title: Notion API 2026-03-11 throttling, with blocked requests
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/0c8e229623efdcc1d4ab50111d17bcca3214a899/APIs/notion.com/2026-03-11/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        headers:
+          Retry-After:
+            role: retryAfter
+            unit: deltaSeconds
+            description: >-
+              Sent with a 429; Notion documents its value as "an integer
+              number of seconds".
+        signals:
+          - status: [429]
+            body:
+              pointer: /additional_data/rate_limit_reason
+              equals: public_api_request_blocked
+            meaning: blocked
+            description: >-
+              "This connection's API access has been restricted. Retrying
+              won't help. Contact Notion support." Listed first: the
+              response also carries the code rate_limited, which the next
+              signal matches.
+          - status: [429]
+            body:
+              pointer: /code
+              equals: rate_limited
+            meaning: throttled
+            description: >-
+              Notion's documented rate-limit response. additional_data.rate_limit_reason
+              says which limit was hit (the connection's, the workspace's, an
+              endpoint's, or an upstream one); public_api_request_blocked is
+              matched by the signal above.

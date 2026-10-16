@@ -1,0 +1,55 @@
+# Reviewed 2026-10-15 against the pinned OAD and the provider's published reference, fetched
+# with curl (https://developer.todoist.com/api/v1/); no live requests, no token. For #99.
+# Source quotes (each checked against the raw page):
+#   Get Tasks: "Get all active tasks for the user. All provided parameters are used to narrow
+#   down the list of tasks."
+#   Get Task: "Returns a single active (non-completed) task by ID".
+#   Close Task: "Regular tasks are marked complete and moved to history, along with their
+#   subtasks. Tasks with recurring due dates will be scheduled to their next occurrence."
+#   Delete Task: "Delete a task and all of its subtasks."
+#   Archive Project: "For workspace projects, this will archive it for all workspace users,
+#   removing it from view."
+#   Pagination: "next_cursor: A string token for fetching the next page, or null if there are
+#   no more results"; "When next_cursor is null, you've reached the end of the results."
+#   (Quotes re-audited against the raw page with curl on 2026-10-15.)
+# A complete read therefore follows next_cursor until it is null (the catalog's pagination
+# overlay declares that cursor); a read that stops earlier, or fails on a page, is not
+# complete, and nothing is concluded from what it did not return.
+# So a task leaves GET /tasks when it is completed (a non-recurring one), deleted, or (not
+# stated, see below) when its project is archived or the user loses access; absence is
+# `removed`, never `deleted`. GET /tasks/{task_id} returns active tasks only, so a completed
+# task cannot be read back as `checked: true`, nor a deleted one as `is_deleted: true`: no read
+# tombstone is declared, and a 404 is `unavailable` (completed, deleted or out of reach).
+# Not verified without a live account (not declared):
+#   - the status GET /tasks/{task_id} answers for a completed, a deleted, or an inaccessible
+#     task (the reference lists 404 among the responses but does not say which case gives it);
+#   - whether GET /tasks includes tasks of an archived project;
+#   - whether Tasks Completed By Completion Date (up to 3 months) lists every task that left
+#     the active list by completion, which would let a client tell completion from deletion.
+# Needs Collection Completeness 0.2.0-draft (notFound). Composes with
+# crud-causality-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml in either order: it
+# deep-merges into components.crudResources.
+overlay: 1.0.0
+info:
+  title: Todoist API v1 active-task completeness
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/ac07532b0a0ac101cf8bae2a54177fb1d8ea3779/APIs/todoist.com/1/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        task:
+          collections:
+            tasks:
+              x-completeness:
+                absent: removed
+                notFound: unavailable
+                description: >-
+                  GET /tasks returns "all active tasks for the user"; a complete
+                  read sends no narrowing parameter (no project_id) and follows
+                  every cursor. A task leaves it when completed ("marked
+                  complete and moved to history"), when deleted, and possibly
+                  when its project is archived or access is lost, so absence is
+                  removed. GET /tasks/{task_id} "Returns a single active
+                  (non-completed) task by ID", so a 404 can mean completed,
+                  deleted or out of reach: unavailable, never deleted.

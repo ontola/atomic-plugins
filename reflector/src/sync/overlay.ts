@@ -237,6 +237,40 @@ export function adaptSchemesForSyncables(
   return document;
 }
 
+const APPLICATION_KEYS = new Set(['scheme', 'overrides', 'description']);
+
+/**
+ * What makes `entry` not a Pagination Application Object, if anything: the
+ * Pagination Schemes spec's schema.json asks for a nonempty `scheme`, an
+ * object `overrides`, a string `description` and no other field but `x-`
+ * ones. The same check syncables applies; without it a typo such as
+ * `overide:` would be dropped without a word.
+ */
+export function applicationProblem(entry: unknown): string | undefined {
+  if (
+    !isPlainObject(entry) ||
+    typeof entry.scheme !== 'string' ||
+    entry.scheme === ''
+  ) {
+    return 'must be a Pagination Application Object with a "scheme" name';
+  }
+  for (const key of Object.keys(entry)) {
+    if (!APPLICATION_KEYS.has(key) && !key.startsWith('x-')) {
+      return `has a field the spec does not define: ${key}`;
+    }
+  }
+  if (entry.overrides !== undefined && !isPlainObject(entry.overrides)) {
+    return 'overrides must be an object';
+  }
+  if (
+    entry.description !== undefined &&
+    typeof entry.description !== 'string'
+  ) {
+    return 'description must be a string';
+  }
+  return undefined;
+}
+
 function schemeItemsField(scheme: unknown): string {
   const response = (
     scheme as { response?: { envelope?: { itemsField?: unknown } } }
@@ -257,15 +291,39 @@ function schemeItemsField(scheme: unknown): string {
  */
 export function pinItemsFields(document: OpenApiDocument): OpenApiDocument {
   const schemes = document.components?.paginationSchemes ?? {};
-  for (const item of Object.values(document.paths)) {
+  for (const [path, item] of Object.entries(document.paths)) {
     const get = item.get;
-    const application = get?.['x-pagination'];
-    if (!Array.isArray(application) || application.length === 0) {
+    const application: unknown = get?.['x-pagination'];
+    if (application === undefined) {
       continue;
     }
-    const schemeName = (application[0] as { scheme?: string }).scheme;
+    // As syncables' resolveEffectiveScheme: an x-pagination that is not an
+    // array cannot be applied, and is refused rather than skipped.
+    if (!Array.isArray(application)) {
+      throw new Error(
+        `paths['${path}'].get: x-pagination must be an array of Pagination Application Objects`,
+      );
+    }
+    if (application.length === 0) {
+      continue;
+    }
+    application.forEach((entry: unknown, index: number) => {
+      const problem = applicationProblem(entry);
+      if (problem) {
+        throw new Error(
+          `paths['${path}'].get.x-pagination[${index}] ${problem}`,
+        );
+      }
+    });
+    // The first application, with its overrides merged onto the named
+    // scheme, as syncables' resolveEffectiveScheme merges them: an
+    // override of response.envelope.itemsField names the items array.
+    const first = application[0] as { scheme: string; overrides?: unknown };
+    const scheme: unknown = schemes[first.scheme];
     const itemsField = schemeItemsField(
-      schemeName ? schemes[schemeName] : undefined,
+      first.overrides === undefined
+        ? scheme
+        : deepMerge(scheme, first.overrides),
     );
     const schema =
       get?.responses?.['200']?.content?.['application/json']?.schema;

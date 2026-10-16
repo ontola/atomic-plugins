@@ -1,10 +1,11 @@
 // @wc-ignore-file
 /**
- * The consumer side of the OpenAPI Throttling Extension 0.3.0-draft
+ * The consumer side of the OpenAPI Throttling Extension 0.4.0-draft
  * (`openapi-extensions/spec/throttling/README.md`): the root `x-throttling`
  * object's `headers` (header roles), `bodyFields` (the same roles read from
  * the JSON response body, since 0.3.0), `signals` (which responses mean
- * throttling) and the earliest retry time, after `classify()` in that
+ * throttling, or, since 0.4.0, a `blocked` refusal not worth retrying) and
+ * the earliest retry time, after `classify()` in that
  * folder's `validate.py`. `limits` and `applies` are read only for the
  * bucket a `quotaExhausted` signal names (its window is the fallback when no
  * time is given), for which buckets an operation selects, and, where a
@@ -52,7 +53,12 @@ export type BodyPredicate = { pointer: string } & (
   | { item: BodyPredicate }
 );
 
-export type ThrottlingMeaning = 'throttled' | 'quotaExhausted';
+/**
+ * `blocked` (0.4.0): a refusal the API documents as not worth retrying. It
+ * is not throttling: no retry time, never resent automatically. A signal
+ * whose meaning this consumer does not recognise is read as `blocked`.
+ */
+export type ThrottlingMeaning = 'throttled' | 'quotaExhausted' | 'blocked';
 
 /** Signal Object: a response the API documents as a rate-limit refusal. */
 export interface SignalObject {
@@ -77,6 +83,14 @@ export interface ThrottlingDeclaration {
    * reading; an `anchor` that does not parse as a time is left out.
    */
   quotas: Map<string, Quota>;
+  /**
+   * Throttling 0.5.0 plan tiers: for a bucket whose Limit Object declares
+   * `tiers` and no tier names the configured plan (or none is configured),
+   * every tier, each kept within at once over the same requests
+   * (`limitsInForce`). Such a bucket has no entry in `quotas`; one whose
+   * tier names the plan has its tier there, as a plain limit.
+   */
+  tieredQuotas?: Map<string, Quota[]>;
   /** The default bucket selection (`applies`). */
   applies: string[];
   /** Header Role Objects by lower-cased header name. */
@@ -103,7 +117,10 @@ export interface ThrottlingVerdict {
    * The earliest time to send the request again (or any request counted
    * against the exhausted bucket), in milliseconds since the epoch. Absent
    * when no header or declared delay gives one: the consumer's own backoff
-   * applies.
+   * applies, except under `blocked` (Throttling 0.4.0), where absent means
+   * never send it again automatically. API semantic change: before 0.4.0
+   * support, a verdict always meant "retry, at `retryAt` or after a
+   * backoff"; a `blocked` verdict means "do not retry".
    */
   retryAt?: number;
   /** The Signal Object that matched; absent for a 429 no signal matched. */
@@ -135,7 +152,7 @@ const UNITS = new Set<string>([
   'httpDate',
   'deltaSecondsOrHttpDate',
 ]);
-const MEANINGS = new Set<string>(['throttled', 'quotaExhausted']);
+const MEANINGS = new Set<string>(['throttled', 'quotaExhausted', 'blocked']);
 
 const isScalar = (value: unknown): value is JsonScalar =>
   value === null ||
@@ -146,23 +163,121 @@ const isScalar = (value: unknown): value is JsonScalar =>
 const isPositiveInteger = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0;
 
+/** A Window Object's quota fields, or undefined when `seconds` does not parse. */
+function quotaOf(requests: unknown, window: unknown): Quota | undefined {
+  if (!isRecord(window) || !isPositiveInteger(window['seconds'])) return;
+  if (!isPositiveInteger(requests)) return;
+  const kind = window['kind'];
+  const anchor = window['anchor'];
+  const anchorMs = typeof anchor === 'string' ? Date.parse(anchor) : NaN;
+  return {
+    requests,
+    seconds: window['seconds'],
+    kind: kind === 'fixed' || kind === 'unspecified' ? kind : 'sliding',
+    ...(kind === 'fixed' && Number.isFinite(anchorMs)
+      ? { anchor: anchorMs }
+      : {}),
+  };
+}
+
+/** A parsed Tier Object (Throttling 0.5.0). */
+export interface Tier {
+  plans: string[];
+  quota: Quota;
+}
+
+/**
+ * A Limit Object's `tiers`, with the spec validator's checks that decide
+ * which tier binds: a nonempty array of Tier Objects, each with a nonempty
+ * `plans` of nonempty strings (no plan in two tiers), a positive integer
+ * `requests` and a window with positive integer `seconds`. Undefined when
+ * any of that fails: a tier that does not parse might be the one that
+ * binds, so none is guessed and the limit is left out. More lenient than
+ * the validator elsewhere, as for a plain limit: an unknown window `kind`
+ * reads as `sliding`, an `anchor` that does not parse is left out, and
+ * unknown fields (or `requests`/`window` beside `tiers`) are ignored.
+ */
+export function parseTiers(tiers: unknown): Tier[] | undefined {
+  if (!Array.isArray(tiers) || tiers.length === 0) return undefined;
+  const parsed: Tier[] = [];
+  const seen = new Set<string>();
+  for (const tier of tiers) {
+    if (!isRecord(tier)) return undefined;
+    const plans = tier['plans'];
+    if (
+      !Array.isArray(plans) ||
+      plans.length === 0 ||
+      !plans.every((plan) => typeof plan === 'string' && plan !== '')
+    )
+      return undefined;
+    for (const plan of plans as string[]) {
+      if (seen.has(plan)) return undefined;
+      seen.add(plan);
+    }
+    const quota = quotaOf(tier['requests'], tier['window']);
+    if (!quota) return undefined;
+    parsed.push({ plans: plans as string[], quota });
+  }
+  return parsed;
+}
+
+/**
+ * Throttling 0.5.0, after the spec's `limits_in_force`: the quotas a
+ * consumer keeps within, all at once. The tier whose `plans` name `plan`;
+ * without a plan, or one no tier names, every tier, each counted
+ * separately over the same requests (no single tier bounds both bursts
+ * and averages).
+ */
+export function limitsInForce(tiers: Tier[], plan?: string): Quota[] {
+  const named =
+    plan === undefined ? undefined : tiers.find((t) => t.plans.includes(plan));
+  return named ? [named.quota] : tiers.map((t) => t.quota);
+}
+
+/**
+ * Throttling 0.5.0, after the spec's `fallback_window`: the window a
+ * time-less `quotaExhausted` falls back to, the configured tier's, else
+ * the longest among the tiers.
+ */
+export function fallbackWindow(tiers: Tier[], plan?: string): number {
+  return Math.max(...limitsInForce(tiers, plan).map((q) => q.seconds));
+}
+
 /**
  * Reads the document's root `x-throttling`. Undefined when absent or not an
  * object. A `headers` entry that does not parse (an unknown role, a missing
- * or misplaced unit, a role or a name already taken) is left out. The
- * `signals` array is left out as a whole when any Signal Object does not
- * parse, since the objects are tested in order and a gap would change the
- * meaning of the rest; a 429 then stays throttling and nothing else does.
+ * or misplaced unit, a role or a name already taken) is left out. A signal
+ * whose meaning is `blocked`, or missing, not a string or not recognised, is
+ * kept as `blocked` (Throttling 0.4.0), with any `bucket` or
+ * `minDelaySeconds` ignored. The `signals` array is left out as a whole
+ * when any other Signal Object does not parse (a bad status list or
+ * predicate), since the objects are tested in order and a gap would change
+ * the meaning of the rest; a 429 then stays throttling and nothing else
+ * does.
  */
 export function declaredThrottling(
   document: OpenApiDocument,
+  plan?: string,
 ): ThrottlingDeclaration | undefined {
   const root = (document as Record<string, unknown>)['x-throttling'];
   if (!isRecord(root)) return undefined;
   const windows = new Map<string, number>();
   const quotas = new Map<string, Quota>();
+  const tieredQuotas = new Map<string, Quota[]>();
   if (isRecord(root['limits']))
     for (const [name, limit] of Object.entries(root['limits'])) {
+      // Throttling 0.5.0 plan tiers (`plan`: the account's plan, as the
+      // provider names it): a limit whose tiers do not all parse is left
+      // out, as any other limit that does not parse.
+      if (isRecord(limit) && limit['tiers'] !== undefined) {
+        const tiers = parseTiers(limit['tiers']);
+        if (!tiers) continue;
+        windows.set(name, fallbackWindow(tiers, plan));
+        const inForce = limitsInForce(tiers, plan);
+        if (inForce.length === 1) quotas.set(name, inForce[0] as Quota);
+        else tieredQuotas.set(name, inForce);
+        continue;
+      }
       const window = isRecord(limit) ? limit['window'] : undefined;
       const seconds = isRecord(window) ? window['seconds'] : undefined;
       if (!isPositiveInteger(seconds)) continue;
@@ -193,6 +308,7 @@ export function declaredThrottling(
   const declaration: ThrottlingDeclaration = {
     windows,
     quotas,
+    tieredQuotas,
     applies,
     headers,
     bodyFields,
@@ -286,10 +402,15 @@ function parseSignal(value: unknown): SignalObject | undefined {
     )
   )
     return undefined;
-  if (typeof meaning !== 'string' || !MEANINGS.has(meaning)) return undefined;
+  // 0.4.0: a meaning this consumer does not recognise (missing, not a
+  // string, empty or unknown) is read as blocked, as the spec's classify()
+  // does, so it never resends on a meaning it cannot read.
   const signal: SignalObject = {
     status: [...(status as number[])],
-    meaning: meaning as ThrottlingMeaning,
+    meaning:
+      typeof meaning === 'string' && MEANINGS.has(meaning)
+        ? (meaning as ThrottlingMeaning)
+        : 'blocked',
   };
   if (header !== undefined) {
     const parsed = parseHeaderPredicate(header);
@@ -301,6 +422,12 @@ function parseSignal(value: unknown): SignalObject | undefined {
     if (!parsed) return undefined;
     signal.body = parsed;
   }
+  if (typeof description === 'string') signal.description = description;
+  // 0.4.0: a blocked signal (or one read as blocked) takes no bucket and no
+  // delay. A document that gives them anyway is invalid, but the signal is
+  // kept as blocked with them ignored, never dropped: dropping it would
+  // leave the matching 429 to the throttled default, which is retried.
+  if (signal.meaning === 'blocked') return signal;
   if (bucket !== undefined) {
     if (typeof bucket !== 'string') return undefined;
     signal.bucket = bucket;
@@ -309,7 +436,6 @@ function parseSignal(value: unknown): SignalObject | undefined {
     if (!isPositiveInteger(minDelaySeconds)) return undefined;
     signal.minDelaySeconds = minDelaySeconds;
   }
-  if (typeof description === 'string') signal.description = description;
   return signal;
 }
 
@@ -628,6 +754,12 @@ const STANDARD_RETRY_AFTER: HeaderRoleObject = {
  * signal's `minDelaySeconds`; else, for `quotaExhausted` with a bucket
  * whose window is declared, plus that window; else absent (the consumer's
  * backoff). A declared header whose value does not parse is ignored.
+ *
+ * Throttling 0.4.0: a matching `blocked` signal (or one whose meaning this
+ * consumer does not recognise, with any `bucket` or `minDelaySeconds`
+ * ignored) gives `{ meaning: 'blocked' }` with no `retryAt`, which means
+ * never resend automatically, not the consumer's backoff. A caller that
+ * treated every verdict as "retry later" must check the meaning.
  */
 export function classifyThrottling(
   declaration: ThrottlingDeclaration | undefined,
@@ -659,6 +791,9 @@ export function classifyThrottling(
     break;
   }
   if (!signal && response.status !== 429) return undefined;
+  // 0.4.0: a blocked refusal is not throttling, even as a 429: no retry
+  // time, and the caller must not resend it by itself.
+  if (signal?.meaning === 'blocked') return { meaning: 'blocked', signal };
   const meaning: ThrottlingMeaning = signal?.meaning ?? 'throttled';
   // Each role's values: from its header, then from its body field (0.3.0).
   // A role read from both counts once: the later time for retryAfter and
