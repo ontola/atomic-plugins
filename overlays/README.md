@@ -225,15 +225,27 @@ outcome. The query is capped at 10,000 results, so a catalog selects this
 overlay only together with `pagination-v3-0c8e2296…`, which marks a capped
 read incomplete; under an earlier pagination revision a query over 10,000
 results looks complete (the test asserts this pairing). Not declared:
-`gone` (no 410 documented), anything on `data_sources` (`POST /search`, not
-documented as returning every shared data source), and so `parentAbsent`,
-which needs a parent collection with a Completeness Object (§4.4). The pinned
-OAD is an authored subset without descriptions, so the evidence is Notion's
-reference. No dated catalog selects it yet.
+`gone` (no 410 documented), anything on `data_sources`, and so
+`parentAbsent`, which needs a parent collection with a Completeness Object
+(§4.4). The pinned OAD is an authored subset without descriptions, so the
+evidence is Notion's reference. No dated catalog selects it yet.
 `tests/test_notion_pages_completeness.py` composes it with the catalog's
 auth, pagination and crud-causality overlays (and with pagination-v3), in
 either order, runs both validators, and checks the outcomes `classify_read`
 gives. No provider was called.
+
+Why `data_sources` stays undeclared (checked 2026-10-15, quotes curl'd from
+the raw pages): the collection is read through `POST /search`.
+[Search by title](https://developers.notion.com/reference/post-search) says
+"If no query param is provided, then the response contains all pages or
+data_sources that have been shared with the connection.", but
+[Search optimizations and limitations](https://developers.notion.com/reference/search-optimizations-and-limitations)
+lists among what search is not optimized for "Exhaustively enumerating
+through all the documents that a bot has access to in a workspace." and says
+"Search is not guaranteed to return everything, and the index may change as
+your connection iterates through pages and databases." and "Search indexing
+is not immediate." A data source absent from a read can therefore be one the
+index has not caught up with, so no completeness is declared on it.
 
 ## Write preconditions
 
@@ -269,14 +281,54 @@ issue after one deleted during a read; that issue still exists, and its own
 read finds it present. Not verified: which issue types (tasks, incidents)
 the list returns without `issue_type`, and whether they are read as issues
 are. Not
-declared: `gone` (no 410 documented for issues), anything on `projects` (the
-catalog narrows it with `membership=true`, and a consumer drops a declaration
-a selection narrows), and so `parentAbsent`, which needs a parent collection
-with a Completeness Object (§4.4). No dated catalog selects it yet.
+declared: `gone` (no 410 documented for issues), anything on `projects`, and
+so `parentAbsent`, which needs a parent collection with a Completeness Object
+(§4.4). No dated catalog selects it yet.
 `tests/test_gitlab_issues_completeness.py` composes it with the catalog's
 auth, pagination and crud-causality overlays of the same pin, in either order,
 runs both validators, and checks the outcomes `classify_read` gives. No
 provider was called.
+
+Why `projects` stays undeclared (checked 2026-10-15, quotes curl'd from the
+raw [projects reference](https://docs.gitlab.com/api/projects/)): the catalog
+narrows the list with a `membership=true` selection override ("Limit by
+projects that the current user is a member of."), and a consumer drops a
+completeness declaration that a selection narrows. A crud-causality revision
+could fix `membership=true` as a `listQuery` (as Google Tasks'
+crud-causality v2 and Google Calendar's app-crud-causality v2 fix their reads,
+and as
+`APIs/moneybird.com/v2-readonly/all-records-selection.json` widens
+Moneybird's), but the read would still narrow by default: parameters exist
+that would widen it, `include_pending_delete` ("Include projects pending
+deletion. (administrators only)") and `include_hidden` ("Include hidden
+projects. (administrators only) Premium and Ultimate only."), and a caller
+that is not an administrator cannot send them. In this repository a list
+filters by default when such a parameter exists (Moneybird's
+`include_archived`, GitHub's `state`), and Collection Completeness §4.2 says
+`absent: removed` "still tells a consumer that the list does not filter by
+default", so no completeness is declared on it.
+
+## Todoist projects completeness
+
+[`completeness-v2-ac07532b…`](APIs/todoist.com/1/completeness-v2-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml)
+keeps v1's tasks declaration (#99) and adds the `projects` collection:
+`absent: removed`, `notFound: unavailable` (quotes curl'd from the raw
+[API v1 reference](https://developer.todoist.com/api/v1/) on 2026-10-15). Get
+Projects says "Get all active user projects, optionally filtered by folder or
+workspace."; its `folder_id` and `workspace_id` only narrow it and are not
+sent, and no parameter widens it to archived projects (those come from a
+separate endpoint, Get Archived: "Get the user's archived projects."). As for
+the tasks list ("all active tasks"), the list therefore does not filter by
+default in the sense this repository applies (a parameter that would widen
+it), and an archived project ("removing it from view") or a deleted one is an
+absence its own read settles: §4.2's `removed` "MAY still exist, for example
+archived". The reference lists a 404 among the read's responses without
+saying which case gives it, so a 404 is `unavailable`. Not verified: what a
+project's read answers once it is archived or deleted. It states
+`info.x-requires` (the catalog's crud-causality overlay). No dated catalog
+selects it. `tests/test_todoist_completeness_v2.py` checks that v2 is v1 plus
+the projects declaration, composes it in either order, and checks the
+outcomes `classify_read` gives. No provider was called.
 
 ## Google Calendar deletion feed
 
