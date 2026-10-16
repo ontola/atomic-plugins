@@ -2038,9 +2038,11 @@ const { records, ontology, errors } = await readPlatform(document, {
   (`authBlocked()`). Writes and value
   conversion are not covered.
 - **Records and ontology**: `deriveOntology` makes one class per resource and
-  one property per field, typed with Atomic Data datatype URLs. Each record's
-  `values` are keyed by property shortname, and `date-time` strings are
-  converted to epoch milliseconds.
+  one property per field, typed with Atomic Data datatype URLs; an
+  OpenAPI 3.1 type list such as `['string', 'null']` is typed by its one
+  non-null type, and a field whose name has no letter or digit (`_`) gets
+  no property. Each record's `values` are keyed by property shortname, and
+  `date-time` strings are converted to epoch milliseconds.
 - **Limits** (`DEFAULT_READ_LIMITS`): 10,000 requests, 5,000 records and 30
   minutes per read, plus at most 3 retries per request of a 429 or a
   response a declared throttling signal matches, each after the earliest

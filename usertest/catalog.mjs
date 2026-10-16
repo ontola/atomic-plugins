@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Builds the user-testing catalog into a folder that deploy.sh copies to the
- * droplet's /srv/catalog:
+ * user-testing server's /srv/catalog:
  *
  *   node usertest/catalog.mjs [out]            # default out: usertest/out
  *   node usertest/catalog.mjs --record [out]   # after a version bump
@@ -99,7 +99,7 @@ export const VERSIONS = {
   'issue-tracker': 'usertest-11',
   money: 'usertest-8',
   notion: 'usertest-15',
-  timesheets: 'usertest-13',
+  timesheets: 'usertest-16',
 };
 const APPS = {
   calendar: {
