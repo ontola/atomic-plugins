@@ -29,7 +29,7 @@ prefix; the moderator refuses to start when a plan has none.
 | `issue-tracker-sample` | GitHub issues drive app, on sample data                                                     | nothing                                                                                     |
 | `timesheets-sample`    | Clockify drive app, on sample data                                                          | nothing                                                                                     |
 | `notion-sample`        | Notion drive app, on sample data                                                            | nothing                                                                                     |
-| `split-pieces`         | the split of views and integrations on tables (ontola/atomic-server#2069), on seeded tables | nothing: the server must run candidate20 (below)                                            |
+| `split-pieces`         | the split of views and integrations on tables (ontola/atomic-server#2069), on seeded tables | nothing: the server must run candidate21 (below)                                            |
 
 ## Sample data (no account needed)
 
@@ -67,8 +67,9 @@ invitation, which does not exist yet (question for Michiel, in the PR).
 `split-pieces` tests the exploration of ontola/atomic-server#2069 (branch
 `claude/split-views-integrations`): a table's **+** menu lists views, and a
 **Connect** button beside the tabs lists integrations, some offered through
-lenses. It needs atomic-server candidate20 (`0fa9c07`), which carries that
-prototype plus a tester entry. The plan's `Start page` line,
+lenses. It needs atomic-server candidate21 (`e922179`), which carries that
+prototype plus a tester entry; on candidate20 (`0fa9c07`) the Clockify tab's
+"Sync now" threw and the Timesheet tab did not render. The plan's `Start page` line,
 `/app/pieces-demo?tester`, makes the usertest page open the tester's window
 there instead of `/app/dev-drive`: the first visit seeds the demo and lands on
 the Hours table without the demo page's explanation, and the page's "Open the
