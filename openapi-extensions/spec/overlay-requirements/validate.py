@@ -25,7 +25,7 @@ def requirements(overlay, url=None):
     """(groups, conflicts) of resolved references; empty when the overlay declares none."""
     info = overlay.get("info") if isinstance(overlay, dict) else None
     info = info if isinstance(info, dict) else {}
-    groups = [[resolve(r, url) for r in group] for group in info.get("x-requires") or []]
+    groups = [[resolve(r, url) for r in group["anyOf"]] for group in info.get("x-requires") or []]
     conflicts = [resolve(r, url) for r in info.get("x-conflicts") or []]
     return groups, conflicts
 
@@ -42,10 +42,11 @@ def validate(overlay, url=None):
             errors.append("info.x-requires: expected a nonempty array of groups (rule 1)")
         else:
             for index, group in enumerate(requires):
-                if not isinstance(group, list) or not group or not all(_reference(r) for r in group):
-                    errors.append(f"info.x-requires[{index}]: expected a nonempty array of URI references (rule 1)")
+                if not isinstance(group, dict) or set(group) != {"anyOf"} or not isinstance(group["anyOf"], list) \
+                        or not group["anyOf"] or not all(_reference(r) for r in group["anyOf"]):
+                    errors.append(f"info.x-requires[{index}]: expected an object with a nonempty anyOf array of URI references (rule 1)")
                     continue
-                resolved = [resolve(r, url) for r in group]
+                resolved = [resolve(r, url) for r in group["anyOf"]]
                 if len(set(resolved)) != len(resolved):
                     errors.append(f"info.x-requires[{index}]: an overlay is named twice (rule 3)")
                 named.extend(resolved)

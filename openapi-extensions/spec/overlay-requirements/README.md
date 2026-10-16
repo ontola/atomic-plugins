@@ -38,7 +38,7 @@ info:
   title: Asana API task completeness
   version: 1.0.0
   x-requires:
-    - [crud-causality-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml]
+    - anyOf: [crud-causality-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml]
   x-conflicts:
     - crud-causality-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml
 extends: https://raw.githubusercontent.com/ontola/openapi-directory/b58c91d9f59c6a10178916e7948793809edae46d/APIs/asana.com/1.0/openapi.yaml
@@ -69,7 +69,7 @@ which allows specification extensions.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `x-requires` | array of arrays of URI references | Nonempty. Each inner array (a _group_) is nonempty and lists alternatives: the group is met when the composition holds at least one of them. Every group MUST be met. |
+| `x-requires` | array of group objects | Nonempty. Each group has one `anyOf` field, a nonempty array of URI references listing alternatives: the group is met when the composition holds at least one of them. Every group MUST be met. |
 | `x-conflicts` | array of URI references | Nonempty. The composition MUST NOT hold any of them. |
 
 A reference MUST NOT name the overlay itself, and the same overlay MUST NOT
@@ -104,8 +104,8 @@ A composition of `base.yaml` and `requires.yaml` is valid, and so is one of
 
 A conforming document:
 
-1. gives `x-requires`, when present, as a nonempty array of nonempty arrays
-   of strings that are URI references;
+1. gives `x-requires`, when present, as a nonempty array of objects, each with only
+   `anyOf`, a nonempty array of strings that are URI references;
 2. gives `x-conflicts`, when present, as a nonempty array of such strings;
 3. names no overlay twice in one group, nor twice in `x-conflicts`, nor the
    same overlay in a group and in `x-conflicts`, nor itself (when its own URL

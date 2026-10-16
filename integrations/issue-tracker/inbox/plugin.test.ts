@@ -17,6 +17,9 @@ import {
   run,
 } from './plugin.js';
 
+/** atomic-server's `egress::FETCH_MAX_RESPONSE_BYTES`. */
+const FETCH_CAP = 8 * 1024 * 1024;
+
 const paths = (host: FakeHost) =>
   host.sent.map(s => `${s.operation} ${s.method} ${new URL(s.url).pathname}`);
 
@@ -185,10 +188,13 @@ describe('the webhook inbox plugin, run as a sync session', () => {
   it(`stops collecting past ${RUN_PAYLOAD_BUDGET} bytes of base64 payload, without error, and the next run goes on`, async () => {
     const inbox = new FakeInbox();
     const host = new FakeHost(inbox);
+    // The host's fetch cap on, so the page stays one it lets through.
+    host.fetchCap = FETCH_CAP;
     await host.run();
-    // Each about 4.7 MiB in base64: together over the budget, so a run that
-    // took both could not save its session.
-    const big = (n: number) => ({ text: String(n).repeat(3_500_000) });
+    // Each about 3.4 MiB in base64: together over the budget, so a run that
+    // took both could not save its session, but the page of all three
+    // (about 6.9 MiB) is under the 8 MiB fetch cap.
+    const big = (n: number) => ({ text: String(n).repeat(2_700_000) });
     inbox.deliver('d-1', big(1));
     inbox.deliver('d-2', big(2));
     inbox.deliver('d-3');
@@ -212,6 +218,77 @@ describe('the webhook inbox plugin, run as a sync session', () => {
         .table(config().tables.work.table)
         .filter(row => row['webhook-work-kind'] === 'delivery'),
     ).toHaveLength(3);
+  });
+
+  it(`stores a lone event between ${RUN_PAYLOAD_BUDGET} and ${MAX_EVENT_PAYLOAD} bytes of base64 whole`, async () => {
+    const inbox = new FakeInbox();
+    const host = new FakeHost(inbox);
+    host.fetchCap = FETCH_CAP;
+    await host.run();
+    // About 6.7 MiB of base64: over the run budget, but the first new event
+    // of a run is always taken, and under the one-event refusal.
+    const lone = { text: 'x'.repeat(5 * 1024 * 1024) };
+    inbox.deliver('d-lone', lone);
+    inbox.deliver('d-next');
+    await host.run();
+    expect(deliveries(host)).toEqual(['d-lone']);
+    const payload = String(host.table(config().table)[0]!['webhook-payload']);
+    expect(payload.length).toBeGreaterThan(RUN_PAYLOAD_BUDGET);
+    expect(payload.length).toBeLessThan(MAX_EVENT_PAYLOAD);
+    expect(Buffer.from(payload, 'base64').toString('utf8')).toBe(
+      JSON.stringify(lone),
+    );
+    expect(host.connection.records[INBOX_RECORD]!.baseline).not.toHaveProperty(
+      'lastError',
+    );
+    // The budget stopped the run before d-next; the next run takes it.
+    await host.run();
+    expect(deliveries(host)).toEqual(['d-lone', 'd-next']);
+  });
+
+  it('a page over the host fetch cap fails, the next run asks for one event, and the runs alternate until the page fits', async () => {
+    const inbox = new FakeInbox();
+    const host = new FakeHost(inbox);
+    host.fetchCap = FETCH_CAP;
+    await host.run();
+    // Each about 4.3 MiB of base64: one fits the cap, two do not.
+    const big = (n: number) => ({ text: String(n).repeat(3_200_000) });
+    inbox.deliver('d-1', big(1));
+    inbox.deliver('d-2', big(2));
+    inbox.deliver('d-3', big(3));
+    const urls = () =>
+      host.sent.map(s => s.url).filter(u => /\/events/.test(u));
+    const lastError = () =>
+      (
+        host.connection.records[INBOX_RECORD]!.baseline as {
+          lastError?: { message: string };
+        }
+      ).lastError;
+    since(host);
+    // Run 1: a page of up to four (all three events) is over the cap.
+    await host.run();
+    expect(urls().at(-1)).toMatch(/[?&]limit=4(&|$)/);
+    expect(lastError()?.message).toContain('exceeds the byte limit');
+    expect(deliveries(host)).toEqual([]);
+    // Run 2: one event fits, and the error clears.
+    await host.run();
+    expect(urls().at(-1)).toMatch(/[?&]limit=1(&|$)/);
+    expect(deliveries(host)).toEqual(['d-1']);
+    expect(lastError()).toBeUndefined();
+    // Run 3: a full page again, still over the cap with d-2 and d-3.
+    await host.run();
+    expect(urls().at(-1)).toMatch(/[?&]limit=4(&|$)/);
+    expect(lastError()?.message).toContain('exceeds the byte limit');
+    expect(deliveries(host)).toEqual(['d-1']);
+    // Run 4: one event again.
+    await host.run();
+    expect(urls().at(-1)).toMatch(/[?&]limit=1(&|$)/);
+    expect(deliveries(host)).toEqual(['d-1', 'd-2']);
+    // Run 5: d-3 alone fits a full page.
+    await host.run();
+    expect(urls().at(-1)).toMatch(/[?&]limit=4(&|$)/);
+    expect(lastError()).toBeUndefined();
+    expect(deliveries(host)).toEqual(['d-1', 'd-2', 'd-3']);
   });
 
   it(`refuses one event over ${MAX_EVENT_PAYLOAD} bytes of base64, recording why`, async () => {

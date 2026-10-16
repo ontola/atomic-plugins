@@ -68,6 +68,13 @@ export class FakeHost {
   readonly effects: string[] = [];
   /** A property whose query throws, to simulate a failing host read. */
   failQuery: string | undefined;
+  /**
+   * The host's cap on a fetched response, in bytes, or `undefined` for
+   * none. atomic-server's is `FETCH_MAX_RESPONSE_BYTES` (8 MiB,
+   * `plugins/egress.rs`): a larger body makes `ctx.http` throw, with the
+   * message `read_capped` gives (`plugins/host_core.rs`). Off by default.
+   */
+  fetchCap: number | undefined;
   private minted = 0;
 
   constructor(
@@ -115,6 +122,17 @@ export class FakeHost {
           headers: request.headers,
           ...(request.body === undefined ? {} : { body: request.body }),
         });
+
+        const url = new URL(request.url);
+
+        if (
+          this.fetchCap !== undefined &&
+          Buffer.byteLength(response.body) > this.fetchCap
+        ) {
+          throw new Error(
+            `${url.origin} response exceeds the byte limit of ${this.fetchCap} bytes`,
+          );
+        }
 
         return { status: response.status, body: response.body };
       },

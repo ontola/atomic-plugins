@@ -37,6 +37,49 @@ export const ROW_EXTRAS = 'did:ad:plugin-row-extras';
 /** Someone else's issue-v1 table the app can be added to as a view. */
 export const OTHER_TABLE = 'did:ad:table-theirs';
 
+/**
+ * Google's documented 403 bodies for a used-up daily quota and for the Tasks
+ * API turned off in the project (0.1.1, read.ts `googleRefusal`). Shapes from
+ * Google's error reference, not recorded from Google.
+ */
+export const DAILY_LIMIT_403 = {
+  error: {
+    code: 403,
+    message: 'Daily Limit Exceeded',
+    errors: [
+      {
+        message: 'Daily Limit Exceeded',
+        domain: 'usageLimits',
+        reason: 'dailyLimitExceeded',
+      },
+    ],
+  },
+};
+export const API_DISABLED_403 = {
+  error: {
+    code: 403,
+    message:
+      'Google Tasks API has not been used in project 1 before or it is disabled.',
+    status: 'PERMISSION_DENIED',
+    errors: [
+      {
+        message:
+          'Google Tasks API has not been used in project 1 before or it is disabled.',
+        domain: 'usageLimits',
+        reason: 'accessNotConfigured',
+      },
+    ],
+    details: [
+      {
+        '@type': 'type.googleapis.com/google.rpc.ErrorInfo',
+        reason: 'SERVICE_DISABLED',
+        domain: 'googleapis.com',
+        metadata: { service: 'tasks.googleapis.com' },
+      },
+    ],
+  },
+};
+
 /** Google's 403 body for a quota overrun, as its reference shows it. */
 export const RATE_LIMIT_403 = {
   error: {
@@ -70,6 +113,8 @@ export interface FakeStore extends PluginStore {
     retryAfter?: string;
     status?: 429 | 403;
     only?: 'list' | 'lookup';
+    /** Google's error body instead of the rate-limit one (0.1.1 refusals). */
+    body?: JSONValue;
   };
   /** Subjects passed to `openResource`. */
   readonly openedRows: string[];
@@ -170,7 +215,7 @@ export function fakeStore({
         fake.limitNext.count > 0 &&
         (fake.limitNext.only ?? kind) === kind
       ) {
-        const { retryAfter, status = 429 } = fake.limitNext;
+        const { retryAfter, status = 429, body } = fake.limitNext;
         if (--fake.limitNext.count <= 0) delete fake.limitNext;
 
         return {
@@ -178,9 +223,13 @@ export function fakeStore({
           headers:
             retryAfter === undefined ? {} : { 'retry-after': retryAfter },
           body:
-            status === 403
-              ? RATE_LIMIT_403
-              : { error: { code: 429, message: 'Synthetic rate limit (429)' } },
+            body !== undefined
+              ? body
+              : status === 403
+                ? RATE_LIMIT_403
+                : {
+                    error: { code: 429, message: 'Synthetic rate limit (429)' },
+                  },
         };
       }
 

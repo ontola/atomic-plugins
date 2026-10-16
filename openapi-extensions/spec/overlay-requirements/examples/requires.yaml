@@ -8,7 +8,7 @@ info:
     so an archived note would look removed. A later revision, base-v3.yaml,
     is accepted too.
   x-requires:
-    - [base.yaml, base-v3.yaml]
+    - anyOf: [base.yaml, base-v3.yaml]
   x-conflicts:
     - base-v1.yaml
 extends: https://api.example.com/openapi.yaml

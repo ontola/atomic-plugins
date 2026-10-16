@@ -33,17 +33,21 @@ class DocumentTests(unittest.TestCase):
         self.invalid(lambda i: i.update({"x-requires": [[]]}), "rule 1")
         self.invalid(lambda i: i.update({"x-requires": [["base yaml"]]}), "rule 1")
         self.invalid(lambda i: i.update({"x-requires": [[7]]}), "rule 1")
+        self.invalid(lambda i: i.update({"x-requires": [{"anyOf": []}]}), "rule 1")
+        self.invalid(lambda i: i.update({"x-requires": [{"anyOf": [7]}]}), "rule 1")
+        self.invalid(lambda i: i.update({"x-requires": [{"anyOf": ["base yaml"]}]}), "rule 1")
+        self.invalid(lambda i: i.update({"x-requires": [{"anyOf": ["base.yaml"], "typo": True}]}), "rule 1")
         self.invalid(lambda i: i.update({"x-conflicts": []}), "rule 2")
         self.invalid(lambda i: i.update({"x-conflicts": "base-v1.yaml"}), "rule 2")
 
     def test_names(self):
-        self.invalid(lambda i: i.update({"x-requires": [["base.yaml", "./base.yaml"]]}), "named twice")
+        self.invalid(lambda i: i.update({"x-requires": [{"anyOf": ["base.yaml", "./base.yaml"]}]}), "named twice")
         self.invalid(lambda i: i.update({"x-conflicts": ["base-v1.yaml", "base-v1.yaml"]}), "named twice")
         self.invalid(lambda i: i.update({"x-conflicts": ["base.yaml"]}), "both required and in conflict")
-        self.invalid(lambda i: i.update({"x-requires": [["requires.yaml"]]}), "names itself")
+        self.invalid(lambda i: i.update({"x-requires": [{"anyOf": ["requires.yaml"]}]}), "names itself")
         # Without its own URL a self reference cannot be told apart; relative names are compared as written.
         overlay = example("requires.yaml")
-        overlay["info"]["x-requires"] = [["requires.yaml"]]
+        overlay["info"]["x-requires"] = [{"anyOf": ["requires.yaml"]}]
         validate(overlay)
 
     def test_resolution(self):
@@ -84,7 +88,7 @@ class CompositionTests(unittest.TestCase):
     def test_every_overlay_is_checked(self):
         # base requires a third overlay: adding requires last does not hide base's unmet group.
         base = copy.deepcopy(self.base)
-        base["info"]["x-requires"] = [["auth.yaml"]]
+        base["info"]["x-requires"] = [{"anyOf": ["auth.yaml"]}]
         problems = check_composition({BASE + "base.yaml": base, BASE + "requires.yaml": self.requires})
         self.assertEqual(problems, [f"{BASE}base.yaml: requires one of ['{BASE}auth.yaml'], none applied"])
 
