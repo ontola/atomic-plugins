@@ -17,6 +17,7 @@ import {
 import { createController, type Controller } from './controller.js';
 import { APP, fakeStore, PARENT, TABLE } from './fakeStore.js';
 import { fixtureProxy } from './fixtureProxy.js';
+import { NAME } from './ontology.js';
 import { ensureSchema } from './schema.js';
 import type { TimelineConflict } from './timeline/types.js';
 
@@ -459,5 +460,70 @@ describe('refused range edits (§3.1, S23)', () => {
     ).toBe(false);
     expect(c.changes().error).toMatch(/not sent yet/);
     expect(t.writes()).toEqual([]);
+  });
+});
+
+describe('names on range edits (0.8.1)', () => {
+  /** Stages a filled gap, then gives its row `name` and `marker`. */
+  async function stagedGap(name: string, marker: Record<string, unknown>) {
+    const t = await setup([]);
+    const c = await t.open();
+    await c.editRange({
+      from: at(13),
+      to: at(14),
+      target: { kind: 'worked', projectId: P },
+    });
+    const [row] = t.rows();
+    expect(JSON.parse(row[t.schema.sync.create] as string)).toEqual({
+      exactName: true,
+    });
+    row[NAME] = name;
+    row[t.schema.sync.create] = JSON.stringify(marker);
+
+    return t;
+  }
+
+  it.each([
+    ['"Time entry"', 'Time entry'],
+    ['a blank Name', '  '],
+  ])(
+    'a filled gap staged before 0.8.0 with %s is created with no description',
+    async (_, name) => {
+      const t = await stagedGap(name, {});
+      const c = await t.open();
+      expect(c.changes().review).toMatchObject([
+        { kind: 'create', desired: { name: '' } },
+      ]);
+      await c.send();
+      expect(t.writes()).toMatchObject([
+        { method: 'POST', body: { description: '' } },
+      ]);
+    },
+  );
+
+  it('a Name on a create staged from 0.8.1 is sent as it is, even "Time entry"', async () => {
+    const t = await stagedGap('Time entry', { exactName: true });
+    const c = await t.open();
+    await c.send();
+    expect(t.writes()).toMatchObject([
+      { method: 'POST', body: { description: 'Time entry' } },
+    ]);
+  });
+
+  it('a split copies the description exactly, surrounding spaces included', async () => {
+    const t = await setup([
+      clockifyEntry('a', '  Write docs ', at(8), at(10), { projectId: P }),
+    ]);
+    const c = await t.open();
+    await c.editRange({
+      from: at(8) + 30 * MIN,
+      to: at(9),
+      target: { kind: 'didNotWork' },
+    });
+    await c.send();
+    expect(t.writes()).toMatchObject([
+      { method: 'PUT', path: '/a', body: { description: '  Write docs ' } },
+      { method: 'POST', body: { description: '  Write docs ' } },
+    ]);
   });
 });
