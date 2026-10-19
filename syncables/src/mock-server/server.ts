@@ -13,6 +13,7 @@ import {
 import type {
   OpenApiDocument,
   OperationObject,
+  ParameterObject,
   SchemaObject,
 } from '../openapi/types.js';
 import { findRoute } from '../routing/router.js';
@@ -47,6 +48,7 @@ export function createMockServer(document: OpenApiDocument): MockServer {
   const resources = discoverResources(paths);
   const store = new ResourceStore();
   const paginatedLists = new Map<string, Record<string, unknown>[]>();
+  const replays: IdempotentReplays = new Map();
   const server: Server = createServer((req, res) => {
     handleRequest(
       req,
@@ -56,6 +58,7 @@ export function createMockServer(document: OpenApiDocument): MockServer {
       resources,
       store,
       paginatedLists,
+      replays,
     ).catch((error: unknown) => {
       sendJson(res, 500, { error: String(error) });
     });
@@ -80,6 +83,32 @@ export function createMockServer(document: OpenApiDocument): MockServer {
   };
 }
 
+/**
+ * The create answered for each idempotency key, per collection: the body
+ * the key was first sent with, and the record created for it.
+ */
+type IdempotentReplays = Map<
+  string,
+  { body: string; record: Record<string, unknown> }
+>;
+
+/**
+ * The `Idempotency-Key` header parameter (any case) a create operation or
+ * its path item declares, as the client looks for it.
+ */
+function declaredIdempotencyHeader(
+  pathItem: Record<string, unknown> | undefined,
+  operation: OperationObject,
+): string | undefined {
+  const parameters = [
+    ...((pathItem?.['parameters'] as ParameterObject[] | undefined) ?? []),
+    ...(operation.parameters ?? []),
+  ];
+  return parameters.find(
+    (p) => p.in === 'header' && /^idempotency-key$/i.test(p.name),
+  )?.name;
+}
+
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -88,6 +117,7 @@ async function handleRequest(
   resources: ResourceRoute[],
   store: ResourceStore,
   paginatedLists: Map<string, Record<string, unknown>[]>,
+  replays: IdempotentReplays,
 ): Promise<void> {
   // Real absolute base (not a placeholder), needed to build working
   // nextLink URLs for paginated responses.
@@ -152,7 +182,45 @@ async function handleRequest(
   }
 
   if (resource?.collectionPath === match.template) {
-    handleCollectionRequest(req, method, resource, operation, store, body, res);
+    const header =
+      method === 'post'
+        ? declaredIdempotencyHeader(
+            paths[match.template] as Record<string, unknown> | undefined,
+            operation,
+          )
+        : undefined;
+    const value = header ? req.headers[header.toLowerCase()] : undefined;
+    const key = typeof value === 'string' && value !== '' ? value : undefined;
+    if (key !== undefined) {
+      // A create the document declares idempotent, sent again with the
+      // same key: the first answer again, not a second record. The same
+      // key with another body is refused, as the IETF Idempotency-Key
+      // draft and Stripe do.
+      const seen = replays.get(`${match.template}\n${key}`);
+      if (seen) {
+        if (seen.body === JSON.stringify(body ?? null))
+          sendJson(res, 201, seen.record);
+        else
+          sendJson(res, 422, {
+            error: 'Idempotency-Key reused with a different request body',
+          });
+        return;
+      }
+    }
+    const record = handleCollectionRequest(
+      req,
+      method,
+      resource,
+      operation,
+      store,
+      body,
+      res,
+    );
+    if (key !== undefined && record)
+      replays.set(`${match.template}\n${key}`, {
+        body: JSON.stringify(body ?? null),
+        record,
+      });
     return;
   }
 
@@ -212,7 +280,7 @@ function handleCollectionRequest(
   store: ResourceStore,
   body: Record<string, unknown> | undefined,
   res: ServerResponse,
-): void {
+): Record<string, unknown> | undefined {
   if (method === 'get') {
     seedIfEmpty(resource, operation, store);
     const etag = store.etag(resource.collectionPath);
@@ -224,7 +292,7 @@ function handleCollectionRequest(
       return;
     }
     sendJson(res, 200, store.list(resource.collectionPath), headers);
-    return;
+    return undefined;
   }
 
   if (method === 'post') {
@@ -245,10 +313,11 @@ function handleCollectionRequest(
     };
     store.put(resource.collectionPath, record['id'] as string, record);
     sendJson(res, 201, record);
-    return;
+    return record;
   }
 
   sendJson(res, 405, { error: 'Method Not Allowed' });
+  return undefined;
 }
 
 /** A dot-path's value in an item: own properties, names split on `.`. */
