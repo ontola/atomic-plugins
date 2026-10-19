@@ -477,7 +477,8 @@ what covers it:
   new. Unit: a listing answering `[]` after the failure (the row written
   before it was proposed again), and two checks in a row while it does (4
   rows for 2 before this). The cost: a row deleted elsewhere still counts
-  as already imported until the app is loaded again.
+  as already imported until the app is opened again (a new view); the
+  in-app "Try again" reloads the table but keeps the rows this view wrote.
 - Every check of a file waits for any import under way, whether or not its
   sheet was closed, and reads the table first. Unit: the file checked again
   at once after a failure (2 proposed at 0.4.4), after closing during an
@@ -500,6 +501,14 @@ neither covers it. These cases remain:
 - a listing that is short without an error (the host's `[]`, or a skipped
   page) for rows this copy of the app never saw, in particular while the
   app loads: a load during such a failure starts from the short listing.
+
+Also found in this review, older than #539 and not a duplicate: two
+identical transactions without a bank reference in one statement
+("twins", told apart only by position) where the write of the second
+failed could not be completed afterwards; the next check found the first
+twin's row by fingerprint and refused the file as an overlap
+(`OVERLAP_WITHOUT_REFERENCES`). Fixed in 0.4.6 (above) for the app's own
+check; the sandbox importer keeps the old rule.
 
 The app can't choose a row's subject (under a DID drive the server mints it
 from the signed genesis commit), so a second write can't be made to land on
