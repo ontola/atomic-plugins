@@ -704,8 +704,9 @@ field, so an empty page ends the read. `after` ("Entries with ID greater
 than", ascending) would meet rule (b) too, but only with a first request of
 `after=0`, which §4.3.3 step 1 does not send, so it is not declared. "All
 audit log entries are stored for 45 days": a complete read reaches the
-oldest entry still stored. No dated catalog selects v4, and like v3 it waits
-for syncables to check `order`. `tests/test_discord_pagination_v4.py`
+oldest entry still stored. No dated catalog selects v4 (nor v3); syncables
+checks `order` from 0.25.0, so either may be selected with that release or
+later. `tests/test_discord_pagination_v4.py`
 composes it alone and after the catalog's Discord overlays, runs the
 validators, checks that v4 is v3 plus the audit log, and reads synthetic
 pages with `read_item_cursor`, including out-of-order pages that fail. No

@@ -18,8 +18,9 @@
 # entry still stored, not the guild's whole history.
 # Every v3 note stands (see that file), except that the guild audit log is no longer among the
 # undeclared lists.
-# Pagination Schemes 0.10.0 says no overlay should declare order until syncables checks it: this
-# revision stays unpublished until then.
+# Pagination Schemes 0.10.0 says no overlay should declare order until syncables checks it.
+# syncables checks it from 0.25.0 (#630, published 2026-10-19), so a catalog may select this
+# revision with syncables 0.25.0 or later; no dated catalog selects it yet.
 # Needs Pagination Schemes 0.10.0. A 0.9.x consumer that validates rejects order; one that does not
 # ignores it and reads without the check, so do not use this revision with one.
 overlay: 1.0.0
