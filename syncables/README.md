@@ -1202,8 +1202,13 @@ on every retry, and an uncertain create is retried automatically instead. Set
 `idempotencyKeyHeader: 'X-Some-Header'` to use another header for every create
 when the provider documents one elsewhere, or `false` to never send one. Whether
 the provider actually deduplicates on that key is the provider's contract; it is
-not verified here. A 2xx response with an unusable body stays `uncertain`
-even with a key.
+not verified against a real provider. The client's half is tested over HTTP
+against the mock server, which answers a create sent again with the same key
+with the record it made the first time (and `422` for the same key with
+another body): a create whose response was lost is retried with its key and
+leaves one record, where without a declared key it stays `uncertain` and is
+not resent. A 2xx response with an unusable body stays `uncertain` even with
+a key.
 
 #### Declared create results (CRUD Causality §4.3.2, §4.4–4.5)
 
@@ -1229,7 +1234,12 @@ When the create operation declares an `x-crud` `create` for the resource
   is not an error; the record is then the sent body plus the identity, until
   the next refresh.
 - When the identity cannot be determined (no or another `Location`, an
-  empty body where the body must name it), the record exists at the
+  empty body where the body must name it, or a value that cannot be an
+  identity: a dot segment such as `/pets/..` or `%2E%2E`, an empty or
+  whitespace-padded string, one with NUL or a lone surrogate, an object, a
+  boolean, a fraction or an integer past 2^53, or a URL value that does not
+  percent-decode; `resolveReference` refuses the same strings), the record
+  exists at the
   provider but is **unbound**: the create becomes `uncertain` with
   `unbound: true` in `pendingWrites()` (stored in the outbox), and once
   that outcome is stored it is never sent again, also with an idempotency
@@ -1730,6 +1740,16 @@ const client = createApiClient(document, {
 });
 ```
 
+`apiKeyAuth(name, in)` takes an OpenAPI `apiKey` security scheme's `name`
+and `in`: `header` (the default), `query` or `cookie`, which adds
+`name=<key>` to the request's `cookie` header, replacing a cookie of that
+name and keeping the others. A cookie name must be an RFC 6265 token, and a
+key sent as a cookie must be RFC 6265 cookie-octets (no control character,
+whitespace, `"`, `,`, `;` or `\`), so a key such as `k;admin=1` cannot add a
+cookie of its own; either is refused. `bearerAuth` and a header key replace
+a header of the same name in any case, so a request never carries both
+`Authorization` and `authorization`.
+
 The Node constructor falls back to `SYNCABLES_API_KEY`,
 `SYNCABLES_OAUTH_CLIENT_ID`, `SYNCABLES_OAUTH_CLIENT_SECRET` and
 `SYNCABLES_ACCESS_TOKEN`. Explicit fields win over environment values.
@@ -1963,9 +1983,9 @@ const { records, ontology, errors } = await readPlatform(document, {
   page or at a `hasMore` body field of `false`, complete unless a response
   was marked (§4.4.6; the mark is kept across pages); a short page does not
   end it. It ends with a `PageReadError`, not complete, when the last item
-  has no such value (or a boolean, `null`, a fraction, an array or an
-  object, or an integer beyond `Number.MAX_SAFE_INTEGER`, which was
-  rounded when parsed), when the value equals the one sent for that
+  has no such value (or an empty string, a boolean, `null`, a fraction,
+  an array or an object, or an integer beyond `Number.MAX_SAFE_INTEGER`,
+  which was rounded when parsed), when the value equals the one sent for that
   page, when a page holds an item an earlier page returned (by identity,
   else the whole item), when an empty page says `hasMore: true`, and when
   `hasMore` is present but not a boolean, `null` included (Pagination

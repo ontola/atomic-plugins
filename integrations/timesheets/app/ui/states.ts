@@ -13,6 +13,7 @@ import { formatDay, type DayKey } from '../model/time.js';
 import type { Problem } from '../problem.js';
 import { banner, button, emptyState, extLink, panel } from './components.js';
 import { icon, type H } from './dom.js';
+import { NEXT_STEP } from './status.js';
 import { CLOCKIFY_TRACKER } from './detail.js';
 
 export function firstRun(h: H, onConnect: () => void) {
@@ -340,8 +341,19 @@ export function problemBanner(
         icon: 'err',
         role: 'alert',
         lead: 'The integration proxy does not let you use it.',
-        text: "Reconnecting won't help; ask whoever runs the integration proxy for access.",
+        // The card's next step, word for word.
+        text: NEXT_STEP['proxy-access'],
         action: retry(),
+        details,
+      });
+    case 'agent-retired':
+      // No action: neither a retry nor a reconnect gets past a retired id.
+      return banner(h, {
+        tone: 'neg',
+        icon: 'err',
+        role: 'alert',
+        lead: "This Atomic agent's key was replaced.",
+        text: NEXT_STEP['agent-retired'],
         details,
       });
     case 'rate-limited':

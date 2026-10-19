@@ -78,6 +78,8 @@ export const FRAMES = {
   e: { width: 360, title: 'E Narrow week strip' },
   e2: { width: 360, title: 'E Detail as a sheet' },
   f: { width: 560, title: 'F Not connected' },
+  f2: { width: 560, title: 'F Connect refused: key replaced' },
+  f3: { width: 560, title: 'F Connect refused: proxy access' },
   g1: { width: 560, title: 'G1 Waiting on the consent bar' },
   g2: { width: 560, title: 'G2 Workspace and window' },
   h: { width: 760, title: 'H First import' },
@@ -89,6 +91,7 @@ export const FRAMES = {
   j5: { width: 560, title: 'J Warnings' },
   j6: { width: 560, title: 'J Too many' },
   j7: { width: 560, title: 'J Proxy access refused' },
+  j8: { width: 560, title: 'J Agent key replaced' },
   k: { width: 560, title: 'K No relay' },
   l: { width: 560, title: 'L Week outside the window' },
   m: { width: 560, title: 'M Settings' },
@@ -312,6 +315,28 @@ export function renderFrame(root: HTMLElement, id: FrameId): Shell {
     e: [ready(ok(4)), sheet],
     e2: [ready(ok(4)), sheet],
     f: [{ kind: 'not-connected' }, undefined],
+    f2: [
+      {
+        kind: 'not-connected',
+        problem: {
+          kind: 'agent-retired',
+          detail:
+            'The integration proxy refused POST /connections/c-1/agents: this agent id was transferred to another one and can no longer own connections',
+        },
+      },
+      undefined,
+    ],
+    f3: [
+      {
+        kind: 'not-connected',
+        problem: {
+          kind: 'proxy-access',
+          detail:
+            'The integration proxy refused POST /connections/c-1/agents: this agent may not use the proxy: not on the list',
+        },
+      },
+      undefined,
+    ],
     g1: [{ kind: 'connecting' }, undefined],
     g2: [
       { kind: 'setup', connection: CONNECTION, draft: {}, options: OPTIONS },
@@ -359,6 +384,13 @@ export function renderFrame(root: HTMLElement, id: FrameId): Shell {
       problem(
         'proxy-access',
         'The integration proxy refused the request (access_denied: this agent may not use the proxy).',
+      ),
+      sheet,
+    ],
+    j8: [
+      problem(
+        'agent-retired',
+        'The integration proxy refused the request (agent_retired: this agent id was transferred to another one and can no longer own connections).',
       ),
       sheet,
     ],
