@@ -206,6 +206,50 @@ describe('createdIdentity (the reference created_identity)', () => {
   });
 });
 
+describe('createdIdentity refuses a value that cannot be an identity', () => {
+  const declaration = (url?: Record<string, unknown>): CreateDeclaration =>
+    createDeclaration(document(), {
+      action: 'create',
+      resource: 'pet',
+      ...(url ? { url } : {}),
+    })!;
+  const header = (): CreateDeclaration =>
+    declaration({ source: 'header', name: 'Location' });
+
+  it.each([
+    '/pets/.',
+    '/pets/..',
+    '/pets/%2E%2E',
+    '/pets/%2e',
+    '/pets/%E0%A4%A',
+  ])('leaves the Location %s undetermined', (location) => {
+    expect(createdIdentity(header(), undefined, { location })).toBeUndefined();
+  });
+
+  it.each([
+    { id: { nested: 1 } },
+    { id: ['a'] },
+    { id: true },
+    { id: 1.5 },
+    { id: 2 ** 53 },
+    { id: '' },
+    { id: '..' },
+  ])('leaves the body %j undetermined', (body) => {
+    for (const url of [{ source: 'template' }, undefined])
+      expect(createdIdentity(declaration(url), body, {})).toBeUndefined();
+  });
+
+  it('keeps a usable string or safe integer', () => {
+    expect(createdIdentity(declaration(), { id: 'p-1' }, {})).toEqual({
+      id: 'p-1',
+    });
+    expect(createdIdentity(declaration(), { id: 0 }, {})).toEqual({ id: 0 });
+    expect(
+      createdIdentity(header(), undefined, { location: '/pets/...' }),
+    ).toEqual({ id: '...' });
+  });
+});
+
 describe('generated addedFields are not sent', () => {
   it('leaves generated fields, the client-made id included, out of the create body', async () => {
     const { client, posts, local } = await created(GENERATED, (body) =>
@@ -301,6 +345,17 @@ describe('an unbound create is never sent again', () => {
       'an empty body where the template needs the id',
       { url: { source: 'template' } },
       (): TransportResponse => json(undefined),
+    ],
+    [
+      'an object where the template needs the id',
+      { url: { source: 'template' } },
+      (body: Record<string, unknown>): TransportResponse =>
+        json({ ...body, id: { value: 9 } }),
+    ],
+    [
+      'a Location naming a dot segment',
+      { url: { source: 'header', name: 'Location' } },
+      (): TransportResponse => json(undefined, { location: '/pets/..' }),
     ],
     [
       'a body field without a URL',

@@ -77,6 +77,18 @@ export function createBody(
   return body;
 }
 
+/**
+ * Whether `value` can be a record's identity: a nonempty string other
+ * than a dot segment, or a safe integer. `.` and `..` would move the
+ * record's path (`/pets/..` normalises to `/`), and an object, a boolean
+ * or a fraction would become a record id such as `[object Object]`.
+ */
+function identityValue(value: unknown): boolean {
+  if (typeof value === 'string')
+    return value !== '' && value !== '.' && value !== '..';
+  return typeof value === 'number' && Number.isSafeInteger(value);
+}
+
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -89,6 +101,9 @@ function escape(text: string): string {
  * template, anywhere in it and ending at its end, `?` or `#`; the values
  * read back are decoded strings. Otherwise each bound field is read from the
  * response body, and one that is absent or null leaves it undetermined.
+ * So does a value that cannot be an identity (`identityValue`): a dot
+ * segment, an empty string, an object, a boolean or a fraction, and a
+ * URL value that does not percent-decode.
  */
 export function createdIdentity(
   declaration: CreateDeclaration,
@@ -118,18 +133,21 @@ export function createdIdentity(
       const at = variables.indexOf(variable);
       const raw = at < 0 ? undefined : match[at + 1];
       if (raw === undefined) return undefined;
+      let value: string;
       try {
-        values[field] = decodeURIComponent(raw);
+        value = decodeURIComponent(raw);
       } catch {
         return undefined;
       }
+      if (!identityValue(value)) return undefined;
+      values[field] = value;
     }
     return values;
   }
   const values: Record<string, unknown> = {};
   for (const field of Object.values(declaration.bindings)) {
     const value = readNestedField(body, field);
-    if (value === undefined || value === null) return undefined;
+    if (!identityValue(value)) return undefined;
     values[field] = value;
   }
   return values;
