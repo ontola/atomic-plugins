@@ -1730,6 +1730,13 @@ const client = createApiClient(document, {
 });
 ```
 
+`apiKeyAuth(name, in)` takes an OpenAPI `apiKey` security scheme's `name`
+and `in`: `header` (the default), `query` or `cookie`, which adds
+`name=<key>` to the request's `cookie` header, replacing a cookie of that
+name and keeping the others. `bearerAuth` and a header key replace a
+header of the same name in any case, so a request never carries both
+`Authorization` and `authorization`.
+
 The Node constructor falls back to `SYNCABLES_API_KEY`,
 `SYNCABLES_OAUTH_CLIENT_ID`, `SYNCABLES_OAUTH_CLIENT_SECRET` and
 `SYNCABLES_ACCESS_TOKEN`. Explicit fields win over environment values.
