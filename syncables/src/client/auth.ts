@@ -80,6 +80,12 @@ export function apiKeyAuth(
     throw new Error(
       `Cookie name ${JSON.stringify(name)} is not an RFC 6265 cookie name`,
     );
+  // A header name is an RFC 7230 token too; `X-Key: x\r\nEvil` or
+  // `X Key` would not be one header.
+  if (placement === 'header' && !TOKEN.test(name))
+    throw new Error(
+      `Header name ${JSON.stringify(name)} is not an RFC 7230 header name`,
+    );
   return (request, credentials) => {
     if (!credentials.apiKey) {
       throw new Error('Missing apiKey credential');

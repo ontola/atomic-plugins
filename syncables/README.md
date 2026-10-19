@@ -28,7 +28,7 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.1 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Auto-detection by query parameters, body fields, and (§6.3, when the scheme turns them on) response headers and response fields as the operation's description declares them. Not `incrementalSync`. |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.2 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Auto-detection by query parameters, body fields, and (§6.3, when the scheme turns them on) response headers and response fields as the operation's description declares them. Not `incrementalSync`. |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.7.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), Reference Objects resolved to a path (`resolveReference`, §4.1.3), and 0.7.0's `replace` and `unkeyedLists` through exported helpers (§4.8, §4.9; `createApiClient` does not use them yet). Not its request, patch or mint semantics, nor 0.8.0's `committedErrors`. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.1-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.4.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
@@ -1746,13 +1746,19 @@ and `in`: `header` (the default), `query` or `cookie`, which adds
 name and keeping the others. A cookie name must be an RFC 6265 token, and a
 key sent as a cookie must be RFC 6265 cookie-octets (no control character,
 whitespace, `"`, `,`, `;` or `\`), so a key such as `k;admin=1` cannot add a
-cookie of its own; either is refused. `bearerAuth` and a header key replace
-a header of the same name in any case, so a request never carries both
-`Authorization` and `authorization`.
+cookie of its own; either is refused. A header name must be an RFC 7230
+token too. `bearerAuth` and a header key replace a header of the same name
+in any case, so a request never carries both `Authorization` and
+`authorization`.
 
-The Node constructor falls back to `SYNCABLES_API_KEY`,
-`SYNCABLES_OAUTH_CLIENT_ID`, `SYNCABLES_OAUTH_CLIENT_SECRET` and
-`SYNCABLES_ACCESS_TOKEN`. Explicit fields win over environment values.
+With an `authenticate` adapter, the Node constructor falls back to
+`SYNCABLES_API_KEY`, `SYNCABLES_OAUTH_CLIENT_ID`,
+`SYNCABLES_OAUTH_CLIENT_SECRET` and `SYNCABLES_ACCESS_TOKEN`. Explicit
+fields win over environment values. Without an adapter it reads none of
+them and says nothing, so such a variable set for another tool does not
+stop a client whose transport authenticates itself. Explicit credentials
+without an adapter are still refused ("Credentials require an
+authenticate adapter").
 `credentialPrefix: 'SECOND_'` selects a different prefix;
 `credentialPrefix: false` disables fallback. `credentialsFromEnv(explicit,
 prefix)` is also exported by the Node entry. The browser entry never reads
@@ -1763,8 +1769,8 @@ environment variables.
 `clientId` and `clientSecret` and returns an authenticated request, possibly
 after obtaining/refreshing a user token. OAuth consent, grant selection and
 token persistence are the adapter's responsibility; loading application
-credentials alone does not log a user in. Credentials without an authentication
-adapter are rejected. Keep confidential client credentials in server-side
+credentials alone does not log a user in. Explicit credentials without an
+authentication adapter are rejected. Keep confidential client credentials in server-side
 configuration. Authentication happens after the data-read capture boundary.
 
 Every request syncables makes says why, in `TransportRequest.purpose`
