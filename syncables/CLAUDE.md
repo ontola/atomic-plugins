@@ -94,7 +94,9 @@ Data flows through four stages, each its own directory under `src/`:
    lone-surrogate value, an unsafe integer, and a target template that
    is not a `/` path or holds a backslash, control character, space or
    DEL); nothing is fetched
-   (`unit/read/references.test.ts`, the spec's §7.6 example).
+   (`unit/read/references.test.ts`, the spec's §7.6 example). The value
+   rules are `segmentProblem` in `read/segment.ts`, which
+   `client/created-identity.ts` applies to a created record's identity too.
    `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
