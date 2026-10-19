@@ -974,7 +974,10 @@ info:
     - anyOf: [crud-causality-v2-<pin>-overlay.yaml]
 ```
 
-`x-requires` is specified by [Overlay Requirements](../openapi-extensions/spec/overlay-requirements/README.md).
+`x-requires` is specified by [Overlay Requirements](../openapi-extensions/spec/overlay-requirements/README.md),
+as is `x-conflicts` (filenames the overlay must not be selected with). The
+test reads both through that specification's `validate.py`, so a malformed
+declaration fails, and refuses a catalog that selects a stated conflict.
 This repository additionally checks revision filenames (`<kind>[-vN]-<pin>-overlay.yaml`)
 against its dated catalogs and rejects another revision of a required kind.
 Published completeness
