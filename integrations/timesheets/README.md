@@ -122,14 +122,19 @@ read, minute snapping and the range planner are unchanged.
     banner in place of the Connect card (frames F2 and F3; Try again
     connects again, a replaced key has no button); after a Reconnect, over
     the data. In the app this is the delegation of an existing connection
-    (picking one in the host's connect bar), which the host relays to the
-    frame as a message only ("The integration proxy refused POST
+    (picking one in the host's connect bar, `POST /connections/<id>/agents`)
+    or the listing of connections (`GET /connections`), which the host
+    relays to the frame as a message only ("The integration proxy refused POST
     /connections/<id>/agents: …", `AppFrame.tsx` posts `e.message`),
     without the code, so `problem.ts` matches the proxy's own wording for
     these two. A refusal at `/connect/redeem`, after connecting a new
     account, never reaches the app: the host's return page shows it
     (`ProxyConnectReturn.tsx`, at the 7dab1ce49a91 pin). Any other connect
     failure still shows "This app cannot run." with the raw message.
+    `app/proxyMessages.test.ts` fails when `integration-proxy/src/api_error.rs`
+    stops containing either phrase; it runs with this lane, not on a proxy
+    change alone (lanes cannot list `integration-proxy/` in `paths`). Passing
+    the code to the frame is ontola/atomic-server#2321.
   - After a key change (a transfer, #410), capabilities the old key signed
     no longer verify. A sync in a page that was open across the change can
     then fail with `invalid_capability` ("the capability is malformed or
