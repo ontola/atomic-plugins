@@ -151,6 +151,9 @@ Data flows through four stages, each its own directory under `src/`:
    query field with `fromLastItem`) is served as the page after the item
    whose value the request names, with `hasMore`; each generated item gets
    a unique value at that path (`unit/mock-server/item-cursor.test.ts`).
+   A page size, offset, page number or page token (this server's tokens
+   are offsets) that is not a whole number in range answers `400`
+   (`unit/mock-server/page-params.test.ts`).
    Resource collections are lazily seeded with
    `SEED_COUNT` fake records (via `fake-data/generate.ts`) on first `GET`.
    A POST to a collection whose create (or path item) declares an
