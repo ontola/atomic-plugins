@@ -89,6 +89,7 @@ export const FRAMES = {
   j5: { width: 560, title: 'J Warnings' },
   j6: { width: 560, title: 'J Too many' },
   j7: { width: 560, title: 'J Proxy access refused' },
+  j8: { width: 560, title: 'J Agent key replaced' },
   k: { width: 560, title: 'K No relay' },
   l: { width: 560, title: 'L Week outside the window' },
   m: { width: 560, title: 'M Settings' },
@@ -359,6 +360,13 @@ export function renderFrame(root: HTMLElement, id: FrameId): Shell {
       problem(
         'proxy-access',
         'The integration proxy refused the request (access_denied: this agent may not use the proxy).',
+      ),
+      sheet,
+    ],
+    j8: [
+      problem(
+        'agent-retired',
+        'The integration proxy refused the request (agent_retired: this agent id was transferred to another one and can no longer own connections).',
       ),
       sheet,
     ],
