@@ -5,6 +5,13 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
 ## Unreleased
 
+- Overlay Requirements 0.1.0-draft at catalog load: a platform whose
+  selected overlays include one with `info.x-requires` that no selected
+  overlay meets, or `info.x-conflicts` naming a selected overlay, fails to
+  load, as an `extends` mismatch does; references resolve against the
+  overlay's own URL. A malformed declaration is an error too. No dated
+  catalog under `overlays/catalog/` is affected today: none selects an
+  overlay that states either field.
 - Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
   paced at the tier whose `plans` name the plan the catalog selection's
   `throttlingPlans` gives for it, else within every tier at once (each its
