@@ -149,7 +149,7 @@ read, minute snapping and the range planner are unchanged.
 
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 194 KB for 0.8.3, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 194 KB for 0.8.4, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected

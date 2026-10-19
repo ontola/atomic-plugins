@@ -17,8 +17,11 @@ describe('drive-plugin bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 194,211 bytes minified on 2026-10-19 (0.8.3: a replaced
-    // agent key as its own problem kind, banner and next step, +251).
+    // Measured 194,951 bytes minified on 2026-10-19 (0.8.4: connect
+    // failures through classify, with the proxy's wording and the
+    // not-connected problem banner, +740). 194,211 bytes on 2026-10-19
+    // (0.8.3: a replaced agent key as its own problem kind, banner and next
+    // step, +251).
     // 193,960 bytes on 2026-10-15 (0.8.2: the proxy's access refusals as
     // their own problem kind, banner and next step, +362). 193,598 bytes on 2026-10-13 (0.8.1, at the
     // 7dab1ce49a91 pin: the review nits on 0.8.0; JS by esbuild, the
@@ -38,7 +41,7 @@ describe('drive-plugin bundle', async () => {
     // inlined, project and person links, the first-open move and the
     // read-only view of another table), and 161 KB before #177 item 14's
     // "Sync this table to Clockify" (binding, row grant, kept rows).
-    expect(bytes).toBeLessThan(213_700);
+    expect(bytes).toBeLessThan(214_500);
   });
 
   it('carries no credential handling of its own', () => {
