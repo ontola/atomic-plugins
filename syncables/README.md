@@ -29,7 +29,7 @@ The extension versions this source reads, against the specifications in
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.1 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Auto-detection by query parameters, body fields, and (§6.3, when the scheme turns them on) response headers and response fields as the operation's description declares them. Not `incrementalSync`. |
-| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.7.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), Reference Objects resolved to a path (`resolveReference`, §4.1.3), and 0.7.0's `replace` and `unkeyedLists` through exported helpers (§4.8, §4.9; `createApiClient` does not use them yet). Not its request, patch or mint semantics, nor 0.8.0's `committedErrors`. |
+| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.8.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), Reference Objects resolved to a path (`resolveReference`, §4.1.3), 0.7.0's `replace` and `unkeyedLists` through exported helpers (§4.8, §4.9; `createApiClient` does not use them yet), and 0.8.0's `committedErrors` (§4.3.3). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.1-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.4.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
@@ -1248,6 +1248,27 @@ When the create operation declares an `x-crud` `create` for the resource
   restart treats as before: `uncertain`, or resent under its idempotency
   key. Settle it with `confirm` (the server's id, found by a
   refresh) or `discard`, or let the next read bind it (below).
+- `committedErrors` (CRUD Causality 0.8.0 §4.3.3) declares `5xx` answers
+  the provider documents as sent only after the create was applied, with
+  where the new object's id is in the error body (Notion's `503` with
+  `additional_data.committed_resource_id`). A matching answer (a listed
+  status, a JSON body, and a usable value at every `identity` path: a
+  nonempty string without surrounding whitespace, `/`, `?`, `#` or a
+  control character, not `.` or `..`, or a non-negative integer) makes the
+  create applied: it is bound to that id, the record being what was sent,
+  and never sent again. Before, a `503` took the ordinary retry path and
+  the create was sent twice. A listed status that does not match (no
+  usable id) is an unknown outcome, since the provider says that status
+  can follow an applied create: `uncertain` without an idempotency key,
+  resent under one. Identity paths step through objects only, never into
+  an array (`errors.length` names nothing), and a JSON `5.0` is read as
+  `5`. When the id field's template variable is not among the values (a
+  template with another variable the error does not name), the create is
+  applied but unbound, as above: the named fields are kept on the local
+  record, it is never sent again, and `matchUnboundCreates` can bind it
+  from a later read. Only a create's answer counts. Entries the spec's
+  rules refuse are ignored, and so is `committedErrors` beside
+  `followUps` (rule 32).
 - `matchUnboundCreates: { uniqueFields: { pets: ['ref'] } }` (off by
   default) binds an unbound create from the first complete read of its
   collection that starts after the create was answered, as `confirm` with
