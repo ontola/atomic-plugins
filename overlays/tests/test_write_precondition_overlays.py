@@ -70,6 +70,11 @@ class WritePreconditionOverlayTests(unittest.TestCase):
             self.assertEqual(wp.may_send(declaration, {"summary": "Old"}, ["summary"], event),
                              ("send", {"If-Match": '"3181161784712000"'}))
         self.assertNotIn("x-write-precondition", composed["paths"][EVENT]["get"])
+        # The If-Match conflict answer is 412 on each write (the declaration's own
+        # description says so); without conflictStatus a 412 would not read as a conflict.
+        for method in ("patch", "put", "delete"):
+            with self.subTest(method=method):
+                self.assertEqual(composed["paths"][EVENT][method]["x-write-precondition"]["conflictStatus"], [412])
         # K18 part 2: a recurring series' master event is not written; an
         # exception of a series (recurringEventId, no recurrence) is.
         event_schema = original["components"]["schemas"]["Event"]["properties"]
