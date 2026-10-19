@@ -1,6 +1,6 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.10.1
+**Spec version:** 0.10.2
 
 ---
 
@@ -230,12 +230,23 @@ with it:
    decimal form;
 4. ends the read with an error, not complete, when the last item has no such
    value, or one that is neither a string nor an integer (a number with a
-   fraction, a boolean, `null`, an array or an object), when the value equals
+   fraction, a boolean, `null`, an array or an object), or the empty string
+   (since 0.10.2; see below), when the value equals
    the one it sent for this page, when a page holds an item (by its CRUD
    Causality identity, else the whole item) that an earlier page of the read
    returned, when a page with no items says `hasMore: true`, or when a
    response has a `hasMore` value that is not a boolean (`"false"`, `0`,
    `null`): a value the client cannot read is not taken as "ask again".
+
+An empty value is never sent. The first request leaves the field out; it
+does not send it empty. A last item whose value is `""` gives no position to
+continue from, so the read ends with an error rather than sending the field
+empty (`starting_after=`) or treating the page as the last one.
+_Informative:_ what a provider does with an empty cursor parameter is its
+own and is not described by this extension; it may answer the first page,
+an error or an empty page. The repository's mock server answers an empty
+page, which a client that sent `starting_after=` could mistake for the end
+of the list.
 
 A `hasMore` of `true` on a page with items, or no `hasMore`, decides nothing:
 the client asks again, and an empty page ends the list. Without `hasMore` a
@@ -1127,6 +1138,7 @@ cd openapi-extensions/spec/pagination-schemes
 
 ## Changes
 
+- **0.10.2** (2026-10-19): §4.3.3 says that a last item whose `fromLastItem` value is the empty string ends the read with an error (the client never sends the field empty), and, informatively, that a provider's answer to an empty cursor parameter is not described. `read_item_cursor` now raises for `""`, which 0.10.1's reader sent as the next cursor; tests. No document changes meaning.
 - **0.10.1** (2026-10-15): rule 28 and §4.3.3 step 1 say that a scheme with `fromLastItem` may also declare other `pageToken`, `cursor` or `previousPageToken` fields (Stripe's `ending_before`), and that a client reading with `fromLastItem` sends none of them, as `read_item_cursor` and syncables already do. A test. No document changes meaning.
 - **0.10.0** (2026-10-15): adds `order` beside `fromLastItem` (§4.3.3): the declared order of the cursor values, which the client checks across the read and which ends it with an error when broken (non-negative integers and digit strings compare exactly as numbers, other strings by code point). Extends the evidence rule (b) to an upper bound ("before") over items in documented descending order of the unique field, as Discord's List Joined Private Archived Threads documents. An order of another property (Discord's messages, newest to oldest) does not qualify: the check sees only the items returned, and an item out of id order at a page boundary would be dropped unseen. Validation rule 30, `read_item_cursor` checks `order`, an example (`examples/item-order.yaml`) and tests. A 0.9.1 document stays valid and means the same. A 0.9.1 validator rejects `order`; a consumer that does not validate ignores it and does not check the order, so a document that relies on `order` should not be used with a 0.9.x consumer, and no overlay should declare it until syncables checks it.
 - **0.9.1** (2026-10-15): a `hasMore` field that is present but not a boolean (`"false"`, `0`, `null`) ends an item-cursor read with an error (§4.3.3 step 4); 0.9.0 read it as absent, so `"false"` asked for another page and an empty page then ended the read as complete. `read_item_cursor` and a test. No document changes meaning.

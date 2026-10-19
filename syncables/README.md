@@ -1234,7 +1234,12 @@ When the create operation declares an `x-crud` `create` for the resource
   is not an error; the record is then the sent body plus the identity, until
   the next refresh.
 - When the identity cannot be determined (no or another `Location`, an
-  empty body where the body must name it), the record exists at the
+  empty body where the body must name it, or a value that cannot be an
+  identity: a dot segment such as `/pets/..` or `%2E%2E`, an empty or
+  whitespace-padded string, one with NUL or a lone surrogate, an object, a
+  boolean, a fraction or an integer past 2^53, or a URL value that does not
+  percent-decode; `resolveReference` refuses the same strings), the record
+  exists at the
   provider but is **unbound**: the create becomes `uncertain` with
   `unbound: true` in `pendingWrites()` (stored in the outbox), and once
   that outcome is stored it is never sent again, also with an idempotency
@@ -1978,9 +1983,9 @@ const { records, ontology, errors } = await readPlatform(document, {
   page or at a `hasMore` body field of `false`, complete unless a response
   was marked (§4.4.6; the mark is kept across pages); a short page does not
   end it. It ends with a `PageReadError`, not complete, when the last item
-  has no such value (or a boolean, `null`, a fraction, an array or an
-  object, or an integer beyond `Number.MAX_SAFE_INTEGER`, which was
-  rounded when parsed), when the value equals the one sent for that
+  has no such value (or an empty string, a boolean, `null`, a fraction,
+  an array or an object, or an integer beyond `Number.MAX_SAFE_INTEGER`,
+  which was rounded when parsed), when the value equals the one sent for that
   page, when a page holds an item an earlier page returned (by identity,
   else the whole item), when an empty page says `hasMore: true`, and when
   `hasMore` is present but not a boolean, `null` included (Pagination

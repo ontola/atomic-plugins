@@ -215,6 +215,32 @@ describe('frames', () => {
     expect(text(root.querySelector('#day-panel h3'))).toBe('Monday 21 Sep');
   });
 
+  it('F2: a connect refused for a replaced key shows that copy, with no Connect button (0.8.4)', () => {
+    const { root } = frame('f2');
+    expect(text(root.querySelector('.pill'))).toBe('Connect failed');
+    const alert = root.querySelector('[role="alert"]')!;
+    expect(text(alert.querySelector('strong'))).toBe(
+      "This Atomic agent's key was replaced.",
+    );
+    expect(alert.textContent).toContain(NEXT_STEP['agent-retired']);
+    expect(alert.querySelectorAll('button')).toHaveLength(0);
+    expect(buttons(root, 'Connect Clockify')).toHaveLength(0);
+  });
+
+  it('F3: a connect refused by the proxy access check offers Try again, which connects again (0.8.4)', () => {
+    const { root } = frame('f3');
+    const alert = root.querySelector('[role="alert"]')!;
+    expect(text(alert.querySelector('strong'))).toBe(
+      'The integration proxy does not let you use it.',
+    );
+    expect(alert.textContent).toContain(NEXT_STEP['proxy-access']);
+    expect(buttons(root, 'Connect Clockify')).toHaveLength(0);
+    buttons(alert, 'Try again')[0].click();
+    expect(text(root.querySelector('.panel h2'))).toBe(
+      'Finish connecting in the bar above this app',
+    );
+  });
+
   it('F and G: connect, wait, then choose a workspace and window', () => {
     const f = frame('f');
     expect(text(f.root.querySelector('.pill'))).toBe('Not connected');
