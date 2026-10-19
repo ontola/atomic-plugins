@@ -89,6 +89,19 @@ export class Pacer {
       }
   }
 
+  /**
+   * Gives back a request counted against `buckets` at `at` (`take`): one
+   * a cache answered (`TransportResponse.fromCache`) asked nothing of the
+   * provider. A bucket with no request counted at `at` is left as it is.
+   */
+  release(buckets: readonly string[], at: number): void {
+    for (const bucket of new Set(buckets)) {
+      const times = this.sent.get(bucket);
+      const index = times?.lastIndexOf(at) ?? -1;
+      if (times && index !== -1) times.splice(index, 1);
+    }
+  }
+
   private quotaDelay(all: number[], quota: Quota, now: number): number {
     const width = quota.seconds * 1000;
     // Older requests no longer count in any window that includes now.

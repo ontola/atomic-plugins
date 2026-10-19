@@ -29,7 +29,9 @@ import {
   canAnnotate,
   classFields,
   readMany,
+  readRow,
   readRows,
+  readRowsReport,
   readStatement,
   resolver,
   type StoredStatement,
@@ -73,6 +75,17 @@ export type ImportSheet =
       progress?: WriteProgress;
       /** Why applying failed, when it did. */
       failure?: string;
+      /**
+       * After a failure: the table is read again and the file compared with
+       * it, so Import offers only what was not written (#539). Import is
+       * disabled meanwhile.
+       */
+      rechecking?: boolean;
+      /**
+       * The table could not be read after a failure, so what was written is
+       * unknown: Import stays disabled; close and check the file again.
+       */
+      unchecked?: boolean;
     }
   | { step: 'error' | 'blocked'; file: FileInfo; problem: Problem };
 
@@ -279,6 +292,17 @@ export function createController(
   let run = 0;
   let pendingText: string | undefined;
   let pendingPreview: Preview | undefined;
+  /**
+   * After a failed import: the table read again, then the kept file compared
+   * with it (#539). A check started meanwhile waits for it, so it never
+   * compares with rows from before the failure.
+   */
+  let recheck: Promise<void> | undefined;
+  /**
+   * The import under way, if any, until its writes are done: a check of a
+   * file waits for it, whether or not its sheet was closed (#572).
+   */
+  let importing: Promise<unknown> | undefined;
   let table: string | undefined;
   /** The table's row class: only children of it are rows. */
   let rowClass: string | undefined;
@@ -290,6 +314,21 @@ export function createController(
    * `Infinity` while an import runs, then 15 s after it applied, else 0.
    */
   let importedUntil = 0;
+  /**
+   * Every complete row read since `load()`, by subject, and every row this
+   * app wrote itself (its `newResource` resolved), for the controller's
+   * lifetime. A check compares a file with all of them as well as with the
+   * table as listed now (#572): the host's `query` can answer `[]`, or skip
+   * a page of 500 that failed, with no error, and a refresh is suppressed
+   * while an import writes. So a row once seen or written stays known;
+   * one deleted elsewhere reads as already imported until the next load.
+   */
+  const seen = new Map<string, Txn>();
+  const written = new Map<string, Txn>();
+
+  const remember = (rows: Txn[]) => {
+    for (const row of rows) seen.set(row.subject, row);
+  };
 
   const update = (patch: Partial<State>) => {
     state = { ...state, ...patch };
@@ -324,7 +363,12 @@ export function createController(
     const known = new Set(state.rows.map(row => row.subject));
     const wereIncomplete = new Set(state.incomplete.map(row => row.subject));
     const fresh = subjects.filter(s => !known.has(s));
-    const freshRows = await readRows(store, fresh, state.fields, rowClass);
+    const { items: freshRows, unread } = await readRowsReport(
+      store,
+      fresh,
+      state.fields,
+      rowClass,
+    );
     const added = split(freshRows);
     const present = new Set(subjects);
     const wasEmpty = state.rows.length === 0;
@@ -333,6 +377,7 @@ export function createController(
       ...added.rows,
     ];
     const incomplete = added.incomplete;
+    remember(added.rows);
     const arrived = freshRows.filter(
       row => !wereIncomplete.has(row.subject),
     ).length;
@@ -354,6 +399,10 @@ export function createController(
         ? { filters: noFilters(defaultPeriod(rows, today())) }
         : {}),
     });
+
+    // Whether every row the table lists could be read: a check of a file
+    // trusts only such a read (#572).
+    return unread === 0;
   };
 
   /**
@@ -361,6 +410,50 @@ export function createController(
    * one refresh after the last of them reports the batch as "Imported N".
    */
   let writing = false;
+
+  /**
+   * Reads the table now, after any read under way, as one of the reads
+   * `queueRefresh` serialises; true when it succeeded. A check of a file
+   * compares only with the table read this way (#572), never with rows from
+   * before an import.
+   */
+  const readNow = async (): Promise<boolean> => {
+    while (refreshing) await refreshing.catch(() => undefined);
+    let ok = true;
+    const reading = refresh().then(
+      complete => {
+        if (complete === false) ok = false;
+      },
+      () => {
+        ok = false;
+      },
+    );
+    refreshing = reading.finally(() => {
+      refreshing = undefined;
+
+      if (again) {
+        again = false;
+        queueRefresh();
+      }
+    });
+    await refreshing;
+
+    return ok;
+  };
+
+  /**
+   * The rows a check compares a file with: the table as listed now, every
+   * row seen since `load()` and every row this app wrote (`seen`, `written`;
+   * #572). Grows only: a row missing from one listing makes a check more
+   * cautious, never less.
+   */
+  const rowsForCheck = (): Txn[] => {
+    const all = new Map<string, Txn>();
+    for (const row of [...written.values(), ...seen.values(), ...state.rows])
+      all.set(row.subject, row);
+
+    return [...all.values()];
+  };
 
   const queueRefresh = () => {
     if (writing) return;
@@ -372,9 +465,12 @@ export function createController(
     }
 
     refreshing = refresh()
-      .catch(() => {
-        // Keep what is shown; the next change notification retries.
-      })
+      .then(
+        () => undefined,
+        () => {
+          // Keep what is shown; the next change notification retries.
+        },
+      )
       .finally(() => {
         refreshing = undefined;
 
@@ -383,6 +479,76 @@ export function createController(
           queueRefresh();
         }
       });
+  };
+
+  /**
+   * After a failed import, which may have written some rows (#539): what the
+   * preview said was new is stale, and writing it again would write those
+   * rows twice. Drop it, read the table again (after any refresh under way),
+   * and compare the kept file with what is there now, so the sheet offers
+   * only the rest. Import is disabled until then.
+   */
+  const recheckAfterFailure = (failure: string) => {
+    const mine = run;
+    const text = pendingText;
+    pendingPreview = undefined;
+    const current = state.importing;
+    if (current?.step === 'preview')
+      update({
+        importing: {
+          ...current,
+          applying: false,
+          progress: undefined,
+          failure,
+          rechecking: true,
+          unchecked: false,
+        },
+      });
+
+    const done: Promise<void> = (async () => {
+      let checked: ReturnType<typeof compare> | undefined;
+
+      try {
+        const fresh = await readNow();
+        await loadStatements().catch(() => undefined);
+        const parsed = fresh && text ? read(text) : undefined;
+        if (parsed && parsed.ok)
+          checked = compare(parsed.format, parsed.statements, rowsForCheck());
+      } finally {
+        const sheet = state.importing;
+
+        if (mine === run && sheet?.step === 'preview') {
+          if (checked && !checked.ok)
+            update({
+              importing: {
+                step: isBlocked(checked.problem) ? 'blocked' : 'error',
+                file: sheet.file,
+                problem: checked.problem,
+              },
+            });
+          else if (checked) {
+            pendingPreview = checked.preview;
+            update({
+              importing: {
+                ...sheet,
+                preview: checked.preview,
+                tab: checked.preview.fresh.length ? 'new' : 'already',
+                rechecking: false,
+                unchecked: false,
+              },
+            });
+          } else
+            // The table could not be read: what was written is unknown, so
+            // nothing is compared and Import stays off (#572).
+            update({
+              importing: { ...sheet, rechecking: false, unchecked: true },
+            });
+        }
+      }
+    })().finally(() => {
+      if (recheck === done) recheck = undefined;
+    });
+    recheck = done;
   };
 
   const loadStatements = async () => {
@@ -433,7 +599,13 @@ export function createController(
           },
           preview,
           onProgress,
-          { today },
+          {
+            today,
+            onWritten: (subject, values) => {
+              const row = readRow({ subject, get: p => values[p] }, fields);
+              if (row && !row.incomplete) written.set(subject, row);
+            },
+          },
         );
       } finally {
         writing = false;
@@ -554,6 +726,8 @@ export function createController(
               });
           }),
         );
+        seen.clear();
+        remember(rows);
         update({
           rows,
           incomplete,
@@ -730,7 +904,26 @@ export function createController(
       });
       await tick();
       if (stale()) return;
-      const checked = compare(parsed.format, parsed.statements, state.rows);
+      // Compared only with the table as it is now (#539, #572): after any
+      // import under way has finished writing (its sheet may be closed),
+      // a fresh read; if that read fails, nothing is compared.
+      await importing?.catch(() => undefined);
+      if (recheck) await recheck;
+      if (stale()) return;
+
+      if (!(await readNow())) {
+        if (!stale())
+          stop({
+            code: 'TABLE_UNREADABLE',
+            message:
+              "Couldn't read this table to check what is already in it. Check the file again in a moment.",
+          });
+
+        return;
+      }
+
+      if (stale()) return;
+      const checked = compare(parsed.format, parsed.statements, rowsForCheck());
       if (!checked.ok) return stop(checked.problem);
       pendingText = text;
       pendingPreview = checked.preview;
@@ -749,7 +942,15 @@ export function createController(
     },
     async applyImport() {
       const sheet = state.importing;
-      if (sheet?.step !== 'preview' || !port || !pendingText || !pendingPreview)
+      if (
+        sheet?.step !== 'preview' ||
+        sheet.applying ||
+        sheet.rechecking ||
+        sheet.unchecked ||
+        !port ||
+        !pendingText ||
+        !pendingPreview
+      )
         return;
       const mine = run;
       update({
@@ -767,7 +968,7 @@ export function createController(
       importedUntil = Infinity;
 
       try {
-        const outcome = await port.apply(
+        const applying = port.apply(
           pendingText,
           sheet.file,
           pendingPreview,
@@ -777,6 +978,10 @@ export function createController(
               update({ importing: { ...current, progress } });
           },
         );
+        importing = applying;
+        const outcome = await applying.finally(() => {
+          if (importing === applying) importing = undefined;
+        });
         importedUntil = outcome.status === 'applied' ? now() + 15_000 : 0;
         if (mine !== run) return;
 
@@ -798,32 +1003,29 @@ export function createController(
         } else if (outcome.status === 'cancelled')
           // Closed in the host's review: back to the preview, unchanged.
           update({ importing: { ...sheet, applying: false } });
-        else
-          update({
-            importing: {
-              ...sheet,
-              applying: false,
-              progress: undefined,
-              failure:
-                ('errors' in outcome ? outcome.errors?.join('\n') : '') ||
-                'The importer blocked this file.',
-            },
-          });
+        else {
+          update({ importing: { ...sheet, applying: false } });
+          recheckAfterFailure(
+            ('errors' in outcome ? outcome.errors?.join('\n') : '') ||
+              'The importer blocked this file.',
+          );
+        }
       } catch (error) {
         importedUntil = 0;
-        if (mine === run)
-          update({
-            importing: {
-              ...sheet,
-              applying: false,
-              progress: undefined,
-              failure: error instanceof Error ? error.message : String(error),
-            },
-          });
-        // Rows the app wrote before the failure are there; show them, so the
-        // next check of the same file proposes only the rest.
-        queueRefresh();
-        void loadStatements().catch(() => undefined);
+
+        // Rows the app wrote before the failure are there: the preview that
+        // listed them is dropped, and the file compared again once the table
+        // shows them, so neither Import again nor a new check of the same
+        // file writes them twice (#539).
+        if (mine === run) {
+          update({ importing: { ...sheet, applying: false } });
+          recheckAfterFailure(
+            error instanceof Error ? error.message : String(error),
+          );
+        } else {
+          queueRefresh();
+          void loadStatements().catch(() => undefined);
+        }
       }
     },
     closeImport() {

@@ -1,0 +1,58 @@
+# Reviewed 2026-10-15 against the pinned OAD and the provider's published reference, fetched
+# with curl (https://developer.todoist.com/api/v1/); no live requests, no token.
+# Revision 2 of completeness-ac07532b...: v1's tasks declaration unchanged, plus the
+# projects collection.
+# Source quotes (each checked against the raw page):
+#   Get Projects: "Get all active user projects, optionally filtered by folder or workspace."
+#     Its folder_id ("Filter projects to only those in this folder.") and workspace_id
+#     ("Filter projects to only those in this workspace.") narrow it; neither is sent.
+#   Get Archived: "Get the user's archived projects." (a separate endpoint).
+#   Archive Project: "For workspace projects, this will archive it for all workspace users,
+#     removing it from view."
+#   The Sync API's project_delete command: "Delete an existing project and all its descendants."
+# Collection Completeness §4.2: `removed` means an absent object "MAY still exist, for
+# example archived". As for the tasks list ("all active tasks"), no parameter of Get Projects
+# widens it to archived projects, so the list does not filter by default in the sense this
+# repository applies (a list filters when a parameter would widen it, as Moneybird's
+# include_archived or GitHub's state), and an archived or deleted project is an absence that
+# its own read settles. notFound: unavailable: the reference lists 404 among the read's
+# responses without saying which case gives it.
+# Not verified: what GET /projects/{project_id} answers for an archived or a deleted project.
+# Needs Collection Completeness 0.2.0-draft (notFound). Compose with
+# crud-causality-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml (info.x-requires).
+overlay: 1.0.0
+info:
+  title: Todoist API v1 completeness (revision 2)
+  version: 2.0.0
+  x-requires:
+  - anyOf:
+    - crud-causality-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/ac07532b0a0ac101cf8bae2a54177fb1d8ea3779/APIs/todoist.com/1/openapi.yaml
+actions:
+- target: $.components
+  update:
+    crudResources:
+      task:
+        collections:
+          tasks:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+              description: 'GET /tasks returns "all active tasks for the user"; a complete read sends
+                no narrowing parameter (no project_id) and follows every cursor. A task leaves it when
+                completed ("marked complete and moved to history"), when deleted, and possibly when its
+                project is archived or access is lost, so absence is removed. GET /tasks/{task_id} "Returns
+                a single active (non-completed) task by ID", so a 404 can mean completed, deleted or out
+                of reach: unavailable, never deleted.'
+      project:
+        collections:
+          projects:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+              description: 'GET /projects returns "all active user projects"; a complete read sends neither
+                folder_id nor workspace_id (both narrow it) and follows every cursor. A project leaves
+                it when archived (archiving removes it "from view") or deleted, and possibly when the
+                user leaves a shared project, so absence is removed: no parameter widens the list, and
+                an archived project still exists. A 404 from its read is unavailable, since the reference
+                does not say which case gives it.'

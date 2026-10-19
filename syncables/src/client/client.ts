@@ -94,6 +94,7 @@ import {
   lowerCaseHeaders,
   type ListMethod,
   type Transport,
+  type PurposedRequest,
   type TransportRequest,
   type TransportResponse,
 } from '../read/transport.js';
@@ -180,6 +181,9 @@ export interface WriteFailure {
    * Set when the response is throttling under the document's `x-throttling`
    * (draft Throttling extension: a matching Signal Object, or a 429), with
    * the earliest retry time when one is known. See `classifyThrottling`.
+   * Its `meaning` is `blocked` (Throttling 0.4.0) for a refusal the API
+   * documents as not worth retrying: not throttling, and `permanent` by
+   * default.
    */
   throttling?: ThrottlingVerdict;
   /**
@@ -202,7 +206,9 @@ export interface WriteFailure {
  * The default classification:
  * - a delete answered 404 or 410: `satisfied` (the record is already gone);
  * - a response that is throttling under the document's `x-throttling`
- *   (`failure.throttling`: a matching signal, or any 429): `retry`;
+ *   (`failure.throttling`: a matching signal, or any 429): `retry`; but a
+ *   `blocked` one (Throttling 0.4.0: the API documents that retrying won't
+ *   help), `permanent`, whatever its status;
  * - 401: `auth`;
  * - 403, when the document declares no signals: `retry` when the response
  *   carries `Retry-After` or `x-ratelimit-remaining: 0` (a rate limit, as
@@ -223,7 +229,8 @@ export function defaultWriteFailureClass(
   const { status, type, headers } = failure;
   if (type === 'delete' && (status === 404 || status === 410))
     return 'satisfied';
-  if (failure.throttling) return 'retry';
+  if (failure.throttling)
+    return failure.throttling.meaning === 'blocked' ? 'permanent' : 'retry';
   if (status === 401) return 'auth';
   if (status === 403) {
     if (
@@ -1170,6 +1177,7 @@ class HttpStatusError extends Error {
     readonly status: number,
     readonly headers: Record<string, string>,
     readonly body: string,
+    readonly fromCache = false,
   ) {
     super(message);
   }
@@ -1808,6 +1816,23 @@ export function createApiClient(
    * `sleep` option may return early, in tests).
    */
   let pacingSleptUntil = 0;
+  /** A cache's answer (`fromCache`) gives the pacer its counted request back. */
+  const released = (
+    pacing: Pacer,
+    buckets: string[],
+    at: number,
+    sent: Promise<TransportResponse>,
+  ): Promise<TransportResponse> => {
+    // Watched beside the caller, not chained before it: the caller sees the
+    // response in the same turn as without pacing.
+    void sent.then(
+      (response) => {
+        if (response.fromCache === true) pacing.release(buckets, at);
+      },
+      () => {},
+    );
+    return sent;
+  };
   const pacedSend = async (
     pacing: Pacer,
     buckets: string[],
@@ -1820,8 +1845,9 @@ export function createApiClient(
       await (options.sleep ?? defaultSleep)(wait);
       pacingSleptUntil = Math.max(pacingSleptUntil, now + wait);
     }
-    pacing.take(buckets, Date.now());
-    return unpacedTransport(request);
+    const at = Date.now();
+    pacing.take(buckets, at);
+    return released(pacing, buckets, at, unpacedTransport(request));
   };
   // Not async: a request with room is counted and sent in the same turn,
   // with no wait added before it.
@@ -1830,8 +1856,9 @@ export function createApiClient(
         const buckets = requestBuckets(request);
         if (pacer.delay(buckets, Date.now()) > 0)
           return pacedSend(pacer, buckets, request);
-        pacer.take(buckets, Date.now());
-        return unpacedTransport(request);
+        const at = Date.now();
+        pacer.take(buckets, at);
+        return released(pacer, buckets, at, unpacedTransport(request));
       }
     : unpacedTransport;
   const transport = authenticatedTransport(
@@ -2689,7 +2716,7 @@ export function createApiClient(
    * `lenient`, a 2xx body that is not JSON reads as no body.
    */
   async function requestJson(
-    request: TransportRequest,
+    request: PurposedRequest,
     received?: { headers?: Record<string, string>; lenient?: boolean },
   ): Promise<unknown> {
     // Tells an error raised before the request left (an authenticate adapter
@@ -2724,6 +2751,7 @@ export function createApiClient(
           ]),
         ),
         response.body ?? '',
+        response.fromCache === true,
       );
     }
     if (received)
@@ -2850,6 +2878,7 @@ export function createApiClient(
           }),
           method: 'GET',
           headers: { accept: 'application/json' },
+          purpose: 'precondition',
         },
         received,
       );
@@ -2871,8 +2900,10 @@ export function createApiClient(
    * A read a precondition needs (the object, or a source object) that was
    * refused as a request: a throttling answer holds the write until its
    * time (`notBefore`, and a `quotaExhausted` bucket pause), as for the
-   * write's own answer; refused credentials block the client. Undefined for
-   * any other answer, which the caller handles.
+   * write's own answer; a `blocked` answer (Throttling 0.4.0) ends the write
+   * (`gaveUp`), not resent and with no `notBefore`; refused credentials
+   * block the client. Undefined for any other answer, which the caller
+   * handles.
    */
   function readRefused(
     write: QueuedWrite,
@@ -2881,10 +2912,18 @@ export function createApiClient(
   ): WriteOutcome | undefined {
     const throttled = classifyThrottling(throttling, {
       status: error.status,
+      fromCache: error.fromCache,
       headers: error.headers,
       body: error.body,
       receivedAt: error.receivedAt,
     });
+    // A blocked answer (Throttling 0.4.0) ends the write: not resent.
+    if (throttled?.meaning === 'blocked') {
+      write.attempts += 1;
+      write.lastError = `The read the write precondition needs was refused, and the API documents that retrying won't help: ${error.message}`;
+      write.lastStatus = error.status;
+      return { status: 'gaveUp' };
+    }
     if (throttled) {
       if (throttled.retryAt !== undefined)
         write.notBefore = Math.max(write.notBefore ?? 0, throttled.retryAt);
@@ -2948,6 +2987,7 @@ export function createApiClient(
         url,
         method: 'GET',
         headers: { accept: 'application/json' },
+        purpose: 'precondition',
       });
     } catch (error) {
       value = null;
@@ -3279,7 +3319,7 @@ export function createApiClient(
     // answer, or what a later read showed), so one that already applied is
     // settled without a request.
     let followUp:
-      | { declared: FollowUp; url: URL; init: TransportRequest }
+      | { declared: FollowUp; url: URL; init: PurposedRequest }
       | undefined;
     if (write.followUp) {
       const declared = route.create?.followUps?.find(
@@ -3325,6 +3365,7 @@ export function createApiClient(
         url,
         init: {
           url,
+          purpose: 'write',
           method: declared.method,
           headers: {
             ...(request.body !== undefined
@@ -3378,6 +3419,7 @@ export function createApiClient(
           }),
           method: 'DELETE',
           headers: { ...preconditionHeaders },
+          purpose: 'write',
         });
         remote(write.scope).delete(write.id);
       } else {
@@ -3414,6 +3456,7 @@ export function createApiClient(
               : data;
         const result = await requestJson(
           {
+            purpose: 'write',
             url:
               write.type === 'create'
                 ? target(route.createPath as string, write.context)
@@ -3511,15 +3554,20 @@ export function createApiClient(
     } catch (error) {
       // Throttling under the document's x-throttling (a matching signal, or
       // a 429), with the earliest retry time; decided once per response.
-      const throttled =
+      const verdict =
         error instanceof HttpStatusError
           ? classifyThrottling(throttling, {
               status: error.status,
+              fromCache: error.fromCache,
               headers: error.headers,
               body: error.body,
               receivedAt: error.receivedAt,
             })
           : undefined;
+      // A blocked answer (Throttling 0.4.0) is not throttling: no retry
+      // time, no bucket pause. The classifier still sees it, and calls it
+      // permanent by default.
+      const throttled = verdict?.meaning === 'blocked' ? undefined : verdict;
       // The earliest retry time holds the write whatever path its class
       // takes below (uncertain, blocked, failed, retried): set it here, so
       // that a resolveWrite retry or authRenewed() never sends it earlier.
@@ -3592,7 +3640,7 @@ export function createApiClient(
       }
       const classified =
         error instanceof HttpStatusError
-          ? classify(write, error, sentAfterRenewal, throttled)
+          ? classify(write, error, sentAfterRenewal, verdict)
           : undefined;
       let failureClass: WriteFailureClass = classified?.result ?? 'retry';
       // Any answer but a refusal shows the credentials were accepted; a 403
@@ -3701,7 +3749,9 @@ export function createApiClient(
       }
       const asked =
         error instanceof HttpStatusError
-          ? retryAfterMs(error.headers)
+          ? error.fromCache
+            ? undefined
+            : retryAfterMs(error.headers)
           : undefined;
       // A Retry-After on another retryable answer (a 503, say) only
       // lengthens the wait (never below the backoff, so "0", a past date or
@@ -4366,6 +4416,7 @@ export function createApiClient(
   ): Promise<void> {
     const throttled = classifyThrottling(throttling, {
       status: response.status,
+      fromCache: response.fromCache === true,
       headers: lowerCaseHeaders(response.headers),
       body: response.body,
       receivedAt,
@@ -4411,7 +4462,19 @@ export function createApiClient(
     const raw = await readTransport({ ...request, headers });
     const response = { ...raw, headers: lowerCaseHeaders(raw.headers) };
     await noteReadThrottling(response, Date.now());
-    if (response.status === 304 && cached) return cached;
+    // The cached body, but this answer's fromCache: a stored response
+    // keeps the fromCache of the request that filled it, and a 304 from
+    // the network is a counted request, not a cache's answer.
+    if (response.status === 304 && cached) {
+      const answer = {
+        status: cached.status,
+        headers: cached.headers,
+        body: cached.body,
+      };
+      return raw.fromCache === undefined
+        ? answer
+        : { ...answer, fromCache: raw.fromCache };
+    }
     if (cacheable && response.status === 200)
       conditionalCache.set(key, response);
     return response;
@@ -4968,6 +5031,7 @@ export function createApiClient(
         upstream,
         path: bindPath(feed.path, context),
         method: 'GET',
+        purpose: 'feed',
         query:
           cursor !== undefined && feed.cursor
             ? { [feed.cursor.parameter]: cursor }
@@ -5129,7 +5193,12 @@ export function createApiClient(
         [route.collection.itemParam ?? 'id']: id,
       });
       path = url.pathname;
-      response = await budget.send({ url, method: 'GET', headers: {} });
+      response = await budget.send({
+        url,
+        method: 'GET',
+        headers: {},
+        purpose: 'item',
+      });
     } catch (error) {
       // The budget is spent, or a 429 asks to wait past its deadline.
       if (

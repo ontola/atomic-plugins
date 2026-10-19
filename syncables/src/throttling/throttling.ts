@@ -1,10 +1,11 @@
 // @wc-ignore-file
 /**
- * The consumer side of the OpenAPI Throttling Extension 0.3.0-draft
+ * The consumer side of the OpenAPI Throttling Extension 0.4.0-draft
  * (`openapi-extensions/spec/throttling/README.md`): the root `x-throttling`
  * object's `headers` (header roles), `bodyFields` (the same roles read from
  * the JSON response body, since 0.3.0), `signals` (which responses mean
- * throttling) and the earliest retry time, after `classify()` in that
+ * throttling, or, since 0.4.0, a `blocked` refusal not worth retrying) and
+ * the earliest retry time, after `classify()` in that
  * folder's `validate.py`. `limits` and `applies` are read only for the
  * bucket a `quotaExhausted` signal names (its window is the fallback when no
  * time is given), for which buckets an operation selects, and, where a
@@ -52,7 +53,12 @@ export type BodyPredicate = { pointer: string } & (
   | { item: BodyPredicate }
 );
 
-export type ThrottlingMeaning = 'throttled' | 'quotaExhausted';
+/**
+ * `blocked` (0.4.0): a refusal the API documents as not worth retrying. It
+ * is not throttling: no retry time, never resent automatically. A signal
+ * whose meaning this consumer does not recognise is read as `blocked`.
+ */
+export type ThrottlingMeaning = 'throttled' | 'quotaExhausted' | 'blocked';
 
 /** Signal Object: a response the API documents as a rate-limit refusal. */
 export interface SignalObject {
@@ -111,7 +117,10 @@ export interface ThrottlingVerdict {
    * The earliest time to send the request again (or any request counted
    * against the exhausted bucket), in milliseconds since the epoch. Absent
    * when no header or declared delay gives one: the consumer's own backoff
-   * applies.
+   * applies, except under `blocked` (Throttling 0.4.0), where absent means
+   * never send it again automatically. API semantic change: before 0.4.0
+   * support, a verdict always meant "retry, at `retryAt` or after a
+   * backoff"; a `blocked` verdict means "do not retry".
    */
   retryAt?: number;
   /** The Signal Object that matched; absent for a 429 no signal matched. */
@@ -121,6 +130,8 @@ export interface ThrottlingVerdict {
 /** A response, as `classifyThrottling` sees it. */
 export interface ThrottlingResponse {
   status: number;
+  /** A cache answered instead of the API; its rate-limit state is stale. */
+  fromCache?: boolean;
   /** Header names in any case; a repeated header's values joined as the transport gives them. */
   headers: Record<string, string>;
   /** The response body text; a body that is not JSON matches no Body Predicate. */
@@ -143,7 +154,7 @@ const UNITS = new Set<string>([
   'httpDate',
   'deltaSecondsOrHttpDate',
 ]);
-const MEANINGS = new Set<string>(['throttled', 'quotaExhausted']);
+const MEANINGS = new Set<string>(['throttled', 'quotaExhausted', 'blocked']);
 
 const isScalar = (value: unknown): value is JsonScalar =>
   value === null ||
@@ -237,10 +248,14 @@ export function fallbackWindow(tiers: Tier[], plan?: string): number {
 /**
  * Reads the document's root `x-throttling`. Undefined when absent or not an
  * object. A `headers` entry that does not parse (an unknown role, a missing
- * or misplaced unit, a role or a name already taken) is left out. The
- * `signals` array is left out as a whole when any Signal Object does not
- * parse, since the objects are tested in order and a gap would change the
- * meaning of the rest; a 429 then stays throttling and nothing else does.
+ * or misplaced unit, a role or a name already taken) is left out. A signal
+ * whose meaning is `blocked`, or missing, not a string or not recognised, is
+ * kept as `blocked` (Throttling 0.4.0), with any `bucket` or
+ * `minDelaySeconds` ignored. The `signals` array is left out as a whole
+ * when any other Signal Object does not parse (a bad status list or
+ * predicate), since the objects are tested in order and a gap would change
+ * the meaning of the rest; a 429 then stays throttling and nothing else
+ * does.
  */
 export function declaredThrottling(
   document: OpenApiDocument,
@@ -389,10 +404,15 @@ function parseSignal(value: unknown): SignalObject | undefined {
     )
   )
     return undefined;
-  if (typeof meaning !== 'string' || !MEANINGS.has(meaning)) return undefined;
+  // 0.4.0: a meaning this consumer does not recognise (missing, not a
+  // string, empty or unknown) is read as blocked, as the spec's classify()
+  // does, so it never resends on a meaning it cannot read.
   const signal: SignalObject = {
     status: [...(status as number[])],
-    meaning: meaning as ThrottlingMeaning,
+    meaning:
+      typeof meaning === 'string' && MEANINGS.has(meaning)
+        ? (meaning as ThrottlingMeaning)
+        : 'blocked',
   };
   if (header !== undefined) {
     const parsed = parseHeaderPredicate(header);
@@ -404,6 +424,12 @@ function parseSignal(value: unknown): SignalObject | undefined {
     if (!parsed) return undefined;
     signal.body = parsed;
   }
+  if (typeof description === 'string') signal.description = description;
+  // 0.4.0: a blocked signal (or one read as blocked) takes no bucket and no
+  // delay. A document that gives them anyway is invalid, but the signal is
+  // kept as blocked with them ignored, never dropped: dropping it would
+  // leave the matching 429 to the throttled default, which is retried.
+  if (signal.meaning === 'blocked') return signal;
   if (bucket !== undefined) {
     if (typeof bucket !== 'string') return undefined;
     signal.bucket = bucket;
@@ -412,7 +438,6 @@ function parseSignal(value: unknown): SignalObject | undefined {
     if (!isPositiveInteger(minDelaySeconds)) return undefined;
     signal.minDelaySeconds = minDelaySeconds;
   }
-  if (typeof description === 'string') signal.description = description;
   return signal;
 }
 
@@ -731,11 +756,18 @@ const STANDARD_RETRY_AFTER: HeaderRoleObject = {
  * signal's `minDelaySeconds`; else, for `quotaExhausted` with a bucket
  * whose window is declared, plus that window; else absent (the consumer's
  * backoff). A declared header whose value does not parse is ignored.
+ *
+ * Throttling 0.4.0: a matching `blocked` signal (or one whose meaning this
+ * consumer does not recognise, with any `bucket` or `minDelaySeconds`
+ * ignored) gives `{ meaning: 'blocked' }` with no `retryAt`, which means
+ * never resend automatically, not the consumer's backoff. A caller that
+ * treated every verdict as "retry later" must check the meaning.
  */
 export function classifyThrottling(
   declaration: ThrottlingDeclaration | undefined,
   response: ThrottlingResponse,
 ): ThrottlingVerdict | undefined {
+  if (response.fromCache === true) return undefined;
   const receivedAt = response.receivedAt ?? Date.now();
   const headers = response.headers;
   let body: unknown = MISSING;
@@ -762,6 +794,9 @@ export function classifyThrottling(
     break;
   }
   if (!signal && response.status !== 429) return undefined;
+  // 0.4.0: a blocked refusal is not throttling, even as a 429: no retry
+  // time, and the caller must not resend it by itself.
+  if (signal?.meaning === 'blocked') return { meaning: 'blocked', signal };
   const meaning: ThrottlingMeaning = signal?.meaning ?? 'throttled';
   // Each role's values: from its header, then from its body field (0.3.0).
   // A role read from both counts once: the later time for retryAfter and

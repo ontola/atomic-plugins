@@ -82,9 +82,37 @@ read, minute snapping and the range planner are unchanged.
   the views. A row whose Name nobody edited never sends a description
   change; the drawer sends typed text as typed. A range edit keeps each
   row's Name, and a filled gap is created with no description.
-  Until 0.7.1 the app trimmed descriptions and stored "Time entry" for
+  Until 0.7.2 the app trimmed descriptions and stored "Time entry" for
   none; a row from then is brought to the description at its next sync, as
-  a change taken over from Clockify, and nothing is sent for it.
+  a change taken over from Clockify, and nothing is sent for it. A filled
+  gap staged then and not yet sent holds "Time entry" too: from 0.8.1 a
+  create without the `exactName` mark in `clockify-create` (staged before
+  0.8.1) whose Name is "Time entry" or blank is created with no
+  description. The rule cannot tell those apart from a Name meant
+  literally, so an unmarked create is also sent with no description when
+  someone typed "Time entry" into its Name, or when it is a 0.8.0 copy of
+  an entry whose description is exactly "Time entry" or only spaces (not
+  tested against a 0.8.0 drive). Creates staged from 0.8.1 send their Name
+  as it is.
+- **Times are sent in whole seconds** (0.8.1). The lens's `iso-seconds-to-ms`
+  refuses a time with milliseconds rather than lose them; `putBody` rounds
+  down to the second first, as the code lens did. Row times are snapped to
+  minutes, so only a time typed into the table can carry milliseconds.
+- **The proxy's own refusals get the right next step** (0.8.2). The
+  integration proxy's `access_denied` ("this agent may not use the proxy",
+  its access check) is a problem of its own: "The integration proxy does
+  not let you use it." with "Ask whoever runs the integration proxy to let
+  you use it; reconnecting won't help." Before, it read as Clockify's own
+  403 and said "Choose another workspace in Settings". `not_owner` (someone
+  else's connection) and `agent_retired` (the owner's id was transferred,
+  #410) now say "Connect again", like a lost connection; `agent_retired`
+  was not recognised as the proxy's at all. Codes from
+  `integration-proxy/src/api_error.rs`. Unit-tested (`problem.ts`,
+  `transport.ts` `proxyRefusal`, the card, frame J7).
+- **A refusal names its reason** (0.8.1). An entry Clockify returns that the lens
+  refuses outside a running timer, a break or another listed blocker (a
+  start or end that is not an ISO instant, say) is refused with the
+  lens's reason (`entryRefusal`).
 - **Still code in `app/catalogLens.ts`**, waiting on catalog features
   (LENSES.md, "What the format cannot express yet"): an entry that ends
   before it starts has no row (gap 1, a relation between two places); the
@@ -96,7 +124,7 @@ read, minute snapping and the range planner are unchanged.
 
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 193 KB for 0.8.0, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 194 KB for 0.8.2, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
@@ -349,7 +377,7 @@ into the view root.
     three-way check against it (a conflict sends nothing); the outbox
     marker; one full-replacement `PUT` that `app/catalogLens.ts` `putBody`
     builds from the fresh full record with the catalog lens (0.8.0; until
-    0.7.1 the code lens's `putBody` in `devonian/clockify/lens/writeBack.ts`),
+    0.7.2 the code lens's `putBody` in `devonian/clockify/lens/writeBack.ts`),
     replacing only changed fields and always sending `start`,
     `end`, `billable`, `description`, `tagIds` and `type` (a project change
     drops `taskId`), or a `DELETE`; a verification `GET`. The baseline and
@@ -485,9 +513,19 @@ into the view root.
     entries 58 ms, 1.11 MB and 907 KB. #97 §7 estimated under 10 ms and
     at most 300 KB / 1 MB, so both are somewhat over. atomic-server's
     JSON extractor limit, read from the pinned source (actix's default
-    `JsonConfig`, 2 MiB; not exercised), would take a 2,000-entry
-    snapshot as one `/app-write` with little room to spare once the JSON
-    text is escaped; snapshots are not split per week yet.
+    `JsonConfig`, 2 MiB; not exercised), takes a 2,000-entry
+    mock-shaped snapshot as one `/app-write`: escaped, it measured
+    1,168,596 bytes, about 56% of the limit (the size budget below). Live
+    entries carry more fields, and snapshots are not split per week yet.
+  - _Size budget_ (`app/snapshotBudget.test.ts`, committed): a first sync
+    of 2,000 mock-shaped entries (40-character descriptions, one tag)
+    over 30 days must keep every log resource, escaped as an `/app-write`
+    body, under 1,835,008 bytes (2 MiB less 256 KiB for the rest of the
+    body). Measured 1,168,596 bytes for the snapshot, the largest, on
+    2026-10-15. A live entry carries more fields (rates, custom field
+    values), so real snapshots are larger; when this fails, the next step
+    is the per-week snapshot split of #123 M5. Timing is printed, not
+    asserted.
 - **Timeline lens** (#123 M2, read-only). Two stages over the mirror, full
   recompute on every build (not measured; #97 §3.2 estimates single-digit
   ms at 2,000 entries):

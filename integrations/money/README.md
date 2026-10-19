@@ -375,6 +375,70 @@ minified, one module). Screenshots, axe and the render budget:
 
 ## Verified
 
+At 0.4.5 (app module `apps/money/0.4.5/ui.js`, 122,855 bytes; `plugin.js`
+again 0.3.0's bundle with only the manifest's `version` changed) the paths
+by which one copy of the app wrote a row twice after a failed or overlapping
+import, found in #539 and the review of #572, are closed. What changed, and
+what covers it:
+
+- A failed import drops the preview that listed the rows it was writing
+  and disables Import ("Checking what was written…") while it reads the
+  table again; it then offers only the rest. Unit: Import pressed again at
+  once after the failure (3 rows at 0.4.4); the view disables the button.
+  Import pressed twice before the first press finishes writes once (unit).
+- A check trusts only a complete read of the rows the table lists. If the
+  listing fails with an error, or any row it lists can't be read (an error,
+  or a resource that comes back with no `isA` at all), nothing is compared:
+  in the failed sheet Import stays off with "Couldn't check what was
+  written; close and check the file again.", and a new check stops with
+  "Couldn't check what is already in this table". Unit: a listing that
+  fails after the failure (the old preview came back at 0.4.4), a listed
+  row whose read fails (3 rows for 2 before this), and one read back empty.
+- A check also compares with every complete row read since the app loaded
+  and every row this app wrote itself (its write resolved), not only with
+  the current listing. The host's `query` can answer `[]`, or leave out a
+  page of 500 that failed, without an error, so a short listing is not
+  detected; this way it can't make a row the app has seen or written look
+  new. Unit: a listing answering `[]` after the failure (the row written
+  before it was proposed again), and two checks in a row while it does (4
+  rows for 2 before this). The cost: a row deleted elsewhere still counts
+  as already imported until the app is loaded again.
+- Every check of a file waits for any import under way, whether or not its
+  sheet was closed, and reads the table first. Unit: the file checked again
+  at once after a failure (2 proposed at 0.4.4), after closing during an
+  import that then fails (3 rows), and after closing during one that
+  succeeds (4 rows for 2).
+- The installed-app e2e step (0.4.3, below) checks that the failed sheet
+  offers "Import 1 transaction" and never "Import 2 transactions" again,
+  that a check made at once after closing it, before anything waited for
+  the app's copy of the table, proposes New 1, that the server ends with
+  each transaction once, and that the file checked again finds nothing new.
+
+Not closed: a row is still told apart only by comparing with what the app
+could read or wrote itself, so a row can still be written twice when
+neither covers it. These cases remain:
+
+- two tabs or devices importing the same file at the same moment (see
+  "Identity and dedupe" above);
+- a row write that failed or timed out on the app's side but whose commit
+  lands on the server anyway, when the next listing doesn't show it;
+- a listing that is short without an error (the host's `[]`, or a skipped
+  page) for rows this copy of the app never saw, in particular while the
+  app loads: a load during such a failure starts from the short listing.
+
+The app can't choose a row's subject (under a DID drive the server mints it
+from the signed genesis commit), so a second write can't be made to land on
+the same resource. The follow-up finds duplicates when reading instead, and
+counts each transaction once; the host side (a `query` that rejects on a
+failed page, an idempotent create) is not this repository's to change.
+
+The six money e2e tests (`e2e/money.spec.ts` and `moneybird.spec.ts`,
+the table without import dates of #588 included), this step included,
+passed on 2026-10-15 at 0.4.5 against the pin `7dab1ce` (the build VPS's
+source build), in 6.5 minutes. The e2e has no step for the error-less
+short listing, the empty read or the late commit; those are unit-tested
+only.
+
 At 0.4.3 (`plugin.js` sha256
 `fa91ad60bf341e7e8c8da523be6e11b4ad81a1403a806b4ee895eb941e692bde`, again
 0.3.0's bundle with only the manifest's `version` changed; app module
@@ -392,15 +456,12 @@ written so far are kept; …"; then, after the app's copy of the table caught
 up (its Transactions count), the same file checked again proposes the one
 left (New 1), and the import ends with 2 rows. The five money e2e tests, this step included, passed on 2026-10-13 at
 0.4.3 against the pin `7dab1ce` (the build VPS's source build), in 5.5
-minutes. Known limit, found
-that way (#539): the app writes exactly what its preview said was new, so
+minutes. Up to 0.4.4 the app had a known limit, found that way (#539) and
+fixed in 0.4.5 (above): it wrote exactly what its preview said was new, so
 checking the file again before the app's copy of the table caught up, or
-pressing Import again in the failed sheet (it keeps the old preview),
-writes the transaction written before the failure a second time; the first
-run of this step ended with that transaction twice. The sheet's
-"transactions saved before the failure are recognised and not written
-twice" holds only for a check made after the app's copy of the table caught
-up.
+pressing Import again in the failed sheet (it kept the old preview), wrote
+the transaction written before the failure a second time; the first run of
+this step ended with that transaction twice.
 
 At 0.4.2 (`plugin.js` sha256
 `2c4005acaaad5ce1fe730009c452fb59c8213f4852711f915b8e12868e39b963`, again

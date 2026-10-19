@@ -92,6 +92,15 @@ const notionMessage = (status: number, body: unknown) => {
     : `Notion answered ${status}`;
 };
 
+/**
+ * `notionMessage`, plus that retrying won't help when Notion marked the 429
+ * as blocked (`isBlockedByNotion`).
+ */
+const blockedMessage = (status: number, body: unknown) =>
+  status === 429 && isBlockedByNotion(body)
+    ? `${notionMessage(status, body).replace(/\.?$/, '.')} ${BLOCKED_MESSAGE}`
+    : notionMessage(status, body);
+
 /** A page's raw property by stable id. */
 const property = (page: unknown, id: string) =>
   Object.values(object(object(page).properties))
@@ -190,7 +199,8 @@ export async function sendChanges({
       report({
         ...who,
         status: 'failed',
-        message: notionMessage(current.status, current.body),
+        // The GET is where a blocked integration is usually refused first.
+        message: blockedMessage(current.status, current.body),
       });
       break;
     }
@@ -257,9 +267,7 @@ export async function sendChanges({
         ...who,
         status: 'failed',
         // Blocked by Notion is permanent, not a limit to wait out.
-        message: isBlockedByNotion(answer.body)
-          ? `${notionMessage(answer.status, answer.body).replace(/\.?$/, '.')} ${BLOCKED_MESSAGE}`
-          : notionMessage(answer.status, answer.body),
+        message: blockedMessage(answer.status, answer.body),
       });
       break;
     }

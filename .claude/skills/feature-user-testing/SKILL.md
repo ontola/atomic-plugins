@@ -9,8 +9,8 @@ A moderated, think-aloud session about one feature of Atomic, a plugin or a part
 
 ## Two ways to run a session
 
-- **On the user-testing droplet** (`usertest/`, see its README): a tester opens an invite link on their own laptop, a voice moderator (Claude) gives the tasks, and the analysis files anonymized findings in the private repo `ontola/usertest-findings`. Testers bring their own provider accounts. The tasks come from a plan in `usertest/moderator/sessions/<plan>.md`, which the tester picks in the page's "What do you want to test?" menu; `&session=<plan>` on the invite link preselects it. Every plan in that folder shows up in the menu. To prepare a session for the droplet, write or update that plan (see the README next to the plans) and open a PR.
-- **Moderated on a prepared laptop** (the rest of this skill): you watch Michiel use a local stack with seeded data and the mock proxy. Use it to try a new app before strangers do, or to dig into a problem the droplet sessions found.
+- **On the user-testing server** (claude-build; `usertest/`, see its README): a tester opens an invite link on their own laptop, a voice moderator (Claude) gives the tasks, and the analysis files anonymized findings in the private repo `ontola/usertest-findings`. Testers bring their own provider accounts. The tasks come from a plan in `usertest/moderator/sessions/<plan>.md`, which the tester picks in the page's "What do you want to test?" menu; `&session=<plan>` on the invite link preselects it. Every plan in that folder shows up in the menu. To prepare a session for the server, write or update that plan (see the README next to the plans) and open a PR.
+- **Moderated on a prepared laptop** (the rest of this skill): you watch Michiel use a local stack with seeded data and the mock proxy. Use it to try a new app before strangers do, or to dig into a problem the server's sessions found.
 
 A plan written for one works for the other with small changes: seeded names become "one of your …".
 
