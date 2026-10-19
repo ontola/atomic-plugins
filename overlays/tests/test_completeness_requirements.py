@@ -11,7 +11,10 @@ capped at 10,000 results incomplete.
 Each completeness overlay states what it needs as groups of overlay
 filenames, every group satisfied by selecting any one of its files:
 
-* a new overlay in its `info`, as `x-requires: [{anyOf: [<filename>, ...]}, ...]`;
+* a new overlay in its `info`, as `x-requires: [{anyOf: [<filename>, ...]}, ...]`
+  (with `x-conflicts: [<filename>, ...]` where it names overlays it must not
+  be selected with), as Overlay Requirements 0.1.0-draft specifies; this test
+  reads both through that specification's `validate.py`;
 * a published overlay, which cannot change, in REQUIRES below (also the
   overlays still in review, by filename, so they need no edit).
 
@@ -21,6 +24,7 @@ may be selected for that platform. Every completeness overlay in the
 repository must state its requirements one way or the other. No provider
 is called and nothing is downloaded.
 """
+import importlib.util
 import json
 import re
 import unittest
@@ -28,6 +32,11 @@ import unittest
 import yaml
 
 from generate_identity_catalog_fixtures import ROOT
+
+_spec = importlib.util.spec_from_file_location(
+    "overlay_requirements", ROOT.parent / "openapi-extensions" / "spec" / "overlay-requirements" / "validate.py")
+overlay_requirements = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(overlay_requirements)
 
 # Published (or in-review) completeness overlays: groups of acceptable files.
 REQUIRES = {
@@ -74,11 +83,23 @@ def kind(filename):
 
 
 def groups_of(overlay, path):
-    """The requirement groups of a completeness overlay: its info.x-requires, else REQUIRES[path], else None."""
-    stated = (overlay.get("info") or {}).get("x-requires")
-    if stated is not None:
-        return [list(group["anyOf"]) for group in stated]
+    """The requirement groups of a completeness overlay: its info.x-requires, else REQUIRES[path], else None.
+
+    A stated x-requires (or x-conflicts) is checked and read by Overlay
+    Requirements' validate.py; references stay as written (filenames next to
+    the overlay), since no URL is given.
+    """
+    info = overlay.get("info") or {}
+    if "x-requires" in info or "x-conflicts" in info:
+        overlay_requirements.validate(overlay)
+    if "x-requires" in info:
+        return overlay_requirements.requirements(overlay)[0]
     return REQUIRES.get(path)
+
+
+def conflicts_of(overlay):
+    """The overlays a completeness overlay states in info.x-conflicts (filenames), else []."""
+    return overlay_requirements.requirements(overlay)[1]
 
 
 def requirements(path):
@@ -86,12 +107,19 @@ def requirements(path):
     return groups_of(yaml.safe_load((ROOT / path).read_text(encoding="utf-8")), path)
 
 
-def violations(catalog, requires_of):
+def conflicts(path):
+    """The x-conflicts of the completeness overlay at `path`, or [] (none, or not on disk)."""
+    file = ROOT / path
+    return conflicts_of(yaml.safe_load(file.read_text(encoding="utf-8"))) if file.exists() else []
+
+
+def violations(catalog, requires_of, conflicts_of_path=lambda path: []):
     """Every unmet requirement of the completeness overlays `catalog` (parsed JSON) selects.
 
     `requires_of(path)` gives a completeness overlay's groups. A group is met
     when one of its files is selected for the platform and no other revision
-    of the same kind is.
+    of the same kind is. `conflicts_of_path(path)` gives the files it must not
+    be selected with (Overlay Requirements' x-conflicts).
     """
     found = []
     for platform in catalog["platforms"]:
@@ -108,6 +136,9 @@ def violations(catalog, requires_of):
                 for other in same_kind:
                     if other not in group:
                         found.append(f"{platform['name']}: {path} is not declared on {other}")
+            for other in conflicts_of_path(path):
+                if other in names:
+                    found.append(f"{platform['name']}: {path} conflicts with {other}")
     return found
 
 
@@ -115,7 +146,8 @@ class CompletenessRequirementTests(unittest.TestCase):
     def test_every_dated_catalog_meets_its_completeness_overlays_requirements(self):
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
-                self.assertEqual(violations(json.loads(catalog.read_text(encoding="utf-8")), requirements), [])
+                self.assertEqual(violations(json.loads(catalog.read_text(encoding="utf-8")), requirements, conflicts),
+                                 [])
 
     def test_every_completeness_overlay_states_its_requirements(self):
         for path in sorted(ROOT.glob("APIs/**/completeness-*-overlay.yaml")):
@@ -140,6 +172,30 @@ class CompletenessRequirementTests(unittest.TestCase):
         self.assertEqual(kind("crud-causality-v2-" + "a" * 40 + "-overlay.yaml"), "crud-causality")
         self.assertEqual(kind("app-crud-causality-" + "a" * 40 + "-overlay.yaml"), "app-crud-causality")
         self.assertEqual(kind("pagination-v3-" + "a" * 40 + "-overlay.yaml"), "pagination")
+
+    def test_stated_fields_are_read_through_the_specification(self):
+        path = "APIs/example/completeness-" + "a" * 40 + "-overlay.yaml"
+        crud = "crud-causality-v2-" + "a" * 40 + "-overlay.yaml"
+        old = "crud-causality-" + "a" * 40 + "-overlay.yaml"
+        stated = {"info": {"x-requires": [{"anyOf": [crud]}], "x-conflicts": [old]}}
+        self.assertEqual(groups_of(stated, path), [[crud]])
+        self.assertEqual(conflicts_of(stated), [old])
+        # A malformed declaration fails the specification's document rules, not silently.
+        for info in ({"x-requires": [[crud]]}, {"x-requires": [{"anyOf": []}]}, {"x-conflicts": []},
+                     {"x-requires": [{"anyOf": [crud]}], "x-conflicts": [crud]}):
+            with self.subTest(info=info), self.assertRaises(ValueError):
+                groups_of({"info": info}, path)
+
+    def test_a_stated_conflict_is_refused(self):
+        pin = "a" * 40
+        base = "https://ontola.github.io/atomic-plugins/overlays/APIs/example/1/"
+        completeness = f"APIs/example/1/completeness-{pin}-overlay.yaml"
+        crud, other = f"crud-causality-v2-{pin}-overlay.yaml", f"pagination-{pin}-overlay.yaml"
+        catalog = {"platforms": [{"name": "example", "overlays": [
+            base + o for o in (other, crud, f"completeness-{pin}-overlay.yaml")]}]}
+        found = violations(catalog, {completeness: [[crud]]}.get, {completeness: [other]}.get)
+        self.assertEqual(found, [f"example: {completeness} conflicts with {other}"])
+        self.assertEqual(violations(catalog, {completeness: [[crud]]}.get), [])
 
     def test_a_catalog_with_an_older_revision_is_refused(self):
         pin = "b58c91d9f59c6a10178916e7948793809edae46d"
