@@ -154,8 +154,9 @@ Data flows through four stages, each its own directory under `src/`:
    A POST to a collection whose create (or path item) declares an
    `Idempotency-Key` header parameter is answered again with the first
    record for a key it has seen with the same body, and `422` for another
-   body (`replays`; `unit/mock-server/idempotency.test.ts`, which also
-   runs the client's lost-response retry against it).
+   body; bodies compare as JSON with sorted keys, or as text when not JSON
+   (`replays`, `bodyFingerprint`; `unit/mock-server/idempotency.test.ts`,
+   which also runs the client's lost-response retry against it).
 
 4. **`client/`** — `client.ts` is the browser-safe local-first core, exported
    by `syncables/browser`. `sync()` uses `readCollections`; `paginate()` uses

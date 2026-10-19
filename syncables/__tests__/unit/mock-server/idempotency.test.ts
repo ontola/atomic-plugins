@@ -88,6 +88,34 @@ describe('the mock server with a declared Idempotency-Key', () => {
     expect(other.id).not.toBe(first.id);
   });
 
+  it('compares bodies with their keys sorted', async () => {
+    const { url } = await serve(true);
+    const first = await (
+      await post(url, { name: 'Milo', tag: 'cat' }, 'k1')
+    ).json();
+    const again = await post(url, { tag: 'cat', name: 'Milo' }, 'k1');
+    expect(again.status).toBe(201);
+    expect(await again.json()).toEqual(first);
+  });
+
+  it('compares bodies that are not JSON as text', async () => {
+    const { url } = await serve(true);
+    const raw = (text: string): Promise<Response> =>
+      fetch(`${url}/pets`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'Idempotency-Key': 'k1',
+        },
+        body: text,
+      });
+    const first = await (await raw('{not json')).json();
+    const same = await raw('{not json');
+    expect(same.status).toBe(201);
+    expect(await same.json()).toEqual(first);
+    expect((await raw('{other')).status).toBe(422);
+  });
+
   it('refuses the same key with another body', async () => {
     const { url } = await serve(true);
     await post(url, { name: 'Milo' }, 'k1');
@@ -139,6 +167,10 @@ describe('a create whose response was lost', () => {
     await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
     expect(posts).toHaveLength(2);
     expect(JSON.parse(posts[0]!.body!)).toEqual({ name: 'Milo' });
+    // The key is sent under the header the document declares.
+    expect(posts[0]!.headers['Idempotency-Key']).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
     expect(posts[1]!.headers['Idempotency-Key']).toBe(
       posts[0]!.headers['Idempotency-Key'],
     );

@@ -23,3 +23,16 @@ generated`), because with the pets fixture the client sends its own id
 and the mock's id upsert hid the duplicate; three of the five tests
 fail on the server before. A real provider's deduplication stays its
 contract, as the README now says.
+
+## Turn 2
+
+**Human (via the coordinator session):** #655's nits: compare bodies
+canonically or state the limit; a 422 for two different unparseable
+bodies; an explicit header assertion.
+
+**Assistant:** `bodyFingerprint` compares a JSON body with its keys
+sorted (`canonicalJson`) and a body that is not JSON by its text, so key
+order no longer makes a 422 and two different unparseable bodies no
+longer replay each other. The lost-response test asserts the key is a
+UUID under the declared `Idempotency-Key`. Two new tests fail on the
+code before.
