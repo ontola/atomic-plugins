@@ -96,19 +96,23 @@ base/schema and record GET operations with `schema.bases:read` and
 `data.records:read`, including offset paging for bases and records. The Airtable
 OAD is an authored, documented subset; it does not claim full API coverage.
 
-Both profiles use S256 PKCE. Airtable supports a confidential client using
-HTTP Basic or a public client without a secret; the registered client’s choice
-is configured through the proxy’s generic credential settings. Selecting this
-catalog does not register applications or prove a real-account connection.
-The operator must configure each application and explicitly switch
-`CATALOG_PATH` after validation. Provider reads are the only operations exposed
-by these two profiles. See the [source and scope evidence](tests/ASANA_AIRTABLE_READONLY_PROVENANCE.md)
-and the focused composition and consumer checks under `tests/`.
+Both profiles use S256 PKCE. Airtable's official OAuth sample sends client
+credentials with HTTP Basic when a client secret is configured and no client
+authentication when there is none (see the provenance file below); the
+overlay declares both, and the registered client’s choice is configured
+through the proxy’s generic credential settings. Selecting this catalog does
+not register applications or prove a real-account connection. The operator
+must configure each application and explicitly switch `CATALOG_PATH` after
+validation. Provider reads are the only operations exposed by these two
+profiles. See the
+[source and scope evidence](tests/ASANA_AIRTABLE_READONLY_PROVENANCE.md) and
+the focused composition and consumer checks under `tests/`.
 
-Airtable OAuth integrations without a support email, privacy-policy URL and
-terms-of-service URL are limited to authorization by their developer account.
-Supply the operator’s actual policies before advertising general availability;
-a working developer connection does not establish public distribution.
+Not checked against a provider page: that Airtable OAuth integrations
+without a support email, privacy-policy URL and terms-of-service URL are
+limited to authorization by their developer account. Supply the operator’s
+actual policies before advertising general availability; a working developer
+connection does not establish public distribution.
 
 ## Throttling response signals
 
@@ -313,22 +317,26 @@ default", so no completeness is declared on it.
 [`completeness-v2-ac07532b…`](APIs/todoist.com/1/completeness-v2-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml)
 keeps v1's tasks declaration (#99) and adds the `projects` collection:
 `absent: removed`, `notFound: unavailable` (quotes curl'd from the raw
-[API v1 reference](https://developer.todoist.com/api/v1/) on 2026-10-15). Get
-Projects says "Get all active user projects, optionally filtered by folder or
-workspace."; its `folder_id` and `workspace_id` only narrow it and are not
-sent, and no parameter widens it to archived projects (those come from a
-separate endpoint, Get Archived: "Get the user's archived projects."). As for
-the tasks list ("all active tasks"), the list therefore does not filter by
-default in the sense this repository applies (a parameter that would widen
-it), and an archived project ("removing it from view") or a deleted one is an
-absence its own read settles: §4.2's `removed` "MAY still exist, for example
-archived". The reference lists a 404 among the read's responses without
-saying which case gives it, so a 404 is `unavailable`. Not verified: what a
-project's read answers once it is archived or deleted. It states
-`info.x-requires` (the catalog's crud-causality overlay). No dated catalog
-selects it. `tests/test_todoist_completeness_v2.py` checks that v2 is v1 plus
-the projects declaration, composes it in either order, and checks the
-outcomes `classify_read` gives. No provider was called.
+[API v1 reference](https://developer.todoist.com/api/v1/) on 2026-10-15).
+Get Projects says "Get all active user projects, optionally filtered by
+folder or workspace."; its `folder_id` and `workspace_id` only narrow it and
+are not sent, and no parameter widens it to archived projects (those come
+from a separate endpoint, Get Archived: "Get the user's archived
+projects."). As for the tasks list ("all active tasks"), the list therefore
+does not filter by default in the sense this repository applies (a parameter
+that would widen it), and an archived project or a deleted one is an absence
+its own read settles. Archive Project archives a workspace project "for all
+workspace users, removing it from view", but a personal project "just for
+the initiating user (leaving it visible to any other collaborators)", so
+another collaborator's list keeps it; either way an absence is settled by
+the read: §4.2's `removed` "MAY still exist, for example archived". The
+reference lists a 404 among the read's responses without saying which case
+gives it, so a 404 is `unavailable`. Not verified: what a project's read
+answers once it is archived or deleted. It states `info.x-requires` (the
+catalog's crud-causality overlay). No dated catalog selects it.
+`tests/test_todoist_completeness_v2.py` checks that v2 is v1 plus the
+projects declaration, composes it in either order, and checks the outcomes
+`classify_read` gives. No provider was called.
 
 ## Google Calendar deletion feed
 
@@ -482,26 +490,31 @@ was called.
 ## Airtable table records completeness
 
 [`completeness-1f5368e0…-overlay.yaml`](APIs/airtable.com/1.0-readonly/completeness-1f5368e0251bfbaa233860dc8131507c38a4f8b3-overlay.yaml)
-declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
-on the Airtable `tableRecords` collection: `absent: removed` and
-`notFound: unavailable`. Airtable's
-[errors page](https://airtable.com/developers/web/api/errors) says a 404 is
-returned "if the resource doesn't exist (e.g. has been deleted)", but a
-record read's 404 answers just as well for a deleted or renamed table
-(`tableIdOrName` may be a name) or a deleted base, and the pinned OAD adds
-"or is not accessible"; the answer does not say which, so a 404 is not
-taken as the record's deletion. [List records](https://airtable.com/developers/web/api/list-records)
-returns every record when no view or `filterByFormula` is given, in
-arbitrary order; nothing is documented about records skipped during offset
-paging, so absence is `removed` and settled by the record's own read. Not
-declared: `gone` (no 410 documented), anything on bases or tables, and
-`parentAbsent` (no resource binds `tableIdOrName`). Not verified: whether a
-deleted record can be restored (the interface has a trash; the API reference
-does not mention it). No dated catalog selects it yet.
-`tests/test_airtable_records_completeness.py` composes it with the catalog's
-auth, pagination and crud-causality overlays, in either order, runs both
-validators, checks the pinned wording and the outcomes `classify_read` gives.
-No provider was called.
+declares
+[Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
+on the Airtable `tableRecords` collection: `absent: removed` and `notFound:
+unavailable`. Airtable's
+[errors page](https://airtable.com/developers/web/api/errors), as a
+rendering fetch showed it (the raw page fetched with curl does not contain
+the text), says a 404 is returned "if the resource doesn't exist (e.g. has
+been deleted)", but a record read's 404 answers just as well for a deleted
+or renamed table (`tableIdOrName` may be a name) or a deleted base, and the
+pinned OAD adds "or is not accessible"; the answer does not say which, so a
+404 is not taken as the record's deletion. The overlay's
+[List records](https://airtable.com/developers/web/api/list-records) read
+sends no `view` and no `filterByFormula`; that it then returns every record
+of the table is inferred, not stated, and the page's raw text gives the
+order: "If neither the **sort** nor the **view** parameter is included, the
+order of records is arbitrary." Nothing is documented about records skipped
+during offset paging, so absence is `removed` and settled by the record's
+own read. Not declared: `gone` (no 410 documented), anything on bases or
+tables, and `parentAbsent` (no resource binds `tableIdOrName`). Not
+verified: whether a deleted record can be restored (the interface has a
+trash; the API reference does not mention it). No dated catalog selects it
+yet. `tests/test_airtable_records_completeness.py` composes it with the
+catalog's auth, pagination and crud-causality overlays, in either order,
+runs both validators, checks the pinned wording and the outcomes
+`classify_read` gives. No provider was called.
 
 ## Airtable throttling
 
@@ -519,7 +532,7 @@ mention. No dated catalog selects it yet. `tests/test_airtable_throttling.py`
 composes it alone and after the catalog's Airtable overlays and classifies
 a synthetic 429. No provider was called.
 
-## Asana project tasks completeness
+## Asana lists completeness
 
 [`completeness-b58c91d9…-overlay.yaml`](APIs/asana.com/1.0/completeness-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml)
 declares [Collection Completeness 0.2.0-draft](../openapi-extensions/spec/collection-completeness/README.md)
@@ -530,8 +543,8 @@ project). Each list sends no narrowing filter ("all workspaces visible to the
 authorized user", "all projects in the workspace" without the optional
 `archived` filter, "all users in all workspaces and organizations accessible
 to the authenticated user", every task of the project). From the pinned OAD's
-own text (the same as Asana's
-[API reference](https://developers.asana.com/reference/rest-api-reference)).
+own text; not compared with Asana's current
+[API reference](https://developers.asana.com/reference/rest-api-reference).
 Its 404 says the object "does not exist", but deleted tasks go into the
 deleting user's trash and "can be recovered from the trash within a period of
 30 days", and what a trashed task's read answers is not documented, so a 404
@@ -627,46 +640,54 @@ responses. No provider was called.
 ## Discord pagination v2: a cursor from the last item
 
 [`pagination-v2-9d0d73c6…`](APIs/discord.com/10/pagination-v2-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
-declares [Pagination Schemes 0.9.0](../openapi-extensions/spec/pagination-schemes/README.md)
+declares
+[Pagination Schemes 0.9.0](../openapi-extensions/spec/pagination-schemes/README.md)
 `fromLastItem` (§4.3.3) on the two Discord operations whose order is
-documented: [Get Guild Bans](https://docs.discord.com/developers/resources/guild)
+documented:
+[Get Guild Bans](https://docs.discord.com/developers/resources/guild)
 ("Users will always be returned in ascending order by `user.id`") and
 [Get Guild Scheduled Event Users](https://docs.discord.com/developers/resources/guild-scheduled-event)
 ("ascending order by `user_id`"). Both take `after` as a strict bound
 ("consider only users after given user id"), so the next page's `after` is
 the last item's `user.id`: rule (b) of §4.3.3. The first request sends no
-`after`, and an empty page ends the read (Discord has no has-more field). The
-pinned OAD does not require `user` on a scheduled-event user; an item without
-it ends the read with an error. Not declared, because Discord does not
-document their order: List Guild Members (its `after` is "the highest user id
-in the previous page", but the order is not stated), Get Reactions, List
-Thread Members, Get Answer Voters, List Entitlements, List SKU
-Subscriptions, Get Current User Guilds, the scheduled-event exception users,
-Get Channel Messages, and the audit log (whose cursor-less first page is not
-ascending). It keeps v1's one action, the guild list's description, revised.
-A 0.8.0 consumer would stop after one page, so it needs a 0.9.0 reader. No
-dated catalog selects it; the catalogs read neither operation.
-`tests/test_discord_pagination_v2.py` validates it alone and in place of v1
-after the catalog's Discord overlays, and reads synthetic pages with the
-reference `read_item_cursor`. No provider was called.
+`after`, and an empty page ends the read (Discord documents no has-more
+field for either). The pinned OAD does not require `user` on a
+scheduled-event user; an item without it ends the read with an error. Not
+declared, because Discord does not document their order: List Guild Members
+(its `after` is "the highest user id in the previous page", but the order is
+not stated), Get Reactions, List Thread Members, Get Answer Voters, List
+Entitlements, List SKU Subscriptions, Get Current User Guilds, the
+scheduled-event exception users, Get Channel Messages, and the audit log
+(whose cursor-less first page is not ascending). It keeps v1's one action,
+the guild list's description, revised. A 0.8.0 consumer would stop after one
+page, so it needs a 0.9.0 reader. No dated catalog selects it; the catalogs
+read neither operation. `tests/test_discord_pagination_v2.py` validates it
+alone and in place of v1 after the catalog's Discord overlays, and reads
+synthetic pages with the reference `read_item_cursor`. No provider was
+called.
 
-The overlay file's comment is published and cannot change; checked again
-on 2026-10-15, it needs these corrections and additions. Get Channel
-Messages does state its order, "from newest to oldest" (it takes
-`before`, `after` and `around`; newest to oldest is not ascending, so its
-`after` is no rule (b) bound either). Newest-first, too, are the `before`-only
-lists the comment does not name: List Public Archived Threads and List
-Private Archived Threads ("ordered by `archive_timestamp`, in descending
-order", `before` a timestamp), List Joined Private Archived Threads
-("ordered by their `id`, in descending order", `before` an id) and Get
-Channel Pins (`before` a pin timestamp, order not stated). Rule (b) covers
-an ascending order with a lower bound only, so none of them qualifies in
-Pagination Schemes 0.9.0. Get Guild Join Requests takes `before` and
-`after` but is undocumented (it is in the pinned OAD only). Checked word for word against the raw
-pages with curl on 2026-10-15, every quote in the overlay matches except
-one: the scheduled-event users' `after` row reads "consider only users
-after given user id" (lowercase), not "Consider ...", and its `limit` row
-reads "number of users to return (up to maximum 100)".
+The overlay file's comment is published and cannot change; checked again on
+2026-10-15, it needs these corrections and additions. Get Channel Messages
+does state its order, "from newest to oldest" (it takes `before`, `after`
+and `around`; newest to oldest is not ascending, so its `after` is no rule
+(b) bound either). Newest-first, too, are the `before`-only lists the
+comment does not name: List Public Archived Threads and List Private
+Archived Threads ("ordered by `archive_timestamp`, in descending order",
+`before` a timestamp), List Joined Private Archived Threads ("ordered by
+their `id`, in descending order", `before` an id) and Get Channel Pins
+(`before` a pin timestamp, order not stated). The audit log states its order
+too: "Omitting both `before` and `after` defaults to `before` the current
+timestamp and will show the most recent entries in descending order by ID,
+the opposite can be achieved using `after=0` (showing oldest entries)."
+(curl'd 2026-10-15); no revision declares it, and neither its `after=0` nor
+its `before` paging has been reviewed. Rule (b) covers an ascending order
+with a lower bound only, so none of them qualifies in Pagination Schemes
+0.9.0. Get Guild Join Requests takes `before` and `after` but is
+undocumented (it is in the pinned OAD only). Checked word for word against
+the raw pages with curl on 2026-10-15, every quote in the overlay matches
+except one: the scheduled-event users' `after` row reads "consider only
+users after given user id" (lowercase), not "Consider ...", and its `limit`
+row reads "number of users to return (up to maximum 100)".
 
 [`pagination-v3-9d0d73c6…`](APIs/discord.com/10/pagination-v3-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
 (Pagination Schemes 0.10.0) keeps v2, adds `order: ascending` to its scheme
@@ -727,17 +748,21 @@ fixed read is the request the drive app sends. No provider was called.
 
 ## Collection completeness
 
-Four standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
+Eight standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
 `x-completeness`, which syncables reads (`absent`, `notFound`, `gone`,
-`parentAbsent`). No dated catalog selects them yet.
+`parentAbsent`). No dated catalog selects them yet. Notion's, GitLab's,
+Spotify's, Airtable's and Asana's have their own sections above.
 
 | Overlay | Declares | Evidence |
 | --- | --- | --- |
 | [Google Tasks v1 completeness](APIs/googleapis.com/tasks/v1/completeness-7ca47c73cf2308c9812692b482b3713b397bc88c-overlay.yaml) | Task lists and tasks `absent: removed`, `notFound: unavailable`; tasks `parentAbsent: unavailable`; the task read tombstone `deleted: true`. Needs crud-causality v2 (the fixed read that returns hidden tasks). | The pinned OAD (tasklists.list "Returns all the authenticated user's task lists"; Task.deleted "Flag indicating whether the task has been deleted"); what a 404 means is not documented |
 | [GitHub Issues completeness](APIs/github.com/github-issues/1.1.4/completeness-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml) | Issues `absent: removed`, `notFound: unavailable`, no `gone`; comments the same plus `parentAbsent: unavailable`. Page-number paging can skip an issue deleted or transferred during a read; it stays unconfirmed until its GET settles it. | [Get an issue](https://docs.github.com/en/rest/issues/issues#get-an-issue): 301 when transferred, 404 when transferred or deleted out of the caller's reach, 410 when deleted where the caller can read, and 410 for every issue when issues are turned off, so neither a 404 nor a 410 is declared a deletion |
 | [GitHub REST (api.github.com) completeness](APIs/github.com/api.github.com/1.1.4/completeness-920631db31e628be547e9366821d3ebc7fa0ead5-overlay.yaml) | The same declaration as GitHub Issues', for the full api.github.com document (crud-causality v2 or v1 of `920631db`). Under page-number paging an issue deleted or transferred during a read moves the later ones back, so the issue after it can be skipped; it still exists, and its own read finds it. | As for GitHub Issues, checked word for word against the raw page. A 410 for disabled issues is documented for [Create an issue](https://docs.github.com/en/rest/issues/issues#create-an-issue) only ("If issues are disabled in the repository, the API returns a 410 Gone status."); that a read answers 410 then, and its body, are not verified. [Using pagination](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api)'s issues example pages by `page`. No catalog selects it |
-| [Google Calendar v3 events completeness](APIs/googleapis.com/calendar/v3/completeness-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Events `absent: removed`, `notFound: unavailable`, no `gone`, no `parentAbsent`. Composes with app-crud-causality, its v2 and crud-causality; a deletion is the read tombstone (a 2xx `cancelled` answer), never a 404. | [Errors guide](https://developers.google.com/workspace/calendar/api/guides/errors): a 404 when the resource "has never existed" or for "a calendar that the user can not access"; the 410s are about sync tokens and repeated deletes. The pinned OAD: cancelled events, "The get method always returns them", and they "will eventually disappear". An event may also leave the list without being deleted when the user's access to the calendar changes (assumed; not documented). A move can "leave behind a cancelled event where only the id field is guaranteed to be populated": with read-tombstone-v2 or list-tombstone selected, that remnant reads as a deletion from the source calendar; under the catalogs' read without them, a deletion or a move is an absence. `removed` stays safe either way. Not verified: what a deleted event's read answers once it has disappeared |
+| [Google Calendar v3 events completeness](APIs/googleapis.com/calendar/v3/completeness-32237fa5d14aa887dc9f3923395dac971e00a36c-overlay.yaml) | Events `absent: removed`, `notFound: unavailable`, no `gone`, no `parentAbsent`. Composes with app-crud-causality, its v2 and crud-causality; a deletion is the read tombstone (a 2xx `cancelled` answer), never a 404. | [Errors guide](https://developers.google.com/workspace/calendar/api/guides/errors): a 404 when the resource "has never existed" or for "a calendar that the user can not access"; the 410s are about sync tokens and repeated deletes. The pinned OAD: cancelled events, "The get method always returns them", and they "will eventually disappear". An event may also leave the list without being deleted when the user's access to the calendar changes (assumed; not documented). A move can "leave behind a cancelled event where only the id field is guaranteed to be populated": with read-tombstone-v2 or list-tombstone selected, that remnant reads as a deletion from the source calendar; the dated catalogs select neither, so there a deletion or a move is an absence. `removed` stays safe either way. Not verified: what a deleted event's read answers once it has disappeared |
 | [Todoist v1 active-task completeness](APIs/todoist.com/1/completeness-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml) (#99) | Tasks `absent: removed`, `notFound: unavailable`; no read tombstone and no `gone`. | [API v1 reference](https://developer.todoist.com/api/v1/), read raw with curl: Get Tasks "Get all active tasks for the user"; Get Task "Returns a single active (non-completed) task by ID"; Close Task "Regular tasks are marked complete and moved to history"; Delete Task "Delete a task and all of its subtasks."; pagination "When next_cursor is null, you've reached the end of the results." A task that leaves the list may be completed, deleted or out of reach, and its read cannot return it as `checked` or `is_deleted`; no read answer is taken as a deletion, and a read that stops before a null `next_cursor` is not complete |
+| [Todoist v1 completeness v2](APIs/todoist.com/1/completeness-v2-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml) | v1's tasks plus projects `absent: removed`, `notFound: unavailable`; `x-requires` the crud-causality overlay. | See [Todoist projects completeness](#todoist-projects-completeness). |
+| [Moneybird v2-readonly completeness](APIs/moneybird.com/v2-readonly/completeness-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml) (#585) | `absent: removed`, `notFound: unavailable` on the five lists whose read sends no filter and leaves nothing out by default. | See [its README](APIs/moneybird.com/v2-readonly/README.md). |
+| [Moneybird v2-readonly completeness v2](APIs/moneybird.com/v2-readonly/completeness-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml) | v1's five plus assets, products, contacts and projects, read through crud-causality v2's widening `listQuery`. | See [its README](APIs/moneybird.com/v2-readonly/README.md). |
 
 An earlier Todoist draft was left out because the reference could not be
 read; read raw, it settles the declaration above. Not verified without a
@@ -974,15 +999,16 @@ info:
     - anyOf: [crud-causality-v2-<pin>-overlay.yaml]
 ```
 
-`x-requires` is specified by [Overlay Requirements](../openapi-extensions/spec/overlay-requirements/README.md).
-This repository additionally checks revision filenames (`<kind>[-vN]-<pin>-overlay.yaml`)
-against its dated catalogs and rejects another revision of a required kind.
-Published completeness
-overlays cannot change, so `tests/test_completeness_requirements.py` holds the
-same groups for them in a table (and for those still in review when it was written). For every dated
-catalog it checks that each completeness overlay it selects has every group
-met, and that no other revision of a group's kinds is selected for that
-platform; it also fails on a completeness overlay that states no
+`x-requires` is specified by
+[Overlay Requirements](../openapi-extensions/spec/overlay-requirements/README.md).
+This repository additionally checks revision filenames
+(`<kind>[-vN]-<pin>-overlay.yaml`) against its dated catalogs and rejects
+another revision of a required kind. Published completeness overlays cannot
+change, so `tests/test_completeness_requirements.py` holds the same groups
+for them in a table (and for those still in review when it was written). For
+every dated catalog it checks that each completeness overlay it selects has
+every group met, and that no other revision of a group's kinds is selected
+for that platform; it also fails on a completeness overlay that states no
 requirement either way.
 
 ## Reviewed standalone pagination overlays
@@ -998,6 +1024,12 @@ OAD revision use `pagination`. Old files and dated catalog selections are
 unchanged. Select a v2 file instead of its v1 variant when composing that
 provider's document; the new services can be composed with their pinned OAD
 directly.
+
+Statements below about provider behaviour (cursor lifetimes, traversal caps,
+snapshot guarantees, rejected parameter combinations) paraphrase the pages in
+each row's Sources column; they are not quotes, this audit (2026-10-19) did
+not re-check them against those pages, and none was verified against a live
+account.
 
 | Variant | Declared coverage | Sources |
 | --- | --- | --- |
