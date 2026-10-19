@@ -1769,8 +1769,8 @@ environment variables.
 `clientId` and `clientSecret` and returns an authenticated request, possibly
 after obtaining/refreshing a user token. OAuth consent, grant selection and
 token persistence are the adapter's responsibility; loading application
-credentials alone does not log a user in. Credentials without an authentication
-adapter are rejected. Keep confidential client credentials in server-side
+credentials alone does not log a user in. Explicit credentials without an
+authentication adapter are rejected. Keep confidential client credentials in server-side
 configuration. Authentication happens after the data-read capture boundary.
 
 Every request syncables makes says why, in `TransportRequest.purpose`
