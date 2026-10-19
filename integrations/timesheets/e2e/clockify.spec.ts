@@ -32,8 +32,17 @@
 import { createRequire } from 'node:module';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { test, expect, type FrameLocator, type Page } from '@playwright/test';
-import { before } from '../../../browser/e2e/tests/test-utils';
+import {
+  test,
+  expect,
+  type Browser,
+  type FrameLocator,
+  type Page,
+} from '@playwright/test';
+import {
+  before,
+  getDevDriveSecret,
+} from '../../../browser/e2e/tests/test-utils';
 import {
   classes as sharedClasses,
   properties as sharedProperties,
@@ -680,6 +689,194 @@ test.describe('timesheets drive app', () => {
       { timeout: 60_000 },
     );
     await expect(changes).toHaveCount(0);
+  });
+});
+
+/**
+ * #123 M5 in two real browser contexts on one drive: the same signed-in
+ * agent (the first context's storage state) with the app open twice, as two
+ * devices would. Until now these ran only as simulated devices
+ * (`app/multiDevice.test.ts`). The ranges are on the day before yesterday
+ * (08:00–10:00 in the fixture's profile zone), where no fixture entry is.
+ */
+test.describe
+  .only('timesheets drive app: two browser contexts (#123 M5)', () => {
+  test.beforeEach(before);
+
+  /** Connect, choose the workspace and import in `page`'s app. */
+  async function importIn(page: Page) {
+    await fixture({ action: 'reset' });
+    await installFromCatalog(page);
+    const app = page.frameLocator(APP_FRAME);
+    const status = app.getByRole('status');
+    await app.getByRole('button', { name: 'Connect Clockify' }).click();
+    const consent = page.getByRole('group', { name: 'Connect an account' });
+    await consent.getByRole('button', { name: 'Connect', exact: true }).click();
+    await page.getByLabel('API key').fill('synthetic-clockify-key');
+    await page
+      .getByRole('button', { name: 'Connect Clockify', exact: true })
+      .click();
+    await expect(status).toContainText('Choose the workspace', {
+      timeout: 30_000,
+    });
+    await app.getByRole('radio', { name: 'Test workspace' }).check();
+    await app.getByRole('button', { name: 'Last 7 days' }).click();
+    await app.getByRole('button', { name: 'Import entries' }).click();
+    await expect(status.filter({ hasText: 'Last synced' })).toContainText(
+      '2 created,',
+      { timeout: 60_000 },
+    );
+  }
+
+  /** Waits until `page`'s store has sent every local change to the server,
+   * where the other context loads it from (its OPFS starts empty). */
+  const pushed = (page: Page) =>
+    page.waitForFunction(
+      () =>
+        (
+          window as unknown as {
+            store?: { getSyncStatus(): { pendingDirtyCount: number } };
+          }
+        ).store?.getSyncStatus().pendingDirtyCount === 0,
+      undefined,
+      { timeout: 30_000 },
+    );
+
+  /** The app in a second context: a new device (empty OPFS) unlocking the
+   * same drive with the same agent secret, synced once. */
+  async function secondCopy(page: Page, browser: Browser) {
+    const secret = await getDevDriveSecret(page);
+    await pushed(page);
+    const context = await browser.newContext();
+    const other = await context.newPage();
+    await other.goto(page.url());
+    await expect(
+      other.getByRole('heading', { name: 'Unlock this drive' }),
+    ).toBeVisible({ timeout: 30_000 });
+    await other.getByLabel('Agent secret').fill(secret);
+    // Unlocking lands on the drive; open the app's view again.
+    await expect(
+      other.getByRole('heading', { name: 'Unlock this drive' }),
+    ).toHaveCount(0, { timeout: 30_000 });
+    await other.goto(page.url());
+    const app = other.frameLocator(APP_FRAME);
+    await expect(
+      app.getByRole('status').filter({ hasText: 'Last synced' }),
+    ).toBeVisible({ timeout: 60_000 });
+
+    return { context, page: other, app };
+  }
+
+  /** Stages "worked on `project`" over `[from, to)` through the form. */
+  async function editRange(
+    app: FrameLocator,
+    from: number,
+    to: number,
+    project: string,
+  ) {
+    await app.getByRole('button', { name: 'Edit a time range…' }).click();
+    const form = app.getByRole('form', { name: 'Edit a time range' });
+    await form.getByLabel(/^From/).fill(amsterdamInput(from));
+    await form.getByLabel(/^To/).fill(amsterdamInput(to));
+    await form
+      .getByLabel('What happened')
+      .selectOption({ label: `Worked on ${project}` });
+    await app.getByRole('button', { name: 'Plan changes' }).click();
+    await expect(
+      app.getByRole('region', { name: 'Changes to send' }),
+    ).toContainText('Create a new entry', { timeout: 30_000 });
+  }
+
+  const writes = async () =>
+    (
+      (await fixture({ action: 'requests' })) as {
+        writes: Array<{ method: string; path: string; body: unknown }>;
+      }
+    ).writes;
+
+  const twoDaysAgoAt = (hours: number) =>
+    yesterdayAt(Date.now(), hours) - 24 * 3_600_000;
+
+  test('S21: the same range edited in two contexts is a conflict in both, and nothing is sent', async ({
+    page,
+    browser,
+  }) => {
+    test.skip(
+      !process.env.ATOMIC_MOCK_INTEGRATION_PROXY,
+      'Run with the documented mock integration-proxy server configuration',
+    );
+    test.setTimeout(240_000);
+    await importIn(page);
+    const a = page.frameLocator(APP_FRAME);
+    const b = await secondCopy(page, browser);
+
+    // Each copy edits the same hour before it has seen the other's edit.
+    const from = twoDaysAgoAt(8);
+    await editRange(a, from, from + 3_600_000, 'Research');
+    await editRange(b.app, from, from + 3_600_000, 'Atomic plugins');
+
+    // Once both edits reach the server, a sync on each copy sees both: a
+    // conflict, held on both.
+    await pushed(page);
+    await pushed(b.page);
+    for (const app of [a, b.app]) {
+      await app.getByRole('button', { name: 'Sync now' }).click();
+      await expect(
+        app.getByRole('region', { name: 'Conflicts in Clockify' }),
+      ).toContainText('Your range edits disagree, not sent', {
+        timeout: 60_000,
+      });
+    }
+    expect(await writes()).toEqual([]);
+    await b.context.close();
+  });
+
+  test('a second context sends nothing while the first holds the send lease', async ({
+    page,
+    browser,
+  }) => {
+    test.skip(
+      !process.env.ATOMIC_MOCK_INTEGRATION_PROXY,
+      'Run with the documented mock integration-proxy server configuration',
+    );
+    test.setTimeout(240_000);
+    await importIn(page);
+    const a = page.frameLocator(APP_FRAME);
+    const b = await secondCopy(page, browser);
+
+    await editRange(a, twoDaysAgoAt(8), twoDaysAgoAt(9), 'Research');
+    await editRange(b.app, twoDaysAgoAt(9), twoDaysAgoAt(10), 'Research');
+
+    await pushed(page);
+    await pushed(b.page);
+    // A's POST is applied but never answered: A keeps the lease (60 s).
+    await fixture({ action: 'applyThenDrop', hang: true });
+    const sendIn = (app: FrameLocator) =>
+      app
+        .getByRole('region', { name: 'Changes to send' })
+        .getByRole('button', { name: /^Send \d+ to Clockify$/ })
+        .click();
+    await sendIn(a);
+    await expect
+      .poll(async () => (await writes()).length, { timeout: 60_000 })
+      .toBe(1);
+
+    await pushed(page);
+    await sendIn(b.app);
+    await expect(b.app.locator('body')).toContainText(
+      'Another open copy of this app is sending changes to Clockify',
+      { timeout: 60_000 },
+    );
+    // Only A's create reached Clockify.
+    expect(await writes()).toEqual([
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.objectContaining({
+          start: clockifyInstant(twoDaysAgoAt(8)),
+        }),
+      }),
+    ]);
+    await b.context.close();
   });
 });
 
