@@ -1230,9 +1230,11 @@ When the create operation declares an `x-crud` `create` for the resource
   the next refresh.
 - When the identity cannot be determined (no or another `Location`, an
   empty body where the body must name it, or a value that cannot be an
-  identity: a dot segment such as `/pets/..` or `%2E%2E`, an empty string,
-  an object, a boolean, a fraction or an integer past 2^53, or a URL value
-  that does not percent-decode), the record exists at the
+  identity: a dot segment such as `/pets/..` or `%2E%2E`, an empty or
+  whitespace-padded string, one with NUL or a lone surrogate, an object, a
+  boolean, a fraction or an integer past 2^53, or a URL value that does not
+  percent-decode; `resolveReference` refuses the same strings), the record
+  exists at the
   provider but is **unbound**: the create becomes `uncertain` with
   `unbound: true` in `pendingWrites()` (stored in the outbox), and once
   that outcome is stored it is never sent again, also with an idempotency

@@ -2,6 +2,7 @@
 import type { OpenApiDocument } from '../openapi/types.js';
 import { readNestedField } from '../pagination/response-parser.js';
 import { isRecord } from '../read/model.js';
+import { segmentProblem } from '../read/segment.js';
 import { withoutOmitted, type FollowUp } from './compound-create.js';
 
 /**
@@ -78,14 +79,16 @@ export function createBody(
 }
 
 /**
- * Whether `value` can be a record's identity: a nonempty string other
- * than a dot segment, or a safe integer. `.` and `..` would move the
- * record's path (`/pets/..` normalises to `/`), and an object, a boolean
- * or a fraction would become a record id such as `[object Object]`.
+ * Whether `value` can be a record's identity: a string `segmentProblem`
+ * accepts (nonempty, not `.` or `..`, not padded with whitespace, no NUL,
+ * no lone surrogate), or a safe integer. `.` and `..` would move the
+ * record's path (`/pets/..` normalises to `/`), a lone surrogate makes
+ * every later path to the record throw `URIError`, and an object, a
+ * boolean or a fraction would become a record id such as
+ * `[object Object]`. A numeric string past 2^53 is kept, as a string.
  */
 function identityValue(value: unknown): boolean {
-  if (typeof value === 'string')
-    return value !== '' && value !== '.' && value !== '..';
+  if (typeof value === 'string') return segmentProblem(value) === undefined;
   return typeof value === 'number' && Number.isSafeInteger(value);
 }
 

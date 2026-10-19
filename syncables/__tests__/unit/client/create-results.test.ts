@@ -221,7 +221,12 @@ describe('createdIdentity refuses a value that cannot be an identity', () => {
     '/pets/..',
     '/pets/%2E%2E',
     '/pets/%2e',
+    '/pets/.%2e',
     '/pets/%E0%A4%A',
+    '/pets/%20x',
+    '/pets/x%20',
+    '/pets/%09x',
+    '/pets/a%00b',
   ])('leaves the Location %s undetermined', (location) => {
     expect(createdIdentity(header(), undefined, { location })).toBeUndefined();
   });
@@ -234,6 +239,11 @@ describe('createdIdentity refuses a value that cannot be an identity', () => {
     { id: 2 ** 53 },
     { id: '' },
     { id: '..' },
+    { id: ' x' },
+    { id: 'x\n' },
+    { id: 'a\u0000b' },
+    // A lone surrogate: every later path to the record would throw.
+    { id: 'p-\ud800' },
   ])('leaves the body %j undetermined', (body) => {
     for (const url of [{ source: 'template' }, undefined])
       expect(createdIdentity(declaration(url), body, {})).toBeUndefined();
@@ -244,6 +254,10 @@ describe('createdIdentity refuses a value that cannot be an identity', () => {
       id: 'p-1',
     });
     expect(createdIdentity(declaration(), { id: 0 }, {})).toEqual({ id: 0 });
+    // A numeric string past 2^53 stays a string, exactly.
+    expect(
+      createdIdentity(declaration(), { id: '9007199254740993' }, {}),
+    ).toEqual({ id: '9007199254740993' });
     expect(
       createdIdentity(header(), undefined, { location: '/pets/...' }),
     ).toEqual({ id: '...' });

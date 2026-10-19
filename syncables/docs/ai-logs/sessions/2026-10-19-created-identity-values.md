@@ -22,3 +22,18 @@ integer; anything else leaves the create unbound. 15 new tests in
 `unit/client/create-results.test.ts`, 13 failing on the code before
 (the undecodable URL case already gave undefined and is now pinned).
 README and a fragment.
+
+## Turn 2
+
+**Human (via the coordinator session):** #660's review: `identityValue`
+still binds what `resolveReference`'s `segmentProblem` refuses
+(whitespace padding, NUL, a lone surrogate, which makes every later
+update or delete throw `URIError` in `bindPath`); share `segmentProblem`
+and add those cases and `.%2e`; say in the fragment that a numeric
+string past 2^53 is kept as a string.
+
+**Assistant:** `segmentProblem` moved to `read/segment.ts`, used by
+`resolveReference` and by `identityValue` for strings. Nine cases added
+(four `Location` values, four body ids, `.%2e`) and one keeping
+`'9007199254740993'`; eight fail on the previous head (`.%2e` already
+decoded to `..`). README and fragment updated.
