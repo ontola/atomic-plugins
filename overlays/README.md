@@ -688,6 +688,29 @@ composes it, runs the validators, and reads synthetic pages with
 `read_item_cursor`, including out-of-order pages that fail. No provider was
 called.
 
+[`pagination-v4-9d0d73c6…`](APIs/discord.com/10/pagination-v4-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+keeps v3 and adds a scheme on
+[Get Guild Audit Log](https://docs.discord.com/developers/resources/audit-log),
+which v3's comment counts among the lists without a documented order. Its
+page (curl'd 2026-10-19) says "When using `before`, the list is ordered by
+the audit log entry ID descending (newer entries first)", that omitting both
+`before` and `after` "will show the most recent entries in descending order
+by ID", and that `before` returns "Entries with ID less than a specific
+audit log entry ID": §4.3.3 rule (b) with an upper bound. `beforeEntryId`
+sends no `before` first, then the last (lowest) entry's `id`, with
+`order: descending`, and pages `audit_log_entries`; the response's other
+arrays are the entries' related objects. Discord documents no has-more
+field, so an empty page ends the read. `after` ("Entries with ID greater
+than", ascending) would meet rule (b) too, but only with a first request of
+`after=0`, which §4.3.3 step 1 does not send, so it is not declared. "All
+audit log entries are stored for 45 days": a complete read reaches the
+oldest entry still stored. No dated catalog selects v4, and like v3 it waits
+for syncables to check `order`. `tests/test_discord_pagination_v4.py`
+composes it alone and after the catalog's Discord overlays, runs the
+validators, checks that v4 is v3 plus the audit log, and reads synthetic
+pages with `read_item_cursor`, including out-of-order pages that fail. No
+provider was called.
+
 ## Discord throttling
 
 [Discord API v10 throttling](APIs/discord.com/10/throttling-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
