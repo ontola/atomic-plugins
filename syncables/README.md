@@ -1257,11 +1257,18 @@ When the create operation declares an `x-crud` `create` for the resource
   control character, not `.` or `..`, or a non-negative integer) makes the
   create applied: it is bound to that id, the record being what was sent,
   and never sent again. Before, a `503` took the ordinary retry path and
-  the create was sent twice. A listed status that does not match keeps its
-  usual meaning. When the id field's template variable is not among the
-  values (a template with another variable the error does not name), the
-  create is applied but unbound, as above. Entries the spec's rules refuse
-  are ignored, and so is `committedErrors` beside `followUps` (rule 32).
+  the create was sent twice. A listed status that does not match (no
+  usable id) is an unknown outcome, since the provider says that status
+  can follow an applied create: `uncertain` without an idempotency key,
+  resent under one. Identity paths step through objects only, never into
+  an array (`errors.length` names nothing), and a JSON `5.0` is read as
+  `5`. When the id field's template variable is not among the values (a
+  template with another variable the error does not name), the create is
+  applied but unbound, as above: the named fields are kept on the local
+  record, it is never sent again, and `matchUnboundCreates` can bind it
+  from a later read. Only a create's answer counts. Entries the spec's
+  rules refuse are ignored, and so is `committedErrors` beside
+  `followUps` (rule 32).
 - `matchUnboundCreates: { uniqueFields: { pets: ['ref'] } }` (off by
   default) binds an unbound create from the first complete read of its
   collection that starts after the create was answered, as `confirm` with

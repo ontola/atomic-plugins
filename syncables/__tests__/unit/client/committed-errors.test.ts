@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createApiClient,
   prepareDocument,
+  type StorageAdapter,
   type OpenApiDocument,
   type Transport,
   type TransportRequest,
@@ -22,6 +23,36 @@ import { petsDocument } from '../../fixtures/pets.js';
 // committed_identity() and runs the client against it. Before, a 503 took
 // the ordinary retry path and the create was sent again: a duplicate.
 // Invented provider and data.
+
+/** An in-memory StorageAdapter two clients can share, as a restart does. */
+class MemoryStorage implements StorageAdapter {
+  private data = new Map<string, Map<string, Record<string, unknown>>>();
+  private ns(resource: string): Map<string, Record<string, unknown>> {
+    let ns = this.data.get(resource);
+    if (!ns) this.data.set(resource, (ns = new Map()));
+    return ns;
+  }
+  async list(resource: string): Promise<Record<string, unknown>[]> {
+    return [...this.ns(resource).values()].map((v) => structuredClone(v));
+  }
+  async get(
+    resource: string,
+    id: string,
+  ): Promise<Record<string, unknown> | undefined> {
+    const value = this.ns(resource).get(id);
+    return value && structuredClone(value);
+  }
+  async put(
+    resource: string,
+    id: string,
+    value: Record<string, unknown>,
+  ): Promise<void> {
+    this.ns(resource).set(id, structuredClone(value));
+  }
+  async delete(resource: string, id: string): Promise<void> {
+    this.ns(resource).delete(id);
+  }
+}
 
 const NOTION_LIKE = [
   {
@@ -138,6 +169,37 @@ describe('committedIdentity (the reference committed_identity)', () => {
     ).toEqual({ shop: 's-1' });
   });
 
+  it('does not step into an array, as the reference get_path does', () => {
+    const declaration = declared({
+      committedErrors: [
+        { status: [503], identity: { petId: 'errors.length' } },
+      ],
+    });
+    expect(
+      committedIdentity(
+        declaration,
+        503,
+        JSON.stringify({ errors: ['a', 'b'] }),
+      ),
+    ).toBeUndefined();
+    const indexed = declared({
+      committedErrors: [{ status: [503], identity: { petId: 'ids.0' } }],
+    });
+    expect(
+      committedIdentity(indexed, 503, JSON.stringify({ ids: ['p-9'] })),
+    ).toBeUndefined();
+  });
+
+  it('reads a JSON 5.0 as the integer 5 (JSON.parse cannot tell them apart)', () => {
+    expect(
+      committedIdentity(
+        declared(),
+        503,
+        '{"additional_data":{"committed_resource_id":5.0}}',
+      ),
+    ).toEqual({ id: '5' });
+  });
+
   it('takes the first entry that matches', () => {
     const declaration = declared({
       committedErrors: [
@@ -231,7 +293,25 @@ describe('a create answered by a committed error', () => {
     expect(fake.posts).toHaveLength(2);
   });
 
-  it('naming no usable id keeps the 5xx an unknown outcome', async () => {
+  it('a listed status naming no usable id is an unknown outcome: uncertain without a key', async () => {
+    const fake = provider(() => committed503(''));
+    const client = createApiClient(document(), {
+      transport: fake.transport,
+      retry: { baseDelayMs: 1 },
+    });
+    await client.create('/pets', { name: 'Rex' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { type: 'create', state: 'uncertain', lastStatus: 503 },
+      ]),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // The provider said this status can follow an applied create: not
+    // resent without a key, though a 503 otherwise means not processed.
+    expect(fake.posts).toHaveLength(1);
+  });
+
+  it('a listed status naming no usable id is resent under an idempotency key', async () => {
     let n = 0;
     const fake = provider(() =>
       ++n === 1
@@ -244,11 +324,150 @@ describe('a create answered by a committed error', () => {
     );
     const client = createApiClient(document(), {
       transport: fake.transport,
+      idempotencyKeyHeader: 'Idempotency-Key',
       retry: { baseDelayMs: 1 },
     });
     await client.create('/pets', { name: 'Rex' });
     await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
-    // 503 without a match: the ordinary path, as without the declaration.
     expect(fake.posts).toHaveLength(2);
+    expect(fake.posts[1]!.headers['Idempotency-Key']).toBe(
+      fake.posts[0]!.headers['Idempotency-Key'],
+    );
+  });
+
+  it('does not apply to an update with a matching body', async () => {
+    const doc = document();
+    let puts = 0;
+    const transport: Transport = async (request) => {
+      if (request.method === 'GET')
+        return {
+          status: 200,
+          headers: {},
+          body: JSON.stringify([{ id: 'p-1', name: 'Rex' }]),
+        };
+      puts += 1;
+      return puts === 1
+        ? committed503('p-1')
+        : { status: 200, headers: {}, body: request.body ?? '{}' };
+    };
+    const client = createApiClient(doc, {
+      transport,
+      retry: { baseDelayMs: 1 },
+    });
+    await client.sync();
+    await client.update('/pets', 'p-1', { id: 'p-1', name: 'Rex II' });
+    await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
+    // A 503 to an update: the ordinary path, sent again.
+    expect(puts).toBe(2);
+  });
+
+  it('wins over an x-throttling signal for the same 503', async () => {
+    const doc = document();
+    (doc as unknown as Record<string, unknown>)['x-throttling'] = {
+      headers: { 'Retry-After': { role: 'retryAfter', unit: 'deltaSeconds' } },
+      signals: [{ status: [503], meaning: 'throttled' }],
+    };
+    const fake = provider(() => ({
+      ...committed503('p-9'),
+      headers: { 'retry-after': '600' },
+    }));
+    const client = createApiClient(doc, {
+      transport: fake.transport,
+      retry: { baseDelayMs: 1 },
+    });
+    await client.create('/pets', { name: 'Rex' });
+    await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
+    expect(fake.posts).toHaveLength(1);
+    // Not held for ten minutes: the create is settled.
+    await vi.waitFor(async () =>
+      expect(await client.get('/pets', 'p-9')).toMatchObject({ name: 'Rex' }),
+    );
+  });
+
+  it('stays applied after a restart: nothing is sent again', async () => {
+    const storage = new MemoryStorage();
+    const fake = provider(() => committed503('p-9'));
+    const first = createApiClient(document(), {
+      transport: fake.transport,
+      storage,
+      retry: { baseDelayMs: 1 },
+    });
+    await first.create('/pets', { name: 'Rex' });
+    await vi.waitFor(() => expect(first.pendingWrites()).toEqual([]));
+    const again = createApiClient(document(), {
+      transport: fake.transport,
+      storage,
+      retry: { baseDelayMs: 1 },
+    });
+    await again.ready();
+    expect(again.pendingWrites()).toEqual([]);
+    expect(await again.get('/pets', 'p-9')).toMatchObject({ name: 'Rex' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(fake.posts).toHaveLength(1);
+  });
+});
+
+describe('a create applied but unbound by a committed error', () => {
+  /** A template with a second variable the error does not name. */
+  function twoVariables(): OpenApiDocument {
+    const doc = document({
+      committedErrors: [
+        {
+          status: [503],
+          identity: { kind: 'additional_data.committed_resource_id' },
+        },
+      ],
+    });
+    (
+      doc.components!['crudResources'] as Record<
+        string,
+        Record<string, unknown>
+      >
+    )['pet']!['identity'] = {
+      urlTemplate: '/pets/{kind}/{petId}',
+      bindings: { kind: { field: 'kind' }, petId: { field: 'id' } },
+    };
+    return doc;
+  }
+
+  it('keeps the named field, is not sent again, and a later read binds it', async () => {
+    let rows: Record<string, unknown>[] = [];
+    const posts: TransportRequest[] = [];
+    const transport: Transport = async (request) => {
+      if (request.method === 'GET')
+        return { status: 200, headers: {}, body: JSON.stringify(rows) };
+      posts.push(request);
+      // Applied: the row exists; the answer names only its kind.
+      rows = [
+        ...rows,
+        {
+          ...(JSON.parse(request.body ?? '{}') as object),
+          id: 's1',
+          kind: 'cat',
+        },
+      ];
+      return committed503('cat');
+    };
+    const client = createApiClient(twoVariables(), {
+      transport,
+      retry: { baseDelayMs: 1 },
+      matchUnboundCreates: { uniqueFields: { pets: ['ref'] } },
+    });
+    await client.sync();
+    const local = String(
+      (await client.create('/pets', { name: 'Rex', ref: 'a1' }))['id'],
+    );
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { type: 'create', state: 'uncertain', unbound: true, lastStatus: 503 },
+      ]),
+    );
+    expect(await client.get('/pets', local)).toMatchObject({ kind: 'cat' });
+    const result = await client.sync();
+    expect(result.matched).toEqual([
+      { collection: 'pets', localId: local, id: 's1' },
+    ]);
+    await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
+    expect(posts).toHaveLength(1);
   });
 });

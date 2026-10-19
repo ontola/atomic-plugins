@@ -248,9 +248,7 @@ export function committedIdentity(
     const values: Record<string, string> = {};
     let usable = true;
     for (const [variable, path] of Object.entries(entry.identity)) {
-      const value = committedValue(
-        readNestedField(body as Record<string, unknown>, path),
-      );
+      const value = committedValue(objectPath(body, path));
       if (value === undefined) {
         usable = false;
         break;
@@ -263,7 +261,25 @@ export function committedIdentity(
   return undefined;
 }
 
-/** A §4.3.3 usable identity value, as a string, or undefined. */
+/**
+ * A dot-path's value through objects only, as the reference `get_path`
+ * walks: an array is not stepped into (`errors.length` names nothing),
+ * and only own properties count.
+ */
+function objectPath(value: unknown, path: string): unknown {
+  let current = value;
+  for (const name of path.split('.')) {
+    if (!isRecord(current) || !Object.hasOwn(current, name)) return undefined;
+    current = current[name];
+  }
+  return current;
+}
+
+/**
+ * A §4.3.3 usable identity value, as a string, or undefined. A JSON `5.0`
+ * reaches here as the integer 5 (`JSON.parse` cannot tell them apart) and
+ * is accepted as `5`, where the Python reference refuses a float.
+ */
 function committedValue(value: unknown): string | undefined {
   if (typeof value === 'number')
     return Number.isSafeInteger(value) && value >= 0

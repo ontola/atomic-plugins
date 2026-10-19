@@ -25,3 +25,22 @@ rules, the first match, refused entries, and three client runs; the
 applied-and-bound run fails on the code before). README section and spec
 table (CRUD Causality 0.8.0), a fragment. No overlay declares
 `committedErrors` yet; Notion's would follow separately.
+
+## Turn 2
+
+**Human (via the coordinator session):** #667's review: arm
+`unboundKnown` for an applied-but-unbound create, keeping the named
+identity; treat a listed but unmatched status as may-have-applied;
+refuse array steps in identity paths, as `get_path` does; client tests
+for applied-but-unbound, an update with a matching body, an
+`x-throttling` 503 beside a match, and a restart; note JSON `5.0`.
+
+**Assistant:** `rememberUnbound` (shared with the 2xx path) arms
+`unboundKnown`, and the fields the error named are merged into the
+create's data and shown on the local record. A status listed in
+`committedErrors` makes the create's failure `appliedMaybe`. Identity
+paths walk own object properties only (`objectPath`). Seven new tests
+(an array step, `5.0`, uncertain and resent-under-key for a listed
+unmatched status, an update, the throttling signal, a restart) and the
+unbound create bound by `matchUnboundCreates`; three fail on the
+previous head.
