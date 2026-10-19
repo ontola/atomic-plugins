@@ -164,6 +164,41 @@ and stepped over under v3); run them from `syncables/` with
 `npx vitest run --root .. overlays/tests/<file>` (all of them:
 `overlays/tests/`), as Overlays CI's `reads` job does.
 
+## Newer revisions catalog: Discord, Asana and Todoist
+
+`catalog/2026-10-19-newer-revisions.json` is
+`catalog/2026-10-12-tasks-box-pages.json` with three platforms changed;
+every other entry is unchanged. No deployment selects it: the proxy's
+default `CATALOG_PATH` is still `catalog/2026-10-02-auth-profiles.json`.
+
+Discord:
+[pagination v4](APIs/discord.com/10/pagination-v4-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+in place of v1. v4 carries v2's item cursors (`fromLastItem`), v3's joined
+private archived threads, and the guild audit log under `before`, each
+with Pagination Schemes 0.10.0 `order`. It needs syncables 0.25.0 or later
+(the first that checks `order`, see the file's header). A 0.9.x consumer
+that validates the document rejects `order`; one that does not validate
+reads without the check.
+
+Asana:
+[crud-causality v2](APIs/asana.com/1.0/crud-causality-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml)
+in place of v1, which fixes `limit: '100'` on the four list reads. Without
+that limit, Asana truncates a list at about 1,000 objects and returns no
+`next_page`. The catalog also adds
+[completeness](APIs/asana.com/1.0/completeness-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml),
+whose header says to compose it with v2 and not with v1.
+
+Todoist:
+[completeness v2](APIs/todoist.com/1/completeness-v2-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml),
+which declares tasks and projects, is added. Its `info.x-requires` names
+the crud-causality overlay this catalog already selects.
+
+Moneybird's completeness v2 is left out: it requires a crud-causality
+revision that widens what Moneybird's reads return, which is a change of its
+own. `tests/test_completeness_requirements.py` and
+`tests/test_crud_reads_in_catalogs.py` check this catalog with the others,
+and `validate_oad_pins.py` checks its selections and action targets.
+
 ## Read and list tombstones
 
 Google Calendar v3 declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#43-tombstone-object)
