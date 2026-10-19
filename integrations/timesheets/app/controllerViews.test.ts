@@ -111,7 +111,7 @@ describe('classify', () => {
     expect(
       classify(
         new Error(
-          'The integration proxy refused POST /connect/redeem: this agent id was transferred to another one and can no longer own connections',
+          'The integration proxy refused POST /connections/c-1/agents: this agent id was transferred to another one and can no longer own connections',
         ),
       ).kind,
     ).toBe('agent-retired');
@@ -281,12 +281,12 @@ describe('controller for the timesheet views', () => {
     expect(back.kind).toBe('ready');
   });
 
-  // The host relays a failed connect to the frame as a message only
+  // The host relays a failed delegation to the frame as a message only
   // (AppFrame posts `e.message`), without the proxy's code (0.8.4).
   const RETIRED =
-    'The integration proxy refused POST /connect/redeem: this agent id was transferred to another one and can no longer own connections';
+    'The integration proxy refused POST /connections/c-1/agents: this agent id was transferred to another one and can no longer own connections';
   const DENIED =
-    'The integration proxy refused POST /connect/redeem: this agent may not use the proxy: not on the list';
+    'The integration proxy refused POST /connections/c-1/agents: this agent may not use the proxy: not on the list';
   const refusing = (store: PluginStore, message: string): PluginStore => ({
     ...store,
     proxy: {

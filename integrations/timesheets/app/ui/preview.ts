@@ -321,7 +321,7 @@ export function renderFrame(root: HTMLElement, id: FrameId): Shell {
         problem: {
           kind: 'agent-retired',
           detail:
-            'The integration proxy refused POST /connect/redeem: this agent id was transferred to another one and can no longer own connections',
+            'The integration proxy refused POST /connections/c-1/agents: this agent id was transferred to another one and can no longer own connections',
         },
       },
       undefined,
@@ -332,7 +332,7 @@ export function renderFrame(root: HTMLElement, id: FrameId): Shell {
         problem: {
           kind: 'proxy-access',
           detail:
-            'The integration proxy refused POST /connect/redeem: this agent may not use the proxy: not on the list',
+            'The integration proxy refused POST /connections/c-1/agents: this agent may not use the proxy: not on the list',
         },
       },
       undefined,

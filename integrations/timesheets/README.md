@@ -117,15 +117,19 @@ read, minute snapping and the range planner are unchanged.
     the proxy's at all.
   - `not_owner` (someone else's connection) now says "Connect again", like
     a lost connection (0.8.2).
-  - A connect, its redeem or a delegation that the proxy refuses for a
-    replaced key or its access check shows the same copy (0.8.4): before
-    any data, as the problem banner in place of the Connect card (frames
-    F2 and F3; Try again connects again, a replaced key has no button);
-    after a Reconnect, over the data. The host passes such a failure to
-    the frame as a message only ("The integration proxy refused POST
-    /connect/redeem: …"), without the code, so `problem.ts` matches the
-    proxy's own wording for these two. Any other connect failure still
-    shows "This app cannot run." with the raw message.
+  - A connect that the proxy refuses for a replaced key or its access
+    check shows the same copy (0.8.4): before any data, as the problem
+    banner in place of the Connect card (frames F2 and F3; Try again
+    connects again, a replaced key has no button); after a Reconnect, over
+    the data. In the app this is the delegation of an existing connection
+    (picking one in the host's connect bar), which the host relays to the
+    frame as a message only ("The integration proxy refused POST
+    /connections/<id>/agents: …", `AppFrame.tsx` posts `e.message`),
+    without the code, so `problem.ts` matches the proxy's own wording for
+    these two. A refusal at `/connect/redeem`, after connecting a new
+    account, never reaches the app: the host's return page shows it
+    (`ProxyConnectReturn.tsx`, at the 7dab1ce49a91 pin). Any other connect
+    failure still shows "This app cannot run." with the raw message.
   - After a key change (a transfer, #410), capabilities the old key signed
     no longer verify. A sync in a page that was open across the change can
     then fail with `invalid_capability` ("the capability is malformed or

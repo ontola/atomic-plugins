@@ -70,10 +70,12 @@ const ACCESS = new Set(['unauthorized', 'forbidden', 'access_denied']);
 
 /**
  * The proxy's own wording (`integration-proxy/src/api_error.rs`) for the
- * refusals a connect can end in. The host relays a failed connect, redeem or
- * delegation to the frame as a message only ("The integration proxy refused
- * POST /connect/redeem: <the proxy's message>"), without the code, so these
- * are matched by their text (0.8.4).
+ * refusals a connect can end in. The host relays a failed delegation (picking
+ * an existing connection) or another host-made proxy call to the frame as a
+ * message only ("The integration proxy refused POST
+ * /connections/<id>/agents: <the proxy's message>"), without the code, so
+ * these are matched by their text (0.8.4). A refused `/connect/redeem` never
+ * reaches the frame: the host's return page shows it.
  */
 const PROXY_MESSAGES: [RegExp, string][] = [
   [
