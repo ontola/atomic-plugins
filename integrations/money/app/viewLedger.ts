@@ -598,12 +598,10 @@ function dedupeOutcome(state: State): string | undefined {
   if (!outcome) return undefined;
 
   switch (outcome.status) {
-    case 'asking':
-      return 'Allow editing in the bar above to remove them.';
     case 'removing':
       return 'Removing duplicates…';
-    case 'refused':
-      return `You didn't allow Money to edit this table, so nothing was removed.${outcome.reason ? ` (${outcome.reason})` : ''}`;
+    case 'stopped':
+      return outcome.message;
 
     case 'done': {
       const parts = [
@@ -613,12 +611,15 @@ function dedupeOutcome(state: State): string | undefined {
         outcome.kept
           ? `${outcome.kept} kept: ${outcome.kept === 1 ? 'its' : 'their'} category or note differs from the row ${outcome.kept === 1 ? 'it copies' : 'they copy'}. Open ${outcome.kept === 1 ? 'it' : 'them'} to decide.`
           : '',
+        outcome.skipped
+          ? `${outcome.skipped} ${outcome.skipped === 1 ? 'group was' : 'groups were'} left as ${outcome.skipped === 1 ? 'it was' : 'they were'}: read again, ${outcome.skipped === 1 ? 'its rows' : 'their rows'} had changed or the kept row was gone.`
+          : '',
         outcome.failed
           ? `Couldn't remove ${outcome.failed} ${rowsWord(outcome.failed)} this time; try again.${outcome.details ? ` (${outcome.details})` : ''}`
           : '',
       ].filter(Boolean);
 
-      return parts.join(' ') || undefined;
+      return parts.join(' ') || 'Nothing to remove.';
     }
   }
 }
@@ -628,8 +629,9 @@ function dedupeOutcome(state: State): string | undefined {
  * transaction written twice. Above the ledger, outside its filters, like
  * incomplete rows: each with what it has, the row it copies and "Open row".
  * None of them is in a balance, total or count. "Remove duplicates" is only
- * offered where the app may edit the rows, or may ask to; nothing is ever
- * removed without that press.
+ * offered on the app's own table: the host lets an app delete no other rows
+ * (not even with "Allow editing"). Nothing is ever removed without that
+ * press.
  */
 export function duplicateRows(
   ctx: Ctx,
@@ -641,13 +643,9 @@ export function duplicateRows(
   if (!rows.length && !outcome) return undefined;
   const n = rows.length;
   const byKept = new Map(state.rows.map(row => [row.subject, row]));
-  const busy =
-    state.dedupe?.status === 'asking' || state.dedupe?.status === 'removing';
-  const canRemove =
-    n > 0 &&
-    (state.source === 'own' ||
-      state.rowAccess === 'granted' ||
-      state.rowAccess === 'none');
+  const busy = state.dedupe?.status === 'removing';
+  // The host lets an app delete only rows of its own table.
+  const canRemove = n > 0 && state.source === 'own';
 
   return h(
     'section',
@@ -665,7 +663,10 @@ export function duplicateRows(
             {},
             `${n} ${n === 1 ? 'row is a duplicate' : 'rows are duplicates'}`,
           ),
-          `: the same transaction as another row of this table, so counted once in every balance and total. Removing keeps the earliest row, moves a category or note only a copy has onto it, and leaves a copy whose category or note differs.`,
+          `: the same transaction as another row of this table, so counted once in every balance and total.`,
+          canRemove
+            ? ' Removing reads the rows again first, moves a category or note only a copy has onto the row that stays, and leaves a copy whose category or note differs.'
+            : ' Apps may not delete rows in this table: remove the copies in the table itself.',
         )
       : undefined,
     n

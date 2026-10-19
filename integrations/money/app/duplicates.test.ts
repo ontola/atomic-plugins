@@ -1,4 +1,5 @@
 // @wc-ignore-file
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { totals } from './amounts.js';
 import { createController, type State } from './controller.js';
@@ -7,10 +8,17 @@ import {
   fakeStore,
   OWN_TABLE,
   seedRow,
+  ROW_DESTROY_REFUSED,
   SHARED_TABLE,
+  sharedProperty,
   type SeedRow,
 } from './fakeStore.js';
 import { atomic, type Txn } from './rows.js';
+
+const mt940 = readFileSync(
+  new URL('../fixtures/synthetic.mt940', import.meta.url),
+  'utf8',
+);
 
 const txn = (subject: string, extra: Partial<Txn> = {}): Txn => ({
   subject,
@@ -56,6 +64,36 @@ describe('groupDuplicates', () => {
     const { rows: kept, duplicates } = groupDuplicates(rows);
     expect(kept).toHaveLength(4);
     expect(duplicates).toEqual([]);
+  });
+
+  it('never groups rows without a fingerprint, even with the same source id', () => {
+    const { duplicates } = groupDuplicates([
+      txn('a/1', { fingerprint: '' }),
+      txn('a/2', { fingerprint: '' }),
+    ]);
+    expect(duplicates).toEqual([]);
+  });
+
+  it('never groups rows that differ in a bank field (an amount edited after the import)', () => {
+    const fields: Partial<Txn>[] = [
+      { amount: '-40' },
+      { account: 'NL00OTHER' },
+      { currency: 'USD' },
+      { valueDate: '2026-09-03' },
+      { bookingDate: '2026-09-03' },
+      { description: 'Edited' },
+      { reference: 'REF-2' },
+      { code: 'NCHK' },
+    ];
+
+    for (const edit of fields) {
+      const { rows, duplicates } = groupDuplicates([
+        txn('a/1', { amount: '-100' }),
+        txn('a/2', { amount: '-100', ...edit }),
+      ]);
+      expect(duplicates, JSON.stringify(edit)).toEqual([]);
+      expect(rows).toHaveLength(2);
+    }
   });
 
   it('keeps the lowest subject', () => {
@@ -197,6 +235,7 @@ describe('a table with a duplicated row (#587)', () => {
       removed: 1,
       kept: 0,
       failed: 0,
+      skipped: 0,
       details: undefined,
     });
     expect(tableRows(store, OWN_TABLE)).toHaveLength(2);
@@ -266,17 +305,112 @@ describe('a table with a duplicated row (#587)', () => {
     expect(controller.state().duplicates.map(d => d.subject)).toEqual([b]);
   });
 
-  it('in a table that is not the app’s own, asks to edit first, and removes nothing when refused', async () => {
-    const store = fakeStore({ data: 'shared', answer: 'deny' });
+  it('in a table that is not the app’s own, lists the copy but offers no removal, and the host refuses row destroys', async () => {
+    const store = fakeStore({ data: 'shared', access: 'granted' });
     const one = seedRow('-12.50', '2026-09-02', { 'bank-reference': 'R1' });
-    store.addRows([one, one]);
+    const [, b] = store.addRows([one, one]);
     const controller = tab(store);
     await controller.load();
-    expect(controller.state().duplicates).toHaveLength(1);
+    expect(controller.state().duplicates.map(d => d.subject)).toEqual([b]);
     await controller.removeDuplicates();
-    expect(store.accessRequests).toBe(1);
-    expect(controller.state().dedupe).toMatchObject({ status: 'refused' });
+    expect(controller.state().dedupe).toBeUndefined();
     expect(store.destroyed).toEqual([]);
     expect(tableRows(store, SHARED_TABLE)).toHaveLength(2);
+    // As the host: a row grant lets an app edit rows, not delete them.
+    await expect((await store.getResource(b)).destroy()).rejects.toThrow(
+      ROW_DESTROY_REFUSED,
+    );
+  });
+
+  it('P3: the kept row deleted elsewhere after load: its copy is left, not destroyed', async () => {
+    const { store, a } = seeded('own');
+    const controller = tab(store);
+    await controller.load();
+    store.resources.delete(a);
+    await controller.removeDuplicates();
+    expect(store.destroyed).toEqual([]);
+    expect(tableRows(store, OWN_TABLE)).toHaveLength(2);
+    expect(controller.state().dedupe).toMatchObject({
+      status: 'done',
+      removed: 0,
+      skipped: 1,
+    });
+  });
+
+  it('P4: a note added to the copy after load moves onto the kept row before the copy goes', async () => {
+    const { store, a, b } = seeded('own');
+    const controller = tab(store);
+    await controller.load();
+    store.resources.get(b)![sharedProperty('money-note')] = 'paid in cash';
+    await controller.removeDuplicates();
+    expect(store.destroyed).toEqual([b]);
+    expect(store.resources.get(a)![sharedProperty('money-note')]).toBe(
+      'paid in cash',
+    );
+  });
+
+  it('P5: the kept row’s category changed elsewhere after load is not overwritten', async () => {
+    const { store, a, b } = seeded(
+      'own',
+      { 'money-category': 'Food' },
+      { 'money-category': 'Food' },
+    );
+    const controller = tab(store);
+    await controller.load();
+    store.resources.get(a)![sharedProperty('money-category')] = 'Travel';
+    await controller.removeDuplicates();
+    expect(store.resources.get(a)![sharedProperty('money-category')]).toBe(
+      'Travel',
+    );
+    // Read again, the copy's category differs from the kept row's: kept.
+    expect(store.destroyed).toEqual([]);
+    expect(controller.state().dedupe).toMatchObject({ kept: 1, removed: 0 });
+    expect(controller.state().duplicates.map(d => d.subject)).toEqual([b]);
+  });
+
+  it('a copy whose amount was edited after load is left: read again, it is not a duplicate', async () => {
+    const { store, b } = seeded('own');
+    const controller = tab(store);
+    await controller.load();
+    store.resources.get(b)![sharedProperty('bank-amount')] = '-40';
+    await controller.removeDuplicates();
+    expect(store.destroyed).toEqual([]);
+    expect(controller.state().dedupe).toMatchObject({ skipped: 1 });
+  });
+
+  it('a press while an import is writing does nothing and says why', async () => {
+    const { store, b } = seeded('own');
+    const controller = tab(store);
+    await controller.load();
+    await controller.importFile({
+      name: 'bunq.sta',
+      size: mt940.length,
+      text: async () => mt940,
+    });
+    // The import's first row write waits until released.
+    const create = store.newResource.bind(store);
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+
+    store.newResource = async args => {
+      await held;
+
+      return create(args);
+    };
+
+    const applying = controller.applyImport();
+    await settle();
+    await controller.removeDuplicates();
+    expect(controller.state().dedupe).toEqual({
+      status: 'stopped',
+      message:
+        'An import is still writing to this table. Try again when it has finished.',
+    });
+    expect(store.destroyed).toEqual([]);
+    release();
+    await applying;
+    store.newResource = create;
+    await controller.removeDuplicates();
+    expect(store.destroyed).toEqual([b]);
   });
 });

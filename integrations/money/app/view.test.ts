@@ -169,6 +169,28 @@ describe('Money view: duplicate rows (#587)', () => {
   });
 });
 
+describe('Money view: duplicate rows on a table that is not the app’s own (#587)', () => {
+  it('lists the copy and says to remove it in the table itself; no button', async () => {
+    const one = seedRow('-1.50', '2026-09-22', { 'bank-reference': 'R1' });
+    const store = fakeStore({
+      data: 'shared',
+      access: 'granted',
+      rows: [one, one],
+    });
+    const root = await open(store);
+    const region = root.querySelector(
+      '[role="region"][aria-label="Duplicate rows"]',
+    )!;
+    expect(text(region)).toContain('1 row is a duplicate');
+    expect(text(region)).toContain(
+      'Apps may not delete rows in this table: remove the copies in the table itself.',
+    );
+    expect(
+      [...region.querySelectorAll('button')].map(b => text(b)),
+    ).not.toContain('Remove duplicate');
+  });
+});
+
 describe('Money view: incomplete rows (#177)', () => {
   it('lists a row missing its amount above the ledger, with Open row, and leaves it out of the strip', async () => {
     const store = fakeStore({

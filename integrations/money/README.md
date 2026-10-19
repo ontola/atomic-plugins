@@ -176,40 +176,53 @@ table it is decides how an import gets in (`controller.ts` `Source`):
   Uncategorised filters, a day-grouped ledger (a table at 560 px and wider,
   a list of buttons below), 200 rows at a time. Amounts are formatted from
   their exact strings (`app/amounts.ts`); sums use `parser.ts`'s `units()`.
-- **Duplicate rows** (0.4.6; #587). Two or more complete rows with the same
-  `bank-source-id` and `bank-fingerprint` are one transaction written twice
-  (two tabs importing the same file at once, a write that failed on the
-  app's side but landed, a copy made by hand). One of them is kept, and the
-  others are listed in a "Duplicate rows" region above the ledger, each
-  with "Copy of" the kept row and "Open row"; they are in no balance,
-  total, count or filter (`app/duplicates.ts`, `state.duplicates` apart
-  from `state.rows`). The kept row is the one with the lowest subject, so
-  every tab and device keeps the same row. Not the earliest: the server
-  serves a `createdAt` it derives from each row's genesis commit
+- **Duplicate rows** (0.4.6; #587). Two or more complete rows that agree
+  on `bank-source-id`, a non-empty `bank-fingerprint` and every bank field
+  (account, currency, amount, value date, booking date, description,
+  reference, code; `SAME_FIELDS` in `app/duplicates.ts`) are one
+  transaction written twice (two tabs importing the same file at once, a
+  write that failed on the app's side but landed, a copy made by hand).
+  Rows without a source id or a fingerprint are never grouped, and rows
+  that share both but differ in a bank field (an amount edited after the
+  import) are not duplicates: hiding one would hide money. One row of a
+  group is kept; the others are listed in a "Duplicate rows" region above
+  the ledger, each with "Copy of" the kept row and "Open row", and are in
+  no balance, total, count or filter (`state.duplicates` apart from
+  `state.rows`). The kept row is the one with the lowest subject, so every
+  tab and device keeps the same row. Not the earliest: the server serves a
+  `createdAt` it derives from each row's genesis commit
   (`lib/src/resources.rs`, `materialize_genesis_metadata` at the pin; the
   e2e checks that a fresh fetch of each row the app wrote carries one), yet
   a first e2e run that picked the earliest kept the person's later copy:
   the app's read of the row it had written evidently lacked it (likely the
-  host's cached copy; not verified further). A pick that can differ between tabs could
-  have two tabs remove both copies. The copies are the same transaction,
-  so which one stays only matters for its category and note, which
-  removal moves over. Rows without a source id are never grouped; the same
-  source id with another fingerprint is a changed booking, not a
-  duplicate. Nothing is removed by reading: "Remove duplicates", where the
-  app may edit the rows (its own table, or after "Allow editing"), first
-  copies a category or note only a duplicate has onto the kept row, then
-  destroys every duplicate whose category and note are empty or the kept
-  row's; one whose category or note differs is left listed for the person
-  to open. A destroy that fails counts as done when a listing that still
-  shows the kept row no longer lists the duplicate (it was gone already);
-  otherwise it is reported ("Couldn't remove 1 row this time; try
-  again."). Unit: `app/duplicates.test.ts`, `app/view.test.ts`. E2E (the
+  host's cached copy; not verified further). A pick that can differ between
+  tabs could have two tabs remove both copies.
+
+  Nothing is removed by reading. "Remove duplicates" is offered on the
+  app's own table only: the host lets an app delete no row of another
+  table, not even after "Allow editing" (atomic-server `hostStore.ts`,
+  "Letting an app edit rows does not let it delete them."), so there the
+  region says to remove the copies in the table itself. On the press the
+  app plans from the table as it is then, not from what it read before: it
+  lists the table once, leaves a group alone whose kept row is no longer
+  listed, reads every row of each group again, and groups those reads
+  anew, so a copy whose amount was edited meanwhile is not removed. Then
+  it copies a category or note only a copy has onto the kept row, never
+  over one the kept row has, and destroys every copy that still agrees
+  with the kept row on every bank field and whose category and note are
+  empty or the kept row's; one whose category or note differs is left
+  listed for the person to open. A destroy that fails counts as done when
+  a listing that still shows the kept row no longer lists the copy (it was
+  gone already); otherwise it is reported ("Couldn't remove 1 row this
+  time; try again."). A press while an import is writing does nothing and
+  says so. Unit: `app/duplicates.test.ts`, `app/view.test.ts`. E2E (the
   installed-app test): a copy the person makes of a row the app wrote is
   listed, the Transactions count stays the same, nothing is removed before
   the press, and after "Remove duplicate" and a reload the table lists no
   duplicate and the server keeps only the lower subject. (Before a reload
   the page's own copy of the table's children still listed the destroyed
   row; the app itself had already dropped it.)
+
 - **Incomplete rows** (0.4.1; #177, ontology-kit's rule: show an incomplete
   row, never skip it). A row of the table's class that lacks one of the four
   required fields (account, currency, amount, value date; absent or the
@@ -413,22 +426,28 @@ minified, one module). Screenshots, axe and the render budget:
 
 ## Verified
 
-At 0.4.6 (app module `apps/money/0.4.6/ui.js`, 127,916 bytes; `plugin.js`
+At 0.4.6 (app module `apps/money/0.4.6/ui.js`, 128,819 bytes; `plugin.js`
 again 0.3.0's bundle with only the manifest's `version` changed) a
 transaction written twice is found when the table is read (#587, Decision
 Inbox Q-115; app only, no host change): see "Duplicate rows" under
 [Money app](#money-app-app). What covers it:
 
-- Unit (`app/duplicates.test.ts`): the grouping (by source id and
-  fingerprint; never without a source id or across fingerprints), the same
-  kept row whatever order the rows are read in (two tabs), the sums and the
-  count taking one row per group, nothing removed by reading, the button
-  moving a category onto the kept row and destroying only untouched copies
-  (a copy whose note differs is left), a copy already gone counting as
-  removed, a failed destroy of a copy still listed counting as failed, and
-  a refused "Allow editing" on a table that is not the app's own removing
-  nothing. `app/view.test.ts`: the region, the strip summing once, removal
-  on press.
+- Unit (`app/duplicates.test.ts`): the grouping (never without a source
+  id or a fingerprint, never across a fingerprint or any bank field, an
+  amount of -100 against -40 included), the same kept row whatever order
+  the rows are read in (two tabs), the sums and the count taking one row
+  per group, nothing removed by reading; on the press: a category moved
+  onto the kept row and only untouched copies destroyed (a copy whose note
+  differs is left), a copy already gone counting as removed, a failed
+  destroy of a copy still listed counting as failed, the kept row deleted
+  elsewhere after load (its copy left), a note added to the copy after
+  load (moved onto the kept row before the copy goes), the kept row's
+  category changed elsewhere (not overwritten), a copy's amount edited
+  after load (left), a press during an import (nothing done, said), and a
+  table that is not the app's own (no removal; the fake host refuses the
+  destroy with the host's message). `app/view.test.ts`: the region, the
+  strip summing once, removal on press, and no button with the host's
+  reason on another table.
 - A no-reference twin (two identical rows without a bank reference in one
   statement) whose write failed is no longer refused afterwards as an
   overlap: a fingerprint match counts as an earlier import only when the
@@ -438,12 +457,19 @@ Inbox Q-115; app only, no host change): see "Duplicate rows" under
   keeps the old rule; it is not changed in this release.
 - E2E: the installed-app test's last step (above).
 
-Not covered: the copies are not merged beyond category and note (a copy
-the person edited otherwise, say its description, is destroyed when its
-category and note match). Two tabs pressing at once keep the same row, so
-neither removes it, and the slower one counts a copy already gone as
-removed; that race is unit-tested in one controller only (a copy deleted
-before the press), not with two.
+Not covered:
+
+- Removal on a table that is not the app's own: the host refuses it, so
+  the person removes the copies in the table.
+- The press reads the rows again through the host, which may answer from
+  its cache; a change made on another device in the moment between that
+  read and the destroy is not seen.
+- Two tabs pressing at once keep the same row, so neither removes it, and
+  the slower one counts a copy already gone as removed; that race is
+  unit-tested with one controller only (a copy deleted before the press),
+  not with two.
+- An incomplete row is never grouped; a duplicate that is also incomplete
+  is listed as incomplete.
 
 The six money e2e tests (`e2e/money.spec.ts` and `moneybird.spec.ts`), the
 duplicate step and the server's `createdAt` check included, passed on

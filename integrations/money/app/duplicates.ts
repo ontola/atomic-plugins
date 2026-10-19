@@ -1,34 +1,33 @@
 // @wc-ignore-file
 /**
- * Duplicate rows (#587): two or more complete rows of one table with the same
- * `bank-source-id` and the same `bank-fingerprint`, which is what one
- * transaction written twice looks like (two tabs importing the same file at
- * once, a write that failed on the app's side but landed anyway, or a copy
- * made by hand). The app can't stop the second write (it can't choose a
- * row's subject, and the host has no unique create), so it finds them when
- * it reads:
+ * Duplicate rows (#587): two or more complete rows of one table that agree on
+ * the importer's identity (`bank-source-id`), its non-empty fingerprint and
+ * every bank field (`SAME_FIELDS`), which is what one transaction written
+ * twice looks like (two tabs importing the same file at once, a write that
+ * failed on the app's side but landed anyway, or a copy made by hand). The
+ * app can't stop the second write (it can't choose a row's subject, and the
+ * host has no unique create), so it finds them when it reads:
  *
  * - every row of a group but one is a duplicate, left out of every balance,
  *   total, count and filter, and listed apart, like incomplete rows;
- * - the one kept (the canonical row) is the one with the lowest subject, so
- *   every tab and device reading the same rows keeps the same one. Not the
- *   earliest: the server serves a `createdAt` it derives from each row's
- *   genesis commit, but the host's copy of a row the app just wrote can lack
- *   it (#587's e2e: picking by it kept the person's later copy in one tab),
- *   and a pick that differs between tabs could have two tabs remove both
- *   copies. The copies are the same transaction, so which one stays only
- *   matters for its category and note, which removal moves over.
+ * - the one kept is the one with the lowest subject, so every tab and device
+ *   reading the same rows keeps the same one. Not the earliest: the server
+ *   serves a `createdAt` it derives from each row's genesis commit, but the
+ *   host's copy of a row the app just wrote can lack it (#587's e2e: picking
+ *   by it kept the person's later copy), and a pick that differs between
+ *   tabs could have two tabs remove both copies.
  *
- * Rows without a `bank-source-id` (made by hand in a self-made table) are
- * never grouped. Rows with the same source id but another fingerprint are a
- * changed booking, which the import check already reports; they are not
- * duplicates either.
+ * Rows without a source id or a fingerprint are never grouped. Rows that
+ * share the source id and fingerprint but differ in a bank field (an amount
+ * edited after the import, say) are not duplicates either: hiding one would
+ * hide money.
  *
  * Nothing is removed by reading. `planRemoval` says what "Remove
- * duplicates" does when the person presses it: a category or note only a
- * duplicate has moves onto the kept row, then every duplicate whose category
- * and note are empty or equal to the kept row's is destroyed. A duplicate
- * whose category or note differs is kept and stays listed.
+ * duplicates" does on the person's press, from rows read again at that
+ * moment: a category or note only a duplicate has moves onto the kept row,
+ * then every duplicate whose category and note are empty or equal to the
+ * kept row's is destroyed. A duplicate whose category or note differs is
+ * kept and stays listed.
  */
 import type { Txn } from './rows.js';
 
@@ -37,8 +36,38 @@ export interface Duplicate extends Txn {
   duplicateOf: string;
 }
 
-const keyOf = (row: Txn) =>
-  row.sourceId ? JSON.stringify([row.sourceId, row.fingerprint]) : undefined;
+/**
+ * The fields two rows must agree on to be one transaction written twice:
+ * the importer's identity and fingerprint, and every bank field the ledger
+ * shows or sums. A row edited after its import (another amount, say) keeps
+ * its source id and fingerprint, so those two alone don't make it a copy.
+ */
+export const SAME_FIELDS = [
+  'sourceId',
+  'fingerprint',
+  'account',
+  'currency',
+  'amount',
+  'valueDate',
+  'bookingDate',
+  'description',
+  'reference',
+  'code',
+] as const satisfies readonly (keyof Txn)[];
+
+/**
+ * The grouping key, or `undefined` for a row that is never grouped: one
+ * without a source id or without a fingerprint (an older or hand-made row,
+ * where the source id alone says too little).
+ */
+export const keyOf = (row: Txn) =>
+  row.sourceId && row.fingerprint
+    ? JSON.stringify(SAME_FIELDS.map(field => row[field]))
+    : undefined;
+
+/** Whether two rows are the same transaction (`SAME_FIELDS`). */
+export const sameTransaction = (a: Txn, b: Txn) =>
+  keyOf(a) !== undefined && keyOf(a) === keyOf(b);
 
 /** The order of copies: the lowest subject first, the one kept. */
 export function firstCopy(a: Txn, b: Txn): number {
@@ -117,7 +146,11 @@ export function planRemoval(
   for (const [subject, list] of copies) {
     const kept = bySubject.get(subject);
     if (!kept) continue;
-    const ordered = [...list].sort(firstCopy);
+    // Checked again here, right before anything is destroyed: only a copy
+    // that agrees with the kept row on every bank field goes.
+    const ordered = list
+      .filter(copy => sameTransaction(kept, copy))
+      .sort(firstCopy);
     const set: GroupRemoval['set'] = {};
     let { category, note } = kept;
 

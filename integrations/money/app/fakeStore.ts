@@ -82,6 +82,10 @@ export const sharedProperty = (shortname: string) =>
     ? SHARED_SUBJECT[shortname as SharedField]
     : `${APP_ONTOLOGY}/${shortname}`;
 
+/** The host's refusal of a row destroy outside the app (atomic-server). */
+export const ROW_DESTROY_REFUSED =
+  'Letting an app edit rows does not let it delete them.';
+
 export const REFUSED =
   'This app may only write its own data. Writing here needs rights its key does not have.';
 
@@ -93,11 +97,41 @@ export type SeedRow = Partial<Record<Shortname, string>> & {
   'bank-value-date': string;
 };
 
-/** A synthetic row: an invented bunq-style IBAN, the amount as reference. */
+/**
+ * A synthetic row: an invented bunq-style IBAN, the amount as reference,
+ * and a content fingerprint shaped like the importer's (`../identity.ts`)
+ * over the row's own values, unless `extra` sets one (`''` for a row
+ * without).
+ */
 export const seedRow = (
   amount: string,
   date: string,
   extra: Partial<SeedRow> = {},
+): SeedRow => {
+  const row = baseRow(amount, date, extra);
+  if ('bank-fingerprint' in extra) return row;
+
+  return {
+    ...row,
+    'bank-fingerprint':
+      'mt940-content:' +
+      JSON.stringify([
+        row['bank-account'],
+        row['bank-currency'],
+        row['bank-value-date'],
+        row['bank-booking-date'] ?? '',
+        row['bank-amount'],
+        row['bank-transaction-code'] ?? '',
+        row['bank-reference'] ?? '',
+        row['bank-description'] ?? '',
+      ]),
+  };
+};
+
+const baseRow = (
+  amount: string,
+  date: string,
+  extra: Partial<SeedRow>,
 ): SeedRow => {
   const account = extra['bank-account'] ?? 'NL42BUNQ0123456789';
   const currency = extra['bank-currency'] ?? 'EUR';
@@ -413,8 +447,11 @@ export function fakeStore({
       },
       async destroy() {
         await Promise.resolve();
-        if (!within(subject) && !(writable && isRow(subject)))
-          throw new Error(REFUSED);
+
+        // As the host (hostStore.ts at the pin): a row grant lets an app
+        // edit the viewed table's rows, never delete them.
+        if (!within(subject))
+          throw new Error(isRow(subject) ? ROW_DESTROY_REFUSED : REFUSED);
         const current = resources.get(subject);
         if (!current) throw new Error(`No resource ${subject}`);
         resources.delete(subject);

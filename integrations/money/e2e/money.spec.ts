@@ -623,13 +623,18 @@ test.describe('money integration', () => {
     const copied = await page.evaluate(
       async args => {
         const store = window.store!;
+        type PropVals = NonNullable<
+          NonNullable<Parameters<typeof store.newResource>[0]>['propVals']
+        >;
+        // The row's own values as the server sent them (JSON), minus the
+        // subject and the server-managed atomic properties.
         const propVals = Object.fromEntries(
           Object.entries(args.row).filter(
             ([key]) =>
               key !== '@id' &&
               !key.startsWith('https://atomicdata.dev/properties/'),
           ),
-        );
+        ) as PropVals;
         const copy = await store.newResource({
           parent: args.table,
           isA: [args.klass],
