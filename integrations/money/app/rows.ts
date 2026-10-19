@@ -452,13 +452,52 @@ export async function readRows(
   onProgress?: (loaded: number) => void,
   concurrency = 16,
 ): Promise<Txn[]> {
-  return readMany(
+  return (
+    await readRowsReport(
+      store,
+      subjects,
+      fields,
+      rowClass,
+      onProgress,
+      concurrency,
+    )
+  ).items;
+}
+
+/**
+ * `readRows`, also saying how many subjects could not be read at all (a
+ * failed `getMany` batch, an entry with an error, a failed `getResource`,
+ * or a resource that came back with no `isA` at all), as against resources
+ * read and found to be no row. A check of a file must not trust a table
+ * read that left any out (#572). Every real child of a table, a View
+ * included, has an `isA`; one without is a read that returned nothing.
+ */
+export async function readRowsReport(
+  store: PluginStore,
+  subjects: string[],
+  fields: Fields,
+  rowClass: string,
+  onProgress?: (loaded: number) => void,
+  concurrency = 16,
+): Promise<{ items: Txn[]; unread: number }> {
+  let hollow = 0;
+  const report = await readManyReport(
     store,
     subjects,
-    r => readRow(r, fields, rowClass),
+    r => {
+      if (!list(r.get(atomic.isA)).length) {
+        hollow++;
+
+        return undefined;
+      }
+
+      return readRow(r, fields, rowClass);
+    },
     onProgress,
     concurrency,
   );
+
+  return { items: report.items, unread: report.unread + hollow };
 }
 
 /** Reads `subjects` into `T`s (see `readRows`); unreadable ones are skipped. */
@@ -469,7 +508,20 @@ export async function readMany<T>(
   onProgress?: (loaded: number) => void,
   concurrency = 16,
 ): Promise<T[]> {
+  return (await readManyReport(store, subjects, read, onProgress, concurrency))
+    .items;
+}
+
+/** `readMany`, with how many subjects could not be read (see `readRowsReport`). */
+export async function readManyReport<T>(
+  store: PluginStore,
+  subjects: string[],
+  read: (resource: PluginResource) => T | undefined,
+  onProgress?: (loaded: number) => void,
+  concurrency = 16,
+): Promise<{ items: T[]; unread: number }> {
   const out: (T | undefined)[] = new Array(subjects.length);
+  let unread = 0;
   let loaded = 0;
   const getMany = store.getMany?.bind(store);
 
@@ -481,15 +533,16 @@ export async function readMany<T>(
     const worker = async () => {
       while (next < batches.length) {
         const at = batches[next++];
-        const entries = await getMany(
-          subjects.slice(at, at + GET_MANY_MAX),
-        ).catch(() => []);
-        entries.forEach((entry, i) => {
-          out[at + i] =
-            'error' in entry && entry.error !== undefined
-              ? undefined
-              : read(entry as PluginResource);
+        const batch = subjects.slice(at, at + GET_MANY_MAX);
+        const entries = await getMany(batch).catch(() => undefined);
+        if (!entries) unread += batch.length;
+        (entries ?? []).forEach((entry, i) => {
+          const failed = 'error' in entry && entry.error !== undefined;
+          if (failed) unread++;
+          out[at + i] = failed ? undefined : read(entry as PluginResource);
         });
+        if (entries && entries.length < batch.length)
+          unread += batch.length - entries.length;
         loaded += Math.min(GET_MANY_MAX, subjects.length - at);
         onProgress?.(loaded);
       }
@@ -507,6 +560,7 @@ export async function readMany<T>(
         const resource = await store
           .getResource(subjects[index])
           .catch(() => undefined);
+        if (!resource) unread++;
         out[index] = resource ? read(resource) : undefined;
         onProgress?.(++loaded);
       }
@@ -517,5 +571,8 @@ export async function readMany<T>(
     );
   }
 
-  return out.filter((row): row is T => row !== undefined);
+  return {
+    items: out.filter((row): row is T => row !== undefined),
+    unread,
+  };
 }

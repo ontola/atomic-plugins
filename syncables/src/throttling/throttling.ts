@@ -130,6 +130,8 @@ export interface ThrottlingVerdict {
 /** A response, as `classifyThrottling` sees it. */
 export interface ThrottlingResponse {
   status: number;
+  /** A cache answered instead of the API; its rate-limit state is stale. */
+  fromCache?: boolean;
   /** Header names in any case; a repeated header's values joined as the transport gives them. */
   headers: Record<string, string>;
   /** The response body text; a body that is not JSON matches no Body Predicate. */
@@ -765,6 +767,7 @@ export function classifyThrottling(
   declaration: ThrottlingDeclaration | undefined,
   response: ThrottlingResponse,
 ): ThrottlingVerdict | undefined {
+  if (response.fromCache === true) return undefined;
   const receivedAt = response.receivedAt ?? Date.now();
   const headers = response.headers;
   let body: unknown = MISSING;

@@ -1,6 +1,6 @@
 #!/bin/sh
-# (Re)starts the log collector (server.mjs) on the droplet, as root:
-# `sh run.sh`. Logs go to /var/lib/usertest-logs/<UTC date>.jsonl; follow a
+# (Re)starts the log collector (server.mjs) on the user-testing server, as
+# root: `sh run.sh`. Logs go to /var/lib/usertest-logs/<UTC date>.jsonl; follow a
 # session with `tail -f /var/lib/usertest-logs/$(date -u +%F).jsonl`.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)

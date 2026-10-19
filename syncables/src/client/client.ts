@@ -94,6 +94,7 @@ import {
   lowerCaseHeaders,
   type ListMethod,
   type Transport,
+  type PurposedRequest,
   type TransportRequest,
   type TransportResponse,
 } from '../read/transport.js';
@@ -1176,6 +1177,7 @@ class HttpStatusError extends Error {
     readonly status: number,
     readonly headers: Record<string, string>,
     readonly body: string,
+    readonly fromCache = false,
   ) {
     super(message);
   }
@@ -1814,6 +1816,23 @@ export function createApiClient(
    * `sleep` option may return early, in tests).
    */
   let pacingSleptUntil = 0;
+  /** A cache's answer (`fromCache`) gives the pacer its counted request back. */
+  const released = (
+    pacing: Pacer,
+    buckets: string[],
+    at: number,
+    sent: Promise<TransportResponse>,
+  ): Promise<TransportResponse> => {
+    // Watched beside the caller, not chained before it: the caller sees the
+    // response in the same turn as without pacing.
+    void sent.then(
+      (response) => {
+        if (response.fromCache === true) pacing.release(buckets, at);
+      },
+      () => {},
+    );
+    return sent;
+  };
   const pacedSend = async (
     pacing: Pacer,
     buckets: string[],
@@ -1826,8 +1845,9 @@ export function createApiClient(
       await (options.sleep ?? defaultSleep)(wait);
       pacingSleptUntil = Math.max(pacingSleptUntil, now + wait);
     }
-    pacing.take(buckets, Date.now());
-    return unpacedTransport(request);
+    const at = Date.now();
+    pacing.take(buckets, at);
+    return released(pacing, buckets, at, unpacedTransport(request));
   };
   // Not async: a request with room is counted and sent in the same turn,
   // with no wait added before it.
@@ -1836,8 +1856,9 @@ export function createApiClient(
         const buckets = requestBuckets(request);
         if (pacer.delay(buckets, Date.now()) > 0)
           return pacedSend(pacer, buckets, request);
-        pacer.take(buckets, Date.now());
-        return unpacedTransport(request);
+        const at = Date.now();
+        pacer.take(buckets, at);
+        return released(pacer, buckets, at, unpacedTransport(request));
       }
     : unpacedTransport;
   const transport = authenticatedTransport(
@@ -2695,7 +2716,7 @@ export function createApiClient(
    * `lenient`, a 2xx body that is not JSON reads as no body.
    */
   async function requestJson(
-    request: TransportRequest,
+    request: PurposedRequest,
     received?: { headers?: Record<string, string>; lenient?: boolean },
   ): Promise<unknown> {
     // Tells an error raised before the request left (an authenticate adapter
@@ -2730,6 +2751,7 @@ export function createApiClient(
           ]),
         ),
         response.body ?? '',
+        response.fromCache === true,
       );
     }
     if (received)
@@ -2856,6 +2878,7 @@ export function createApiClient(
           }),
           method: 'GET',
           headers: { accept: 'application/json' },
+          purpose: 'precondition',
         },
         received,
       );
@@ -2889,6 +2912,7 @@ export function createApiClient(
   ): WriteOutcome | undefined {
     const throttled = classifyThrottling(throttling, {
       status: error.status,
+      fromCache: error.fromCache,
       headers: error.headers,
       body: error.body,
       receivedAt: error.receivedAt,
@@ -2963,6 +2987,7 @@ export function createApiClient(
         url,
         method: 'GET',
         headers: { accept: 'application/json' },
+        purpose: 'precondition',
       });
     } catch (error) {
       value = null;
@@ -3294,7 +3319,7 @@ export function createApiClient(
     // answer, or what a later read showed), so one that already applied is
     // settled without a request.
     let followUp:
-      | { declared: FollowUp; url: URL; init: TransportRequest }
+      | { declared: FollowUp; url: URL; init: PurposedRequest }
       | undefined;
     if (write.followUp) {
       const declared = route.create?.followUps?.find(
@@ -3340,6 +3365,7 @@ export function createApiClient(
         url,
         init: {
           url,
+          purpose: 'write',
           method: declared.method,
           headers: {
             ...(request.body !== undefined
@@ -3393,6 +3419,7 @@ export function createApiClient(
           }),
           method: 'DELETE',
           headers: { ...preconditionHeaders },
+          purpose: 'write',
         });
         remote(write.scope).delete(write.id);
       } else {
@@ -3429,6 +3456,7 @@ export function createApiClient(
               : data;
         const result = await requestJson(
           {
+            purpose: 'write',
             url:
               write.type === 'create'
                 ? target(route.createPath as string, write.context)
@@ -3530,6 +3558,7 @@ export function createApiClient(
         error instanceof HttpStatusError
           ? classifyThrottling(throttling, {
               status: error.status,
+              fromCache: error.fromCache,
               headers: error.headers,
               body: error.body,
               receivedAt: error.receivedAt,
@@ -3720,7 +3749,9 @@ export function createApiClient(
       }
       const asked =
         error instanceof HttpStatusError
-          ? retryAfterMs(error.headers)
+          ? error.fromCache
+            ? undefined
+            : retryAfterMs(error.headers)
           : undefined;
       // A Retry-After on another retryable answer (a 503, say) only
       // lengthens the wait (never below the backoff, so "0", a past date or
@@ -4385,6 +4416,7 @@ export function createApiClient(
   ): Promise<void> {
     const throttled = classifyThrottling(throttling, {
       status: response.status,
+      fromCache: response.fromCache === true,
       headers: lowerCaseHeaders(response.headers),
       body: response.body,
       receivedAt,
@@ -4430,7 +4462,19 @@ export function createApiClient(
     const raw = await readTransport({ ...request, headers });
     const response = { ...raw, headers: lowerCaseHeaders(raw.headers) };
     await noteReadThrottling(response, Date.now());
-    if (response.status === 304 && cached) return cached;
+    // The cached body, but this answer's fromCache: a stored response
+    // keeps the fromCache of the request that filled it, and a 304 from
+    // the network is a counted request, not a cache's answer.
+    if (response.status === 304 && cached) {
+      const answer = {
+        status: cached.status,
+        headers: cached.headers,
+        body: cached.body,
+      };
+      return raw.fromCache === undefined
+        ? answer
+        : { ...answer, fromCache: raw.fromCache };
+    }
     if (cacheable && response.status === 200)
       conditionalCache.set(key, response);
     return response;
@@ -4987,6 +5031,7 @@ export function createApiClient(
         upstream,
         path: bindPath(feed.path, context),
         method: 'GET',
+        purpose: 'feed',
         query:
           cursor !== undefined && feed.cursor
             ? { [feed.cursor.parameter]: cursor }
@@ -5148,7 +5193,12 @@ export function createApiClient(
         [route.collection.itemParam ?? 'id']: id,
       });
       path = url.pathname;
-      response = await budget.send({ url, method: 'GET', headers: {} });
+      response = await budget.send({
+        url,
+        method: 'GET',
+        headers: {},
+        purpose: 'item',
+      });
     } catch (error) {
       // The budget is spent, or a 429 asks to wait past its deadline.
       if (
