@@ -78,6 +78,8 @@ export const FRAMES = {
   e: { width: 360, title: 'E Narrow week strip' },
   e2: { width: 360, title: 'E Detail as a sheet' },
   f: { width: 560, title: 'F Not connected' },
+  f2: { width: 560, title: 'F Connect refused: key replaced' },
+  f3: { width: 560, title: 'F Connect refused: proxy access' },
   g1: { width: 560, title: 'G1 Waiting on the consent bar' },
   g2: { width: 560, title: 'G2 Workspace and window' },
   h: { width: 760, title: 'H First import' },
@@ -313,6 +315,28 @@ export function renderFrame(root: HTMLElement, id: FrameId): Shell {
     e: [ready(ok(4)), sheet],
     e2: [ready(ok(4)), sheet],
     f: [{ kind: 'not-connected' }, undefined],
+    f2: [
+      {
+        kind: 'not-connected',
+        problem: {
+          kind: 'agent-retired',
+          detail:
+            'The integration proxy refused POST /connect/redeem: this agent id was transferred to another one and can no longer own connections',
+        },
+      },
+      undefined,
+    ],
+    f3: [
+      {
+        kind: 'not-connected',
+        problem: {
+          kind: 'proxy-access',
+          detail:
+            'The integration proxy refused POST /connect/redeem: this agent may not use the proxy: not on the list',
+        },
+      },
+      undefined,
+    ],
     g1: [{ kind: 'connecting' }, undefined],
     g2: [
       { kind: 'setup', connection: CONNECTION, draft: {}, options: OPTIONS },

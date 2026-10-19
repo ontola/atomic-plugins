@@ -184,7 +184,9 @@ export function mountShell(
       case 'no-proxy':
         return ['paused', 'Offline'];
       case 'not-connected':
-        return ['idle', 'Not connected'];
+        return state.problem
+          ? ['error', 'Connect failed']
+          : ['idle', 'Not connected'];
       case 'connecting':
         return ['syncing', 'Connecting…'];
       case 'setup':
@@ -963,7 +965,28 @@ export function mountShell(
         break;
       case 'not-connected':
         if (bound) parts.push(bound);
-        parts.push(firstRun(h, () => void controller.connect()));
+        // A connect the proxy refused for a reason connecting again does
+        // not fix: that problem's banner instead of the Connect card (0.8.4).
+        if (state.problem) {
+          const connect = () => void controller.connect();
+          parts.push(
+            h(
+              'div',
+              { class: 'content', style: 'padding-top: 16px' },
+              problemBanner(h, state.problem, {
+                lookbackDays: 30,
+                waitSeconds: 0,
+                syncing: false,
+                actions: {
+                  reconnect: connect,
+                  chooseWorkspace: connect,
+                  retry: connect,
+                  narrow: connect,
+                },
+              }),
+            ),
+          );
+        } else parts.push(firstRun(h, () => void controller.connect()));
         break;
       case 'connecting':
         parts.push(waiting(h));

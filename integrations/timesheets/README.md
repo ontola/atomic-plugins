@@ -117,8 +117,23 @@ read, minute snapping and the range planner are unchanged.
     the proxy's at all.
   - `not_owner` (someone else's connection) now says "Connect again", like
     a lost connection (0.8.2).
+  - A connect, its redeem or a delegation that the proxy refuses for a
+    replaced key or its access check shows the same copy (0.8.4): before
+    any data, as the problem banner in place of the Connect card (frames
+    F2 and F3; Try again connects again, a replaced key has no button);
+    after a Reconnect, over the data. The host passes such a failure to
+    the frame as a message only ("The integration proxy refused POST
+    /connect/redeem: …"), without the code, so `problem.ts` matches the
+    proxy's own wording for these two. Any other connect failure still
+    shows "This app cannot run." with the raw message.
+  - After a key change (a transfer, #410), capabilities the old key signed
+    no longer verify. A sync in a page that was open across the change can
+    then fail with `invalid_capability` ("the capability is malformed or
+    not signed by the connection's owner"), which shows "Try again".
+    Opening Atomic again with the new key fixes it; the app does not tell
+    that cause apart from a malformed capability.
   - Unit-tested (`problem.ts`, `transport.ts` `proxyRefusal`, the card,
-    frames J7 and J8).
+    frames J7 and J8; connect refusals: `controller.ts` `connectProblem`, frames F2 and F3).
 - **A refusal names its reason** (0.8.1). An entry Clockify returns that the lens
   refuses outside a running timer, a break or another listed blocker (a
   start or end that is not an ISO instant, say) is refused with the
