@@ -86,6 +86,42 @@ describe('apiKeyAuth', () => {
     expect(headers).toEqual({ cookie: 'session=k' });
   });
 
+  it.each([
+    'k;admin=1',
+    'k admin',
+    'k,x',
+    'k"x',
+    'k\\x',
+    'k\nSet: x',
+    'k\u0000',
+  ])(
+    'refuses a cookie value that is not RFC 6265 cookie-octets: %j',
+    async (apiKey) => {
+      const attempt = sent(apiKeyAuth('session', 'cookie'), { apiKey });
+      await expect(attempt).rejects.toThrow(/not a valid cookie value/);
+      // The secret is not echoed.
+      await expect(attempt).rejects.not.toThrow(apiKey);
+    },
+  );
+
+  it.each(['a b', 'a;b', 'a=b', '', 'sess\u00e9'])(
+    'refuses a cookie name that is not a token: %j',
+    (name) => {
+      expect(() => apiKeyAuth(name, 'cookie')).toThrow(
+        /not an RFC 6265 cookie name/,
+      );
+    },
+  );
+
+  it('joins every case of a Cookie header, and matches names trimmed', async () => {
+    const { headers } = await sent(
+      apiKeyAuth('session', 'cookie'),
+      { apiKey: 'k' },
+      { Cookie: 'theme=dark;session =stale', cookie: 'lang=nl' },
+    );
+    expect(headers).toEqual({ cookie: 'theme=dark; lang=nl; session=k' });
+  });
+
   it('refuses without an API key', async () => {
     await expect(sent(apiKeyAuth('key'), { accessToken: 't' })).rejects.toThrow(
       /Missing apiKey/,

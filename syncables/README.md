@@ -1733,8 +1733,11 @@ const client = createApiClient(document, {
 `apiKeyAuth(name, in)` takes an OpenAPI `apiKey` security scheme's `name`
 and `in`: `header` (the default), `query` or `cookie`, which adds
 `name=<key>` to the request's `cookie` header, replacing a cookie of that
-name and keeping the others. `bearerAuth` and a header key replace a
-header of the same name in any case, so a request never carries both
+name and keeping the others. A cookie name must be an RFC 6265 token, and a
+key sent as a cookie must be RFC 6265 cookie-octets (no control character,
+whitespace, `"`, `,`, `;` or `\`), so a key such as `k;admin=1` cannot add a
+cookie of its own; either is refused. `bearerAuth` and a header key replace
+a header of the same name in any case, so a request never carries both
 `Authorization` and `authorization`.
 
 The Node constructor falls back to `SYNCABLES_API_KEY`,

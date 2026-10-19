@@ -18,3 +18,18 @@ the same name replaced. `bearerAuth` and a header key added a lower-case
 header beside one of the same name in another case, so the request
 carried both; they now replace it. Tests in `unit/client/auth.test.ts`
 (9, four failing on the code before); README and a fragment.
+
+## Turn 2
+
+**Human (via the coordinator session):** #654's blocker: the key is
+written into the cookie unchecked, so `k;admin=1` injects a cookie;
+refuse a value that is not RFC 6265 cookie-octets and a name that is not
+a token. Nits: join every `Cookie` case variant, and trim names when
+matching.
+
+**Assistant:** `apiKeyAuth(name, 'cookie')` throws at once for a name
+that is not a token, and each request with a key that is not
+cookie-octets throws without echoing the key. All `Cookie` headers,
+whatever their case, are joined before the named cookie is replaced, and
+names are trimmed when matching. 13 new tests, all failing on the code
+before.
