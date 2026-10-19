@@ -1202,8 +1202,13 @@ on every retry, and an uncertain create is retried automatically instead. Set
 `idempotencyKeyHeader: 'X-Some-Header'` to use another header for every create
 when the provider documents one elsewhere, or `false` to never send one. Whether
 the provider actually deduplicates on that key is the provider's contract; it is
-not verified here. A 2xx response with an unusable body stays `uncertain`
-even with a key.
+not verified against a real provider. The client's half is tested over HTTP
+against the mock server, which answers a create sent again with the same key
+with the record it made the first time (and `422` for the same key with
+another body): a create whose response was lost is retried with its key and
+leaves one record, where without a declared key it stays `uncertain` and is
+not resent. A 2xx response with an unusable body stays `uncertain` even with
+a key.
 
 #### Declared create results (CRUD Causality §4.3.2, §4.4–4.5)
 
