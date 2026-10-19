@@ -413,7 +413,9 @@ names one of the document's `components.x-authentication-profiles`
 same as `oauthSecurityScheme` for a document with several `apiKey` schemes,
 or several bearer/basic `http` schemes.
 **GET /catalog/{platform}.selection.json** returns the selection object (or an
-empty object when absent).
+empty object when absent). Like the rest of `/catalog` it needs no
+signature, so a `throttlingPlans` entry in it tells anyone which provider
+plan the deployment is on.
 
 A composed document whose `paths` holds a path item that is a `$ref`
 (OpenAPI 3.1) or not an object is refused at load, naming the platform and

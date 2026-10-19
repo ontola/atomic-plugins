@@ -8,7 +8,11 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 - Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
   paced at the tier whose `plans` name the plan the catalog selection's
   `throttlingPlans` gives for it, else within every tier at once (each its
-  own count). Unknown entries are logged at load and ignored.
+  own count). Unknown entries are logged at load and ignored. A tier above
+  the 10,000-requests cap is dropped (not paced) while the other tiers still
+  count, which paces below what Throttling requires when the dropped tier
+  would have been the binding one. Tier logs are keyed by bucket id and tier
+  position, so a bucket id can never collide with another bucket's tier.
 - Key rotation (#410): `POST /agents/transfer`, signed by the old agent with
   a proof by the new one, moves the old agent's connections and runtimes to
   the new id in one transaction and retires the old id (new `retired_agents`
