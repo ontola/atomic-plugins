@@ -748,7 +748,7 @@ fixed read is the request the drive app sends. No provider was called.
 
 ## Collection completeness
 
-Eight standalone overlays declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
+Thirteen completeness overlays exist; eight standalone ones, in this table, declare [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md)
 `x-completeness`, which syncables reads (`absent`, `notFound`, `gone`,
 `parentAbsent`). No dated catalog selects them yet. Notion's, GitLab's,
 Spotify's, Airtable's and Asana's have their own sections above.
@@ -1242,8 +1242,12 @@ Mastodon's selected response bodies remain root arrays. Its pinned OAD omits
 response headers, so the overlay adds only the documented string `Link` header
 to followers, following, blocks, mutes, bookmarks and favourites. Follow the
 RFC 8288 next relation ("Following the next link relation should show you the
-next page."). That private relationship IDs can differ from visible account or
-status IDs is not found on the cited page (curl'd 2026-10-19). Unpaged batch
+next page."). Its cursors can be IDs the response does not show: "Some API
+methods operate on entity IDs that are not publicly exposed in the API
+response and are only known to the backend and the database. (This is
+usually the case for entities that reference other entities, such as Follow
+entities which reference Accounts, or Favourite entities which reference
+Statuses, etc.)" (curl'd 2026-10-19). Unpaged batch
 reads, directory offsets and instance peer reads are excluded. Server
 selection and dynamic OAuth registration remain separate from this pagination
 metadata.
