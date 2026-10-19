@@ -24,6 +24,58 @@ export interface CreateDeclaration {
   generated: string[];
   /** `followUps` (CRUD Causality 0.5.0 §4.7): a compound create. */
   followUps?: FollowUp[];
+  /**
+   * `committedErrors` (CRUD Causality 0.8.0 §4.3.3): error responses the
+   * provider documents as sent only after the create was applied, with
+   * where the new object's identity is in the error body.
+   */
+  committedErrors?: CommittedError[];
+}
+
+/** A usable Committed Error Object (§4.3.3). */
+export interface CommittedError {
+  /** 5xx statuses, each 500–599. */
+  status: number[];
+  /** Template variable → dot-path into the JSON error body. */
+  identity: Record<string, string>;
+}
+
+/**
+ * The usable entries of `x-crud.committedErrors` (rules 30–31): a nonempty
+ * `status` of integers 500–599 and a nonempty `identity` of template
+ * variables to dot-paths. An entry that is not is left out, so a response
+ * it would describe stays an unknown outcome, as without it.
+ */
+function committedErrors(
+  value: unknown,
+  variables: Set<string>,
+): CommittedError[] {
+  if (!Array.isArray(value)) return [];
+  const usable: CommittedError[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry)) continue;
+    const status = entry['status'];
+    const identity = entry['identity'];
+    if (
+      !Array.isArray(status) ||
+      status.length === 0 ||
+      !status.every(
+        (code) => Number.isInteger(code) && code >= 500 && code <= 599,
+      ) ||
+      !isRecord(identity) ||
+      Object.keys(identity).length === 0 ||
+      !Object.entries(identity).every(
+        ([variable, path]) =>
+          variables.has(variable) && typeof path === 'string' && path !== '',
+      )
+    )
+      continue;
+    usable.push({
+      status: status as number[],
+      identity: identity as Record<string, string>,
+    });
+  }
+  return usable;
 }
 
 /** The create declaration of `resource` from an operation's `x-crud`, if usable. */
@@ -55,7 +107,17 @@ export function createDeclaration(
         )
         .map(([field]) => field)
     : [];
+  const variables = new Set(
+    [...template.matchAll(/\{([^{}]+)\}/g)].map(([, name]) => name as string),
+  );
+  // Rule 32: not with followUps, whose 5xx answers §4.7.2 resolves by a
+  // read; such a create keeps every 5xx an unknown outcome.
+  const committed =
+    crud['action'] === 'create' && crud['followUps'] === undefined
+      ? committedErrors(crud['committedErrors'], variables)
+      : [];
   return {
+    ...(committed.length ? { committedErrors: committed } : {}),
     ...(source === 'header' || source === 'bodyField' || source === 'template'
       ? { source }
       : {}),
@@ -154,4 +216,77 @@ export function createdIdentity(
     values[field] = value;
   }
   return values;
+}
+
+/**
+ * §4.3.3, after the reference `committed_identity()` (CRUD Causality
+ * 0.8.0): the created object's identity fields from an error response a
+ * Committed Error Object matches, or undefined when none does (the outcome
+ * stays unknown). A response matches when its status is listed, its body
+ * is JSON and every identity path resolves to a usable value: a nonempty
+ * string without surrounding whitespace, `/`, `?`, `#` or a control
+ * character, and not `.` or `..`, or a non-negative safe integer, used in
+ * decimal. The first entry that matches decides. Returns {object field:
+ * value} through the identity bindings; a variable without a binding is
+ * left out.
+ */
+export function committedIdentity(
+  declaration: CreateDeclaration,
+  status: number,
+  bodyText: string,
+): Record<string, string> | undefined {
+  if (!declaration.committedErrors?.length) return undefined;
+  let body: unknown;
+  try {
+    body = JSON.parse(bodyText);
+  } catch {
+    return undefined;
+  }
+  if (body === null || typeof body !== 'object') return undefined;
+  for (const entry of declaration.committedErrors) {
+    if (!entry.status.includes(status)) continue;
+    const values: Record<string, string> = {};
+    let usable = true;
+    for (const [variable, path] of Object.entries(entry.identity)) {
+      const value = committedValue(
+        readNestedField(body as Record<string, unknown>, path),
+      );
+      if (value === undefined) {
+        usable = false;
+        break;
+      }
+      const field = declaration.bindings[variable];
+      if (field !== undefined) values[field] = value;
+    }
+    if (usable) return values;
+  }
+  return undefined;
+}
+
+/** A §4.3.3 usable identity value, as a string, or undefined. */
+function committedValue(value: unknown): string | undefined {
+  if (typeof value === 'number')
+    return Number.isSafeInteger(value) && value >= 0
+      ? String(value)
+      : undefined;
+  if (
+    typeof value !== 'string' ||
+    value === '' ||
+    value !== value.trim() ||
+    value === '.' ||
+    value === '..' ||
+    [...value].some((char) => {
+      // `/`, `?`, `#`, and Unicode category Cc (C0, DEL, C1).
+      const code = char.codePointAt(0)!;
+      return (
+        char === '/' ||
+        char === '?' ||
+        char === '#' ||
+        code <= 0x1f ||
+        (code >= 0x7f && code <= 0x9f)
+      );
+    })
+  )
+    return undefined;
+  return value;
 }

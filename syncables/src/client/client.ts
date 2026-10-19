@@ -10,6 +10,7 @@ import {
 import {
   createBody,
   createDeclaration,
+  committedIdentity,
   createdIdentity,
   type CreateDeclaration,
 } from './created-identity.js';
@@ -2771,6 +2772,36 @@ export function createApiClient(
     }
   }
 
+  /**
+   * A create a Committed Error Object (CRUD Causality 0.8.0 §4.3.3) says
+   * was applied: bound to the identity the error named, as a 2xx would
+   * bind it, the record being what was sent. Without the id field among
+   * the values, it is applied but unbound: uncertain, never sent again.
+   */
+  function committedCreate(
+    write: QueuedWrite,
+    declared: CreateDeclaration,
+    identity: Record<string, string>,
+    status: number,
+  ): WriteOutcome {
+    const idField = write.route.collection.idField;
+    const id = identity[idField];
+    if (id === undefined) {
+      write.unbound = true;
+      write.lastStatus = status;
+      write.lastError = `Create answered ${status}, which the document says follows an applied create (CRUD Causality §4.3.3), but without the record's ${idField}; the record is unbound and is not sent again`;
+      return { status: 'uncertain' };
+    }
+    const record = withIdentity(
+      createBody(declared, write.data as Record<string, unknown>),
+      identity,
+    );
+    if (id !== write.id) remote(write.scope).delete(write.id);
+    remote(write.scope).set(id, record);
+    setLastKnown(keyFor(write.scope, id), record);
+    return settled(write, id);
+  }
+
   function settled(write: QueuedWrite, resolvedId: string): WriteOutcome {
     revisions.set(write.scope, (revisions.get(write.scope) ?? 0) + 1);
     for (const id of new Set([write.id, resolvedId])) {
@@ -3552,6 +3583,26 @@ export function createApiClient(
       accepted();
       return settled(write, resolvedId);
     } catch (error) {
+      // CRUD Causality 0.8.0 §4.3.3: an error response the provider
+      // documents as sent only after the create was applied (Notion's 503
+      // with additional_data.committed_resource_id). The create is
+      // applied, never sent again, and bound to the identity it names,
+      // before throttling or the retry path (which would resend a 503).
+      if (
+        write.type === 'create' &&
+        route.create &&
+        error instanceof HttpStatusError
+      ) {
+        const committed = committedIdentity(
+          route.create,
+          error.status,
+          error.body,
+        );
+        if (committed) {
+          accepted();
+          return committedCreate(write, route.create, committed, error.status);
+        }
+      }
       // Throttling under the document's x-throttling (a matching signal, or
       // a 429), with the earliest retry time; decided once per response.
       const verdict =
