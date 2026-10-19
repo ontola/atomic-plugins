@@ -2191,7 +2191,9 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
     sleeping and fails on it. API semantic change: a `ThrottlingVerdict` no
     longer always means "retry later"; a custom `classifyWriteFailure` that
     returns `retry` for any `failure.throttling` now retries a blocked
-    answer, so check its meaning.
+    answer, so check its meaning. `ThrottlingMeaning` gains `'blocked'`, so
+    an exhaustive `switch` over it no longer compiles until it handles the
+    new value.
   - **Behaviour change:** Pagination Schemes §6.3 `matchHeaders` and
     `matchResponseFields` are read (#577): a scheme auto-detected by its
     response headers (a `Link` header, as in the spec's example and GitHub's
@@ -2225,12 +2227,15 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
     step and asks again on later steps. `StepResult` has this new kind,
     which code that handles every kind of `InboxConsumer.step()` result must
     now handle; it is returned only when `reconcile` answers `'pending'`.
-    `InboxClient` refuses a base URL whose host is an IP literal other than
-    a dotted-decimal IPv4 address without leading zeros or shorthand (no
-    `127.1`, `0x7f.0.0.1`, `010.0.0.1`, no IPv6 literal), and, where `URL`
-    exists, one that `URL` would rewrite: a base URL with an IPv6 literal
-    host (`http://[::1]:8080`), accepted before, is now refused when the
-    `InboxClient` is created. Use a host name.
+    `reconcile` now also gets a second argument, the receiver's
+    `ReconciliationRequired`. `InboxClient` refuses a base URL whose host
+    is an IP literal other than a dotted-decimal IPv4 address without
+    leading zeros or shorthand, and, where `URL` exists, one that `URL`
+    would rewrite. Both kinds were accepted before and are now refused
+    when the `InboxClient` is created: an IPv6 literal host
+    (`http://[::1]:8080`), and an IPv4 shorthand, hexadecimal or
+    leading-zero form (`127.1`, `0x7f.0.0.1`, `010.0.0.1`). Use a host name
+    or a plain dotted-decimal address.
   - **Behaviour change:** `generateFromSchema`, which the mock server seeds
     records and answers responses with, keeps to the schema it generates
     from (#623, #626), so mock values change: an OpenAPI 3.1 type list
@@ -2273,8 +2278,10 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
     `describer`, `zone`, `precondition`, `write`, `inbox`) on every request
     syncables makes, and `TransportResponse.fromCache`, which gives back the
     request's pacing count and does not count against `maxRequests`. Both
-    optional; the `PurposedRequest` and `RequestPurpose` types are exported.
-    #566's "smallest backward-compatible extension" for a caching transport.
+    optional; the `PurposedRequest` and `RequestPurpose` types are exported,
+    and `Pacer.release()`, which gives back a counted request, is new public
+    API (#606, #566's "smallest backward-compatible extension" for a caching
+    transport).
   - **Added:** `resolveReference` and the `ResolvedReference` type (#611,
     #620) resolve a CRUD Causality §4.1.3 Reference Object for an object:
     the referenced resource's identity path, filled from the object's fields
@@ -2293,7 +2300,7 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
     collection whose read failed. Before, only `sync()` reported it.
   - **Fixed:** Do not classify cached responses as throttling or blocked,
     apply their Retry-After, or pause shared buckets from them (Throttling
-    0.5.1-draft). Live revalidation responses retain their own cache
+    0.5.1-draft, #606). Live revalidation responses retain their own cache
     provenance.
   - **Fixed:** `deriveOntology`, and so `readPlatform`, reads an OpenAPI 3.1
     type list: a field typed `['string', 'null']` with format `date-time`
@@ -2317,6 +2324,9 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
     GitHub read and session revocation. Keep owner signing outside the CLI
     and distinguish this evidence from packed CLI testing, production
     owner-hub integration and untested refresh rotation.
+  - **Other:** the README's spec table now says Pagination Schemes 0.10.1,
+    CRUD Causality 0.7.0 (whose `replace` and `unkeyedLists` 0.24.0 added
+    as exported helpers) and Collection Completeness 0.4.0-draft.
 - **0.24.0**: CRUD Causality 0.7.0's `replace` and `unkeyedLists` for
   APIs that cannot update an object or give list items no id (see "APIs
   that cannot update"): `replaceOf`, `replaceBlock`, `unkeyedListsOf`,
