@@ -680,9 +680,9 @@ describe('direct authentication configuration', () => {
     const transport = vi.fn<Transport>(async () => response([]));
     const client = createNodeClient(document(), { transport });
     await client.sync();
-    expect(transport.mock.calls[0]?.[0].headers).not.toHaveProperty(
-      'authorization',
-    );
+    const sent = transport.mock.calls[0]?.[0].headers;
+    expect(sent).not.toHaveProperty('authorization');
+    expect(sent).not.toHaveProperty('x-api-key');
     // Explicit credentials without an adapter are still a mistake.
     expect(() =>
       createNodeClient(document(), {

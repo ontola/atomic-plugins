@@ -23,3 +23,22 @@ authenticates itself needs no credential options. Environment
 credentials are now read only for an adapter; `credentialPrefix` is no
 longer passed on to the core. Two tests in `unit/client/unified.test.ts`,
 one failing on the code before. README and a fragment.
+
+## Turn 2
+
+**Human (via the coordinator session):** #658 conflicts with main
+outside the changelog: merge main by hand; the fragment says env keys
+are silently ignored without an adapter, the README says explicit
+credentials without one are still refused, the test also checks
+`x-api-key`; add #654's header-name token check for
+`apiKeyAuth(name, 'header')` with its own fragment; Pagination Schemes
+0.10.2 in the table if #650 is in.
+
+**Assistant:** The README conflict (#654's `apiKeyAuth` paragraph beside
+this branch's environment paragraph) keeps both, the environment one
+saying the variables are ignored silently and explicit credentials still
+refused. The test also checks no `x-api-key` was sent. A header name
+that is not an RFC 7230 token now throws when the adapter is made
+(`changes/header-name-token.fixed.md`); a query name is not restricted.
+#650 is on main, and syncables refuses an empty cursor since #661, so
+the table says 0.10.2.

@@ -104,6 +104,23 @@ describe('apiKeyAuth', () => {
     },
   );
 
+  it.each(['X Key', 'X-Key:', 'X-Key\r\nEvil: 1', '', 'Schl\u00fcssel'])(
+    'refuses a header name that is not a token: %j',
+    (name) => {
+      expect(() => apiKeyAuth(name)).toThrow(/not an RFC 7230 header name/);
+      expect(() => apiKeyAuth(name, 'header')).toThrow(
+        /not an RFC 7230 header name/,
+      );
+    },
+  );
+
+  it('accepts a query parameter name that is not a token', async () => {
+    const { url } = await sent(apiKeyAuth('api key', 'query'), {
+      apiKey: 'k',
+    });
+    expect(url.searchParams.get('api key')).toBe('k');
+  });
+
   it.each(['a b', 'a;b', 'a=b', '', 'sess\u00e9'])(
     'refuses a cookie name that is not a token: %j',
     (name) => {
