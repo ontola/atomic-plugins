@@ -17,21 +17,32 @@ pub(crate) async fn connect_once(database_url: &str) -> Result<(Client, Connecti
     let tls = postgres_native_tls::MakeTlsConnector::new(tls);
     let (client, connection) = tokio_postgres::connect(database_url, tls)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(db_error)?;
     Ok((client, Box::pin(connection)))
 }
 
 /// Drives the active connection to completion, then keeps reconnecting with
 /// exponential backoff and swapping the shared client in on success, so a
 /// dropped connection recovers without restarting the process.
+///
+/// It holds the shared client only weakly: once every [`Security`] handle
+/// is dropped, the client is dropped, its connection ends, and the
+/// supervisor stops instead of reconnecting. Holding it strongly kept one
+/// PostgreSQL connection open, and reconnecting, for every `Security` ever
+/// made; the test suite makes hundreds and ran out of server connections
+/// ("too many clients already").
 fn spawn_reconnect_supervisor(
     database_url: String,
-    current: Arc<RwLock<Arc<Client>>>,
+    current: std::sync::Weak<RwLock<Arc<Client>>>,
     mut connection: ConnectionDriver,
 ) {
     tokio::spawn(async move {
         loop {
-            if let Err(error) = connection.await {
+            let result = connection.await;
+            if current.strong_count() == 0 {
+                return;
+            }
+            if let Err(error) = result {
                 tracing::error!(%error, "postgres connection failed; reconnecting");
             } else {
                 tracing::warn!("postgres connection closed; reconnecting");
@@ -40,6 +51,9 @@ fn spawn_reconnect_supervisor(
             loop {
                 match connect_once(&database_url).await {
                     Ok((client, new_connection)) => {
+                        let Some(current) = current.upgrade() else {
+                            return;
+                        };
                         *current.write().await = Arc::new(client);
                         connection = new_connection;
                         break;
@@ -220,7 +234,12 @@ fn timestamp(value: std::time::SystemTime) -> String {
 }
 
 fn db_error(error: tokio_postgres::Error) -> String {
-    error.to_string()
+    // `Display` alone says only "db error"; the server's message (never a
+    // parameter value) is what an operator needs in the log.
+    match error.as_db_error() {
+        Some(db) => format!("{error}: {} ({})", db.message(), db.code().code()),
+        None => error.to_string(),
+    }
 }
 
 #[derive(Clone)]
@@ -325,7 +344,11 @@ impl Security {
 
         let (client, connection) = connect_once(database_url).await?;
         let database = Arc::new(RwLock::new(Arc::new(client)));
-        spawn_reconnect_supervisor(database_url.to_string(), database.clone(), connection);
+        spawn_reconnect_supervisor(
+            database_url.to_string(),
+            Arc::downgrade(&database),
+            connection,
+        );
         Ok(Self {
             device_pool: Arc::new(crate::webhooks::pool::Pool::new(database_url, 4)),
             database,
@@ -1138,6 +1161,47 @@ pub(crate) mod tests {
             let _ = connection.await;
         });
         admin
+    }
+
+    /// Dropping every handle of a `Security` closes its PostgreSQL
+    /// connections and stops its reconnect supervisor: 20 handles made and
+    /// dropped leave no connection behind (counted by an application name of
+    /// their own).
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn a_dropped_security_closes_its_connections() {
+        let tag = format!("leak_{:016x}", rand::random::<u64>());
+        let mut url = url::Url::parse(&test_database_url()).unwrap();
+        url.query_pairs_mut().append_pair("application_name", &tag);
+        let admin = admin().await;
+        let open = || async {
+            admin
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1",
+                    &[&tag],
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0)
+        };
+        for _ in 0..20 {
+            let security = Security::connect(url.as_str(), TEST_KEY).await.unwrap();
+            security
+                .create_connection("github-issues", "atomic:agent:leak", b"{}")
+                .await
+                .unwrap();
+            assert!(open().await >= 1);
+            drop(security);
+        }
+        let mut left = open().await;
+        for _ in 0..50 {
+            if left == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            left = open().await;
+        }
+        assert_eq!(left, 0, "connections left open by dropped Security handles");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
