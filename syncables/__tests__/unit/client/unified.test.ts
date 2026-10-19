@@ -672,6 +672,37 @@ describe('direct authentication configuration', () => {
     expect(credentialsFromEnv({}, 'SECOND_')).toEqual({ apiKey: 'second-key' });
   });
 
+  it('reads no environment credentials without an authenticate adapter', async () => {
+    // A key set for some other tool, and a transport that authenticates
+    // itself: before, the client refused to start.
+    vi.stubEnv('SYNCABLES_API_KEY', 'set-for-something-else');
+    vi.stubEnv('SYNCABLES_ACCESS_TOKEN', 'also-unrelated');
+    const transport = vi.fn<Transport>(async () => response([]));
+    const client = createNodeClient(document(), { transport });
+    await client.sync();
+    expect(transport.mock.calls[0]?.[0].headers).not.toHaveProperty(
+      'authorization',
+    );
+    // Explicit credentials without an adapter are still a mistake.
+    expect(() =>
+      createNodeClient(document(), {
+        transport,
+        credentials: { apiKey: 'explicit' },
+      }),
+    ).toThrow('require an authenticate adapter');
+  });
+
+  it('loads environment credentials for an adapter, under a custom prefix too', async () => {
+    vi.stubEnv('OTHER_API_KEY', 'other-key');
+    const authenticate = vi.fn<Authenticate>((request) => request);
+    await createNodeClient(document(), {
+      transport: async () => response([]),
+      credentialPrefix: 'OTHER_',
+      authenticate,
+    }).sync();
+    expect(authenticate.mock.calls[0]?.[1]).toEqual({ apiKey: 'other-key' });
+  });
+
   it('supports direct fetch authentication and lets a Node caller disable environment loading', async () => {
     vi.stubEnv('SYNCABLES_API_KEY', 'ignored');
     const fetch = vi.fn<typeof globalThis.fetch>(

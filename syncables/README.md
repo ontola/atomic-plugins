@@ -1730,9 +1730,12 @@ const client = createApiClient(document, {
 });
 ```
 
-The Node constructor falls back to `SYNCABLES_API_KEY`,
-`SYNCABLES_OAUTH_CLIENT_ID`, `SYNCABLES_OAUTH_CLIENT_SECRET` and
-`SYNCABLES_ACCESS_TOKEN`. Explicit fields win over environment values.
+With an `authenticate` adapter, the Node constructor falls back to
+`SYNCABLES_API_KEY`, `SYNCABLES_OAUTH_CLIENT_ID`,
+`SYNCABLES_OAUTH_CLIENT_SECRET` and `SYNCABLES_ACCESS_TOKEN`. Explicit
+fields win over environment values. Without an adapter it reads none of
+them, so such a variable set for another tool does not stop a client whose
+transport authenticates itself.
 `credentialPrefix: 'SECOND_'` selects a different prefix;
 `credentialPrefix: false` disables fallback. `credentialsFromEnv(explicit,
 prefix)` is also exported by the Node entry. The browser entry never reads
