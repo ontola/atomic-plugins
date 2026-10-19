@@ -1968,9 +1968,9 @@ const { records, ontology, errors } = await readPlatform(document, {
   page or at a `hasMore` body field of `false`, complete unless a response
   was marked (§4.4.6; the mark is kept across pages); a short page does not
   end it. It ends with a `PageReadError`, not complete, when the last item
-  has no such value (or a boolean, `null`, a fraction, an array or an
-  object, or an integer beyond `Number.MAX_SAFE_INTEGER`, which was
-  rounded when parsed), when the value equals the one sent for that
+  has no such value (or an empty string, a boolean, `null`, a fraction,
+  an array or an object, or an integer beyond `Number.MAX_SAFE_INTEGER`,
+  which was rounded when parsed), when the value equals the one sent for that
   page, when a page holds an item an earlier page returned (by identity,
   else the whole item), when an empty page says `hasMore: true`, and when
   `hasMore` is present but not a boolean, `null` included (Pagination
