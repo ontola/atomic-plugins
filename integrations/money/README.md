@@ -472,9 +472,9 @@ Not covered:
   is listed as incomplete.
 
 The six money e2e tests (`e2e/money.spec.ts` and `moneybird.spec.ts`), the
-duplicate step and the server's `createdAt` check included, passed on
-2026-10-19 at 0.4.6 against the pin `7dab1ce` (the build VPS's source
-build), in 6.7 minutes.
+duplicate step and the server's `createdAt` check included, passed again
+after the review fixes on 2026-10-19 at 0.4.6 against the pin `7dab1ce`
+(the build VPS's source build), in 8.3 minutes.
 
 At 0.4.5 (app module `apps/money/0.4.5/ui.js`, 122,855 bytes; `plugin.js`
 again 0.3.0's bundle with only the manifest's `version` changed) the paths
