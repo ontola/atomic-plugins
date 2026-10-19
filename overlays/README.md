@@ -1026,10 +1026,9 @@ provider's document; the new services can be composed with their pinned OAD
 directly.
 
 Statements below about provider behaviour (cursor lifetimes, traversal caps,
-snapshot guarantees, rejected parameter combinations) paraphrase the pages in
-each row's Sources column; they are not quotes, this audit (2026-10-19) did
-not re-check them against those pages, and none was verified against a live
-account.
+snapshot guarantees, rejected parameter combinations) are quoted from the page
+in each row's Sources column, curl'd 2026-10-19, or marked "not found on the
+cited page"; none was verified against a live account.
 
 | Variant | Declared coverage | Sources |
 | --- | --- | --- |
@@ -1199,43 +1198,55 @@ Asana requires `limit` to enable ordinary pagination; its `offset` is an
 opaque token, not an item count. The overlay marks that pagination request
 field required without changing the OAD's parameter contract. It preserves
 filters and `opt_fields`, and stops on null `next_page`. Audit logs are
-excluded: that stream can keep returning a token even with no matching data.
+excluded: for them the pagination page says "it will continue to return
+`next_page` even when there are no more matching events available. This design
+is intentional to mimic stream behavior." (curl'd 2026-10-19).
 
 Zendesk selects offset-mode reads with declared `page` or `per_page` fields
 and a next-page URL. It follows that URL instead of calculating a page number.
 Activities uses `activities`, not the sideloaded `actors` or `users` arrays.
 Cursor-mode routes, incremental exports and batch show-many routes are outside
-this variant. The provider limits offset traversal to the first 10,000 records;
-larger collections need a separately reviewed cursor/export variant.
+this variant. A limit of offset traversal to the first 10,000 records is not
+found on the cited page (curl'd 2026-10-19), nor on its companion
+"Understanding the limitations of offset pagination"; the cited page says "If
+records are removed, some records may be skipped." Larger collections need a
+separately reviewed cursor/export variant.
 
 Square separates query cursors on GET from body cursors on read/search POST,
-preserving all search filters. Page size is added only where the pinned request
-declares `limit`. Merchant cursors are integers in both directions and remain
-opaque; the overlay never increments them. Catalog searches page `objects` or
-`items` rather than related objects or variation IDs; event searches page
-`events` rather than associated metadata. Order search is excluded because
-`return_entries` chooses between `orders` and `order_entries`. Errors are never
-the paged item array. Square documents a five-minute cursor lifetime.
-The pinned source omits `AppFeeAllocation` and `CurrencyExchange` payment
-schemas, leaving five dangling references. Tests assert their exact locations
-and the unchanged source validation failure. This pagination overlay adds no
+preserving all search filters. Page size is added only where the pinned
+request declares `limit`. Merchant cursors are integers in both directions and
+remain opaque; the overlay never increments them. Catalog searches page
+`objects` or `items` rather than related objects or variation IDs; event
+searches page `events` rather than associated metadata. Order search is
+excluded because `return_entries` chooses between `orders` and
+`order_entries`. Errors are never the paged item array. Square's pagination
+page: "A cursor has a 5-minute lifetime." (curl'd 2026-10-19). The pinned
+source omits `AppFeeAllocation` and `CurrencyExchange` payment schemas,
+leaving five dangling references. Tests assert their exact locations and the
+unchanged source validation failure. This pagination overlay adds no
 substitute payment schema.
 
 Zoom Meetings uses opaque tokens with operation-specific envelopes. It does
 not select deprecated `page_number` pagination, individual archive files, or
-writes. Tokens expire after 15 minutes; filters and date ranges must remain
-fixed. The archive-files API can normalize a future `to` to the current time,
-and callers must reuse that returned effective date. This extension has no
-role for copying a non-pagination response filter into the next request, so
-the overlay records that caller requirement explicitly.
+writes. The cited reference, on `next_page_token`: "This token's expiration
+period is 15 minutes." and, on the archive-files list, "if your `to` parameter
+is for a future time, Zoom resets this value to the current time and returns
+this value in the response body, along with the `next_page_token` value. Use
+these same `to` and `next_page_token` values in requests for the remaining
+results set; otherwise you will get an invalid token error." (curl'd
+2026-10-19). This extension has no role for copying a non-pagination response
+filter into the next request, so the overlay records that caller requirement
+explicitly.
 
 Mastodon's selected response bodies remain root arrays. Its pinned OAD omits
 response headers, so the overlay adds only the documented string `Link` header
 to followers, following, blocks, mutes, bookmarks and favourites. Follow the
-RFC 8288 next relation; private relationship IDs can differ from visible
-account or status IDs. Unpaged batch reads, directory offsets and instance
-peer reads are excluded. Server selection and dynamic OAuth registration
-remain separate from this pagination metadata.
+RFC 8288 next relation ("Following the next link relation should show you the
+next page."). That private relationship IDs can differ from visible account or
+status IDs is not found on the cited page (curl'd 2026-10-19). Unpaged batch
+reads, directory offsets and instance peer reads are excluded. Server
+selection and dynamic OAuth registration remain separate from this pagination
+metadata.
 
 The six Google variants use opaque `nextPageToken` values as `pageToken`,
 with `pageSize` or `maxResults` only as declared on that operation. A short
@@ -1268,22 +1279,31 @@ for all tasks.
 
 YouTube selects playlists, playlist items, subscriptions, comment threads,
 comment replies and search. Comment replies require `parentId`, and comment
-threads require `videoId` or `allThreadsRelatedToChannelId`: the provider
-rejects pagination with their `id` batch mode. Live-chat/member-update streams
-and other list modes remain excluded. Follow the forward token only; search's
-`pageInfo.totalResults` is approximate and does not control traversal.
+threads require `videoId` or `allThreadsRelatedToChannelId`. That the `id`
+batch mode excludes paging is not found on the cited page (playlistItems.list)
+(curl'd 2026-10-19); the comments.list and commentThreads.list pages say of
+`pageToken` "This parameter is not supported for use in conjunction with the
+id parameter." Live-chat/member-update streams and other list modes remain
+excluded. Follow the forward token only; search's `pageInfo.totalResults` is
+approximate and does not control traversal.
 
 Cloud Storage selects buckets, objects, long-running operations and HMAC-key
 lists. The object application requires flat mode: omit `delimiter` and
-`includeFoldersAsPrefixes`; `prefixes` is a separate directory-mode collection.
-Folder and managed-folder methods remain unselected because their current
+`includeFoldersAsPrefixes`; `prefixes` is a separate directory-mode
+collection. Folder and managed-folder methods remain unselected because their
+current
 [folder](https://docs.cloud.google.com/storage/docs/json_api/v1/folders/list)
-and [managed-folder](https://docs.cloud.google.com/storage/docs/json_api/v1/managedFolder/list)
+and
+[managed-folder](https://docs.cloud.google.com/storage/docs/json_api/v1/managedFolder/list)
 docs name `maxResults`, while the pinned OAD declares `pageSize`.
 [Cache-list docs](https://docs.cloud.google.com/storage/docs/json_api/v1/AnywhereCaches/list)
 omit the pagination inputs present in the pin, so that method also needs a
-separate review. Tokens preserve an ordering position, not a snapshot of
-concurrent changes.
+separate review. The cited objects.list page: "The pageToken is an encoded
+field that marks the name and generation of the last object in the returned
+list." and "If you start a listing and then create an object in the bucket
+before using a pageToken to continue listing, you do not see the new object in
+subsequent listing results if it is in part of the object namespace already
+listed." (curl'd 2026-10-19).
 
 Box 2026.0 selects the beta Automate workflow list and the read-only item-query
 POST. Query markers and page sizes belong in the JSON body for `/query` and
@@ -1339,11 +1359,13 @@ settings. Its `pageSize` requests a minimum desired activity count, so the
 maximum-size role does not apply to that field.
 
 Books selects the two bookshelf-volume lists, using `startIndex` from zero and
-a positive `maxResults`. It leaves volume search and less documented annotation,
-onboarding and upload lists unselected; `totalItems` is not a traversal bound.
-Its ordinary offset traversal does not guarantee a snapshot through concurrent
-changes. Existing Calendar, Classroom, Forms and Books revisions remain
-published; select the new `pagination-v2` files explicitly.
+a positive `maxResults`. It leaves volume search and less documented
+annotation, onboarding and upload lists unselected; `totalItems` is not a
+traversal bound. That its ordinary offset traversal does not guarantee a
+snapshot through concurrent changes is not found on the cited page (curl'd
+2026-10-19), which says nothing about concurrent changes. Existing Calendar,
+Classroom, Forms and Books revisions remain published; select the new
+`pagination-v2` files explicitly.
 
 The twelve additional HubSpot 2026-03 service OADs copy `paging.next.after`
 into the query's `after`, page `results`, and preserve `limit` and all other
