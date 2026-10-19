@@ -68,6 +68,29 @@ const REAUTH = new Set([
  */
 const ACCESS = new Set(['unauthorized', 'forbidden', 'access_denied']);
 
+/**
+ * The proxy's own wording (`integration-proxy/src/api_error.rs`) for the
+ * refusals a connect can end in. The host relays a failed delegation
+ * (`POST /connections/<id>/agents`, picking an existing connection) or a
+ * failed listing (`GET /connections`) to the frame as a message only ("The
+ * integration proxy refused POST /connections/<id>/agents: <the proxy's
+ * message>"), without the code, so these are matched by their text (0.8.4).
+ * A refused `/connect/redeem` never reaches the frame: the host's return page
+ * shows it. `proxyMessages.test.ts` checks both phrases are still in
+ * `api_error.rs`. The long-term fix is the host passing the code along
+ * (ontola/atomic-server#2321); then this table can go.
+ */
+export const PROXY_MESSAGES: [RegExp, string][] = [
+  [
+    /this agent id was transferred to another one and can no longer own connections/,
+    'agent_retired',
+  ],
+  [/this agent may not use the proxy/, 'access_denied'],
+];
+
+const messageCode = (detail: string) =>
+  PROXY_MESSAGES.find(([pattern]) => pattern.test(detail))?.[1];
+
 /** `retry-after` as seconds (a number or an HTTP date), else undefined. */
 export function retryAfterSeconds(
   header: string | undefined,
@@ -118,7 +141,8 @@ export function classify(error: unknown, now = Date.now()): Problem {
   const code =
     typeof (error as { code?: unknown } | null)?.code === 'string'
       ? (error as { code: string }).code
-      : /refused (?:this connection|the request) \((\w+)/.exec(detail)?.[1];
+      : (/refused (?:this connection|the request) \((\w+)/.exec(detail)?.[1] ??
+        messageCode(detail));
   // Before the reconnect check: reconnecting loops on a retired id.
   if (code === 'agent_retired') return { kind: 'agent-retired', detail };
   if (/refused this connection/.test(detail) || (code && REAUTH.has(code)))
