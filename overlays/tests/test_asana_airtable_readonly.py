@@ -5,6 +5,7 @@ metadata composition, not provider credentials or live API behavior.
 """
 from copy import deepcopy
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import unittest
@@ -27,6 +28,13 @@ def load_yaml(path):
     return yaml.safe_load(path.read_text())
 
 
+# The catalog's selection (catalog/2026-10-08-asana-airtable.json), named
+# explicitly: a later revision at the same pin must not be composed in.
+KINDS = ("auth", "pagination", "crud-causality")
+ASANA_PIN = "b58c91d9f59c6a10178916e7948793809edae46d"
+AIRTABLE_PIN = "1f5368e0251bfbaa233860dc8131507c38a4f8b3"
+
+
 def composed(provider, pin, version):
     source_path = f"APIs/{version}/openapi.yaml"
     raw = read_pinned_oad(
@@ -37,8 +45,7 @@ def composed(provider, pin, version):
     )
     document = yaml.safe_load(raw)
     directory = ROOT / "APIs" / version
-    overlays = sorted(directory.glob(f"*-{pin}-overlay.yaml"))
-    assert overlays, f"no overlays found for {version}@{pin}"
+    overlays = [directory / f"{kind}-{pin}-overlay.yaml" for kind in KINDS]
     for path in overlays:
         document, errors = apply_overlay(document, load_yaml(path), str(path))
         if errors:
@@ -49,8 +56,8 @@ def composed(provider, pin, version):
 class ReadonlyOverlayTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.asana = composed("ontola/openapi-directory", "b58c91d9f59c6a10178916e7948793809edae46d", "asana.com/1.0")
-        cls.airtable = composed("localthought/openapi-directory", "1f5368e0251bfbaa233860dc8131507c38a4f8b3", "airtable.com/1.0-readonly")
+        cls.asana = composed("ontola/openapi-directory", ASANA_PIN, "asana.com/1.0")
+        cls.airtable = composed("localthought/openapi-directory", AIRTABLE_PIN, "airtable.com/1.0-readonly")
 
     def test_asana_profile_is_scoped_to_selected_read_operations(self):
         doc = self.asana
@@ -73,6 +80,13 @@ class ReadonlyOverlayTests(unittest.TestCase):
         flow = scheme["flows"]["authorizationCode"]
         self.assertEqual((flow["authorizationUrl"], flow["tokenUrl"]),
                          ("https://app.asana.com/-/oauth_authorize", "https://app.asana.com/-/oauth_token"))
+
+    def test_the_composed_overlays_are_the_catalogs_selection(self):
+        catalog = json.loads((ROOT / "catalog" / "2026-10-08-asana-airtable.json").read_text(encoding="utf-8"))
+        selected = {p["name"]: [url.rsplit("/", 1)[1] for url in p["overlays"]] for p in catalog["platforms"]}
+        for name, pin in (("asana", ASANA_PIN), ("airtable", AIRTABLE_PIN)):
+            with self.subTest(platform=name):
+                self.assertEqual(selected[name], [f"{kind}-{pin}-overlay.yaml" for kind in KINDS])
 
     def test_pagination_validator_passes_both_compositions(self):
         # Catches an x-pagination that names a scheme no longer declared, on any operation.
