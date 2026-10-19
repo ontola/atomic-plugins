@@ -107,6 +107,21 @@ describe('classify', () => {
       classify(Object.assign(new Error('refused'), { code: 'agent_retired' }))
         .kind,
     ).toBe('agent-retired');
+    // The proxy's own wording, as the host relays a failed connect (0.8.4).
+    expect(
+      classify(
+        new Error(
+          'The integration proxy refused POST /connections/c-1/agents: this agent id was transferred to another one and can no longer own connections',
+        ),
+      ).kind,
+    ).toBe('agent-retired');
+    expect(
+      classify(
+        new Error(
+          'The integration proxy refused POST /connections/c-1/agents: this agent may not use the proxy: blocked',
+        ),
+      ).kind,
+    ).toBe('proxy-access');
     // Clockify's own 403 on a workspace stays "choose another workspace".
     expect(classify(err(403)).kind).toBe('forbidden');
     expect(
@@ -264,6 +279,62 @@ describe('controller for the timesheet views', () => {
 
     expect(seen.at(-2)?.kind).toBe('connecting');
     expect(back.kind).toBe('ready');
+  });
+
+  // The host relays a failed delegation to the frame as a message only
+  // (AppFrame posts `e.message`), without the proxy's code (0.8.4).
+  const RETIRED =
+    'The integration proxy refused POST /connections/c-1/agents: this agent id was transferred to another one and can no longer own connections';
+  const DENIED =
+    'The integration proxy refused POST /connections/c-1/agents: this agent may not use the proxy: not on the list';
+  const refusing = (store: PluginStore, message: string): PluginStore => ({
+    ...store,
+    proxy: {
+      ...store.proxy!,
+      connect: async () => {
+        throw new Error(message);
+      },
+    },
+  });
+
+  it('a connect the proxy refuses for a replaced key or its access check shows that problem, not a raw failure (0.8.4)', async () => {
+    const proxy = fixtureProxy(NOW);
+    const base = fakeStore({ proxy: proxy.request, connections: [] });
+
+    for (const [message, kind] of [
+      [RETIRED, 'agent-retired'],
+      [DENIED, 'proxy-access'],
+    ] as const) {
+      const controller = createController(refusing(base, message));
+      await controller.load();
+      expect(controller.state().kind).toBe('not-connected');
+      expect(await controller.connect()).toEqual({
+        kind: 'not-connected',
+        problem: { kind, detail: message },
+      });
+    }
+
+    // Anything else stays a raw failure.
+    const other = createController(refusing(base, 'the host broke'));
+    await other.load();
+    expect(await other.connect()).toEqual({
+      kind: 'failed',
+      message: 'the host broke',
+    });
+  });
+
+  it('a reconnect refused for a replaced key keeps the data and shows that problem over it (0.8.4)', async () => {
+    const { store } = await configured();
+    const controller = await ready(refusing(store, RETIRED));
+    const back = await controller.reconnect();
+    expect(back).toMatchObject({
+      kind: 'ready',
+      last: { ok: false, problem: { kind: 'agent-retired' } },
+    });
+    expect(controller.sheet()!.entries.length).toBeGreaterThan(0);
+
+    const broken = await ready(refusing(store, 'the host broke'));
+    expect((await broken.reconnect()).kind).toBe('failed');
   });
 
   it('opens links and rows only through the host', async () => {

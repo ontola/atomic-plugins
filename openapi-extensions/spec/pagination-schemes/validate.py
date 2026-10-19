@@ -824,7 +824,7 @@ def read_item_cursor(scheme, request, *, page_size=None, identity=_default_ident
         value = page[-1]
         for segment in path.split("."):
             value = value.get(segment) if isinstance(value, dict) else None
-        if isinstance(value, bool) or not isinstance(value, (str, int)):
+        if isinstance(value, bool) or not isinstance(value, (str, int)) or value == "":
             raise PageReadError(f"the last item has no usable {path} to continue from")
         following = str(value) if isinstance(value, int) else value
         if following == cursor:
