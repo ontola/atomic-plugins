@@ -1004,6 +1004,30 @@ Checks:
   served dated catalogs, every overlay and Pages-published OAD they list, and
   the pets demo's data match the built commit.
 
+Not a check, and not run in CI: `scripts/mutate_overlays.py` measures
+whether a test would notice a wrong overlay. It changes the overlays the test
+is about one small step at a time (drops an action, a key or a list item,
+flips a boolean, bumps an integer, swaps a short string such as `removed` for
+`deleted`; descriptions and targets stay), runs the test against each
+change, and counts the changes the test still passes. Run it on a new or
+changed test before review, naming the overlays under test:
+
+```sh
+python3 overlays/scripts/mutate_overlays.py --list test_discord_pagination_v3
+python3 overlays/scripts/mutate_overlays.py test_discord_pagination_v3 --survivors \
+  --overlay APIs/discord.com/10/pagination-v3-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml
+```
+
+It works in temporary copies of `overlays/`, `openapi-extensions/` and
+`integrations/` (four workers by default); a test that calls git needs
+`--in-place`, which mutates the checkout's files one at a time and restores
+each. `--cap N` samples N changes per overlay. On 2026-10-19 the full run of
+the Discord v2 overlay against its test as it then stood on `main` left 5
+of 28 changes unnoticed (`autoDetect`, the `after` role, an emptied
+`x-pagination`). Survivors in the catalog overlays a test composes only for
+context are not that test's concern. `python3
+overlays/scripts/mutate_overlays.py --help` has the details.
+
 ### What a completeness overlay is declared on
 
 A Collection Completeness overlay is a claim about a collection's read as one
