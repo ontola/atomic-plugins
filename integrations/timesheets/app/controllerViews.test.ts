@@ -86,16 +86,27 @@ describe('classify', () => {
         ),
       ).kind,
     ).toBe('proxy-access');
-    // Someone else's connection, or a transferred owner id: connect again.
-    for (const code of ['not_owner', 'agent_retired'])
-      expect(
-        classify(
-          new Error(
-            `The integration proxy refused this connection (${code}). Connect again.`,
-          ),
-        ).kind,
-        code,
-      ).toBe('reauth');
+    // Someone else's connection: connect again.
+    expect(
+      classify(
+        new Error(
+          'The integration proxy refused this connection (not_owner). Connect again.',
+        ),
+      ).kind,
+    ).toBe('reauth');
+    // A retired agent id is not a reconnect: the proxy refuses it at
+    // /connect/redeem too, so "Reconnect" would loop.
+    expect(
+      classify(
+        new Error(
+          'The integration proxy refused the request (agent_retired: this agent id was transferred to another one and can no longer own connections).',
+        ),
+      ).kind,
+    ).toBe('agent-retired');
+    expect(
+      classify(Object.assign(new Error('refused'), { code: 'agent_retired' }))
+        .kind,
+    ).toBe('agent-retired');
     // Clockify's own 403 on a workspace stays "choose another workspace".
     expect(classify(err(403)).kind).toBe('forbidden');
     expect(
@@ -105,17 +116,24 @@ describe('classify', () => {
     ).toBe('other');
   });
 
-  it('reads not_owner and agent_retired as the proxy refusing this connection (0.8.2)', () => {
-    for (const code of ['not_owner', 'agent_retired']) {
-      const refused = proxyRefusal({
-        status: 403,
-        body: { error: code, message: 'm' },
-      });
-      expect(refused?.message, code).toMatch(
-        /refused this connection .* Connect again\./,
-      );
-      expect(classify(refused).kind, code).toBe('reauth');
-    }
+  it('reads not_owner as the proxy refusing this connection, and agent_retired as a replaced key (0.8.3)', () => {
+    const notOwner = proxyRefusal({
+      status: 403,
+      body: { error: 'not_owner', message: 'm' },
+    });
+    expect(notOwner?.message).toMatch(
+      /refused this connection .* Connect again\./,
+    );
+    expect(classify(notOwner).kind).toBe('reauth');
+
+    // Not "Connect again": after a key transfer the proxy refuses the
+    // retired id at /connect/redeem too.
+    const retired = proxyRefusal({
+      status: 403,
+      body: { error: 'agent_retired', message: 'm' },
+    });
+    expect(retired?.message).not.toMatch(/Connect again/);
+    expect(classify(retired).kind).toBe('agent-retired');
 
     const denied = proxyRefusal({
       status: 403,
