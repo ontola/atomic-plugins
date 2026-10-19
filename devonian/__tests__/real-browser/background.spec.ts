@@ -8,15 +8,20 @@ import { html, js, serve } from './server.js';
  * by every tab of an origin and released when a tab closes; the state lives
  * in IndexedDB, shared by the tabs and the service worker; and a service
  * worker's `sync` event runs a tick (fixtures/tab.mjs, fixtures/sw.mjs).
+ * The schedule survives a reload and a new page, and the in-process
+ * fallback leases are shown not to exclude another tab.
  *
  * Not covered: Periodic Background Sync firing (the browser decides when,
  * and only for an installed app with the permission), Firefox and Safari.
  */
+/** `web`: Web Locks (the default here); `process`: the in-process fallback. */
+type Locks = 'web' | 'process';
+
 interface Harness {
   hasWebLocks(): boolean;
-  startHeld(name: string, intervalMs: number): Promise<void>;
+  startHeld(name: string, intervalMs: number, locks?: Locks): Promise<void>;
   releaseHeld(): Promise<string>;
-  tick(name: string, intervalMs: number): Promise<string>;
+  tick(name: string, intervalMs: number, locks?: Locks): Promise<string>;
   count(key: string): Promise<number>;
   registerWorker(): Promise<{
     periodic: boolean;
@@ -95,6 +100,48 @@ test('a tab closed mid-pass leaves no stale lease', async ({ context }) => {
     .poll(() => b.evaluate(() => window.devonian.tick('closed', 60_000)))
     .toBe('ran');
   expect(await b.evaluate(() => window.devonian.count('runs-closed'))).toBe(2);
+});
+
+test('the schedule survives a reload and a new page', async ({ context }) => {
+  const a = await tab(await context.newPage());
+  expect(await a.evaluate(() => window.devonian.tick('kept', 60_000))).toBe(
+    'ran',
+  );
+
+  // A reload is a restart: a new BackgroundSync over the same IndexedDB.
+  await tab(a);
+  expect(await a.evaluate(() => window.devonian.tick('kept', 60_000))).toBe(
+    'not-due',
+  );
+  await a.close();
+
+  const b = await tab(await context.newPage());
+  expect(await b.evaluate(() => window.devonian.tick('kept', 60_000))).toBe(
+    'not-due',
+  );
+  expect(await b.evaluate(() => window.devonian.count('runs-kept'))).toBe(1);
+});
+
+test('the in-process fallback leases do not exclude another tab', async ({
+  context,
+}) => {
+  const a = await tab(await context.newPage());
+  const b = await tab(await context.newPage());
+
+  // processLocks() is what defaultLocks() uses without Web Locks. Each tab
+  // has its own, so while A's pass holds its lease, B's tick runs as well:
+  // two passes at once. Only Web Locks (or a host's own cross-context
+  // lease) make a second tab wait.
+  await a.evaluate(() =>
+    window.devonian.startHeld('fallback', 60_000, 'process'),
+  );
+  expect(
+    await b.evaluate(() => window.devonian.tick('fallback', 60_000, 'process')),
+  ).toBe('ran');
+  expect(await a.evaluate(() => window.devonian.releaseHeld())).toBe('ran');
+  expect(await b.evaluate(() => window.devonian.count('runs-fallback'))).toBe(
+    2,
+  );
 });
 
 test('a service worker sync event runs a tick on the shared store', async ({

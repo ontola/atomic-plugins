@@ -5,16 +5,21 @@
 import {
   BackgroundSync,
   defaultLocks,
+  processLocks,
   registerBackgroundSync,
 } from 'devonian/background';
 import { bump, count, idbStore } from './idb-store.mjs';
 
-const syncFor = (name, intervalMs, run) =>
+/**
+ * `web`: the default leases (Web Locks here). `process`: the in-process
+ * fallback `defaultLocks()` uses where Web Locks are missing.
+ */
+const syncFor = (name, intervalMs, run, locks = 'web') =>
   new BackgroundSync({
     name,
     intervalMs,
     store: idbStore,
-    locks: defaultLocks(),
+    locks: locks === 'process' ? processLocks() : defaultLocks(),
     run,
   });
 
@@ -29,13 +34,18 @@ window.devonian = {
    * Starts a tick whose pass does not finish until `releaseHeld`: it holds
    * the lease meanwhile. Resolves once the pass has started.
    */
-  startHeld: (name, intervalMs) =>
+  startHeld: (name, intervalMs, locks) =>
     new Promise((started) => {
-      const sync = syncFor(name, intervalMs, async () => {
-        await bump(`runs-${name}`);
-        started();
-        await new Promise((resolve) => (release = resolve));
-      });
+      const sync = syncFor(
+        name,
+        intervalMs,
+        async () => {
+          await bump(`runs-${name}`);
+          started();
+          await new Promise((resolve) => (release = resolve));
+        },
+        locks,
+      );
       held = sync.tick();
     }),
 
@@ -46,9 +56,14 @@ window.devonian = {
   },
 
   /** One tick whose pass counts itself; resolves with the outcome. */
-  tick: async (name, intervalMs) =>
+  tick: async (name, intervalMs, locks) =>
     (
-      await syncFor(name, intervalMs, () => bump(`runs-${name}`)).tick()
+      await syncFor(
+        name,
+        intervalMs,
+        () => bump(`runs-${name}`),
+        locks,
+      ).tick()
     ).outcome,
 
   count,
