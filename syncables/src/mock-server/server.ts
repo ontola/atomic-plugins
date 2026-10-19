@@ -13,6 +13,7 @@ import {
 import type {
   OpenApiDocument,
   OperationObject,
+  ParameterObject,
   SchemaObject,
 } from '../openapi/types.js';
 import { findRoute } from '../routing/router.js';
@@ -47,6 +48,7 @@ export function createMockServer(document: OpenApiDocument): MockServer {
   const resources = discoverResources(paths);
   const store = new ResourceStore();
   const paginatedLists = new Map<string, Record<string, unknown>[]>();
+  const replays: IdempotentReplays = new Map();
   const server: Server = createServer((req, res) => {
     handleRequest(
       req,
@@ -56,6 +58,7 @@ export function createMockServer(document: OpenApiDocument): MockServer {
       resources,
       store,
       paginatedLists,
+      replays,
     ).catch((error: unknown) => {
       sendJson(res, 500, { error: String(error) });
     });
@@ -80,6 +83,32 @@ export function createMockServer(document: OpenApiDocument): MockServer {
   };
 }
 
+/**
+ * The create answered for each idempotency key, per collection: the body
+ * the key was first sent with, and the record created for it.
+ */
+type IdempotentReplays = Map<
+  string,
+  { body: string; record: Record<string, unknown> }
+>;
+
+/**
+ * The `Idempotency-Key` header parameter (any case) a create operation or
+ * its path item declares, as the client looks for it.
+ */
+function declaredIdempotencyHeader(
+  pathItem: Record<string, unknown> | undefined,
+  operation: OperationObject,
+): string | undefined {
+  const parameters = [
+    ...((pathItem?.['parameters'] as ParameterObject[] | undefined) ?? []),
+    ...(operation.parameters ?? []),
+  ];
+  return parameters.find(
+    (p) => p.in === 'header' && /^idempotency-key$/i.test(p.name),
+  )?.name;
+}
+
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -88,6 +117,7 @@ async function handleRequest(
   resources: ResourceRoute[],
   store: ResourceStore,
   paginatedLists: Map<string, Record<string, unknown>[]>,
+  replays: IdempotentReplays,
 ): Promise<void> {
   // Real absolute base (not a placeholder), needed to build working
   // nextLink URLs for paginated responses.
@@ -134,10 +164,11 @@ async function handleRequest(
     }
   }
 
-  const body =
+  const raw =
     method === 'post' || method === 'put' || method === 'patch'
-      ? await readJsonBody(req)
+      ? await readBody(req)
       : undefined;
+  const body = raw?.json;
 
   const resource = resources.find(
     (route) =>
@@ -152,7 +183,46 @@ async function handleRequest(
   }
 
   if (resource?.collectionPath === match.template) {
-    handleCollectionRequest(req, method, resource, operation, store, body, res);
+    const header =
+      method === 'post'
+        ? declaredIdempotencyHeader(
+            paths[match.template] as Record<string, unknown> | undefined,
+            operation,
+          )
+        : undefined;
+    const value = header ? req.headers[header.toLowerCase()] : undefined;
+    const key = typeof value === 'string' && value !== '' ? value : undefined;
+    if (key !== undefined) {
+      // A create the document declares idempotent, sent again with the
+      // same key: the first answer again, not a second record. The same
+      // key with another body is refused, as the IETF Idempotency-Key
+      // draft and Stripe do. Bodies compare as JSON with sorted keys, or
+      // as text when they are not JSON (bodyFingerprint).
+      const seen = replays.get(`${match.template}\n${key}`);
+      if (seen) {
+        if (raw && seen.body === bodyFingerprint(raw))
+          sendJson(res, 201, seen.record);
+        else
+          sendJson(res, 422, {
+            error: 'Idempotency-Key reused with a different request body',
+          });
+        return;
+      }
+    }
+    const record = handleCollectionRequest(
+      req,
+      method,
+      resource,
+      operation,
+      store,
+      body,
+      res,
+    );
+    if (key !== undefined && record)
+      replays.set(`${match.template}\n${key}`, {
+        body: raw ? bodyFingerprint(raw) : '',
+        record,
+      });
     return;
   }
 
@@ -212,7 +282,7 @@ function handleCollectionRequest(
   store: ResourceStore,
   body: Record<string, unknown> | undefined,
   res: ServerResponse,
-): void {
+): Record<string, unknown> | undefined {
   if (method === 'get') {
     seedIfEmpty(resource, operation, store);
     const etag = store.etag(resource.collectionPath);
@@ -224,7 +294,7 @@ function handleCollectionRequest(
       return;
     }
     sendJson(res, 200, store.list(resource.collectionPath), headers);
-    return;
+    return undefined;
   }
 
   if (method === 'post') {
@@ -245,10 +315,11 @@ function handleCollectionRequest(
     };
     store.put(resource.collectionPath, record['id'] as string, record);
     sendJson(res, 201, record);
-    return;
+    return record;
   }
 
   sendJson(res, 405, { error: 'Method Not Allowed' });
+  return undefined;
 }
 
 /** A dot-path's value in an item: own properties, names split on `.`. */
@@ -519,25 +590,50 @@ function respondWithExample(
   sendJson(res, Number.parseInt(successCode, 10) || 200, body);
 }
 
-async function readJsonBody(
+async function readBody(
   req: IncomingMessage,
-): Promise<Record<string, unknown> | undefined> {
+): Promise<{ text: string; json: Record<string, unknown> | undefined }> {
   const chunks: Buffer[] = [];
   for await (const chunk of req as AsyncIterable<Buffer>) {
     chunks.push(chunk);
   }
-  if (chunks.length === 0) {
-    return undefined;
-  }
   const text = Buffer.concat(chunks).toString('utf8');
   if (!text) {
-    return undefined;
+    return { text, json: undefined };
   }
   try {
-    return JSON.parse(text) as Record<string, unknown>;
+    return { text, json: JSON.parse(text) as Record<string, unknown> };
   } catch {
-    return undefined;
+    return { text, json: undefined };
   }
+}
+
+/** JSON with every object's keys sorted, so key order does not matter. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object')
+    return `{${Object.keys(value)
+      .sort()
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`,
+      )
+      .join(',')}}`;
+  return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * What makes two creates under one idempotency key the same request: the
+ * JSON body with its keys sorted, or the body text as sent when it is not
+ * JSON (so two different unparseable bodies differ).
+ */
+function bodyFingerprint(body: {
+  text: string;
+  json: Record<string, unknown> | undefined;
+}): string {
+  return body.json === undefined
+    ? `text:${body.text}`
+    : `json:${canonicalJson(body.json)}`;
 }
 
 function sendJson(
