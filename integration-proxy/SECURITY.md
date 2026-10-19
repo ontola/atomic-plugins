@@ -339,8 +339,10 @@ Implemented today: the requested path is rejected if it contains a `.` or
 `..` segment before catalog validation, so it cannot normalize to a
 different path than the one authorized (see `proxy::contains_traversal_segment`).
 Upstream requests use a bounded connect/read timeout and disable automatic
-redirects, so a redirect cannot send a request to a destination the catalog
-never validated. The upstream response body is read incrementally and capped
+redirects, so a redirect cannot send a request, or the connection's
+credential, to a destination the catalog never validated; the redirect's
+`Location` is not forwarded to the caller either
+(`proxy::upstream_redirects_are_not_followed_and_their_location_is_dropped`). The upstream response body is read incrementally and capped
 at 10 MiB instead of being buffered in full before the limit is checked.
 Request validation against the OAD (`Catalog::validate_request`) is a bounded
 subset: it checks that declared *required* query parameters are present,
@@ -717,14 +719,14 @@ generic code.
   Behind a proxy such as Heroku's router, `TRUST_FORWARDED_FOR` must be
   set (`heroku`), or every sender is one network: the router's.
   There is one endpoint-lookup slot. Requests from networks over their
-  limit may wait for it, but at most 2 of them at a time across all such
-  networks; while 2 wait, any further request from a network over its
+  limit may wait for or hold it, but at most 2 of them at a time across all
+  such networks; while 2 do, any further request from a network over its
   limit gets `429` at once. The slot's semaphore is fair, so a released
   slot goes to the requests already waiting in order, and those 2 cannot
   jump ahead of other networks' requests. What holds: a flood from
   networks over their limit cannot hold up deliveries from other networks,
   and a real delivery from a network over its limit still gets through
-  whenever fewer than 2 of its kind are waiting. What remains:
+  whenever fewer than 2 of its kind are waiting for or holding the slot. What remains:
   - A provider whose delivery addresses also carry junk (anyone can point
     the provider's hooks at junk ids, so its network goes over the limit)
     has its real deliveries compete for those 2 places with the junk. Under

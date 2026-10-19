@@ -87,11 +87,13 @@ read, minute snapping and the range planner are unchanged.
   a change taken over from Clockify, and nothing is sent for it. A filled
   gap staged then and not yet sent holds "Time entry" too: from 0.8.1 a
   create without the `exactName` mark in `clockify-create` (staged before
-  0.8.0) whose Name is "Time entry" or blank is created with no
-  description. A create 0.8.0 staged has no mark either, so a copy of an
-  entry whose description is exactly "Time entry", or only spaces, staged
-  by 0.8.0 and sent by 0.8.1 is created with none (not tested against a
-  0.8.0 drive).
+  0.8.1) whose Name is "Time entry" or blank is created with no
+  description. The rule cannot tell those apart from a Name meant
+  literally, so an unmarked create is also sent with no description when
+  someone typed "Time entry" into its Name, or when it is a 0.8.0 copy of
+  an entry whose description is exactly "Time entry" or only spaces (not
+  tested against a 0.8.0 drive). Creates staged from 0.8.1 send their Name
+  as it is.
 - **Times are sent in whole seconds** (0.8.1). The lens's `iso-seconds-to-ms`
   refuses a time with milliseconds rather than lose them; `putBody` rounds
   down to the second first, as the code lens did. Row times are snapped to
@@ -520,9 +522,19 @@ into the view root.
     entries 58 ms, 1.11 MB and 907 KB. #97 §7 estimated under 10 ms and
     at most 300 KB / 1 MB, so both are somewhat over. atomic-server's
     JSON extractor limit, read from the pinned source (actix's default
-    `JsonConfig`, 2 MiB; not exercised), would take a 2,000-entry
-    snapshot as one `/app-write` with little room to spare once the JSON
-    text is escaped; snapshots are not split per week yet.
+    `JsonConfig`, 2 MiB; not exercised), takes a 2,000-entry
+    mock-shaped snapshot as one `/app-write`: escaped, it measured
+    1,168,596 bytes, about 56% of the limit (the size budget below). Live
+    entries carry more fields, and snapshots are not split per week yet.
+  - _Size budget_ (`app/snapshotBudget.test.ts`, committed): a first sync
+    of 2,000 mock-shaped entries (40-character descriptions, one tag)
+    over 30 days must keep every log resource, escaped as an `/app-write`
+    body, under 1,835,008 bytes (2 MiB less 256 KiB for the rest of the
+    body). Measured 1,168,596 bytes for the snapshot, the largest, on
+    2026-10-15. A live entry carries more fields (rates, custom field
+    values), so real snapshots are larger; when this fails, the next step
+    is the per-week snapshot split of #123 M5. Timing is printed, not
+    asserted.
 - **Timeline lens** (#123 M2, read-only). Two stages over the mirror, full
   recompute on every build (not measured; #97 §3.2 estimates single-digit
   ms at 2,000 entries):

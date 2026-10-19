@@ -9,7 +9,13 @@
  *   api/GET__api__v1__projects__page-<n>.json
  *   api/GET__api__v1__tasks__page-<n>.json
  *                   { status, headers, body } per page of Todoist API v1,
- *                   body redacted per REDACTIONS below.
+ *                   body redacted per REDACTIONS below, headers kept only
+ *                   on an allowlist (content-type, retry-after,
+ *                   x-ratelimit-*; never authorization or cookies). A page
+ *                   that is not a 200 with a results array is recorded as
+ *                   answered (status, headers, every string scrubbed) and
+ *                   ends the recording: nothing more is requested, meta.json
+ *                   says where (`stopped`), and the script exits non-zero.
  *   api/GET__api__v1__tasks__completed-<n>.json
  *                   { status, headers, body } of `GET /tasks/{id}` for each
  *                   `--completed-task <id>`: a task the account's owner
@@ -19,8 +25,17 @@
  *                   then models its `completeTask` driver on the answer.
  *                   Redacted like the lists; a 404 body keeps its status and
  *                   has every string redacted.
- *   api/meta.json   when and how the recording was made, and every field the
- *                   redactor did not recognise (redacted to "redacted").
+ *   api/GET__api__v1__tasks__deleted-<n>.json
+ *   api/GET__api__v1__tasks__inaccessible-<n>.json
+ *                   the same for each `--deleted-task <id>` (deleted by
+ *                   hand) and `--inaccessible-task <id>` (in a project a
+ *                   second account shared and the test account then left),
+ *                   whatever the status. No test expects an answer yet.
+ *   api/meta.json   when and how the recording was made, every field the
+ *                   redactor did not recognise (redacted to "redacted"),
+ *                   each looked-up task's status, and `truncated: true` with
+ *                   `truncated_collections` when --max-pages cut a list off
+ *                   while Todoist still sent a next_cursor.
  *
  * Commands, from the repo root:
  *
@@ -49,6 +64,18 @@
  *                      The id is the one Todoist shows in the task's URL.
  *                      Given without a value (last, or before another
  *                      --option) it is ignored, with a warning.
+ *   --deleted-task <id>
+ *   --inaccessible-task <id>
+ *                      record `GET /tasks/<id>` for a task deleted by hand,
+ *                      or one the account can no longer read (repeatable).
+ *                      Without them the script warns that the question stays
+ *                      unrecorded. Given without a value they are ignored,
+ *                      with a warning, as --completed-task.
+ *
+ * Every task id given must match ^[A-Za-z0-9_-]+$; anything else (`..`, a
+ * slash) stops the script before anything is fetched. A lookup that answers
+ * 401, 429, a 5xx or anything but a 2xx, 403, 404 or 410 says nothing about
+ * the task: it is recorded, and stops the recording as an error page does.
  *
  * --proxy, --limit and --max-pages without a value (last, or before another
  * --option), a --limit or --max-pages that is not an integer of at least 1,
@@ -90,7 +117,7 @@ const API = 'https://api.todoist.com/api/v1';
  */
 export const REDACTIONS = [
   {
-    field: 'id, *_id, *_uid, v2_id, v2_*_id (any string)',
+    field: 'id, *_id, *_uid, v2_id, v2_*_id (any string or number)',
     replace: '<kind>-<n>, e.g. task-1, project-2, user-1',
     reason:
       'Account-identifying. Mapped consistently across all files, so ' +
@@ -117,6 +144,20 @@ export const REDACTIONS = [
     reason: 'User-chosen names.',
   },
   {
+    field: 'due.timezone',
+    replace: 'redacted (null kept)',
+    reason: "The user's time zone; todoist.ts does not read it.",
+  },
+  {
+    field: 'error bodies (anything but a 200 row)',
+    replace:
+      'every string, and every number under an id field, "redacted"; under ' +
+      'error_extra, keys other than the documented ones become key-<n>',
+    reason:
+      'Not task fields; error_extra keys can name user data. Kept keys: ' +
+      "the reference's common error_extra fields.",
+  },
+  {
     field: 'due.string, deadline.string',
     replace: 'redacted',
     reason:
@@ -130,8 +171,20 @@ export const REDACTIONS = [
   },
   {
     field: 'next_cursor',
-    replace: 'page-<n+1>, or null on the last page',
-    reason: 'Opaque server state; the mock only needs a stable token.',
+    replace:
+      'page-<n+1> when Todoist sent a cursor, null only when it sent null',
+    reason:
+      "Opaque server state, and it can carry ids: Todoist's Workspace " +
+      'Users example eyJpZCI6MTIzfQ is base64 for {"id":123} (the ' +
+      "pagination guide's own example carries a page and a limit); the " +
+      'mock only needs a ' +
+      'stable token. A cut-off at --max-pages keeps page-<n+1>, and ' +
+      'meta.json says truncated.',
+  },
+  {
+    field: 'response headers',
+    replace: 'kept only if content-type, retry-after or x-ratelimit-*',
+    reason: 'Allowlist: authorization, cookies and unknown headers never land.',
   },
   {
     field: 'any other string field',
@@ -151,7 +204,6 @@ const KEEP = new Set([
   'role',
   'due.date',
   'due.datetime',
-  'due.timezone',
   'due.lang',
   'deadline.date',
   'deadline.lang',
@@ -192,6 +244,9 @@ export function redactor() {
 
   const value = (v, path, resource, row) => {
     const field = path.split('.').pop();
+    // An id field holding a number is mapped like a string one.
+    if (typeof v === 'number' && !path.includes('.') && ID.test(field))
+      return fake(idKind(field, resource), String(v));
     if (v === null || typeof v === 'number' || typeof v === 'boolean') return v;
     if (Array.isArray(v))
       return field === 'labels'
@@ -214,7 +269,12 @@ export function redactor() {
         ? 'Inbox'
         : `Redacted project ${next('name')}`;
     if (path === 'description') return v === '' ? '' : 'Redacted description';
-    if (path === 'due.string' || path === 'deadline.string') return 'redacted';
+    if (
+      path === 'due.string' ||
+      path === 'deadline.string' ||
+      path === 'due.timezone'
+    )
+      return 'redacted';
     if (path === 'url')
       return `https://app.todoist.com/app/${resource}/${fake(resource, row.id)}`;
     unknown.add(`${resource}.${path}`);
@@ -285,58 +345,158 @@ export const valueless = (name, argv = process.argv) =>
   argv.filter((a, i) => a === `--${name}` && noValue(argv, i)).length;
 
 /**
- * Every string in `body` replaced with "redacted", numbers, booleans and
- * null kept: for an error answer (404), whose fields are no task fields.
+ * The keys the API v1 reference documents as common in an error body's
+ * `error_extra`; any other key there is replaced, since it can name data.
+ */
+const ERROR_EXTRA_KEYS = new Set([
+  'argument',
+  'explanation',
+  'retry_after',
+  'workspace_id',
+  'max_count',
+  'event_id',
+  'project_id',
+  'section_id',
+  'bad_item',
+]);
+
+/**
+ * Every string in `body` replaced with "redacted", and every number under
+ * an id field (`workspace_id`, say); other numbers, booleans and null kept.
+ * Under `error_extra`, a key the reference does not document becomes
+ * `key-<n>`. For an error answer (404), whose fields are no task fields.
  * Nothing in it is reported as unrecognised, so an error body never lands
  * in meta.json's "add to KEEP" list.
  */
-export const scrub = body =>
-  Array.isArray(body)
-    ? body.map(scrub)
-    : body !== null && typeof body === 'object'
-      ? Object.fromEntries(Object.entries(body).map(([k, v]) => [k, scrub(v)]))
-      : typeof body === 'string'
-        ? 'redacted'
-        : body;
+export function scrub(body, field = '') {
+  if (Array.isArray(body)) return body.map(item => scrub(item, field));
+
+  if (body !== null && typeof body === 'object') {
+    let n = 0;
+
+    return Object.fromEntries(
+      Object.entries(body).map(([k, v]) => [
+        field === 'error_extra' && !ERROR_EXTRA_KEYS.has(k) ? `key-${++n}` : k,
+        scrub(v, k),
+      ]),
+    );
+  }
+
+  if (typeof body === 'string') return 'redacted';
+  if (typeof body === 'number' && ID.test(field)) return 'redacted';
+
+  return body;
+}
 
 /**
- * Records `GET /tasks/{id}` for one task completed by hand (#46). The file
- * holds whatever Todoist answered, 404 included: scenario.mjs reads the
- * status and `checked` of these files to model its completeTask driver, and
- * todoist-fixture.test.ts fails when the answer is neither 404 nor a row with
- * `checked: true`, so an unexpected shape is noticed, not assumed away.
+ * The response headers a recording keeps, by an allowlist: the content type
+ * and the rate-limit ones (`retry-after`, `x-ratelimit-*`). Everything else
+ * is dropped, so an `authorization`, `set-cookie` or `cookie` header, or
+ * any header Todoist adds later, never reaches the fixture.
  */
-async function recordCompleted({ dir, token, redact, id, n }) {
-  const url = new URL(`${API}/tasks/${encodeURIComponent(id)}`);
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+export function keptHeaders(headers) {
+  const kept = {};
+
+  for (const [name, value] of headers.entries()) {
+    const lower = name.toLowerCase();
+    if (
+      lower === 'content-type' ||
+      lower === 'retry-after' ||
+      lower.startsWith('x-ratelimit-')
+    )
+      kept[lower] = value;
+  }
+
+  return Object.fromEntries(Object.entries(kept).sort());
+}
+
+/** The JSON body of `res`, or `{}` when it is no JSON object. */
+async function jsonObject(res) {
   let body;
 
   try {
     body = await res.json();
   } catch {
-    body = {};
+    return {};
   }
 
-  if (body === null || typeof body !== 'object' || Array.isArray(body))
-    body = {};
-  const file = `GET__api__v1__tasks__completed-${n}.json`;
+  return body === null || typeof body !== 'object' || Array.isArray(body)
+    ? {}
+    : body;
+}
+
+/**
+ * The tasks looked up by id: each kind's option, the file name it writes
+ * (`GET__api__v1__tasks__<kind>-<n>.json`) and what the task is.
+ */
+export const LOOKUPS = [
+  {
+    kind: 'completed',
+    option: 'completed-task',
+    what: 'a task completed by hand before recording',
+  },
+  {
+    kind: 'deleted',
+    option: 'deleted-task',
+    what: 'a task deleted by hand before recording',
+  },
+  {
+    kind: 'inaccessible',
+    option: 'inaccessible-task',
+    what: 'a task in a project the account has left (shared by another account)',
+  },
+];
+
+/**
+ * Records `GET /tasks/{id}` for one looked-up task (#46): whatever Todoist
+ * answered, its status kept, a 404 or any other status included. A 200 body
+ * is redacted as a task row; any other body is scrubbed whole, its fields
+ * being no task fields to learn from. For a completed task, scenario.mjs
+ * reads the status and `checked` of these files to model its completeTask
+ * driver, and todoist-fixture.test.ts fails when the answer is neither 404
+ * nor a row with `checked: true`, so an unexpected shape is noticed, not
+ * assumed away. Deleted and inaccessible tasks are recorded as seen; no test
+ * expects an answer for them yet.
+ */
+/** Whether a lookup's status answers about the task (2xx, 403, 404, 410). */
+export const answersAboutTask = status =>
+  (status >= 200 && status < 300) || [403, 404, 410].includes(status);
+
+/** Task ids look like Todoist's (letters, digits, `_`, `-`); anything else throws. */
+export function checkTaskIds(lookups) {
+  for (const { kind, option } of LOOKUPS)
+    for (const id of lookups[kind] ?? [])
+      if (!/^[A-Za-z0-9_-]+$/.test(id))
+        throw new Error(
+          `--${option} ${JSON.stringify(id)} is no Todoist task id (letters, digits, _ and - only)`,
+        );
+}
+
+export async function recordLookup({ dir, api, token, redact, kind, id, n }) {
+  const url = new URL(`${api}/tasks/${encodeURIComponent(id)}`);
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const body = await jsonObject(res);
   writeFileSync(
-    new URL(`api/${file}`, dir),
+    new URL(`api/GET__api__v1__tasks__${kind}-${n}.json`, dir),
     `${JSON.stringify(
       {
         status: res.status,
-        headers: {},
-        // A task row is redacted as one; an error body (404) is scrubbed
-        // whole, its fields being no task fields to learn from.
+        headers: keptHeaders(res.headers),
         body: res.status === 200 ? redact.row('task', body) : scrub(body),
       },
       null,
       2,
     )}\n`,
   );
-  if (res.status === 200 && body.checked === true)
+  if (!answersAboutTask(res.status))
+    console.warn(
+      `record: ${kind} task ${n}: ${res.status} says nothing about the task; recorded, and the recording stops there.`,
+    );
+  else if (kind !== 'completed')
+    console.info(`record: ${kind} task ${n}: ${res.status}`);
+  else if (res.status === 200 && body.checked === true)
     console.info(`record: completed task ${n}: 200 with checked: true`);
   else if (res.status === 404) console.info(`record: completed task ${n}: 404`);
   else
@@ -354,8 +514,23 @@ async function recordDocument(dir, proxy) {
   writeFileSync(new URL('document.yaml', dir), await res.text());
 }
 
-async function recordCollection({
+/**
+ * Records the pages of one collection, at most `maxPages`. Each page file
+ * keeps the status and the allowlisted headers. Its `next_cursor` is
+ * `page-<n+1>` when Todoist sent a cursor and null only when Todoist sent
+ * null, so a recording cut off by `maxPages` does not show an end Todoist
+ * never sent. The raw cursor is not written anywhere: it is opaque server
+ * state, and Todoist's Workspace Users example (`eyJpZCI6MTIzfQ`) is base64
+ * for `{"id":123}`. A page that is not a 200 with a `results` array is
+ * recorded as answered (status, headers, scrubbed body) and ends the read.
+ *
+ * Returns `{ pages, truncated, stopped }`: the page count, whether a cursor
+ * was cut off by `maxPages`, and `{ status, reason }` of a page that ended
+ * the read (null when none did).
+ */
+export async function recordCollection({
   dir,
+  api,
   token,
   redact,
   resource,
@@ -365,46 +540,193 @@ async function recordCollection({
 }) {
   let cursor;
   let page = 1;
+  let truncated = false;
+  let stopped = null;
 
   for (; page <= maxPages; page++) {
-    const url = new URL(`${API}${path}`);
+    const url = new URL(`${api}${path}`);
     url.searchParams.set('limit', String(limit));
     if (cursor) url.searchParams.set('cursor', cursor);
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
     });
-    if (res.status !== 200)
-      throw new Error(`GET ${url.pathname} returned ${res.status}`);
-    const body = await res.json();
-    if (!Array.isArray(body?.results))
-      throw new Error(`GET ${url.pathname}: no results array`);
-    cursor = body.next_cursor ?? null;
-    const last = !cursor || page === maxPages;
-    const file = `GET__api__v1__${path.slice(1)}__page-${page}.json`;
+    const body = await jsonObject(res);
+    const file = new URL(
+      `api/GET__api__v1__${path.slice(1)}__page-${page}.json`,
+      dir,
+    );
+
+    if (res.status !== 200 || !Array.isArray(body.results)) {
+      writeFileSync(
+        file,
+        `${JSON.stringify(
+          {
+            status: res.status,
+            headers: keptHeaders(res.headers),
+            body: scrub(body),
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      stopped = {
+        status: res.status,
+        reason: res.status === 200 ? 'no results array' : 'an error status',
+      };
+      console.warn(
+        `record: GET ${url.pathname} page ${page} answered ${res.status}${
+          res.status === 200 ? ', which lacked a results array' : ''
+        }; recorded, and the read stops there.`,
+      );
+      break;
+    }
+
+    cursor = typeof body.next_cursor === 'string' ? body.next_cursor : null;
+    truncated = Boolean(cursor) && page === maxPages;
     writeFileSync(
-      new URL(`api/${file}`, dir),
+      file,
       `${JSON.stringify(
         {
           status: 200,
-          headers: {},
+          headers: keptHeaders(res.headers),
           body: {
             results: body.results.map(row => redact.row(resource, row)),
-            next_cursor: last ? null : `page-${page + 1}`,
+            next_cursor: cursor ? `page-${page + 1}` : null,
           },
         },
         null,
         2,
       )}\n`,
     );
-    if (last) break;
+    if (!cursor) break;
   }
 
-  if (page === 1)
+  const pages = Math.min(page, maxPages);
+
+  if (truncated)
+    console.warn(
+      `record: ${path} still had a next_cursor after --max-pages ${maxPages}; the recording does not reach its end (meta.json says truncated).`,
+    );
+  else if (pages === 1 && stopped === null)
     console.warn(
       `record: ${path} fit on one page at limit=${limit}; its cursor paging is not exercised.`,
     );
 
-  return page;
+  return { pages, truncated, stopped };
+}
+
+/** `url` as a string, without any user name or password in it. */
+function withoutUserinfo(url) {
+  const clean = new URL(url);
+  clean.username = '';
+  clean.password = '';
+
+  return clean.href;
+}
+
+/**
+ * Records the API side of the fixture into `dir`/api/: both collections,
+ * then each looked-up task, then meta.json. `api` is Todoist's API base
+ * (main passes API; tests pass a local fake server). `lookups` maps each
+ * LOOKUPS kind to its ids, checked before anything is fetched. A
+ * collection page that ends a read, or a lookup whose status says nothing
+ * about the task, stops the recording: nothing more is requested,
+ * meta.json says where (`stopped`), and the result's `stopped` is set.
+ */
+export async function recordApi({
+  dir,
+  api,
+  token,
+  limit,
+  maxPages,
+  lookups = {},
+  proxy = 'https://localthought.io',
+}) {
+  checkTaskIds(lookups);
+  const apiDir = new URL('api/', dir);
+  rmSync(apiDir, { recursive: true, force: true });
+  mkdirSync(apiDir);
+  const redact = redactor();
+  const pages = {};
+  const truncated = {};
+  let stopped = null;
+
+  // Projects first, so project ids are numbered before tasks refer to them.
+  for (const [resource, path] of [
+    ['project', '/projects'],
+    ['task', '/tasks'],
+  ]) {
+    const result = await recordCollection({
+      dir,
+      api,
+      token,
+      redact,
+      resource,
+      path,
+      limit,
+      maxPages,
+    });
+    pages[path] = result.pages;
+    truncated[path] = result.truncated;
+
+    if (result.stopped !== null) {
+      stopped = { path, page: result.pages, ...result.stopped };
+      break;
+    }
+  }
+
+  const statuses = {};
+
+  for (const { kind } of LOOKUPS) {
+    statuses[kind] = [];
+
+    for (const [i, id] of (lookups[kind] ?? []).entries()) {
+      if (stopped) break;
+      const status = await recordLookup({
+        dir,
+        api,
+        token,
+        redact,
+        kind,
+        id,
+        n: i + 1,
+      });
+      statuses[kind].push(status);
+      if (!answersAboutTask(status))
+        stopped = {
+          path: '/tasks/{id}',
+          lookup: `${kind}-${i + 1}`,
+          status,
+          reason: 'not an answer about the task',
+        };
+    }
+  }
+
+  const meta = {
+    recorded_at: new Date().toISOString().slice(0, 10),
+    source: api,
+    document_source: withoutUserinfo(new URL('/catalog/todoist.yaml', proxy)),
+    limit,
+    max_pages: maxPages,
+    pages,
+    // A collection that still had a next_cursor at --max-pages: its
+    // recording does not reach the end. The last page file's next_cursor
+    // then names the page after it (redacted), as Todoist sent one.
+    truncated: Object.values(truncated).some(Boolean),
+    truncated_collections: Object.keys(truncated).filter(p => truncated[p]),
+    ...(stopped ? { stopped } : {}),
+    completed_tasks: statuses.completed?.length ?? 0,
+    completed_task_statuses: statuses.completed ?? [],
+    deleted_task_statuses: statuses.deleted ?? [],
+    inaccessible_task_statuses: statuses.inaccessible ?? [],
+    unrecognised_fields_redacted: redact.unknown(),
+  };
+  writeFileSync(
+    new URL('meta.json', apiDir),
+    `${JSON.stringify(meta, null, 2)}\n`,
+  );
+
+  return { meta, stopped };
 }
 
 /**
@@ -444,71 +766,57 @@ async function main() {
   const proxy = arg('proxy', 'https://localthought.io');
   const limit = positiveInteger('limit', arg('limit', '3'));
   const maxPages = positiveInteger('max-pages', arg('max-pages', '3'));
+  const lookups = {};
+
+  for (const { kind, option } of LOOKUPS) {
+    lookups[kind] = args(option);
+    const skipped = valueless(option);
+    if (skipped)
+      console.warn(
+        `record: ${skipped} --${option} option(s) without a value (at the end, or followed by another --option) ignored.`,
+      );
+  }
+
+  checkTaskIds(lookups);
   await recordDocument(dir, proxy);
-  console.info(`record: wrote document.yaml from ${proxy}`);
+  console.info(`record: wrote document.yaml from ${withoutUserinfo(proxy)}`);
   if (process.argv.includes('--document-only')) return format(dir);
 
   const token = process.env.TODOIST_TOKEN;
   if (!token)
     throw new Error('TODOIST_TOKEN must be set (or pass --document-only)');
+  for (const { kind, option, what } of LOOKUPS)
+    if (lookups[kind].length === 0)
+      console.warn(
+        `record: no --${option} given; what GET /tasks/{id} answers for ${what} stays unrecorded${
+          kind === 'completed'
+            ? ', and scenario.mjs keeps assuming checked: true'
+            : ''
+        }.`,
+      );
+
+  const { meta, stopped } = await recordApi({
+    dir,
+    api: API,
+    token,
+    limit,
+    maxPages,
+    lookups,
+    proxy,
+  });
+  if (meta.unrecognised_fields_redacted.length)
+    console.warn(
+      `record: redacted unrecognised fields ${meta.unrecognised_fields_redacted.join(', ')}; review, and add safe ones to KEEP.`,
+    );
   const api = new URL('api/', dir);
-  rmSync(api, { recursive: true, force: true });
-  mkdirSync(api);
-  const redact = redactor();
-  // Projects first, so project ids are numbered before tasks refer to them.
-  const pages = {};
-  for (const [resource, path] of [
-    ['project', '/projects'],
-    ['task', '/tasks'],
-  ])
-    pages[path] = await recordCollection({
-      dir,
-      token,
-      redact,
-      resource,
-      path,
-      limit,
-      maxPages,
-    });
-
-  const completedIds = args('completed-task');
-  const skipped = valueless('completed-task');
-  if (skipped)
-    console.warn(
-      `record: ${skipped} --completed-task option(s) without a value (at the end, or followed by another --option) ignored.`,
-    );
-  const completed = [];
-  for (const [i, id] of completedIds.entries())
-    completed.push(await recordCompleted({ dir, token, redact, id, n: i + 1 }));
-  if (completed.length === 0)
-    console.warn(
-      'record: no --completed-task given; what GET /tasks/{id} answers for a completed task (#46) stays unrecorded, and scenario.mjs keeps assuming checked: true.',
-    );
-
-  writeFileSync(
-    new URL('meta.json', api),
-    `${JSON.stringify(
-      {
-        recorded_at: new Date().toISOString().slice(0, 10),
-        source: API,
-        document_source: `${proxy}/catalog/todoist.yaml`,
-        limit,
-        pages,
-        completed_tasks: completed.length,
-        completed_task_statuses: completed,
-        unrecognised_fields_redacted: redact.unknown(),
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  const unknown = redact.unknown();
-  if (unknown.length)
-    console.warn(
-      `record: redacted unrecognised fields ${unknown.join(', ')}; review, and add safe ones to KEEP.`,
-    );
   console.info(`record: wrote ${readdirSync(api).length} files to api/`);
   format(dir);
+  if (stopped)
+    throw new Error(
+      `GET ${stopped.path} ${
+        stopped.lookup ? `(${stopped.lookup})` : `page ${stopped.page}`
+      } answered ${stopped.status} (${stopped.reason}); recorded in api/ and meta.json, but the recording is not complete and scenario.mjs refuses it`,
+    );
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)

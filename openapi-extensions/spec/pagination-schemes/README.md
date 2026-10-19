@@ -1,6 +1,6 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.9.1
+**Spec version:** 0.10.1
 
 ---
 
@@ -116,6 +116,7 @@ Describes the fields the client sends to control pagination.
 | `start` | integer, at least 0 | Added in 0.6.0, and allowed only when `role` is `page`. The number of the first page. Default: `1`. A client asks for the first page with `start`, and for each next page with one more. |
 | `advance` | `"itemCount"` \| `"pageSize"` | Added in 0.7.0, and allowed only when `role` is `offset`. How the client works out the next offset (§4.3.2). Default: `"itemCount"`. |
 | `fromLastItem` | string | Added in 0.9.0, and allowed only when `role` is `pageToken` or `cursor` (rules 27 and 28). A dot-path into an item: the client sends that value of the previous page's last item (§4.3.3). |
+| `order` | `"ascending"` \| `"descending"` | Added in 0.10.0, and allowed only beside `fromLastItem` (rule 30). The order of the `fromLastItem` values across the items a read returns, which the client checks (§4.3.3). |
 | `template` | string | Added in 0.5.0, and allowed only when `role` is `windowRange`, where it is REQUIRED. The whole value the client sends, with `{start}` and `{end}` standing for the window's bounds written in the window's `format` (§4.6.2). Each placeholder appears exactly once, and no other `{` or `}` appears. Everything else is sent as written, before the parameter's ordinary serialization (percent-encoding in a query string, for example). |
 | `x-*` | any | Extension fields. |
 
@@ -185,14 +186,42 @@ one of these:
   as a position in the provider's own list order (Stripe's
   `starting_after`); or
 - (b) that the cursor parameter is a strict bound on an item field whose
-  values are unique, and that the items are returned in ascending order of
-  that field (Discord's Get Guild Bans). An operation that documents the
-  bound but not the order, such as List Guild Members, does not qualify.
+  values are unique, and that the items are returned in the order of that
+  field that the bound pages through: ascending for a lower bound ("after"),
+  as Discord's Get Guild Bans documents, or, since 0.10.0, descending for an
+  upper bound ("before"), as Discord's List Joined Private Archived Threads
+  documents ("Threads are ordered by their id, in descending order"; before
+  "returns threads before this id"). An operation that documents the bound
+  but not the order of that field, such as List Guild Members, does not
+  qualify; nor does one that documents an order of another property (Get
+  Channel Messages, "from newest to oldest"), since a bound on the id over
+  items sorted by time can drop an item whose id is out of time order at a
+  page boundary, unseen. Under (b) the field SHOULD declare `order`.
+
+With `order`, the `fromLastItem` values of the items a read returns, in the
+order the pages return them, MUST be strictly ascending (or descending)
+across the whole read, within and between pages. Two values compare as
+numbers when each is a non-negative integer or a string of ASCII digits
+without a sign (as Discord's snowflakes are), an integer beside a digit
+string included (`10` after `"9"` is ascending). Numbers compare exactly,
+whatever their size (Discord's ids exceed 2^53), and leading zeros do not
+count (`"010"` equals `"10"`). Otherwise both values must be strings that
+are not all digits, compared by code point: in a field whose values are
+text, values that are all digits still compare as numbers, and a mix of
+the two kinds ends the read with an error. A client ends the read with an
+error, not complete, at the first pair out of order, at a value that is
+neither kind, or at a number beside a non-digit string. Without `order` it
+checks nothing beyond step 4 below. The check sees only the items the read
+returns: it does not show that the provider returned every item, which is
+why rule (b) asks for a documented order of the field itself.
 
 A request field with `fromLastItem` names the item field. A client that reads
 with it:
 
-1. sends the first request without that field;
+1. sends the first request without that field, and no request with any
+   other field of the scheme whose `role` is `pageToken`, `cursor` or
+   `previousPageToken` (since 0.10.1; such a field, as Stripe's
+   `ending_before`, pages the other way and is not part of this read);
 2. ends the read at a page with no items, or at a page whose `hasMore`
    response field (§4.5) is `false`: complete, unless any response of the
    read was marked by the scheme's Incomplete Object (§4.4.6);
@@ -212,7 +241,7 @@ A `hasMore` of `true` on a page with items, or no `hasMore`, decides nothing:
 the client asks again, and an empty page ends the list. Without `hasMore` a
 read costs one request more than the pages that hold items. A short page does
 not end the read: neither provider documents that it is the last. Rules 27
-to 29 say where `fromLastItem` and `hasMore` may appear.
+to 30 say where `fromLastItem`, `hasMore` and `order` may appear.
 
 ### 4.4 Response Pagination Fields Object
 
@@ -380,10 +409,11 @@ an item re-reads.
 Added in 0.8.0. Some APIs stop serving a result at a cap and say so in the
 response rather than through the next-page signals. Notion's
 [Query a data source](https://developers.notion.com/reference/query-a-data-source)
-pages through "up to **10,000 results** per query"; past that, "`has_more`
-becomes `false`, and every response page served from the capped result
-includes a `request_status` marking the result as incomplete", with
-"`type: incomplete` and `incomplete_reason: query_result_limit_reached`". A
+pages through "up to **10,000 results** per query"; past that, "pagination
+stops at the 10,000th result: `has_more` becomes `false`, and every response
+page served from the capped result includes a `request_status` marking the
+result as incomplete", with the example
+`{ "request_status": { "type": "incomplete", "incomplete_reason": "query_result_limit_reached" } }`. A
 reader that trusts `has_more` alone takes such a read as complete. The
 Incomplete Object names the body value that says otherwise.
 
@@ -1075,8 +1105,9 @@ A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every lin
 25. When a scheme whose `offset` field has `advance: pageSize` is applied to an operation, after its overrides are merged, it has a request or response field whose `role` is `pageSize`. A component scheme on its own is not checked.
 26. `incomplete` MAY appear only in the Response Pagination Fields Object of a `pageNumber`, `pageToken` or `nextLink` scheme. Its `field` is a dot-path of one or more non-empty names, and it has exactly one of `equals` (a JSON scalar) or `in` (a nonempty array of JSON scalars).
 27. `fromLastItem` MAY appear only on a Request Field Object whose `role` is `pageToken` or `cursor`. It is a dot-path of one or more non-empty names.
-28. A scheme with a `fromLastItem` field is a `pageToken` scheme with exactly one such field, and has no response field whose `role` is `nextPageToken`, `nextCursor` or `nextLink`. A validator checks this on a component scheme and again after an application's overrides are merged.
+28. A scheme with a `fromLastItem` field is a `pageToken` scheme with exactly one such field, and has no response field whose `role` is `nextPageToken`, `nextCursor` or `nextLink`. A validator checks this on a component scheme and again after an application's overrides are merged. Other request fields of such a scheme whose `role` is `pageToken`, `cursor` or `previousPageToken` (Stripe's `ending_before`, say) are allowed, and a client reading with `fromLastItem` does not send them (§4.3.3).
 29. A response field whose `role` is `hasMore` MAY appear only in `bodyFields`, and only in a scheme with a `fromLastItem` field.
+30. `order` MAY appear only on a Request Field Object that has `fromLastItem`, and is `ascending` or `descending`.
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paginationSchemes.myScheme.request.queryParameters.page`).
 
@@ -1084,18 +1115,20 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 
 ## Schema, validator and tests
 
-[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4, 8–10, 12–16, 19, 20, 23, 24, 26 and 27. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5, 11, 17, 18, 21, 22, 25, 28 and 29 (for Swagger 2.0, rule 18 reads the operation's and path item's `parameters` the same way, with `$ref`s to the root `parameters`). It also holds `read_item_cursor`, a reference implementation of §4.3.3, `response_incomplete`, which says whether a response body is marked (§4.4.6), `page_items`, which locates a page's items through the Envelope Object (with `emptyWhenAbsent`), `read_offsets`, a reference implementation of the offset traversal with `advance` (§4.3.2), `read_pages`, a reference implementation of the page-number traversal with `start` and §4.4.5 over a caller-supplied request function (with `totalPages`, `totalCount` and a reported `pageSize`, and refusing a page size above the documented maximum), `read_range`, a reference implementation of §4.6.3 and §4.6.4 over a caller-supplied request function, and `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
+[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4, 8–10, 12–16, 19, 20, 23, 24, 26, 27 and 30. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5, 11, 17, 18, 21, 22, 25, 28 and 29 (for Swagger 2.0, rule 18 reads the operation's and path item's `parameters` the same way, with `$ref`s to the root `parameters`). It also holds `read_item_cursor`, a reference implementation of §4.3.3, `response_incomplete`, which says whether a response body is marked (§4.4.6), `page_items`, which locates a page's items through the Envelope Object (with `emptyWhenAbsent`), `read_offsets`, a reference implementation of the offset traversal with `advance` (§4.3.2), `read_pages`, a reference implementation of the page-number traversal with `start` and §4.4.5 over a caller-supplied request function (with `totalPages`, `totalCount` and a reported `pageSize`, and refusing a page size above the documented maximum), `read_range`, a reference implementation of §4.6.3 and §4.6.4 over a caller-supplied request function, and `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
 
 ```sh
 python3 -m venv /tmp/pagination-schemes-venv
 /tmp/pagination-schemes-venv/bin/pip install -r openapi-extensions/spec/pagination-schemes/requirements.txt
 cd openapi-extensions/spec/pagination-schemes
 /tmp/pagination-schemes-venv/bin/python -m unittest test_validate
-/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml examples/range-window.yaml examples/short-page.yaml examples/empty-when-absent.yaml examples/offset-advance.yaml examples/incomplete-marker.yaml examples/item-cursor.yaml
+/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml examples/range-window.yaml examples/short-page.yaml examples/empty-when-absent.yaml examples/offset-advance.yaml examples/incomplete-marker.yaml examples/item-cursor.yaml examples/item-order.yaml
 ```
 
 ## Changes
 
+- **0.10.1** (2026-10-15): rule 28 and §4.3.3 step 1 say that a scheme with `fromLastItem` may also declare other `pageToken`, `cursor` or `previousPageToken` fields (Stripe's `ending_before`), and that a client reading with `fromLastItem` sends none of them, as `read_item_cursor` and syncables already do. A test. No document changes meaning.
+- **0.10.0** (2026-10-15): adds `order` beside `fromLastItem` (§4.3.3): the declared order of the cursor values, which the client checks across the read and which ends it with an error when broken (non-negative integers and digit strings compare exactly as numbers, other strings by code point). Extends the evidence rule (b) to an upper bound ("before") over items in documented descending order of the unique field, as Discord's List Joined Private Archived Threads documents. An order of another property (Discord's messages, newest to oldest) does not qualify: the check sees only the items returned, and an item out of id order at a page boundary would be dropped unseen. Validation rule 30, `read_item_cursor` checks `order`, an example (`examples/item-order.yaml`) and tests. A 0.9.1 document stays valid and means the same. A 0.9.1 validator rejects `order`; a consumer that does not validate ignores it and does not check the order, so a document that relies on `order` should not be used with a 0.9.x consumer, and no overlay should declare it until syncables checks it.
 - **0.9.1** (2026-10-15): a `hasMore` field that is present but not a boolean (`"false"`, `0`, `null`) ends an item-cursor read with an error (§4.3.3 step 4); 0.9.0 read it as absent, so `"false"` asked for another page and an empty page then ended the read as complete. `read_item_cursor` and a test. No document changes meaning.
 - **0.9.0** (2026-10-14): adds `fromLastItem` to the Request Field Object (§4.3.3): a cursor the client reads from a field of the previous page's last item, as Stripe's `starting_after` and Discord's `after` take; and the response role `hasMore`, whose `false` ends the list. Validation rules 27–29, `read_item_cursor` in the validator, an example and tests. A document valid under 0.8.0 stays valid and means the same. A 0.8.0 validator rejects `fromLastItem` and the `hasMore` role. A 0.8.0 consumer that does not validate reads such a scheme as a `pageToken` scheme without a next token: it stops after one page and takes that page as the complete list, so a document that needs `fromLastItem` should not be used with one.
 - **0.8.0** (2026-10-13): adds `incomplete` to the Response Pagination Fields Object (§4.4.6), the Incomplete Object: a response body value (`field` with `equals` or `in`) that marks the result as cut short by the server, as Notion's query does past 10,000 results with `has_more: false`. A read in which any response is marked is not complete; paging is unchanged. Validation rule 26, `response_incomplete` in the validator, and `complete` in `read_pages` and `read_offsets` honour it; an example and tests. Allowed on `pageNumber`, `pageToken` and `nextLink` schemes only. Collection Completeness 0.4.0-draft §3 states that such a read is not complete. A document valid under 0.7.1 stays valid and means the same. A 0.7.1 validator rejects a scheme with `incomplete`; a consumer that does not validate ignores it and takes a marked read as complete. The Notion overlay revision that declares it follows separately.
