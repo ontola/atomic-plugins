@@ -125,7 +125,7 @@ function issueBody(f, meta) {
     '**Evidence:**',
     ...(f.evidence ?? []).map(e => `- ${e}`),
     '',
-    `Session \`${meta.id}\` (${meta.started.slice(0, 10)}), found by automatic analysis. The transcript, screenshots and recording stay on the droplet in \`/var/lib/usertest-sessions/${meta.id}/\`.`,
+    `Session \`${meta.id}\` (${meta.started.slice(0, 10)}), found by automatic analysis. The transcript, screenshots and recording stay on the user-testing server in \`/var/lib/usertest-sessions/${meta.id}/\`.`,
   ].join('\n');
 }
 

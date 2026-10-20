@@ -559,21 +559,17 @@ test.describe('money integration', () => {
       await page.unroute('**/app-write');
     }
 
-    // The host recovers: the same file again writes the rest, nothing twice.
-    const otherRows = async () =>
-      (await rowsOf(page, own)).filter(
-        r =>
-          r[terms.properties['bank-account'].subject] === 'NL00BUNQ0000000001',
-      ).length;
-    await expect.poll(otherRows, { timeout: 30_000 }).toBe(1);
-    // Deliberately after the app's table caught up (#539): the check below
-    // compares the file with the app's own copy of the table, which counts
-    // the row written before the failure only once its refresh landed
-    // (4 transactions before, 5 now).
-    await expect(app.getByRole('tab', { name: /^Transactions/ })).toContainText(
-      '5',
-      { timeout: 30_000 },
-    );
+    // The host recovers. Since 0.4.5 (#539, #572) the failed sheet checks
+    // the file again against the table and offers only the transaction that
+    // was not written, never its old preview of 2. Closing it and checking
+    // the same file at once, before anything has waited for the app's copy
+    // of the table, reads the table first and proposes the same one.
+    await expect(
+      sheet.getByRole('button', { name: 'Import 1 transaction' }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(
+      sheet.getByRole('button', { name: 'Import 2 transactions' }),
+    ).toHaveCount(0);
     await sheet.getByRole('button', { name: 'Close' }).first().click();
     await input.setInputFiles({
       name: 'other.mt940',
@@ -588,7 +584,24 @@ test.describe('money integration', () => {
     await expect(syncCard).not.toContainText(
       'The import stopped before every row was written.',
     );
+    // The server has each transaction once.
+    const otherRows = async () =>
+      (await rowsOf(page, own)).filter(
+        r =>
+          r[terms.properties['bank-account'].subject] === 'NL00BUNQ0000000001',
+      ).length;
     await expect.poll(otherRows, { timeout: 30_000 }).toBe(2);
+    await input.setInputFiles({
+      name: 'other.mt940',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(other),
+    });
+    await expect(sheet).toContainText(
+      'Nothing new in this file. All 2 transactions were imported before.',
+      { timeout: 30_000 },
+    );
+    await sheet.getByRole('button', { name: 'Close' }).first().click();
+    expect(await otherRows()).toBe(2);
   });
 
   test('Money app: a view of the importer’s Bank transactions table: import, statements, row editing, in-app check', async ({
@@ -871,6 +884,69 @@ test.describe('money integration', () => {
     );
     await expect(syncCard).toContainText(
       'Saving a category or note asks you to allow editing first.',
+    );
+
+    // Importing into it: the check proposes the file's 2 transactions, and
+    // Import asks in the host's bar first, since the table is not the
+    // app's own. Nothing is written before the person allows it.
+    const input = app.locator('input[type="file"]');
+    const sheet = app.getByRole('dialog', { name: 'Import statement' });
+    await input.setInputFiles({
+      name: 'statement.mt940',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(mt940),
+    });
+    await expect(sheet.getByRole('tab', { name: 'New 2' })).toBeVisible({
+      timeout: 30_000,
+    });
+    await sheet.getByRole('button', { name: 'Import 2 transactions' }).click();
+    // The table's children are its rows of the shared class and its views.
+    const transactions = async () =>
+      (await rowsOf(page, table)).filter(r =>
+        (r['https://atomicdata.dev/properties/isA'] as string[]).includes(
+          shared,
+        ),
+      );
+    const allow = page.getByRole('group', { name: 'Let this app edit rows' });
+    await expect(allow).toBeVisible({ timeout: 30_000 });
+    expect(await transactions()).toHaveLength(2);
+    await allow.getByRole('button', { name: 'Allow editing' }).click();
+    await expect(sheet).toBeHidden({ timeout: 60_000 });
+    await expect(app.getByRole('status').first()).toContainText('Imported 2', {
+      timeout: 60_000,
+    });
+
+    // On the server: the 2 rows typed by hand and the 2 imported, all of
+    // the shared class, the amounts as the exact strings of the file.
+    const imported = async () =>
+      (await transactions()).filter(
+        r => r[p['bank-account'].subject] === 'NL00BUNQ0000000000',
+      );
+    await expect
+      .poll(async () => (await imported()).length, {
+        timeout: 30_000,
+      })
+      .toBe(2);
+    expect(await transactions()).toHaveLength(4);
+    const rows = await imported();
+    expect(rows.map(r => r[p['bank-amount'].subject]).sort()).toEqual([
+      '-12.34',
+      '20',
+    ]);
+
+    // The ledger and the card: the import is dated, the statement's closing
+    // balance is in the strip, and editing is no longer asked for.
+    await expect(
+      app.getByRole('button', { name: /Fixture lunch/ }),
+    ).toBeVisible();
+    await expect(syncCard).toContainText('Synced just now');
+    await expect(syncCard).toContainText('2 imported here at the last sync');
+    await expect(syncCard).not.toContainText(
+      'Saving a category or note asks you to allow editing first.',
+    );
+    await expect(app.getByRole('group', { name: /^Accounts/ })).toContainText(
+      /€107\.66\s*on /,
+      { timeout: 30_000 },
     );
   });
 });

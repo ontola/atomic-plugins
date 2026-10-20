@@ -1,4 +1,4 @@
-# Caddy config for the user-testing droplet. Installed as
+# Caddy config for the user-testing server (claude-build). Installed as
 # /etc/caddy/Caddyfile by deploy.sh; Caddy fetches the Let's Encrypt
 # certificates itself. BASE_DOMAIN and ACME_EMAIL come from
 # /etc/caddy/usertest.env, which the systemd drop-in caddy-usertest.conf
@@ -56,7 +56,7 @@ logs.{$BASE_DOMAIN} {
 # Server plugins' installation origins, https://<slug>.routes.<base-domain>
 # (server.sh with USERTEST_PLUGIN_ROUTES). atomic-server picks the
 # Installation by the Host header, which reverse_proxy passes on unchanged.
-# sslip.io offers no wildcard certificate, so each host gets its own, on
+# Caddy has no wildcard certificate for them, so each host gets its own, on
 # demand. With plugin routes off, atomic-server serves nothing on these hosts.
 *.routes.{$BASE_DOMAIN} {
 	tls {

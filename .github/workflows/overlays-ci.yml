@@ -43,6 +43,7 @@ jobs:
       pull-requests: read
     outputs:
       overlays: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.overlays }}
+      reads: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.reads }}
     steps:
       # dorny/paths-filter reads changed files from the pull_request API, which
       # doesn't exist for a merge_group or workflow_dispatch event, so this step
@@ -59,6 +60,12 @@ jobs:
               - 'overlays/**'
               - 'openapi-extensions/spec/pagination-schemes/**'
               - 'openapi-extensions/spec/crud-causality/**'
+              - '.github/workflows/overlays-ci.yml'
+            reads:
+              - 'overlays/**'
+              - 'syncables/src/**'
+              - 'syncables/package.json'
+              - 'syncables/package-lock.json'
               - '.github/workflows/overlays-ci.yml'
 
   validate:
@@ -120,3 +127,40 @@ jobs:
             echo "::endgroup::"
           done
           exit "$status"
+
+  # overlays/tests/*.test.ts read real catalogs, their pinned OADs and the
+  # local overlay bytes through syncables' own source (vitest), with
+  # synthetic responses: no provider is called. Each composes its platform
+  # with tests/compose_gitlab_platform.py, which reads the pinned OAD from
+  # OPENAPI_DIRECTORY_REPO (the same blob-less clone as above) rather than
+  # from raw.githubusercontent.com. Every *.test.ts under overlays/tests/ is
+  # discovered, so a new one runs without a workflow change. Runs when an
+  # overlay or syncables' source changes, since either can break a read.
+  reads:
+    name: Overlay reads through syncables
+    needs: changes
+    if: needs.changes.outputs.reads == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: syncables
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -r ../overlays/requirements-identity-tests.txt
+      - name: Fetch OAD history without checking out its documents
+        run: git clone --filter=blob:none --no-checkout --single-branch https://github.com/ontola/openapi-directory.git /tmp/openapi-directory
+      # Matches syncables' package.json "engines" (>= 22.11 < 23).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: syncables/package-lock.json
+      - run: npm ci --no-audit
+      - name: Run every overlays/tests/*.test.ts
+        env:
+          OPENAPI_DIRECTORY_REPO: /tmp/openapi-directory
+        run: npx vitest run --root .. overlays/tests/

@@ -596,6 +596,7 @@ export async function interpretRuntimeItems(
         url,
         method: 'GET',
         headers: { accept: 'application/json' },
+        purpose: 'describer',
       });
       if (response.status < 200 || response.status >= 300)
         throw new Error(`GET ${url.pathname} responded ${response.status}`);

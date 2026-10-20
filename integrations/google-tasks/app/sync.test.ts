@@ -33,7 +33,9 @@ import {
   TASK_STATUS,
 } from './drive.js';
 import {
+  API_DISABLED_403,
   APP,
+  DAILY_LIMIT_403,
   fakeStore,
   ONTOLOGY,
   OTHER_TABLE,
@@ -849,6 +851,41 @@ describe('controller under a rate limit', () => {
     expect(
       store.writes.slice(provisioned).filter(w => w.op === 'create'),
     ).toHaveLength(5);
+  });
+
+  it('a used-up daily quota stops the sync with no retry and no reconnect (0.1.1)', async () => {
+    const store = fakeStore();
+    await connectedWith(store);
+    const { controller, timers } = limited(store);
+    store.limitNext = { count: 10, status: 403, body: DAILY_LIMIT_403 };
+    await (
+      await controller.load()
+    ).syncing;
+    expect(controller.state()).toMatchObject({
+      kind: 'error',
+      status: 403,
+      refusal: 'daily-quota',
+    });
+    expect(controller.state()).not.toHaveProperty('rateLimited');
+    expect(timers).toHaveLength(0);
+    // One request, not retried inline either.
+    expect(store.limitNext?.count).toBe(9);
+  });
+
+  it('the Tasks API turned off stops the sync and says so (0.1.1)', async () => {
+    const store = fakeStore();
+    await connectedWith(store);
+    const { controller, timers } = limited(store);
+    store.limitNext = { count: 1, status: 403, body: API_DISABLED_403 };
+    await (
+      await controller.load()
+    ).syncing;
+    expect(controller.state()).toMatchObject({
+      kind: 'error',
+      refusal: 'api-disabled',
+      message: expect.stringMatching(/turned off .* Reconnecting won't help/),
+    });
+    expect(timers).toHaveLength(0);
   });
 
   it('stops, saying when to try again, for a long wait or after too many retries', async () => {

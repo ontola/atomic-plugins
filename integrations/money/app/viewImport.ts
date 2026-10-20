@@ -319,8 +319,9 @@ function preview(
       banner({
         tone: 'neg',
         title: "The import didn't go through",
-        text:
-          state.source === 'importer'
+        text: sheet.unchecked
+          ? "Couldn't check what was written; close and check the file again."
+          : state.source === 'importer'
             ? 'Nothing was saved. Try again, or import the file from the importer’s page.'
             : 'Try again: transactions saved before the failure are recognised and not written twice.',
         details: sheet.failure,
@@ -349,10 +350,16 @@ function preview(
               ? sheet.progress
                 ? `Importing ${count(sheet.progress.done, locale)} of ${count(sheet.progress.total, locale)}…`
                 : 'Importing…'
-              : `Import ${plural(fresh.length, 'transaction', 'transactions', locale)}`,
+              : sheet.rechecking
+                ? 'Checking what was written…'
+                : `Import ${plural(fresh.length, 'transaction', 'transactions', locale)}`,
             {
               variant: 'primary',
-              disabled: !state.canApply || sheet.applying,
+              disabled:
+                !state.canApply ||
+                sheet.applying ||
+                sheet.rechecking ||
+                sheet.unchecked,
               onClick: actions.applyImport,
               key: 'import-apply',
               'aria-describedby': state.canApply
@@ -490,6 +497,13 @@ export function explain(
         hint: 'Choose an MT940 or camt.053 export straight from your bank.',
       };
     }
+
+    case 'TABLE_UNREADABLE':
+      return {
+        title: "Couldn't check what is already in this table",
+        text: 'Reading the table failed, so this file was not compared with it. Nothing was imported.',
+        hint: 'Check the file again in a moment.',
+      };
 
     default:
       return {

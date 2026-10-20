@@ -1,6 +1,6 @@
 # OpenAPI Throttling Extension
 
-**Spec version:** 0.5.0-draft
+**Spec version:** 0.5.1-draft
 
 This proposal addresses [issue #13](https://github.com/pondersource/openapi-extensions/issues/13).
 It describes announced API request quotas, the response headers that report
@@ -101,15 +101,16 @@ free domain and 1,500 on a paid one
 ([rate limits](https://developers.asana.com/docs/rate-limits)); Notion 600
 per minute per connection on Business and Enterprise plans and 180 on all
 others ([request limits](https://developers.notion.com/reference/request-limits));
-Clockify, per workspace with an API key, "30 requests per hour" on FREE, "20
-requests per second" on TRIAL, BASIC, STANDARD and PRO, and "50 requests per
-second" on ENTERPRISE ([API documentation](https://docs.clockify.me/)). A
-Limit Object with `tiers` declares each of them, instead of `requests` and
+Clockify, per workspace: "Newly created workspaces on the Free plan are
+restricted to 30 API requests per hour for the entire workspace. Workspaces
+on any paid plan maintain the standard limit of 50 requests per second"
+([webhook and API limitations](https://clockify.me/help/getting-started/webhook-and-api-limitations)).
+A Limit Object with `tiers` declares each of them, instead of `requests` and
 `window`:
 
 | Field | Type | Meaning |
 | --- | --- | --- |
-| `plans` | nonempty array of strings, required | The provider's plans this tier applies to, as it names them. A plan appears in at most one tier of the limit. |
+| `plans` | nonempty array of strings, required | The provider's plans this tier applies to, as it names them. A plan appears in at most one tier of the limit. Plan names are compared exactly, case included. |
 | `requests` | positive integer, required | Announced maximum number of counted requests in the window, on this tier. |
 | `window` | Window Object, required | Duration and known window semantics, on this tier. |
 | `description` | string, optional | Qualifications, such as the source of the claim. |
@@ -118,35 +119,35 @@ The limit's `partitionBy` and `description` apply to every tier, and so does
 the bucket's identity: one bucket, whose amount and window depend on the
 account's plan. A consumer that knows the account's plan (from its own
 configuration; this extension does not say how to find out) uses the tier
-whose `plans` name it. One that does not, or whose plan no tier names, MUST
-keep within every tier at once, each tier's `requests` in its own `window`
+whose `plans` name it, and uses a tier only for the plans it names. One
+that does not know the plan, or whose plan no tier names, MUST keep within
+every tier at once, each tier's `requests` in its own `window`
 as a separate count over the same requests. No single tier is safe on its
 own: a lower average rate over a longer window can still allow a burst that
-a shorter tier forbids (30 per hour permits 30 requests in one second, which
-breaks 20 per second). Where the provider gives a tier no number, leave it
+a shorter tier forbids (a tier of 100 per hour permits 100 requests in one
+second, which breaks a tier of 50 per second). Where the provider gives a tier no number, leave it
 out; with no numbered tier, declare no `tiers` and no `requests`.
 
 When a `quotaExhausted` response names such a bucket and gives no time, the
-bucket window it falls back to (Earliest retry time) is the configured tier's
-window, or, without one, the longest window among the tiers.
+bucket window it falls back to ([Earliest retry time](#throttling-signals),
+step 3) is the configured tier's window, or, without one, the longest window
+among the tiers.
 
 ```yaml
 x-throttling:
   limits:
     workspace:
       partitionBy: [account]
-      description: Counted per workspace for requests with an API key.
+      description: Counted for the entire workspace (Clockify-shaped).
       tiers:
-        - { plans: [FREE], requests: 30, window: { seconds: 3600, kind: unspecified } }
-        - { plans: [TRIAL, BASIC, STANDARD, PRO], requests: 20, window: { seconds: 1, kind: unspecified } }
-        - { plans: [ENTERPRISE], requests: 50, window: { seconds: 1, kind: unspecified } }
+        - { plans: [Free], requests: 30, window: { seconds: 3600, kind: unspecified } }
+        - { plans: [Paid], requests: 50, window: { seconds: 1, kind: unspecified } }
   applies: [workspace]
 ```
 
-A consumer told that the workspace is on PRO keeps to 20 per second. One
-without a configured plan keeps to 30 per hour, 20 per second and 50 per
-second together; the last adds nothing beside 20 per second, but each is
-counted. A 0.4.0 validator rejects a Limit Object with `tiers`, and one
+A consumer told that the workspace is on a paid plan keeps to 50 per second.
+One without a configured plan, or with a plan no tier names, keeps to 30 per
+hour and 50 per second together. A 0.4.0 validator rejects a Limit Object with `tiers`, and one
 without `window`.
 
 ### Windows
@@ -450,6 +451,20 @@ Signal Object; in particular, a `403` that matches no signal is not
 throttling. When `signals` is absent, this extension says nothing about
 responses other than `429`.
 
+**Cached responses.** Since 0.5.1. A throttling or `blocked` response, and
+the rate-limit headers and body fields of any response, describe the API's
+state when the API sent it. A consumer MUST NOT store a response that it
+classifies as throttling or `blocked` in a cache that answers later requests
+in the API's place, and MUST NOT classify a response such a cache answers (one
+the API did not send for this request) at all: it neither sets an earliest
+retry time, nor pauses a bucket, nor counts as a refusal, and its `retryAfter`
+or `reset` values are not read. A delay counted from a replayed response would
+start at the wrong time, and a stored `blocked` answer would refuse requests
+the API might now accept. The time a consumer measures a delay from is the
+time it received the response from the API (above). An HTTP revalidation that
+the API answers with `304 Not Modified` is a response the API sent, and is
+classified as any other.
+
 `headers` and `signals` are root-level only in this version: an operation's
 `x-throttling` array still selects buckets and nothing else. An API whose
 throttling responses differ per operation is described by the union of its
@@ -631,6 +646,7 @@ API throttling.
 
 ## Changes
 
+- **0.5.1-draft** (2026-10-15): Cached responses: a throttling or `blocked` response is not stored in a cache that answers later requests, and a response such a cache answers is not classified (no retry time, no bucket pause, no refusal). `cacheable` and `classify(..., from_cache=True)` in the validator, and tests. No document changes meaning; the rule binds consumers that cache, such as a caching transport.
 - **0.5.0-draft** (2026-10-13): adds `tiers` to the Limit Object (Plan tiers):
   one bucket whose amount and window depend on the account's plan, as Asana,
   Notion and Clockify document, each tier naming its `plans`. A consumer

@@ -40,6 +40,8 @@ export type {
   FetchLike,
   ListMethod,
   Transport,
+  PurposedRequest,
+  RequestPurpose,
   TransportRequest,
   TransportResponse,
   HttpMethod,
@@ -172,6 +174,8 @@ export type {
   ThrottlingVerdict,
   TimeUnit,
 } from './throttling/throttling.js';
+export { resolveReference } from './read/references.js';
+export type { ResolvedReference } from './read/references.js';
 export { Pacer } from './throttling/pacing.js';
 export type { Quota } from './throttling/pacing.js';
 export { halves, WindowReadError } from './pagination/window.js';

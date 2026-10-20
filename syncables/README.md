@@ -28,10 +28,10 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.8.0 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) and its `response.incomplete` ([below](#reading-in-a-browser-syncablesbrowser)). Not `incrementalSync`, and auto-detection only by query parameters and body fields (not `matchHeaders` or `matchResponseFields`). |
-| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.6.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7). Not its request, patch or mint semantics. |
-| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.3.0-draft, plan tiers from 0.5.0-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. Not yet 0.4.0's `blocked` meaning (#533): a signal that declares it is not read, so such a refusal is retried. |
-| [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.3.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.2 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Auto-detection by query parameters, body fields, and (§6.3, when the scheme turns them on) response headers and response fields as the operation's description declares them. Not `incrementalSync`. |
+| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.7.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), Reference Objects resolved to a path (`resolveReference`, §4.1.3), and 0.7.0's `replace` and `unkeyedLists` through exported helpers (§4.8, §4.9; `createApiClient` does not use them yet). Not its request, patch or mint semantics, nor 0.8.0's `committedErrors`. |
+| [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.1-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
+| [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.4.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
 | [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md) | 0.1.0-draft | `x-runtime-schema` on a CRUD resource, in `readCollections` ([below](#reading-in-a-browser-syncablesbrowser)). Not writes or value conversion. |
 | [Filtering](../openapi-extensions/spec/filtering/README.md) | 0.2.0-draft | `x-time-zone` on list query parameters, with their `x-filter` field and operator for the covered spans. Not `x-filter` or `x-collection-scope` otherwise. |
@@ -69,8 +69,13 @@ and custom mutation protocols may need an adapter.
 Start with the [local-first guide](docs/local-first.md): it includes a runnable
 offline-edit example, the document/overlay workflow, direct and proxy transports,
 persistence and write recovery. The API details below serve as a reference.
-This README describes current source, including any **Unreleased** changes;
-the guide explains how to run that source before an npm release.
+For the CLI/daemon product direction, see the
+[local archive and migration design](docs/daemon-design.md), which records the
+PostgreSQL cache, compact collection coverage, durable outbox, device approval
+and replication plans with their implementation status.
+This README describes current source, including unreleased changes, which
+are listed in [`changes/`](changes/) until a release folds them into the
+changelog; the guide explains how to run that source before an npm release.
 
 ## Usage
 
@@ -222,7 +227,9 @@ is `observed` or `assumed`). Only a finished read by range windows over
 `x-time-zone` window fields keeps its `spans`, with `reason:
 'incomplete'`. An open end is left out. A `probe` read reads no zone and
 converts nothing.
-`readPlatform` does not report coverage. Only query parameters are read;
+`readPlatform` reports the same entries, in `ReadResult.coverage`
+(`CollectionCoverage`, as `sync()` gives them), also for a collection
+whose read failed, where `sync()` throws. Only query parameters are read;
 an `x-time-zone` in a request body or path is ignored.
 `wallClockParam`, `instantsOf` and `coveredSpan` are exported (the spec's
 `wall_clock_param`, `instants_of` and `covered_span`); `instantsOf` takes
@@ -344,6 +351,7 @@ A write the server answers with a non-2xx status is classified. The defaults
 | --- | --- | --- |
 | 404 or 410 to a delete | `satisfied` | The record is already gone, so the delete settles as if it had succeeded |
 | A response that is throttling under the document's `x-throttling` ([below](#throttling)): a matching signal, or any 429 | `retry` | Sent again no earlier than the earliest retry time the response gives, else after the backoff |
+| A response a `blocked` signal matches (Throttling 0.4.0), whatever its status | `permanent` | Not sent again: the API documents that retrying won't help |
 | 401 | `auth` | The write becomes `blocked` and the client stops sending writes (below); no attempt is counted |
 | 403 with `Retry-After` or `x-ratelimit-remaining: 0`, when the document declares no `x-throttling.signals` | `retry` | A rate limit, as GitHub sends it; with signals declared, a 403 is throttling only when a signal matches |
 | Other 403 | `auth` | As 401, except for a request sent after `authRenewed()` before any response showed the renewed credentials accepted (below): then `permanent` |
@@ -395,14 +403,22 @@ create or update counts as `permanent`.
 #### Throttling
 
 The draft [Throttling extension](../openapi-extensions/spec/throttling/README.md)
-(0.3.0-draft) lets a document say, at the root `x-throttling`, which
+(0.4.0-draft) lets a document say, at the root `x-throttling`, which
 response headers report the rate limit (`headers`: roles `limit`,
 `remaining`, `used`, `reset` and `retryAfter`, the last two with a time
 unit), which JSON body fields report the same roles (`bodyFields`, since
 0.3.0, keyed by a dot-path such as Todoist's `error_extra.retry_after`) and
 which responses are rate-limit refusals (`signals`: a status
 list plus a header or JSON-body predicate, with the meaning `throttled` or
-`quotaExhausted`, an optional `bucket` of `limits` and `minDelaySeconds`).
+`quotaExhausted`, an optional `bucket` of `limits` and `minDelaySeconds`;
+since 0.4.0 also `blocked`, a refusal the API documents as not worth
+retrying, such as Notion's `public_api_request_blocked`).
+A `blocked` verdict is not throttling: it has no retry time, a read
+returns the response (and fails on it) without sleeping, and a write is
+`permanent` by default and is not sent again. A signal with a meaning this
+version does not recognise (or none, or one that is not a string) is read
+as `blocked`; a `blocked` signal with a `bucket` or `minDelaySeconds` is
+kept as `blocked`, with those fields ignored.
 `declaredThrottling` reads it and `classifyThrottling` (both exported)
 applies it to a response, after the spec's `classify()`: the first signal
 that matches decides; without one, a 429 is `throttled` (with or without a
@@ -1186,8 +1202,13 @@ on every retry, and an uncertain create is retried automatically instead. Set
 `idempotencyKeyHeader: 'X-Some-Header'` to use another header for every create
 when the provider documents one elsewhere, or `false` to never send one. Whether
 the provider actually deduplicates on that key is the provider's contract; it is
-not verified here. A 2xx response with an unusable body stays `uncertain`
-even with a key.
+not verified against a real provider. The client's half is tested over HTTP
+against the mock server, which answers a create sent again with the same key
+with the record it made the first time (and `422` for the same key with
+another body): a create whose response was lost is retried with its key and
+leaves one record, where without a declared key it stays `uncertain` and is
+not resent. A 2xx response with an unusable body stays `uncertain` even with
+a key.
 
 #### Declared create results (CRUD Causality §4.3.2, §4.4–4.5)
 
@@ -1213,7 +1234,12 @@ When the create operation declares an `x-crud` `create` for the resource
   is not an error; the record is then the sent body plus the identity, until
   the next refresh.
 - When the identity cannot be determined (no or another `Location`, an
-  empty body where the body must name it), the record exists at the
+  empty body where the body must name it, or a value that cannot be an
+  identity: a dot segment such as `/pets/..` or `%2E%2E`, an empty or
+  whitespace-padded string, one with NUL or a lone surrogate, an object, a
+  boolean, a fraction or an integer past 2^53, or a URL value that does not
+  percent-decode; `resolveReference` refuses the same strings), the record
+  exists at the
   provider but is **unbound**: the create becomes `uncertain` with
   `unbound: true` in `pendingWrites()` (stored in the outbox), and once
   that outcome is stored it is never sent again, also with an idempotency
@@ -1714,9 +1740,25 @@ const client = createApiClient(document, {
 });
 ```
 
-The Node constructor falls back to `SYNCABLES_API_KEY`,
-`SYNCABLES_OAUTH_CLIENT_ID`, `SYNCABLES_OAUTH_CLIENT_SECRET` and
-`SYNCABLES_ACCESS_TOKEN`. Explicit fields win over environment values.
+`apiKeyAuth(name, in)` takes an OpenAPI `apiKey` security scheme's `name`
+and `in`: `header` (the default), `query` or `cookie`, which adds
+`name=<key>` to the request's `cookie` header, replacing a cookie of that
+name and keeping the others. A cookie name must be an RFC 6265 token, and a
+key sent as a cookie must be RFC 6265 cookie-octets (no control character,
+whitespace, `"`, `,`, `;` or `\`), so a key such as `k;admin=1` cannot add a
+cookie of its own; either is refused. A header name must be an RFC 7230
+token too. `bearerAuth` and a header key replace a header of the same name
+in any case, so a request never carries both `Authorization` and
+`authorization`.
+
+With an `authenticate` adapter, the Node constructor falls back to
+`SYNCABLES_API_KEY`, `SYNCABLES_OAUTH_CLIENT_ID`,
+`SYNCABLES_OAUTH_CLIENT_SECRET` and `SYNCABLES_ACCESS_TOKEN`. Explicit
+fields win over environment values. Without an adapter it reads none of
+them and says nothing, so such a variable set for another tool does not
+stop a client whose transport authenticates itself. Explicit credentials
+without an adapter are still refused ("Credentials require an
+authenticate adapter").
 `credentialPrefix: 'SECOND_'` selects a different prefix;
 `credentialPrefix: false` disables fallback. `credentialsFromEnv(explicit,
 prefix)` is also exported by the Node entry. The browser entry never reads
@@ -1727,9 +1769,30 @@ environment variables.
 `clientId` and `clientSecret` and returns an authenticated request, possibly
 after obtaining/refreshing a user token. OAuth consent, grant selection and
 token persistence are the adapter's responsibility; loading application
-credentials alone does not log a user in. Credentials without an authentication
-adapter are rejected. Keep confidential client credentials in server-side
+credentials alone does not log a user in. Explicit credentials without an
+authentication adapter are rejected. Keep confidential client credentials in server-side
 configuration. Authentication happens after the data-read capture boundary.
+
+Every request syncables makes says why, in `TransportRequest.purpose`
+(`RequestPurpose`): `list` (a page of a collection read, `paginate` or a
+range window), `feed` (a deletion feed page), `item` (a record's own GET
+when a list lacks it), `describer`, `zone`, `precondition` (a read a
+write depends on), `write` (a create, update, delete or follow-up) and
+`inbox`. A transport may ignore it; it is optional on the type, so a
+transport written before it still works. A caching transport uses it to
+answer only what it may: a `list` read, say. An `item` read must be
+fresh, like a `precondition` read: it decides whether a record a list
+left out still exists. A `write` is never answered from a cache, and a
+request without a `purpose` (from code that predates it) must be taken
+as not cacheable. An authentication adapter that builds a new request
+must keep the `purpose` of the one it was given. A transport that answers
+without asking the provider sets `fromCache: true` on its response: the
+client then gives back the request it counted against a pacing quota,
+and the read's `maxRequests` does not count it. Under Throttling
+0.5.1-draft, cached responses are not classified: they set no retry time
+and pause no bucket. A cache must not store throttling or blocked answers. A `304` that the conditional cache
+answers with a stored body carries the `fromCache` of that `304`, not
+of the stored response.
 
 ## Optional raw read-response storage
 
@@ -1767,6 +1830,20 @@ transport or direct fetch. A test bundles it with esbuild `platform: 'browser'`
 and fails on any Node built-in import. It does not include the mock
 server, environment loader or file-path loaders, so pass documents and
 overlays as parsed objects.
+
+`prepareDocument` applies overlays with `applyOverlay`, which reads the
+target grammar integration-proxy reads: `$`, then `.name` or `['name']`
+segments, as in `$.paths['/users.list'].get.responses['200']`. Wildcards,
+filters and array indexes are refused. An `update` object is deep-merged
+onto an object target; any other `update`, or one onto an array or a
+scalar, replaces the target, as the proxy does (Overlay 1.0 would append
+to an array). Objects missing along a target's path are created, where
+the proxy refuses the action. Every overlay under
+[`overlays/APIs/`](../overlays/APIs/) applies. Nothing in a target is
+unescaped, as in the proxy: `$.paths['a\'b']` names `a\'b`, and a
+segment ends at the first `']`. Unlike the proxy, a `__proto__` segment
+is refused, and a document or `update` key named `__proto__` stays an
+ordinary own member: it never sets an object's prototype.
 
 ```ts
 import {
@@ -1876,7 +1953,10 @@ const { records, ontology, errors } = await readPlatform(document, {
   read unpaginated, one request taken as the whole list, so only where
   that is true), or apply a valid scheme with an explicit `x-pagination`
   entry. An explicit entry naming the invalid scheme makes the read fail
-  instead. `x-pagination: []` applies nothing and does not opt out: the
+  instead, as does one that is not a Pagination Application Object (an
+  empty `scheme`, `overrides` that are not an object, a `description`
+  that is not a string, or a field other than those and `x-` ones).
+  `x-pagination: []` applies nothing and does not opt out: the
   operation is still matched by auto-detection. A scheme whose
   `autoDetect` is neither a boolean nor an object (`null`) is invalid
   too, and auto-detection reads it as the default options. The validator
@@ -1886,8 +1966,84 @@ const { records, ontology, errors } = await readPlatform(document, {
   invalid, so a typo such as `respnse:` is not silently read as a scheme
   without a response. It refuses an `incrementalSync` scheme, which the
   spec allows, because this client does not implement it.
+  Auto-detection also reads the response dimensions of §6.3 when a
+  scheme turns them on: `matchHeaders` matches an operation one of whose
+  success responses (`200`–`299`, `2XX`) declares every one of the
+  scheme's response `headers` (names compared without case), and
+  `matchResponseFields` one whose success response's JSON schema has
+  every response `bodyFields` path (through `properties` and `allOf`).
+  Only the description is read: an operation whose description does not
+  declare the `Link` header a provider sends is not matched, and is read
+  with one request as before; apply the scheme with an explicit
+  `x-pagination` there.
   An `outcome` passed to `paginate` again starts clean: an earlier walk's
   mark does not carry over.
+- **A cursor read from the last item** (Pagination Schemes 0.9.1
+  §4.3.3): a `pageToken` scheme whose one `pageToken` or `cursor` field
+  declares `fromLastItem` (a dot-path into an item, as Stripe's
+  `starting_after` takes the last object's `id`) is read by sending that
+  value of each page's last item, in that field only: a string as it is,
+  a safe integer in decimal. Another `pageToken`- or `cursor`-role field,
+  which rule 28 allows beside it (Stripe's `ending_before`), gets no
+  value. The first request goes without a cursor. The read ends at an empty
+  page or at a `hasMore` body field of `false`, complete unless a response
+  was marked (§4.4.6; the mark is kept across pages); a short page does not
+  end it. It ends with a `PageReadError`, not complete, when the last item
+  has no such value (or an empty string, a boolean, `null`, a fraction,
+  an array or an object, or an integer beyond `Number.MAX_SAFE_INTEGER`,
+  which was rounded when parsed), when the value equals the one sent for that
+  page, when a page holds an item an earlier page returned (by identity,
+  else the whole item), when an empty page says `hasMore: true`, and when
+  `hasMore` is present but not a boolean, `null` included (Pagination
+  Schemes 0.9.1; only an absent `hasMore` decides nothing). The cursor field
+  must be a query parameter or, on a POST, a body field; a header
+  field ends the read with an error. The validator checks rules 27 to 29.
+  The mock server serves such a scheme on a GET: the page after the item
+  whose value the request names (the first page without one, an empty
+  last page for a value no item has or an empty value), with `hasMore`
+  set; each generated item gets its own value at the `fromLastItem`
+  path.
+  With `order: ascending` or `descending` beside `fromLastItem`
+  (Pagination Schemes 0.10.0, rule 30), the read checks that the
+  `fromLastItem` values of all its items, within and between pages, are
+  strictly in that order, and ends with a `PageReadError`, not complete,
+  before yielding a page with a pair out of order, two equal values, a
+  value that cannot be ordered, or a number beside text. A non-negative
+  integer or a string of ASCII digits compares as an exact number
+  (`BigInt`, so 19-digit Discord snowflakes beyond 2^53 compare
+  correctly; leading zeros do not count). Any other string compares by
+  code point. A negative or fractional number, a signed digit string
+  beside a number, a boolean, `null` or a missing value cannot be
+  ordered. Without `order` nothing is checked.
+- **A field that identifies another resource** (CRUD Causality §4.1.3,
+  Reference Objects): `resolveReference(document, resource, reference,
+  object, context)` fills the referenced resource's
+  `identity.urlTemplate` from the referring object's fields, and a
+  variable the reference does not bind from `context` (the path variables
+  of the request the object was read through, such as a shared
+  `{workspaceId}`), giving `{ resource, path, values }`. A time entry with
+  `projectId: "p-9"`, read under workspace 42, resolves to
+  `/workspaces/42/projects/p-9`. A reference with `required: false` whose
+  field is absent or `null` resolves to nothing, even when a context
+  variable is missing too: bound fields are read first. An empty string
+  is a value, not an absence, and throws whether the reference is
+  required or not. Anything else that cannot be filled throws: a
+  required field absent, a value that is neither a string nor a safe
+  integer (`Number.isSafeInteger`: beyond 2^53 - 1 a parsed number may
+  not be the id the API sent), a variable missing from `context`, or a
+  declaration it cannot read. A declaration it cannot read includes an
+  `identity.urlTemplate` that is not a path starting with one `/` (an
+  absolute URL, a variable in the host), or that holds a backslash, a
+  control character, a space or DEL (a URL parser reads
+  `/\evil.example/` as that host, and strips a tab, LF or CR anywhere, so
+  `/<tab>/evil.example/` too): `path` is always relative to the API's
+  server. A value, bound or from `context`, also
+  throws when it is `.` or `..` (it survives percent-encoding, and
+  `/projects/..` normalises to `/`, another resource), has leading or
+  trailing whitespace, contains NUL, or holds a lone surrogate. Other
+  characters are percent-encoded (`/` as `%2F`, `%` as `%25`). It
+  asserts identity only: nothing is fetched, and the path need not exist
+  or be readable.
 - **User-defined fields** (draft
   [Runtime Schemas](../openapi-extensions/spec/runtime-schemas/README.md)
   0.1.0, `x-runtime-schema` on a CRUD resource; a port of the spec's
@@ -1939,9 +2095,11 @@ const { records, ontology, errors } = await readPlatform(document, {
   (`authBlocked()`). Writes and value
   conversion are not covered.
 - **Records and ontology**: `deriveOntology` makes one class per resource and
-  one property per field, typed with Atomic Data datatype URLs. Each record's
-  `values` are keyed by property shortname, and `date-time` strings are
-  converted to epoch milliseconds.
+  one property per field, typed with Atomic Data datatype URLs; an
+  OpenAPI 3.1 type list such as `['string', 'null']` is typed by its one
+  non-null type, and a field whose name has no letter or digit (`_`) gets
+  no property. Each record's `values` are keyed by property shortname, and
+  `date-time` strings are converted to epoch milliseconds.
 - **Limits** (`DEFAULT_READ_LIMITS`): 10,000 requests, 5,000 records and 30
   minutes per read, plus at most 3 retries per request of a 429 or a
   response a declared throttling signal matches, each after the earliest
@@ -2030,6 +2188,171 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **0.25.0**: behaviour changes to know before upgrading come first:
+  explicit `x-pagination` entries must have the spec's shape; Throttling
+  `blocked`; auto-detection by response headers and fields; `applyOverlay`
+  reads the proxy's target grammar; the webhook inbox's `reconciling` step
+  and IPv6 refusal; mock-server values that keep to their schema. Then the
+  cursor read from the last item and its `order`, request `purpose` and
+  cached responses on the transport, `resolveReference`, coverage from
+  `readPlatform`, fixes and design docs.
+  - **Behaviour change:** An explicit `x-pagination` entry must be a
+    Pagination Application Object as the spec's `schema.json` gives it
+    (#609): a nonempty `scheme`, an object `overrides`, a string
+    `description`, and no other field but `x-` ones, on every entry. One
+    that is not fails the read with a `PaginationSchemeError`, as an
+    undeclared scheme does; before, a typo such as `overide:` dropped the
+    overrides without a word, so a read that used to page with the scheme's
+    own fields now fails. Every `x-pagination` entry in this repository's
+    YAML and JSON files passes (1,275 entries, counted on 2026-10-15).
+  - **Behaviour change:** Throttling 0.4.0-draft `blocked` (#533). A signal
+    with `meaning: blocked` (Notion's `public_api_request_blocked`), or with
+    a meaning this version does not recognise (or none, or a non-string
+    one), gives `classifyThrottling` the verdict `{ meaning: 'blocked' }`
+    with no `retryAt`: not throttling, never resent automatically. Such a
+    signal keeps a `bucket` or `minDelaySeconds` ignored rather than being
+    dropped. A write answered `blocked` (its own answer, or a precondition
+    read's) fails at once (`permanent` in `defaultWriteFailureClass`), with
+    no `notBefore` and no bucket pause; a read returns the answer without
+    sleeping and fails on it. API semantic change: a `ThrottlingVerdict` no
+    longer always means "retry later"; a custom `classifyWriteFailure` that
+    returns `retry` for any `failure.throttling` now retries a blocked
+    answer, so check its meaning. `ThrottlingMeaning` gains `'blocked'`, so
+    an exhaustive `switch` over it no longer compiles until it handles the
+    new value.
+  - **Behaviour change:** Pagination Schemes §6.3 `matchHeaders` and
+    `matchResponseFields` are read (#577): a scheme auto-detected by its
+    response headers (a `Link` header, as in the spec's example and GitHub's
+    and GitLab's overlays) or response fields now matches an operation whose
+    description declares them, and the read pages instead of taking its
+    first response as the whole list. An operation whose description does
+    not declare them is read as before. In this repository's catalogs no
+    operation changes (GitLab's `Link` scheme is applied explicitly).
+  - **Behaviour change:** `applyOverlay` (and so `prepareDocument`) reads
+    `['name']` target segments, as integration-proxy does (#618). Before,
+    174 of the 524 overlays under `overlays/APIs/` threw "Unsupported
+    overlay target" (most address an operation as
+    `$.paths['/users.list'].get`). An array or scalar target is now replaced
+    by the `update` instead of throwing, and an array `update` (Notion's
+    auth overlay) replaces the target instead of being merged index by index
+    into an object. A target that applied before gives the same result, with
+    two exceptions no overlay in this repository uses: a falsy `update`
+    (`null`, `0`, `false`, `''`) now replaces the target instead of being
+    skipped, and an object `update` onto an existing scalar replaces it
+    instead of throwing. Every `update`, a root (`$`) one included, is
+    copied into the result, so a later action no longer changes the caller's
+    overlay (#627). `OverlayAction.update` is typed `Record<string, unknown>
+    | unknown[]`, so code that reads its properties directly needs a
+    narrowing. A `__proto__` target segment is refused, and every member is
+    set as an own property, so a document or `update` key named `__proto__`
+    (an own key after `JSON.parse`) no longer sets a prototype (#624).
+    Nothing in a target is unescaped, as in the proxy.
+  - **Behaviour change:** The webhook inbox consumer's `reconcile` may
+    answer `'pending'` (#613; the full read runs as separate work): the
+    consumer then records the gap, reports nothing, returns a `reconciling`
+    step and asks again on later steps. `StepResult` has this new kind,
+    which code that handles every kind of `InboxConsumer.step()` result must
+    now handle; it is returned only when `reconcile` answers `'pending'`.
+    `reconcile` now also gets a second argument, the receiver's
+    `ReconciliationRequired`. `InboxClient` refuses a base URL whose host
+    is an IP literal other than a dotted-decimal IPv4 address without
+    leading zeros or shorthand, and, where `URL` exists, one that `URL`
+    would rewrite. Both kinds were accepted before and are now refused
+    when the `InboxClient` is created: an IPv6 literal host
+    (`http://[::1]:8080`), and an IPv4 shorthand, hexadecimal or
+    leading-zero form (`127.1`, `0x7f.0.0.1`, `010.0.0.1`). Use a host name
+    or a plain dotted-decimal address.
+  - **Behaviour change:** `generateFromSchema`, which the mock server seeds
+    records and answers responses with, keeps to the schema it generates
+    from (#623, #626), so mock values change: an OpenAPI 3.1 type list
+    (`['string', 'null']` gave `null`, now a string), `examples` and
+    `const`, numeric bounds (`maximum`, 3.0 and 3.1 exclusive bounds, a
+    fractional `minimum` on an integer, `multipleOf` on integers and
+    numbers), `minLength` and `maxLength` on an unformatted string, and
+    `minItems` and `maxItems`. An inclusive `minimum` is still the value
+    generated, and a value that already divides by `multipleOf` is kept. A
+    bound past 2^53 or 1e17 is kept strictly by stepping to the next float
+    (at `±Number.MAX_VALUE` the bound itself, not an infinity), and `-0` is
+    generated as `0`. `minItems` and `minLength` are capped at 10,000 per
+    array or string, and one call makes at most 100,000 array items and
+    padding characters in all, so nested minimums cannot multiply; past
+    those limits a value is short of its minimum instead of throwing a
+    `RangeError` or exhausting memory. A schema's own `example`, `examples`,
+    `const` or `enum` value is returned as a copy (#603). Not followed:
+    `pattern`, `uniqueItems`, and `maxLength` on a formatted string.
+  - **Added:** Pagination Schemes 0.9.1's cursor read from the last item
+    (#600): `fromLastItem` (Stripe's `starting_after`) with the `hasMore`
+    response role, after the spec's `read_item_cursor`. The cursor goes in
+    the `fromLastItem` field only, never in another cursor-role field beside
+    it, and an integer cursor value must be a safe integer; a `hasMore` that
+    is present but not a boolean, `null` included, ends the read with an
+    error. The validator accepts these fields under rules 27 to 29; no
+    scheme in this repository's overlays changes verdict. Additive for
+    documents without these fields.
+  - **Added:** Pagination Schemes 0.10.0 `order` beside `fromLastItem`
+    (#630): the read checks that the cursor values of all its items are
+    strictly ascending or descending, comparing digit strings and
+    non-negative integers exactly (`BigInt`) and other strings by code
+    point, and fails with a `PageReadError` at a pair out of order, an equal
+    pair or a value that cannot be ordered. The validator accepts `order`
+    only beside `fromLastItem` (rule 30). Additive: a document without
+    `order` reads as before.
+  - **Added:** The mock server serves a Pagination Schemes item-cursor
+    scheme on a GET (#603): the page after the named item, with `hasMore`;
+    before, it read the cursor as an offset and answered an empty page.
+  - **Added:** `TransportRequest.purpose` (`list`, `feed`, `item`,
+    `describer`, `zone`, `precondition`, `write`, `inbox`) on every request
+    syncables makes, and `TransportResponse.fromCache`, which gives back the
+    request's pacing count and does not count against `maxRequests`. Both
+    optional; the `PurposedRequest` and `RequestPurpose` types are exported,
+    and `Pacer.release()`, which gives back a counted request, is new public
+    API (#606, #566's "smallest backward-compatible extension" for a caching
+    transport).
+  - **Added:** `resolveReference` and the `ResolvedReference` type (#611,
+    #620) resolve a CRUD Causality §4.1.3 Reference Object for an object:
+    the referenced resource's identity path, filled from the object's fields
+    and the request context. It throws instead of naming another object for
+    a value of `.` or `..`, an empty or whitespace-padded value, one with
+    NUL or a lone surrogate, an integer beyond `Number.MAX_SAFE_INTEGER`,
+    and a target `identity.urlTemplate` that is not a path starting with one
+    `/` or that holds a backslash, a C0 control character, a space or DEL (a
+    URL parser reads `/\evil.example/`, or a path with a tab, LF or CR, as
+    another host). Its error messages name any value, a bigint or a cycle
+    included, and cut it at 200 characters. Nothing in the client calls it
+    yet.
+  - **Added:** `readPlatform` reports coverage (#575): `ReadResult.coverage`
+    (`CollectionCoverage`) lists each collection's `ReadCoverage` with
+    `collection` and `context`, as `SyncResult.coverage` does, also for a
+    collection whose read failed. Before, only `sync()` reported it.
+  - **Fixed:** Do not classify cached responses as throttling or blocked,
+    apply their Retry-After, or pause shared buckets from them (Throttling
+    0.5.1-draft, #606). Live revalidation responses retain their own cache
+    provenance.
+  - **Fixed:** `deriveOntology`, and so `readPlatform`, reads an OpenAPI 3.1
+    type list: a field typed `['string', 'null']` with format `date-time`
+    was given the `json` datatype and its values were not converted to
+    timestamps; it is now a timestamp, and a list with one other non-null
+    type takes that type. A title without a letter or digit (`日本語`) gives
+    the default base `ontology` instead of term paths starting with `/`; a
+    field name without one (`_`) gets no term instead of a path ending in
+    `/`; and such a resource name throws.
+  - **Other:** Document the proposed Syncables CLI and daemon architecture:
+    a separate local PostgreSQL archive, disposable hydrated collections
+    with compact coverage, durable outgoing intent, device approval,
+    replication backends and a future source-retirement path. Extend the
+    existing archive plan with content-addressed nested JSON, observed
+    revision history, selected incremental fetches, offline browsing,
+    polling and queued webhooks; include delayed Jazz and atproto adapters.
+    Distinguish existing features from draft and planned implementation.
+  - **Other:** Record the laptop worker's completed live device-flow pilot
+    in the standalone design: existing owner approval through a local
+    Keychain-backed bridge, approved-connection discovery, authenticated
+    GitHub read and session revocation. Keep owner signing outside the CLI
+    and distinguish this evidence from packed CLI testing, production
+    owner-hub integration and untested refresh rotation.
+  - **Other:** the README's spec table now says Pagination Schemes 0.10.1,
+    CRUD Causality 0.7.0 (whose `replace` and `unkeyedLists` 0.24.0 added
+    as exported helpers) and Collection Completeness 0.4.0-draft.
 - **0.24.0**: CRUD Causality 0.7.0's `replace` and `unkeyedLists` for
   APIs that cannot update an object or give list items no id (see "APIs
   that cannot update"): `replaceOf`, `replaceBlock`, `unkeyedListsOf`,

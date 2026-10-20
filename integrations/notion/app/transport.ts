@@ -50,6 +50,52 @@ export function observedTransport(
 }
 
 /**
+ * Whether a Notion error body says its public API blocked this integration's
+ * requests (`additional_data.rate_limit_reason` is
+ * `public_api_request_blocked`). Notion sends that with a 429, but it is
+ * permanent: retrying won't help, only Notion support can lift it. Read from
+ * the body itself (an object, or JSON text), so it holds whatever the
+ * transport or syncables make of the status.
+ */
+export function isBlockedByNotion(body: unknown): boolean {
+  let value = body;
+
+  if (typeof value === 'string')
+    try {
+      value = JSON.parse(value);
+    } catch {
+      return false;
+    }
+
+  const data =
+    typeof value === 'object' && value !== null
+      ? (value as { additional_data?: unknown }).additional_data
+      : undefined;
+
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    (data as { rate_limit_reason?: unknown }).rate_limit_reason ===
+      'public_api_request_blocked'
+  );
+}
+
+/**
+ * Thrown by `syncablesTransport` for a 429 Notion marks as blocked
+ * (`isBlockedByNotion`), after the observer has seen it: syncables retries a
+ * 429 whose `Retry-After` is short, and a blocked request must not be sent
+ * again (0.5.5). From 0.5.6 the same transport then refuses every later
+ * request without sending it, so the read stops at the first block. The
+ * controller classifies the sync as blocked from the observed failure.
+ */
+export class NotionBlocked extends Error {
+  constructor(readonly path: string) {
+    super(`Notion blocked this integration's request (429 for ${path}).`);
+    this.name = 'NotionBlocked';
+  }
+}
+
+/**
  * The integration proxy's own refusals (`integration-proxy/src/api_error.rs`):
  * `{ error, message }` with one of these codes, answered before the provider
  * is called. `RECONNECT_CODES` mean the connection is gone or no longer this
@@ -142,8 +188,15 @@ export function syncablesTransport(
   observe?: RelayObserver,
 ): Transport {
   const base = upstream.pathname.replace(/\/$/, '');
+  /**
+   * Set at the first 429 Notion marks as blocked (0.5.6): from then on this
+   * transport sends nothing, so the read stops there instead of requesting
+   * every remaining data source once more (each would be blocked too).
+   */
+  let blocked: NotionBlocked | undefined;
 
   return async request => {
+    if (blocked) throw blocked;
     const { url } = request;
     if (
       url.origin !== upstream.origin ||
@@ -186,6 +239,11 @@ export function syncablesTransport(
       ...(refused ? { code: refused.code } : {}),
     });
     if (refused) throw refused;
+
+    if (response.status === 429 && isBlockedByNotion(response.body)) {
+      blocked = new NotionBlocked(path);
+      throw blocked;
+    }
 
     return {
       status: response.status,

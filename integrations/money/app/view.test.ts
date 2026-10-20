@@ -448,6 +448,54 @@ describe('Money view: import sheet', () => {
     expect(applied).toEqual(['bunq.sta']);
     expect(root.querySelector('[role="dialog"]')).toBeNull();
   });
+
+  it('disables Import while the file is compared with the table again', async () => {
+    const root = document.createElement('div');
+    document.body.replaceChildren(root);
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    const store = fakeStore();
+    await mount(root, store, {
+      today: () => '2026-09-24',
+      locale: 'en-GB',
+      width: 1200,
+      importer: {
+        apply: async () => {
+          throw new Error('Refused by the host');
+        },
+      },
+    });
+    await choose(root, 'bunq.sta', mt940Text());
+    // The table read that follows the failure waits until released.
+    const query = store.query.bind(store);
+
+    store.query = async args => {
+      await held;
+
+      return query(args);
+    };
+
+    const buttons = () => [
+      ...root.querySelectorAll<HTMLButtonElement>('.m-dialog button'),
+    ];
+    buttons()
+      .find(b => text(b) === 'Import 2 transactions')!
+      .click();
+    await settle();
+    const checking = buttons().find(
+      b => text(b) === 'Checking what was written…',
+    );
+    expect(checking?.disabled).toBe(true);
+    expect(text(root.querySelector('.m-dialog'))).toContain(
+      "The import didn't go through",
+    );
+    store.query = query;
+    release();
+    await settle();
+    expect(
+      buttons().find(b => text(b) === 'Import 2 transactions')?.disabled,
+    ).toBe(false);
+  });
 });
 
 describe('Money view: the sync-status card (Q-084)', () => {

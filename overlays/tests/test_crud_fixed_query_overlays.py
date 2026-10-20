@@ -97,10 +97,19 @@ class FixedQueryOverlayTests(unittest.TestCase):
         self.assertEqual(set(old), set(new))
         for name, resource in old.items():
             self.assertEqual(resource["identity"], new[name]["identity"])
+            self.assertEqual(resource["schema"], new[name]["schema"])
+            self.assertEqual(resource["schema"], {"$ref": f"#/components/schemas/{name[0].upper() + name[1:]}"})
+            self.assertEqual(set(resource["collections"]), set(new[name]["collections"]))
             for collection, definition in resource["collections"].items():
                 self.assertEqual(definition["urlTemplate"], new[name]["collections"][collection]["urlTemplate"])
+                # v2 adds the envelope: items, and no items field means an empty page.
+                self.assertEqual(new[name]["collections"][collection]["envelope"],
+                                 {"itemsField": "items", "emptyWhenAbsent": True})
         targets = lambda v: {(a["target"], yaml.safe_dump(a["update"].get("x-crud"))) for a in v["actions"][1:]}
-        self.assertLessEqual(targets(v1), targets(v2))
+        list_read = ("$.paths['/tasks/v1/users/@me/lists/{tasklist}'].get",
+                     yaml.safe_dump({"action": "read", "resource": "taskList"}))
+        self.assertEqual(targets(v2), targets(v1) | {list_read})
+        self.assertNotIn(list_read, targets(v1))
 
     def test_google_calendar_reads_series_masters_and_cancelled_events(self):
         original, composed = self.documents["google_calendar"]
