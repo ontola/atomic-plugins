@@ -189,7 +189,7 @@
     ],
     "https://atomicdata.dev/properties/shortname": "google-keep",
     "https://atomicdata.dev/integrations/properties/experimental": true,
-    "https://atomicdata.dev/integrations/properties/enabled": false,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
     "https://atomicdata.dev/properties/name": "Google Keep",
     "https://atomicdata.dev/properties/emoji": "📝",
     "https://atomicdata.dev/properties/description": "Sync your Google Keep notes and lists with a table in your drive, both ways, while the app is open.",
