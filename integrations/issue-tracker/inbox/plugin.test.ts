@@ -185,10 +185,64 @@ describe('the webhook inbox plugin, run as a sync session', () => {
     expect(payload.length).toBeGreaterThan(1_390_000);
   });
 
-  it(`stops collecting past ${RUN_PAYLOAD_BUDGET} bytes of base64 payload, without error, and the next run goes on`, async () => {
+  it(`asks for at most ${RUN_PAYLOAD_BUDGET} bytes of payload per fetch; what does not fit follows in the next run`, async () => {
     const inbox = new FakeInbox();
     const host = new FakeHost(inbox);
     // The host's fetch cap on, so the page stays one it lets through.
+    host.fetchCap = FETCH_CAP;
+    await host.run();
+    const big = (n: number) => ({ text: String(n).repeat(3_500_000) });
+    inbox.deliver('d-1', big(1));
+    inbox.deliver('d-2', big(2));
+    inbox.deliver('d-3');
+    since(host);
+    await host.run();
+    expect(host.sent.at(-1)?.url).toMatch(
+      new RegExp(`[?&]maxBytes=${RUN_PAYLOAD_BUDGET}(&|$)`),
+    );
+    // The receiver cut the page after d-1, which was stored whole, so its
+    // cursor is kept for the next run to acknowledge.
+    expect(deliveries(host)).toEqual(['d-1']);
+    expect(state(host)?.unacknowledged).toBeDefined();
+    await host.run();
+    expect(deliveries(host)).toEqual(['d-1', 'd-2', 'd-3']);
+    await host.run();
+    expect(inbox.subs.get('sub-1')!.refs).toHaveLength(0);
+  });
+
+  it(`keeps a delivery over ${RUN_PAYLOAD_BUDGET} bytes of base64 without its payload, and acknowledges it`, async () => {
+    const inbox = new FakeInbox();
+    const host = new FakeHost(inbox);
+    await host.run();
+    const huge = { text: 'x'.repeat(6 * 1024 * 1024) };
+    inbox.deliver('d-huge', huge);
+    inbox.deliver('d-after');
+    await host.run();
+    expect(host.connection.records[INBOX_RECORD]!.baseline).not.toHaveProperty(
+      'lastError',
+    );
+    const [row] = host.table(config().table);
+    expect(row).toMatchObject({
+      'webhook-delivery-id': 'd-huge',
+      'webhook-payload-bytes': String(JSON.stringify(huge).length),
+      'webhook-payload-sha256': expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    expect(row).not.toHaveProperty('webhook-payload');
+    expect(
+      host
+        .table(config().tables.work.table)
+        .filter(r => r['webhook-work-kind'] === 'delivery'),
+    ).toHaveLength(1);
+    await host.run();
+    expect(deliveries(host)).toEqual(['d-huge', 'd-after']);
+    await host.run();
+    expect(inbox.subs.get('sub-1')!.refs).toHaveLength(0);
+  });
+
+  it(`against a receiver that ignores maxBytes, stops collecting past ${RUN_PAYLOAD_BUDGET} bytes of base64 payload, without error, and the next run goes on`, async () => {
+    const inbox = new FakeInbox();
+    inbox.ignoreMaxBytes = true;
+    const host = new FakeHost(inbox);
     host.fetchCap = FETCH_CAP;
     await host.run();
     // Each about 3.4 MiB in base64: together over the budget, so a run that
@@ -220,8 +274,9 @@ describe('the webhook inbox plugin, run as a sync session', () => {
     ).toHaveLength(3);
   });
 
-  it(`stores a lone event between ${RUN_PAYLOAD_BUDGET} and ${MAX_EVENT_PAYLOAD} bytes of base64 whole`, async () => {
+  it(`against a receiver that ignores maxBytes, stores a lone event between ${RUN_PAYLOAD_BUDGET} and ${MAX_EVENT_PAYLOAD} bytes of base64 whole`, async () => {
     const inbox = new FakeInbox();
+    inbox.ignoreMaxBytes = true;
     const host = new FakeHost(inbox);
     host.fetchCap = FETCH_CAP;
     await host.run();
@@ -246,8 +301,9 @@ describe('the webhook inbox plugin, run as a sync session', () => {
     expect(deliveries(host)).toEqual(['d-lone', 'd-next']);
   });
 
-  it('a page over the host fetch cap fails, the next run asks for one event, and the runs alternate until the page fits', async () => {
+  it('against a receiver that ignores maxBytes, a page over the host fetch cap fails, the next run asks for one event, and the runs alternate until the page fits', async () => {
     const inbox = new FakeInbox();
+    inbox.ignoreMaxBytes = true;
     const host = new FakeHost(inbox);
     host.fetchCap = FETCH_CAP;
     await host.run();
@@ -291,8 +347,9 @@ describe('the webhook inbox plugin, run as a sync session', () => {
     expect(deliveries(host)).toEqual(['d-1', 'd-2', 'd-3']);
   });
 
-  it(`refuses one event over ${MAX_EVENT_PAYLOAD} bytes of base64, recording why`, async () => {
+  it(`against a receiver that ignores maxBytes, refuses one event over ${MAX_EVENT_PAYLOAD} bytes of base64, recording why`, async () => {
     const inbox = new FakeInbox();
+    inbox.ignoreMaxBytes = true;
     const host = new FakeHost(inbox);
     await host.run();
     inbox.deliver('d-huge', { text: 'x'.repeat(6 * 1024 * 1024) });
