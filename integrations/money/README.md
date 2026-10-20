@@ -446,7 +446,9 @@ neither removes it, and the slower one counts a copy already gone as
 removed; that race is unit-tested in one controller only (a copy deleted
 before the press), not with two.
 
-RUNLINE
+The six money e2e tests (`e2e/money.spec.ts` and `moneybird.spec.ts`), the
+duplicate step included, passed on 2026-10-15 at 0.4.6 against the pin
+`7dab1ce` (the build VPS's source build), in 7.2 minutes.
 
 At 0.4.5 (app module `apps/money/0.4.5/ui.js`, 122,855 bytes; `plugin.js`
 again 0.3.0's bundle with only the manifest's `version` changed) the paths

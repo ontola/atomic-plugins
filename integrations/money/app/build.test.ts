@@ -21,8 +21,7 @@ describe('money drive-app bundle', async () => {
     // Measured 127,916 bytes minified (JS and embedded CSS) on 2026-10-15,
     // at the 7dab1ce pin, for 0.4.6 (duplicate rows grouped, listed and
     // removed on press, #587; a no-reference twin is not an overlap); the
-    // limit is that plus about 10%, rounded
-    // up. 0.4.5 measured 122,855 bytes on 2026-10-15 (a failed import
+    // limit is that plus about 10%, rounded up. 0.4.5 measured 122,855 bytes on 2026-10-15 (a failed import
     // rechecks before it offers Import again; every check of a file reads
     // the whole table first, trusts only a complete read, and also compares
     // with every row seen or written, #539, #572). 0.4.4 measured 120,662 bytes on 2026-10-13 (an

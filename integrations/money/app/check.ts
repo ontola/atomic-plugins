@@ -196,7 +196,7 @@ export function compare(
       ? undefined
       : byFingerprint
           .get(entry.fingerprint)
-          ?.find(row => !sameStatement(row.sourceId, entry.identity));
+          ?.find(stored => !sameStatement(stored.sourceId, entry.identity));
 
     if (earlier)
       return {
