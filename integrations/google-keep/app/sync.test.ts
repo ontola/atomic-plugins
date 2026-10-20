@@ -8,6 +8,7 @@ import {
   NAME,
   PARENT,
   provision,
+  saveSettings,
   type Drive,
 } from './drive.js';
 import { fakeStore, OTHER_TABLE, TABLE, type FakeStore } from './fakeStore.js';
@@ -19,6 +20,7 @@ import {
   keepMine,
   keepTheirs,
   listNotes,
+  READ_ONLY,
   relayCall,
   restoreRemoved,
   syncNotes,
@@ -31,9 +33,14 @@ const options: SyncOptions = {
   rateLimit: { sleep: async () => {}, now: () => Date.parse(NOW) },
 };
 
-async function setup(args: Parameters<typeof fakeStore>[0] = {}) {
+/** Sending to Keep on unless `readOnly`: most tests are about the writes. */
+async function setup(
+  args: Parameters<typeof fakeStore>[0] = {},
+  { readOnly = false, onlyTitle = '' } = {},
+) {
   const store = fakeStore(args);
   const drive = await provision(store);
+  await saveSettings(store, drive, { writeBack: !readOnly, onlyTitle });
   const call = relayCall(store.proxy!, {
     platform: 'google-keep',
     connectionId: 'c1',
@@ -132,6 +139,73 @@ describe('syncNotes', () => {
       replaced: 0,
     });
     expect(store.writes.length).toBe(before);
+    expect(store.calls.every(c => c.method === 'GET')).toBe(true);
+  });
+
+  it('sends nothing to Keep while sending is off, and the held edit once it is on', async () => {
+    const { store, drive, sync } = await setup({}, { readOnly: true });
+    expect(await sync()).toMatchObject({ added: 5 });
+    const text = rowFor(store, drive, 'notes/synthetic-note-1');
+    await edit(store, text.subject, { [DESCRIPTION]: 'Edited here.' });
+    const { subject } = rowFor(store, drive, 'notes/synthetic-note-2');
+    await edit(store, itemRow(store, drive, subject, 'Made-up charger'), {
+      [drive.properties.done]: true,
+    });
+    await store.newResource({
+      parent: drive.table,
+      isA: [drive.rowClass],
+      propVals: { [NAME]: 'Made here', [DESCRIPTION]: 'New.' },
+    });
+    store.google.editNote('synthetic-note-5', 'Renamed in Keep', 'Keep text');
+    const before = store.google.snapshot();
+
+    const held = await sync();
+    expect(held).toMatchObject({ created: 0, replaced: 0, updated: 2 });
+    expect(held.blocked.map(b => b.reason)).toEqual([
+      READ_ONLY,
+      READ_ONLY,
+      READ_ONLY,
+    ]);
+    expect(store.calls.every(c => c.method === 'GET')).toBe(true);
+    expect(store.google.snapshot()).toEqual(before);
+    expect(store.resources.get(text.subject)![drive.properties.hold]).toBe(
+      READ_ONLY,
+    );
+    // The tick stays here, and Keep's rename came in.
+    expect(itemLines(store, drive, subject)).toContain('[x] Made-up charger');
+    expect(rowFor(store, drive, 'notes/synthetic-note-5').props[NAME]).toBe(
+      'Renamed in Keep',
+    );
+
+    await saveSettings(store, drive, { writeBack: true, onlyTitle: '' });
+    expect(await sync()).toMatchObject({ created: 1, replaced: 2 });
+    expect(
+      store.resources.get(text.subject)![drive.properties.hold],
+    ).toBeUndefined();
+  });
+
+  it('syncs only the note with the chosen title, and leaves the rest alone', async () => {
+    const { store, drive, sync } = await setup(
+      {},
+      { readOnly: true, onlyTitle: '  synthetic PACKING list ' },
+    );
+    expect(await sync()).toMatchObject({ added: 1, total: 1 });
+    expect(
+      [...store.resources.values()]
+        .filter(r => r[drive.properties.noteId])
+        .map(r => r[drive.properties.noteId]),
+    ).toEqual(['notes/synthetic-note-2']);
+    // A row made here with another title is not sent, even once sending is on.
+    await store.newResource({
+      parent: drive.table,
+      isA: [drive.rowClass],
+      propVals: { [NAME]: 'Another note', [DESCRIPTION]: 'Here only.' },
+    });
+    await saveSettings(store, drive, {
+      writeBack: true,
+      onlyTitle: 'Synthetic packing list',
+    });
+    expect(await sync()).toMatchObject({ created: 0, total: 1, unchanged: 1 });
     expect(store.calls.every(c => c.method === 'GET')).toBe(true);
   });
 

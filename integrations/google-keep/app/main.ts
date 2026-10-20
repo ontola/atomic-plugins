@@ -8,10 +8,17 @@
  * sync-status card, the connect and sync buttons, the notes with their
  * presence and anything held back (a conflict offers both versions), and
  * the notes deleted here that are still in Keep, with "Bring back" and
- * "Delete in Keep" (which asks first: Keep's delete is permanent).
+ * "Delete in Keep" (which asks first: Keep's delete is permanent), and the
+ * settings: whether edits are sent to Keep (off until turned on, which asks
+ * first) and the one note title to sync, if any.
  */
 import { renderSyncStatus, syncStatusCss } from '../../sync-status/card.js';
-import { createController, describe, type ViewState } from './controller.js';
+import {
+  createController,
+  DEFAULT_SETTINGS,
+  describe,
+  type ViewState,
+} from './controller.js';
 import { modeFor, syncStatusFor } from './status.js';
 import type { ViewArgs } from './store.js';
 import { CONFLICT, type NoteRow } from './sync.js';
@@ -72,6 +79,50 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   const scroll = el('div');
   scroll.className = 'scroll';
   scroll.append(table);
+  // Settings: off and every note until the person changes them.
+  const settings = el('fieldset');
+  settings.append(el('legend', 'Settings'));
+  const writeBack = el('input');
+  writeBack.type = 'checkbox';
+  writeBack.id = 'keep-write-back';
+  const writeLabel = el('label', ' Send edits to Google Keep');
+  writeLabel.htmlFor = writeBack.id;
+  writeLabel.prepend(writeBack);
+  const onlyTitle = el('input');
+  onlyTitle.type = 'text';
+  onlyTitle.id = 'keep-only-title';
+  onlyTitle.placeholder = 'Every note';
+  const onlyLabel = el('label', 'Only the note titled ');
+  onlyLabel.htmlFor = onlyTitle.id;
+  let dirty = false;
+  for (const input of [writeBack, onlyTitle])
+    input.addEventListener('input', () => (dirty = true));
+  const save = button('Save settings', () => {
+    const state = controller.state();
+    const was = 'settings' in state && state.settings.writeBack;
+
+    // Turning sending on can replace notes in Keep: ask first.
+    if (
+      writeBack.checked &&
+      !was &&
+      !doc.defaultView?.confirm(
+        'Send edits made here to Google Keep? An edited note is sent as a new note and the old one deleted (the Keep API has no update), so its colour, labels, pin and reminders are lost. Shared notes and notes with images are never replaced.',
+      )
+    )
+      return;
+    dirty = false;
+    void controller.configure({
+      writeBack: writeBack.checked,
+      onlyTitle: onlyTitle.value,
+    });
+  });
+  const writeLine = el('p');
+  writeLine.append(writeLabel);
+  const onlyLine = el('p');
+  onlyLine.append(onlyLabel, onlyTitle);
+  const saveLine = el('p');
+  saveLine.append(save);
+  settings.append(writeLine, onlyLine, saveLine);
   const removed = el('section');
   removed.setAttribute('aria-label', 'Deleted here, still in Google Keep');
   root.style.fontFamily = 'system-ui, sans-serif';
@@ -82,6 +133,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     card,
     controls,
     status,
+    settings,
     scroll,
     removed,
   );
@@ -102,6 +154,14 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     );
     sync.hidden = !('connection' in state && state.connection);
     sync.disabled = state.kind === 'syncing';
+
+    settings.hidden = !('settings' in state);
+    if ('settings' in state && !dirty) {
+      writeBack.checked = state.settings.writeBack;
+      onlyTitle.value = state.settings.onlyTitle;
+    }
+    save.disabled = state.kind === 'syncing';
+    const sending = 'settings' in state && state.settings.writeBack;
 
     const notes = 'notes' in state ? state.notes : [];
     table.hidden = notes.length === 0;
@@ -160,21 +220,25 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
             () => void controller.restore(note.id),
             `Bring back ${note.title}`,
           ),
-          ' ',
-          button(
-            'Delete in Keep',
-            () => {
-              // Keep's delete is permanent: ask, every time.
-              if (
-                doc.defaultView?.confirm(
-                  `Delete “${note.title}” in Google Keep for good? This cannot be undone.`,
-                )
-              )
-                void controller.deleteInKeep(note.id);
-            },
-            `Delete ${note.title} in Google Keep`,
-          ),
         );
+        // Only while sending to Keep is on.
+        if (sending)
+          p.append(
+            ' ',
+            button(
+              'Delete in Keep',
+              () => {
+                // Keep's delete is permanent: ask, every time.
+                if (
+                  doc.defaultView?.confirm(
+                    `Delete “${note.title}” in Google Keep for good? This cannot be undone.`,
+                  )
+                )
+                  void controller.deleteInKeep(note.id);
+              },
+              `Delete ${note.title} in Google Keep`,
+            ),
+          );
 
         return p;
       }),
@@ -192,6 +256,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
       at: Date.now(),
       notes: 'notes' in current ? current.notes : [],
       removedHere: 'removedHere' in current ? current.removedHere : [],
+      settings: 'settings' in current ? current.settings : DEFAULT_SETTINGS,
     });
   });
 }

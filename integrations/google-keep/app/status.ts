@@ -17,11 +17,13 @@ import {
 } from '../../sync-status/card.js';
 import { clockTime, type ViewState } from './controller.js';
 import { MAX_PAGES } from './read.js';
-import { CONFLICT, type NoteRow } from './sync.js';
+import { CONFLICT, type NoteRow, READ_ONLY } from './sync.js';
 
 /** The card's mode line for this app, in every state where it syncs. */
 export const MODE =
   'Two-way: edits here are sent to Google Keep, and Keep’s changes come here, every minute while this app is open in anyone’s browser. Nothing syncs while no one has it open.';
+export const READ_ONLY_MODE =
+  'Read-only: Google Keep’s changes come here every minute while this app is open; nothing here is sent to Keep until you turn on “Send edits to Google Keep” below.';
 export const NO_RELAY_MODE =
   'Nothing is sent to Google Keep or read from it until this Atomic Server can connect apps to it.';
 
@@ -66,7 +68,14 @@ export function ignoredGroups(notes: NoteRow[]): IgnoredGroup[] {
       `${is(n, 'was', 'were')} changed both here and in Google Keep: nothing is sent or overwritten until you choose a version below.`,
   );
   group(
-    notes.filter(r => r.hold && r.hold !== CONFLICT && !away(r)),
+    notes.filter(r => r.hold === READ_ONLY && !away(r)),
+    n =>
+      `${is(n, 'has an edit', 'have edits')} waiting: sending to Google Keep is off.`,
+  );
+  group(
+    notes.filter(
+      r => r.hold && r.hold !== CONFLICT && r.hold !== READ_ONLY && !away(r),
+    ),
     n =>
       `${is(n, 'has an edit', 'have edits')} that cannot be sent to Google Keep; the list below says why.`,
   );
@@ -95,7 +104,10 @@ export function syncStatusFor(input: StatusInput): SyncStatus | undefined {
   const now = input.now ?? Date.now();
   const status: SyncStatus = {
     provider: 'Google Keep',
-    writeBack: 'after-review',
+    writeBack:
+      'settings' in state && state.settings.writeBack
+        ? 'after-review'
+        : 'read-only',
     rowNoun: ['note', 'notes'],
   };
   const problems: Problem[] = [];
@@ -220,5 +232,15 @@ export function syncStatusFor(input: StatusInput): SyncStatus | undefined {
 }
 
 /** The mode line `main.ts` shows in place of the card's own. */
-export const modeFor = (state: ViewState): string =>
-  state.kind === 'no-relay' ? NO_RELAY_MODE : MODE;
+export const modeFor = (state: ViewState): string => {
+  if (state.kind === 'no-relay') return NO_RELAY_MODE;
+  const only =
+    'settings' in state && state.settings.onlyTitle
+      ? ` Only the note titled “${state.settings.onlyTitle}” is synced.`
+      : '';
+
+  return (
+    ('settings' in state && state.settings.writeBack ? MODE : READ_ONLY_MODE) +
+    only
+  );
+};

@@ -1,8 +1,8 @@
 # Google Keep
 
 A drive app that syncs the connected Google account's Keep notes with its
-own table, both ways, every minute while the app is open in anyone's
-browser. It is the Google Tasks app (`../google-tasks/app/`) made two-way:
+own table, both ways (only reading until sending is turned on, below),
+every minute while the app is open in anyone's browser. It is the Google Tasks app (`../google-tasks/app/`) made two-way:
 the same shape, the same shared sync-status card, the same bounded
 rate-limit handling, in its own folder with nothing imported from it.
 
@@ -36,6 +36,26 @@ connecting. The proxy's Google client needs the
 `https://www.googleapis.com/auth/keep` scope (read and write; there is no
 narrower scope that allows creating notes). No live account has been
 connected yet.
+
+## Settings
+
+Two settings, under the notes, kept on the App (`google-keep-write-back`,
+`google-keep-only-title`):
+
+- **Send edits to Google Keep**, off by default. Off, the app only reads:
+  Keep's changes come into the table, and nothing is created, replaced or
+  deleted in Keep. Every non-`GET` call is refused before it is sent
+  (`readsOnly` in `app/sync.ts`), "Delete in Keep" is hidden, and an edit
+  made here waits on its row (held as "sending is off") until it is turned
+  on. Turning it on asks first, since a replaced note loses its colour,
+  labels, pin and reminders.
+- **Only the note titled**, empty by default. Set, a pass reads every note
+  but syncs only those with that title (case and surrounding spaces
+  ignored), and leaves every other note and row alone: nothing else is
+  imported, checked, sent or marked.
+
+For a first run against a real account: keep sending off and set the one
+note's title, check the rows, then turn sending on.
 
 ## What a row is
 
@@ -146,13 +166,13 @@ rule them out on a drive slower than the wait.
 
 ## Evidence
 
-Declared, unit-tested (66 tests: the mapping, the plan, the item merge, a
+Declared, unit-tested (69 tests: the mapping, the plan, the item merge, a
 pass against the fixture through a fake host store, the lease and the
 controller, the card)
 and **Host E2E** on the synthetic fixture: catalog install, connect, the five
 notes imported, a reload that writes nothing, an edit made in Keep pulled, a
-list moved in Keep and ticked here coming out moved and ticked (its note
-replaced), a shared note held back, a conflict
+list moved in Keep and ticked here coming out moved and ticked (held while
+sending is off, its note replaced once it is turned on), a shared note held back, a conflict
 settled for the row's version, a row created in Keep, a trashed note marked.
 Nothing verified against Google: what Keep returns for shared notes, the
 permissions of a Workspace account's notes, and what `GET` answers for a

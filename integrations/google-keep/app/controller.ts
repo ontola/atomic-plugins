@@ -19,6 +19,9 @@ import {
   lastSync,
   OtherTable,
   provision,
+  readSettings,
+  saveSettings,
+  type Settings,
 } from './drive.js';
 import { acquire, newHolder, release, type LeaseOptions } from './lease.js';
 import { GoogleError, GoogleRateLimited } from './read.js';
@@ -31,6 +34,7 @@ import {
   listNotes,
   type NoteRow,
   PLATFORM,
+  readsOnly,
   relayCall,
   restoreRemoved,
   syncNotes,
@@ -46,7 +50,11 @@ export interface Listed {
   lastPass?: string;
   /** Notes whose row was deleted here, as the last pass of this page found them. */
   removedHere: { id: string; title: string }[];
+  /** The view's settings; read-only and every note until read. */
+  settings: Settings;
 }
+
+export const DEFAULT_SETTINGS: Settings = { writeBack: false, onlyTitle: '' };
 
 export type ViewState =
   | { kind: 'loading' }
@@ -168,6 +176,7 @@ export function createController(
   let lastGood: string | undefined;
   let lastPassAt: string | undefined;
   let removedHere: Listed['removedHere'] = [];
+  let settings: Settings = DEFAULT_SETTINGS;
   let ticking: unknown;
   let notBefore = 0;
   let busy = false;
@@ -184,6 +193,7 @@ export function createController(
     ...(lastGood ? { lastGood } : {}),
     ...(lastPassAt ? { lastPass: lastPassAt } : {}),
     removedHere,
+    settings,
   });
   const connection = () =>
     'connection' in state ? state.connection : undefined;
@@ -213,6 +223,7 @@ export function createController(
     if (!drive) return listed(notes());
     lastGood = await lastSync(store, drive, clock()).catch(() => lastGood);
     lastPassAt = await lastPass(store, drive, clock()).catch(() => lastPassAt);
+    settings = await readSettings(store, drive).catch(() => settings);
 
     return listed(await listNotes(store, drive).catch(() => notes()));
   };
@@ -413,13 +424,36 @@ export function createController(
       if (using) await controller.sync(using);
     },
 
+    /** Saves the settings, then syncs with them. */
+    async configure(next: Settings): Promise<void> {
+      const d = await ready();
+      if (!d || busy) return;
+
+      try {
+        await saveSettings(store, d, next);
+      } catch (error) {
+        return set({
+          kind: 'error',
+          message: `Could not save the settings: ${message(error)}`,
+          at: clock(),
+          ...(await reread()),
+        });
+      }
+
+      settings = await readSettings(store, d).catch(() => next);
+      const using = connection();
+      if (using) await controller.sync(using);
+      else set({ ...state, ...listed(notes()) } as ViewState);
+    },
+
     /** Deletes a note in Keep for good, on the person's explicit request. */
     async deleteInKeep(id: string): Promise<void> {
       const using = connection();
       if (!using || !store.proxy || busy) return;
+      const call = relayCall(store.proxy, using);
 
       try {
-        await deleteRemoved(relayCall(store.proxy, using), id);
+        await deleteRemoved(settings.writeBack ? call : readsOnly(call), id);
         removedHere = removedHere.filter(r => r.id !== id);
         set({ ...state, ...listed(notes()) } as ViewState);
       } catch (error) {

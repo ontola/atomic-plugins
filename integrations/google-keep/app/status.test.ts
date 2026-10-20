@@ -7,6 +7,7 @@ import {
   MODE,
   modeFor,
   NO_RELAY_MODE,
+  READ_ONLY_MODE,
   syncStatusFor,
 } from './status.js';
 import type { SyncSummary } from './sync.js';
@@ -47,6 +48,7 @@ const listed: Listed = {
     { subject: 'e', title: 'E', kind: 'text', presence: 'local' },
   ],
   removedHere: [{ id: 'notes/f', title: 'F' }],
+  settings: { writeBack: true, onlyTitle: '' },
 };
 const summary: SyncSummary = {
   total: 4,
@@ -123,5 +125,16 @@ describe('syncStatusFor', () => {
   it('puts the two-way sentence in the mode line, except where nothing can sync', () => {
     expect(modeFor({ kind: 'disconnected', ...listed })).toBe(MODE);
     expect(modeFor({ kind: 'no-relay' })).toBe(NO_RELAY_MODE);
+  });
+
+  it('says read-only, and names the one note, when the settings say so', () => {
+    const settings = { writeBack: false, onlyTitle: 'Groceries' };
+    expect(modeFor({ kind: 'disconnected', ...listed, settings })).toBe(
+      `${READ_ONLY_MODE} Only the note titled “Groceries” is synced.`,
+    );
+    expect(
+      syncStatusFor({ state: { kind: 'disconnected', ...listed, settings } })
+        ?.writeBack,
+    ).toBe('read-only');
   });
 });

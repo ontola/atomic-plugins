@@ -29,7 +29,9 @@ import {
   lastSync,
   NAME,
   PARENT,
+  readSettings,
   recordPass,
+  titled,
 } from './drive.js';
 import {
   absentNotes,
@@ -87,6 +89,28 @@ export const PLATFORM = 'google-keep';
 export const MAX_WRITES = 25;
 /** The hold a conflict leaves on its row. */
 export const CONFLICT = 'conflict';
+/** The hold on a row whose edit waits because sending to Keep is off. */
+export const READ_ONLY =
+  'Sending edits to Google Keep is off; it is sent once you turn it on.';
+
+/** Thrown for a write while sending to Keep is off; nothing was sent. */
+export class ReadOnly extends Error {
+  constructor(method: string) {
+    super(
+      `Sending edits to Google Keep is off, so ${method} was not sent. Turn it on in the settings below.`,
+    );
+    this.name = 'ReadOnly';
+  }
+}
+
+/** `call` that sends reads only: every other method throws `ReadOnly` unsent. */
+export const readsOnly =
+  (call: KeepCall): KeepCall =>
+  (method, path, options) => {
+    if (method !== 'GET') throw new ReadOnly(method);
+
+    return call(method, path, options);
+  };
 
 /** A `KeepCall` over the host's proxy relay; the frame never holds a credential. */
 export function relayCall(
@@ -327,6 +351,26 @@ async function write(
   return true;
 }
 
+/**
+ * The rows a pass with `onlyTitle` set looks at: those of the notes read
+ * (already filtered by title), and those whose own title is it. Without a
+ * title, all of them.
+ */
+function only(rows: TableRows, notes: Row[], onlyTitle: string): TableRows {
+  if (!onlyTitle) return rows;
+  const read = new Set(notes.map(noteId));
+  const known = rows.known.filter(
+    r => read.has(r.id) || titled(r.local.title, onlyTitle),
+  );
+
+  // `held` stays whole: a retiring note another row holds is never deleted.
+  return {
+    ...rows,
+    known,
+    locals: rows.locals.filter(r => titled(r.local.title, onlyTitle)),
+  };
+}
+
 export interface SyncOptions {
   now?: () => string;
   read?: { pageSize?: number; maxPages?: number };
@@ -349,11 +393,18 @@ export async function syncNotes(
   }: SyncOptions = {},
 ): Promise<SyncSummary> {
   const clock = () => Date.parse(now());
-  const call = rateLimited(rawCall, rateLimit);
+  const { writeBack, onlyTitle } = await readSettings(store, drive);
+  // Off, the pass cannot write to Keep even through a path missed below.
+  const call = rateLimited(writeBack ? rawCall : readsOnly(rawCall), rateLimit);
   const p = drive.properties;
 
   // Reads.
-  const { notes, partial } = await readNotes(call, { ...read, now: clock });
+  const all = await readNotes(call, { ...read, now: clock });
+  const { partial } = all;
+  // With a title chosen, every other note and row is left out of the pass.
+  const notes = onlyTitle
+    ? all.notes.filter(n => titled(noteFields(n).title, onlyTitle))
+    : all.notes;
   const recorded = text(await appValue(store, drive, 'account')) || undefined;
   const seenAccount = accountOf(notes);
   if (recorded && seenAccount && recorded !== seenAccount)
@@ -364,7 +415,7 @@ export async function syncNotes(
   /** Old notes this pass's replacements could not delete: retried next pass. */
   const failedDeletes: string[] = [];
   const lastCompleteAt = await lastSync(store, drive, clock());
-  const rows = await tableRows(store, drive);
+  const rows = only(await tableRows(store, drive), notes, onlyTitle);
   const complete = !partial;
   const lookups = await lookupNotes(
     call,
@@ -551,6 +602,15 @@ export async function syncNotes(
       return keepBaseline(reason);
     }
 
+    if (!writeBack) {
+      summary.blocked.push({
+        title: titleOf({ title, body: '' }),
+        reason: READ_ONLY,
+      });
+
+      return keepBaseline(READ_ONLY);
+    }
+
     if (writes >= maxWrites) {
       summary.waiting++;
 
@@ -708,6 +768,14 @@ export async function syncNotes(
             ? byRow.get(action.subject)!.local
             : localOf.get(action.subject)!.local;
 
+        if (!writeBack) {
+          await write(rows.resources.get(action.subject)!, {
+            [p.hold]: READ_ONLY,
+          });
+          summary.blocked.push({ title: titleOf(planned), reason: READ_ONLY });
+          break;
+        }
+
         if (writes >= maxWrites) {
           summary.waiting++;
           break;
@@ -786,9 +854,9 @@ export async function syncNotes(
   }
 
   // Old notes of earlier passes' replacements: try the delete again.
-  const still: string[] = [...failedDeletes];
+  const still: string[] = [...failedDeletes, ...(writeBack ? [] : retiring)];
 
-  for (const id of retiring) {
+  for (const id of writeBack ? retiring : []) {
     if (rows.held.includes(id)) continue;
 
     try {
@@ -801,7 +869,7 @@ export async function syncNotes(
   summary.retiring = still.length;
   if (account) summary.account = account;
 
-  const after = await tableRows(store, drive);
+  const after = only(await tableRows(store, drive), notes, onlyTitle);
   summary.total = after.known.length;
   for (const row of after.known) summary.presence[row.presence]++;
 

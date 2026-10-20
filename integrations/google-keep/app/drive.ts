@@ -82,7 +82,9 @@ export type OwnProperty =
   | 'known'
   | 'retiring'
   | 'account'
-  | 'lease';
+  | 'lease'
+  | 'writeBack'
+  | 'onlyTitle';
 
 interface PropertySpec {
   key: OwnProperty;
@@ -227,6 +229,21 @@ export const PROPERTY_SPECS: PropertySpec[] = [
     name: 'Keep sync lease',
     description:
       'Which open browser is syncing, and until when, so two do not create the same note twice. On the App resource.',
+  },
+  {
+    key: 'writeBack',
+    shortname: 'google-keep-write-back',
+    name: 'Keep send edits',
+    description:
+      'Whether the Google Keep app sends edits made here to Google Keep. Off (the default): it only reads, and creates, replaces or deletes nothing in Keep. On the App resource.',
+    datatype: BOOLEAN,
+  },
+  {
+    key: 'onlyTitle',
+    shortname: 'google-keep-only-title',
+    name: 'Keep only note',
+    description:
+      'When set, the Google Keep app syncs only the notes with this title (case and surrounding spaces ignored) and leaves every other note and row alone. On the App resource.',
   },
 ];
 
@@ -557,3 +574,52 @@ export async function recordPass(
 
   if (changed) await app.save();
 }
+
+/** What the person chose in the view's settings, kept on the App. */
+export interface Settings {
+  /** Send edits made here to Keep. Off by default: the app only reads. */
+  writeBack: boolean;
+  /** Sync only the notes with this title; empty for every note. */
+  onlyTitle: string;
+}
+
+export async function readSettings(
+  store: PluginStore,
+  drive: Drive,
+): Promise<Settings> {
+  const app = await store.getResource(drive.app);
+  const only = app.get(drive.properties.onlyTitle);
+
+  return {
+    writeBack: app.get(drive.properties.writeBack) === true,
+    onlyTitle: typeof only === 'string' ? only.trim() : '',
+  };
+}
+
+export async function saveSettings(
+  store: PluginStore,
+  drive: Drive,
+  settings: Settings,
+): Promise<void> {
+  const app = await store.getResource(drive.app);
+  const p = drive.properties;
+  const only = settings.onlyTitle.trim();
+  let changed = false;
+
+  if (app.get(p.writeBack) !== settings.writeBack) {
+    app.set(p.writeBack, settings.writeBack);
+    changed = true;
+  }
+
+  if ((app.get(p.onlyTitle) ?? '') !== only) {
+    if (only) app.set(p.onlyTitle, only);
+    else app.remove(p.onlyTitle);
+    changed = true;
+  }
+
+  if (changed) await app.save();
+}
+
+/** Whether a title is the one `onlyTitle` names (case and outer spaces ignored). */
+export const titled = (title: string, only: string) =>
+  title.trim().toLocaleLowerCase() === only.trim().toLocaleLowerCase();

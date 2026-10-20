@@ -16,9 +16,11 @@
  * 2. Reload: nothing changed, no row is written, nothing is sent.
  * 3. A note edited in Keep (`editNote`): its row takes the edit.
  * 4. A list edited on both sides, item by item: an item moved in Keep
- *    (`moveItem`) and another ticked here come out moved and ticked, sent
- *    to Keep as a replacement note; the old note is deleted there, the row
- *    follows the new one.
+ *    (`moveItem`) and another ticked here come out moved and ticked. While
+ *    sending is off (the default) nothing reaches Keep; once "Send edits to
+ *    Google Keep" is turned on (it asks first), the list is sent as a
+ *    replacement note; the old note is deleted there, the row follows the
+ *    new one.
  * 5. A shared note's row edited here: held back, nothing sent.
  * 6. A note edited on both sides: a conflict; "Keep mine" sends the row's
  *    version.
@@ -94,9 +96,7 @@ test.describe('Google Keep drive app', () => {
     );
     await expect(rows).toHaveCount(5);
     await expect(card).toContainText('5 notes from Google Keep');
-    await expect(card).toContainText(
-      'Two-way: edits here are sent to Google Keep',
-    );
+    await expect(card).toContainText('Read-only: Google Keep’s changes');
     const packing = rows.filter({ hasText: 'Synthetic packing list' });
     await expect(packing).toHaveAttribute(
       'data-note',
@@ -166,9 +166,20 @@ test.describe('Google Keep drive app', () => {
     await fixture('moveItem', ['synthetic-note-2', 1, 0]);
     await tickItem(page, packingSubject, 'Made-up charger');
     await sync.click();
+    await expect(synced).toContainText('1 not sent', { timeout: 60_000 });
+    expect(
+      ((await fixture('snapshot', [])) as { deleted: string[] }).deleted,
+    ).toEqual([]);
+    await expect(card).toContainText('sending to Google Keep is off');
+    page.once('dialog', dialog => void dialog.accept());
+    await app.getByLabel('Send edits to Google Keep').check();
+    await app.getByRole('button', { name: 'Save settings' }).click();
     await expect(synced).toContainText('1 sent to Google Keep', {
       timeout: 60_000,
     });
+    await expect(card).toContainText(
+      'Two-way: edits here are sent to Google Keep',
+    );
     await expect(packing).toHaveAttribute('data-note', 'notes/synthetic-new-1');
     let keep = (await fixture('snapshot', [])) as {
       notes: KeepNote[];
