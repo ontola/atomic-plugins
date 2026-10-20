@@ -58,8 +58,12 @@ export interface InboxEvent {
     mediaType: string;
     bytes: number;
     sha256: string;
-    /** The raw body, base64. */
-    body: string;
+    /**
+     * The raw body, base64. Absent exactly when `omitted`: the body alone
+     * was over the fetch's `maxBytes` (Webhook Subscriptions 0.2.0-draft).
+     */
+    body?: string;
+    omitted?: true;
   };
 }
 
@@ -247,14 +251,30 @@ export class InboxClient {
    * Up to `limit` events after `after`; waits up to `wait` seconds for one
    * (the receiver caps it at 25). Without `wait` the receiver answers at
    * once, so a loop of such calls would poll as fast as it can.
+   *
+   * `maxBytes` (an integer, at least 1) bounds the page's base64 payload
+   * bytes. An event whose body alone is over it comes back alone, with
+   * `payload.omitted` and no `body`. The envelopes are not counted.
    */
   events(
     id: string,
-    options: { after?: string; limit?: number; wait?: number } = {},
+    options: {
+      after?: string;
+      limit?: number;
+      maxBytes?: number;
+      wait?: number;
+    } = {},
   ): Promise<InboxEventPage> {
+    if (
+      options.maxBytes !== undefined &&
+      !(Number.isInteger(options.maxBytes) && options.maxBytes >= 1)
+    ) {
+      throw new RangeError('maxBytes must be an integer of at least 1');
+    }
     const suffix = queryString({
       after: options.after,
       limit: options.limit,
+      maxBytes: options.maxBytes,
       wait: options.wait,
     });
     return this.call(

@@ -38,7 +38,7 @@ The extension versions this source reads, against the specifications in
 | [Write Preconditions](../openapi-extensions/spec/write-preconditions/README.md) | 0.1.0-draft | `x-write-precondition` on create, update and delete operations: `ifMatch`, `readVerify` and `refuseWhen` ([below](#write-preconditions-x-write-precondition)). Not on a compound create's follow-up operations. |
 | [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.1-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
 | [Webhook Deliveries](../openapi-extensions/spec/webhook-deliveries/README.md) | 0.1.0-draft | The `events` of `x-webhook-deliveries`, read by `scopedReads` only (the webhook inbox consumer). Not signature checks or hook registration, which are the receiver's. |
-| [Webhook Subscriptions](../openapi-extensions/spec/webhook-subscriptions/README.md) | 0.1.0-draft | The consumer routes, through `InboxClient` and `InboxConsumer`. The root `x-webhook-subscriptions` field is not read. |
+| [Webhook Subscriptions](../openapi-extensions/spec/webhook-subscriptions/README.md) | 0.2.0-draft | The consumer routes, through `InboxClient` and `InboxConsumer`, `maxBytes` included. The root `x-webhook-subscriptions` field is not read. |
 
 The other specifications there (the authentication extensions) are not read
 by Syncables.
@@ -2188,6 +2188,17 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: the webhook inbox consumer speaks Webhook Subscriptions
+  0.2.0-draft's `maxBytes` (ontola/atomic-plugins#369, step 4b plan Unit
+  B). `InboxClient.events()` takes `maxBytes` and refuses one that is not
+  an integer of at least 1 (`RangeError`), and `InboxConsumerOptions`
+  passes `maxBytes` to every fetch. An event whose body alone is over it
+  reaches the journal with `payload.omitted: true` and no `body`, and is
+  acknowledged like any other; `scopedReads` names no reads for it.
+  **Breaking for TypeScript:** `InboxEvent.payload.body` is now optional
+  (`body?: string`), so code that reads it must handle its absence; a
+  receiver sends no omitted event unless the consumer asked for
+  `maxBytes`.
 - **0.25.0**: behaviour changes to know before upgrading come first:
   explicit `x-pagination` entries must have the spec's shape; Throttling
   `blocked`; auto-detection by response headers and fields; `applyOverlay`

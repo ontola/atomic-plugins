@@ -156,6 +156,8 @@ export function scopedReads(document: Json, event: InboxEvent): ScopedRead[] {
   const declared = doc['x-webhook-deliveries']?.events?.[event.eventType];
   const resources = doc.components?.crudResources;
   if (!declared || !resources) return [];
+  // An event without its body (`maxBytes`) binds nothing.
+  if (event.payload.body === undefined) return [];
   let body: Json;
   try {
     const text = decodeBase64Utf8(event.payload.body);

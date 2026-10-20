@@ -262,7 +262,8 @@ export class SandboxInboxJournal implements InboxJournal {
       return false;
     }
 
-    const size = event.payload.body.length;
+    // Without its body (`maxBytes`), an event costs the run nothing.
+    const size = event.payload.body?.length ?? 0;
 
     if (size > MAX_EVENT_PAYLOAD) {
       throw new Error(
