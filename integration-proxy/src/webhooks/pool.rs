@@ -83,7 +83,7 @@ impl Pool {
                         "SET lock_timeout = '{LOCK_TIMEOUT_MS}ms'; SET statement_timeout = '{STATEMENT_TIMEOUT_MS}ms'"
                     ))
                     .await
-                    .map_err(|e| e.to_string())?;
+                    .map_err(crate::security::db_error)?;
                 client
             }
         };

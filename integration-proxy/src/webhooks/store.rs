@@ -680,19 +680,25 @@ impl Store {
         policy.check()?;
         let (mut setup, driver) = crate::security::connect_once(database_url).await?;
         let driver = tokio::spawn(driver);
-        let transaction = setup.transaction().await.map_err(|e| e.to_string())?;
+        let transaction = setup
+            .transaction()
+            .await
+            .map_err(crate::security::db_error)?;
         transaction
             .query_one(
                 "SELECT pg_advisory_xact_lock($1)",
                 &[&7_316_186_474_691_124_078_i64],
             )
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::security::db_error)?;
         transaction
             .batch_execute(SCHEMA)
             .await
-            .map_err(|e| e.to_string())?;
-        transaction.commit().await.map_err(|e| e.to_string())?;
+            .map_err(crate::security::db_error)?;
+        transaction
+            .commit()
+            .await
+            .map_err(crate::security::db_error)?;
         drop(setup);
         let _ = driver.await;
         Ok(Self {

@@ -59,6 +59,11 @@ fn spawn_reconnect_supervisor(
                         break;
                     }
                     Err(error) => {
+                        // Every handle may have gone while the database was
+                        // down: stop instead of reconnecting for nobody.
+                        if current.strong_count() == 0 {
+                            return;
+                        }
                         tracing::error!(%error, ?backoff, "postgres reconnect attempt failed; retrying");
                         tokio::time::sleep(backoff).await;
                         backoff = (backoff * 2).min(Duration::from_secs(30));
@@ -233,7 +238,7 @@ fn timestamp(value: std::time::SystemTime) -> String {
         .unwrap_or_default()
 }
 
-fn db_error(error: tokio_postgres::Error) -> String {
+pub(crate) fn db_error(error: tokio_postgres::Error) -> String {
     // `Display` alone says only "db error"; the server's message (never a
     // parameter value) is what an operator needs in the log.
     match error.as_db_error() {
@@ -313,6 +318,42 @@ fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     mac.finalize().into_bytes().into()
 }
 
+/// How often [`Security::connect`] tries the schema setup when PostgreSQL
+/// aborts it as a deadlock victim.
+const SCHEMA_SETUP_ATTEMPTS: u32 = 5;
+
+/// Creates or completes the schema in one transaction under
+/// [`SCHEMA_LOCK`], on a connection of its own. `Err((message, deadlock))`:
+/// `deadlock` when PostgreSQL aborted it as a deadlock victim (40P01).
+async fn set_up_schema(database_url: &str) -> Result<(), (String, bool)> {
+    let failed = |error: tokio_postgres::Error| {
+        let deadlock =
+            error.code() == Some(&tokio_postgres::error::SqlState::T_R_DEADLOCK_DETECTED);
+        (db_error(error), deadlock)
+    };
+    let (mut setup, setup_connection) = connect_once(database_url)
+        .await
+        .map_err(|error| (error, false))?;
+    let driver = tokio::spawn(setup_connection);
+    let result = async {
+        let transaction = setup.transaction().await.map_err(failed)?;
+        transaction
+            .query_one("SELECT pg_advisory_xact_lock($1)", &[&SCHEMA_LOCK])
+            .await
+            .map_err(failed)?;
+        transaction.batch_execute(SCHEMA).await.map_err(failed)?;
+        transaction
+            .batch_execute(crate::device::store::SCHEMA)
+            .await
+            .map_err(failed)?;
+        transaction.commit().await.map_err(failed)
+    }
+    .await;
+    drop(setup);
+    let _ = driver.await;
+    result
+}
+
 impl Security {
     pub async fn connect(database_url: &str, encryption_key: &str) -> Result<Self, String> {
         let key = URL_SAFE_NO_PAD
@@ -324,22 +365,24 @@ impl Security {
         // Schema setup needs a transaction, which requires exclusive (&mut)
         // access to a Client — incompatible with the shared, reconnectable
         // client below. Run it on its own short-lived connection first.
-        {
-            let (mut setup, setup_connection) = connect_once(database_url).await?;
-            let driver = tokio::spawn(setup_connection);
-            let transaction = setup.transaction().await.map_err(db_error)?;
-            transaction
-                .query_one("SELECT pg_advisory_xact_lock($1)", &[&SCHEMA_LOCK])
-                .await
-                .map_err(db_error)?;
-            transaction.batch_execute(SCHEMA).await.map_err(db_error)?;
-            transaction
-                .batch_execute(crate::device::store::SCHEMA)
-                .await
-                .map_err(db_error)?;
-            transaction.commit().await.map_err(db_error)?;
-            drop(setup);
-            let _ = driver.await;
+        //
+        // The DDL takes strong table locks (`ALTER TABLE ... ADD COLUMN IF NOT
+        // EXISTS` an access-exclusive one, even when the column exists) while
+        // other instances' transactions may hold row locks on the same
+        // tables, so PostgreSQL can detect a deadlock and abort it. It is
+        // idempotent and nothing else happened in its transaction, so a
+        // deadlock is retried, a bounded number of times.
+        let mut attempt = 1;
+        loop {
+            match set_up_schema(database_url).await {
+                Ok(()) => break,
+                Err((error, true)) if attempt < SCHEMA_SETUP_ATTEMPTS => {
+                    tracing::warn!(%error, attempt, "schema setup deadlocked; retrying");
+                    tokio::time::sleep(Duration::from_millis(50 * u64::from(attempt))).await;
+                    attempt += 1;
+                }
+                Err((error, _)) => return Err(error),
+            }
         }
 
         let (client, connection) = connect_once(database_url).await?;
