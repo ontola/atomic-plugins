@@ -3,7 +3,8 @@
 This source branch adds a read-only standalone daemon to the existing
 `syncables` executable. It stores original API response text and lossless,
 content-addressed nested JSON nodes in a separate local PostgreSQL database.
-Its local data copy and bundled schema resources live in a private bare Git
+The [JSON graph format and fixed vectors](json-graph-v1.md) define its persisted
+node encoding. Its local data copy and bundled schemas live in a private bare Git
 repository. [Versioned Atomic Data](../../docs/design/versioned-atomic-data.md)
 defines the experiment and commit/tag resolution contract.
 

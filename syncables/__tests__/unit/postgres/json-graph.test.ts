@@ -1,9 +1,6 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import {
-  indexJson,
-  renderJson,
-  nodeHash,
-} from '../../../src/postgres/json-graph.js';
+import { indexJson, renderJson } from '../../../src/postgres/json-graph.js';
 
 const render = async (source: string): Promise<string> => {
   const graph = indexJson(source);
@@ -77,11 +74,17 @@ describe('version-1 nested JSON graph', () => {
       'checksum',
     );
   });
-  it('freezes the tuple bytes for an empty object', () => {
-    const graph = indexJson('{}');
-    expect(graph.nodes.get(graph.root)).toBe(
-      '["syncables-json-node",1,"object",[]]',
-    );
-    expect(graph.root).toBe(nodeHash('["syncables-json-node",1,"object",[]]'));
+  it('matches the published version-1 byte and SHA-256 vectors', () => {
+    const vectors = JSON.parse(
+      readFileSync(
+        new URL('../../fixtures/json-graph-v1.json', import.meta.url),
+        'utf8',
+      ),
+    ) as { input: string; root: string; nodes: Record<string, string> }[];
+    for (const vector of vectors) {
+      const graph = indexJson(vector.input);
+      expect(graph.root).toBe(vector.root);
+      expect(Object.fromEntries(graph.nodes)).toEqual(vector.nodes);
+    }
   });
 });

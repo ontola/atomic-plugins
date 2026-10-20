@@ -109,6 +109,9 @@ Keep the three roles explicit:
 | Daemon's Atomic data copy, imported schemas and their history | Local Git snapshots under this experiment. |
 | Scheduling, inbox acknowledgements and outgoing intent | Laptop PostgreSQL job/inbox/outbox records; no credentials in either store. |
 
+The [JSON graph encoding](../../syncables/docs/json-graph-v1.md) freezes raw-log
+node bytes and hashes independently of Git.
+
 Raw response archival commits before applying a data observation. A successful
 recorded run can then be referenced by the prepared Git snapshot. Publish the
 Git head only after the required responses are durable; its context includes
