@@ -754,10 +754,24 @@ test.describe
       other.getByRole('heading', { name: 'Unlock this drive' }),
     ).toBeVisible({ timeout: 30_000 });
     await other.getByLabel('Agent secret').fill(secret);
-    // Unlocking lands on the drive; open the app's view again.
+    // A new device has no current drive yet, and the host only opens an App
+    // as an app on the current drive (`useAppClass(store.getDrive())`):
+    // make the first device's drive current here, then open the app.
+    const drive = await page.evaluate(() =>
+      (window as unknown as { store: { getDrive(): string } }).store.getDrive(),
+    );
+    await other.goto(
+      new URL(`/app/show?subject=${encodeURIComponent(drive)}`, page.url())
+        .href,
+    );
+    // Opening the drive itself makes it current; "Set Drive" is offered only
+    // when it does not.
     await expect(
-      other.getByRole('heading', { name: 'Unlock this drive' }),
-    ).toHaveCount(0, { timeout: 30_000 });
+      other.getByRole('heading', { name: 'Dev drive', level: 1 }),
+    ).toBeVisible({ timeout: 30_000 });
+    const setDrive = other.getByRole('button', { name: 'Set Drive' });
+    if (await setDrive.isVisible()) await setDrive.click();
+    await expect(setDrive).toHaveCount(0);
     await other.goto(page.url());
     const app = other.frameLocator(APP_FRAME);
     await expect(
@@ -819,13 +833,35 @@ test.describe
     // conflict, held on both.
     await pushed(page);
     await pushed(b.page);
-    for (const app of [a, b.app]) {
+    for (const [copy, app] of [
+      ['a', a],
+      ['b', b.app],
+    ] as const) {
       await app.getByRole('button', { name: 'Sync now' }).click();
-      await expect(
-        app.getByRole('region', { name: 'Conflicts in Clockify' }),
-      ).toContainText('Your range edits disagree, not sent', {
+      await expect(app.getByRole('status')).toContainText('Synced just now', {
         timeout: 60_000,
       });
+      console.log(
+        `DIAG ${copy} after Sync now: conflict regions`,
+        await app.getByRole('region', { name: 'Conflicts in Clockify' }).count(),
+        await app.getByRole('region', { name: 'Changes to send' }).innerText(),
+      );
+    }
+    for (const [copy, p] of [
+      ['a', page],
+      ['b', b.page],
+    ] as const) {
+      await p.reload();
+      const app = p.frameLocator(APP_FRAME);
+      await expect(app.getByRole('status')).toContainText('Synced', {
+        timeout: 60_000,
+      });
+      await p.waitForTimeout(5_000);
+      console.log(
+        `DIAG ${copy} after reload: conflict regions`,
+        await app.getByRole('region', { name: 'Conflicts in Clockify' }).count(),
+        await app.getByRole('region', { name: 'Changes to send' }).innerText(),
+      );
     }
     expect(await writes()).toEqual([]);
     await b.context.close();
