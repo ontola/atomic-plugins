@@ -62,6 +62,9 @@ const VERSION = appVersion('issue-tracker');
 const REPOSITORY = 'atomic-fixture/tracker';
 /** Seeded by the item 14 test itself, through the fixture's createIssue driver. */
 const TEAM_REPOSITORY = 'atomic-fixture/team-board';
+/** Seeded by the large-repository test: past the host Collection's 500. */
+const LARGE_REPOSITORY = 'atomic-fixture/large';
+const LARGE_ISSUES = 520;
 const NAME = 'https://atomicdata.dev/properties/name';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const PARENT = 'https://atomicdata.dev/properties/parent';
@@ -696,6 +699,85 @@ test.describe('GitHub issues drive app', () => {
         return JSON.parse(String(row?.['github-sync-baseline'] ?? '{}')).status;
       })
       .toBe('Done');
+  });
+
+  // README "Not verified, or not supported": repositories past the host
+  // Collection's 500-per-page paging (`app/frameStore.ts`). A row the host
+  // leaves off its first page must not look missing: the second sync has to
+  // find all of them, create none and keep every one.
+  test(`imports a repository of ${LARGE_ISSUES} issues, and a second sync creates no duplicates`, async ({
+    page,
+  }) => {
+    test.skip(
+      !process.env.ATOMIC_MOCK_INTEGRATION_PROXY,
+      'Run with the documented mock integration-proxy server configuration',
+    );
+    test.setTimeout(600_000);
+    await fixture('reset', [LARGE_REPOSITORY]);
+    for (let n = 1; n <= LARGE_ISSUES; n++)
+      await fixture('createIssue', [
+        LARGE_REPOSITORY,
+        { title: `Large issue ${n}`, body: '' },
+      ]);
+    await installFromCatalog(page);
+
+    const app = page.frameLocator(APP_FRAME);
+    const status = app.getByRole('status');
+    await app.getByRole('button', { name: 'Connect GitHub' }).click();
+    const consent = page.getByRole('group', { name: 'Connect an account' });
+    await consent.getByRole('button', { name: 'Connect', exact: true }).click();
+    await page
+      .getByRole('button', {
+        name: 'Use LocalThought to sync GitHub Issues with this destination',
+        exact: true,
+      })
+      .click();
+    await expect(page).not.toHaveURL(/connection_code=|integration_state=/);
+    await expect(
+      app.getByRole('heading', { name: 'Which repository?' }),
+    ).toBeVisible({ timeout: 30_000 });
+    await app
+      .getByRole('radio', { name: new RegExp(LARGE_REPOSITORY) })
+      .check();
+    await app
+      .getByRole('button', { name: `Import ${LARGE_REPOSITORY}` })
+      .click();
+    const bar = app.locator('.pl-conn');
+    const inSync = new RegExp(
+      `${LARGE_ISSUES} issues and 0 comments in sync with atomic-fixture/large`,
+    );
+    await expect(bar).toHaveAttribute('title', inSync, { timeout: 300_000 });
+    await expect(status).toContainText('Synced');
+
+    const table = await page.evaluate(
+      async args => {
+        const row = await window.store!.getResource(args.row);
+
+        return row.get(args.parent) as string;
+      },
+      { row: await subjectOf(app, '#1'), parent: PARENT },
+    );
+    const issueRows = async () =>
+      (await rowsUnder(page, table)).filter(
+        r => r['github-issue-number'] !== undefined,
+      );
+    const numbers = (rows: Record<string, unknown>[]) =>
+      rows.map(r => Number(r['github-issue-number'])).sort((a, b) => a - b);
+    const all = Array.from({ length: LARGE_ISSUES }, (_, i) => i + 1);
+
+    const first = await issueRows();
+    expect(numbers(first)).toEqual(all);
+
+    // A second sync over the same repository: every row found again.
+    await app.getByRole('button', { name: 'Sync now' }).click();
+    await expect(status).not.toContainText('Synced', { timeout: 30_000 });
+    await expect(status).toContainText('Synced', { timeout: 300_000 });
+    await expect(bar).toHaveAttribute('title', inSync);
+    const second = await issueRows();
+    expect(numbers(second)).toEqual(all);
+    expect(second.map(r => r.subject).sort()).toEqual(
+      first.map(r => r.subject).sort(),
+    );
   });
 });
 
