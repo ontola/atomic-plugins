@@ -82,9 +82,71 @@ read, minute snapping and the range planner are unchanged.
   the views. A row whose Name nobody edited never sends a description
   change; the drawer sends typed text as typed. A range edit keeps each
   row's Name, and a filled gap is created with no description.
-  Until 0.7.1 the app trimmed descriptions and stored "Time entry" for
+  Until 0.7.2 the app trimmed descriptions and stored "Time entry" for
   none; a row from then is brought to the description at its next sync, as
-  a change taken over from Clockify, and nothing is sent for it.
+  a change taken over from Clockify, and nothing is sent for it. A filled
+  gap staged then and not yet sent holds "Time entry" too: from 0.8.1 a
+  create without the `exactName` mark in `clockify-create` (staged before
+  0.8.1) whose Name is "Time entry" or blank is created with no
+  description. The rule cannot tell those apart from a Name meant
+  literally, so an unmarked create is also sent with no description when
+  someone typed "Time entry" into its Name, or when it is a 0.8.0 copy of
+  an entry whose description is exactly "Time entry" or only spaces (not
+  tested against a 0.8.0 drive). Creates staged from 0.8.1 send their Name
+  as it is.
+- **Times are sent in whole seconds** (0.8.1). The lens's `iso-seconds-to-ms`
+  refuses a time with milliseconds rather than lose them; `putBody` rounds
+  down to the second first, as the code lens did. Row times are snapped to
+  minutes, so only a time typed into the table can carry milliseconds.
+- **The proxy's own refusals get the right next step** (0.8.2, and 0.8.3
+  for `agent_retired`). Codes from `integration-proxy/src/api_error.rs`:
+  - `access_denied` ("this agent may not use the proxy", its access check)
+    is a problem of its own (0.8.2). The banner leads with "The integration proxy
+    does not let you use it." and, like the card's next step, says "Ask
+    whoever runs the integration proxy to let you use it; reconnecting
+    won't help." It keeps Try again. Before, it read as Clockify's own 403
+    and said "Choose another workspace in Settings".
+  - `agent_retired` (a key transfer, #410, moved this agent's connections
+    to a new key and retired this id) is a problem of its own too (0.8.3).
+    Reconnecting cannot fix it: the proxy refuses the retired id at
+    `/connect/redeem` as well, so "Reconnect" would loop. The banner leads
+    with "This Atomic agent's key was replaced." and, like the card, says
+    "This Atomic agent's key was replaced; open Atomic with your new key,
+    where your connections already are." It has no button. 0.8.2 read it
+    as "Connect again", which looped; before 0.8.2 it was not recognised as
+    the proxy's at all.
+  - `not_owner` (someone else's connection) now says "Connect again", like
+    a lost connection (0.8.2).
+  - A connect that the proxy refuses for a replaced key or its access
+    check shows the same copy (0.8.4): before any data, as the problem
+    banner in place of the Connect card (frames F2 and F3; Try again
+    connects again, a replaced key has no button); after a Reconnect, over
+    the data. In the app this is the delegation of an existing connection
+    (picking one in the host's connect bar, `POST /connections/<id>/agents`)
+    or the listing of connections (`GET /connections`), which the host
+    relays to the frame as a message only ("The integration proxy refused POST
+    /connections/<id>/agents: …", `AppFrame.tsx` posts `e.message`),
+    without the code, so `problem.ts` matches the proxy's own wording for
+    these two. A refusal at `/connect/redeem`, after connecting a new
+    account, never reaches the app: the host's return page shows it
+    (`ProxyConnectReturn.tsx`, at the 7dab1ce49a91 pin). Any other connect
+    failure still shows "This app cannot run." with the raw message.
+    `app/proxyMessages.test.ts` fails when `integration-proxy/src/api_error.rs`
+    stops containing either phrase; it runs with this lane, not on a proxy
+    change alone (lanes cannot list `integration-proxy/` in `paths`). Passing
+    the code to the frame is ontola/atomic-server#2321.
+  - After a key change (a transfer, #410), capabilities the old key signed
+    no longer verify. A sync in a page that was open across the change can
+    then fail with `invalid_capability` ("the capability is malformed or
+    not signed by the connection's owner"), which shows "Try again".
+    Opening Atomic again with the new key fixes it; the app does not tell
+    that cause apart from a malformed capability.
+  - Unit-tested (`problem.ts`, `transport.ts` `proxyRefusal`, the card,
+    frames J7 and J8; connect refusals: `controller.ts` `connectProblem`, frames F2 and F3).
+- **A refusal names its reason** (0.8.1). An entry Clockify returns that the lens
+  refuses outside a running timer, a break or another listed blocker (a
+  start or end that is not an ISO instant, say) is refused with the
+  lens's reason (`entryRefusal`).
 - **Still code in `app/catalogLens.ts`**, waiting on catalog features
   (LENSES.md, "What the format cannot express yet"): an entry that ends
   before it starts has no row (gap 1, a relation between two places); the
@@ -96,7 +158,7 @@ read, minute snapping and the range planner are unchanged.
 
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 193 KB for 0.8.0, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 194 KB for 0.8.4, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
@@ -349,7 +411,7 @@ into the view root.
     three-way check against it (a conflict sends nothing); the outbox
     marker; one full-replacement `PUT` that `app/catalogLens.ts` `putBody`
     builds from the fresh full record with the catalog lens (0.8.0; until
-    0.7.1 the code lens's `putBody` in `devonian/clockify/lens/writeBack.ts`),
+    0.7.2 the code lens's `putBody` in `devonian/clockify/lens/writeBack.ts`),
     replacing only changed fields and always sending `start`,
     `end`, `billable`, `description`, `tagIds` and `type` (a project change
     drops `taskId`), or a `DELETE`; a verification `GET`. The baseline and

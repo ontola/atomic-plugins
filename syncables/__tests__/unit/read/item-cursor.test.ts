@@ -263,6 +263,11 @@ describe('a read by the last item ends with an error', () => {
       /no usable id/,
     ],
     [
+      'an empty id on the last item',
+      [{ data: [{ id: 'a' }, { id: '' }], has_more: true }, { data: [] }],
+      /no usable id/,
+    ],
+    [
       'a fractional id',
       [{ data: [{ id: 1.5 }], has_more: true }],
       /no usable id/,

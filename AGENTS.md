@@ -82,9 +82,10 @@ in [`integrations/READINESS.md`](integrations/READINESS.md).
    from a catalog entry that has `app-module` (atomic-server#1689;
    [#94](https://github.com/ontola/atomic-plugins/issues/94), closed), and the
    lane e2es install through that UI with the lane's dev-server standing in
-   for GitHub Pages. Only the `pets` entry is `enabled: true`, so the
-   published catalog offers Pets alone; the other app entries are
-   `enabled: false` and are not listed. The design of that UI is tracked in
+   for GitHub Pages. Only the `pets` and `google-keep` entries are `enabled:
+true`, so the published catalog offers Pets, and Google Keep behind
+   "Show experimental plugins" (it reads only until sending is turned on);
+   the other app entries are `enabled: false` and are not listed. The design of that UI is tracked in
    [#89](https://github.com/ontola/atomic-plugins/issues/89).
 2. **Server-executed sandbox plugins** — a bundled `plugin.js` with a
    `manifest` and a `run(ctx)`, executed server-side in a QuickJS/WASM
@@ -308,7 +309,7 @@ on #177 (question 12).
 ## Style notes for docs and code in `integrations/`
 
 - Prose here is precise and hedged, not marketing copy: state exact limits
-  (record counts, byte sizes, timeouts), name what is *not* yet verified,
+  (record counts, byte sizes, timeouts), name what is _not_ yet verified,
   and give exact copy-pasteable commands rather than "run the tests."
 - Every `.ts` source file starts with `// @wc-ignore-file`.
 - Amounts, dates and other precision-sensitive values are exact strings,
@@ -347,7 +348,7 @@ the rules; rule 12 lets a session merge its own atomic-plugins PR once the
 `CI` gate is green). The operational know-how those sessions need is in
 [`docs/agents/`](docs/agents/README.md): the working model and worker checks,
 pins and the pin-PR recipe, CI and merging, the catalog and Pages, the
-user-testing droplet, and releasing the integration proxy. Where the roles
+user-testing server, and releasing the integration proxy. Where the roles
 below and #227 disagree, #227 is newer.
 
 ### Roles
@@ -531,8 +532,8 @@ node integrations/tooling/run-lane.mjs pets --tier e2e
   `docker volume rm atomic-plugins-lane-store-<lane>`.
 - On Linux you can also copy the binary out and skip Docker at run time:
   `docker create --name tmp "$ATOMIC_SERVER_IMAGE" && docker cp
-  tmp:/usr/local/bin/atomic-server "$DIR/target/e2e/atomic-server" &&
-  docker rm tmp`. Then leave `ATOMIC_SERVER_IMAGE` unset. The binary is
+tmp:/usr/local/bin/atomic-server "$DIR/target/e2e/atomic-server" &&
+docker rm tmp`. Then leave `ATOMIC_SERVER_IMAGE` unset. The binary is
   linked against glibc 2.36 (Debian bookworm).
 - Until an org owner makes the package public (a one-time switch in its
   GitHub package settings), pulls need `docker login ghcr.io` with a token

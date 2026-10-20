@@ -1,0 +1,86 @@
+# Reviewed 2026-10-15 against the pinned OAD and official provider documentation; no live calls.
+# Revision 2 of completeness-85a61052...: v1's five lists (identities, ledger_accounts,
+# task_list_templates, task_lists, workflows), plus assets, products, contacts and projects,
+# whose crud-causality v2 read widens their default (listQuery: assets and products
+# active=false, contacts include_archived=true, projects filter=state:all). Compose after
+# crud-causality-v2-85a61052...-overlay.yaml, not v1: under v1's read those four lists leave out
+# inactive, deactivated, archived contacts and non-active projects, and Collection
+# Completeness §4.2 says `removed` "still tells a consumer that the list does not filter by
+# default". Needs Collection Completeness 0.2.0-draft (notFound) and CRUD Causality 0.4.0.
+#
+# absent: removed and notFound: unavailable, as in v1: an absent record may still exist and
+# is settled by its own read. /api/contacts, /api/products and /api/projects list "Returns
+# 404 when contact does not exist", "Returns 404 when product does not exist" and "Returns
+# 404 when project does not exist" (/api/assets has no such example); none says what a
+# deleted record's read answers, nor tells it from one the caller cannot read.
+# Not verified: that contacts' include_archived=true lists archived contacts as well as the
+# others (inferred from its name); what any read answers for a deleted record.
+# Still not declared: the period:this_year, unbatched:true and state:active lists without a
+# widening read, financial_mutations, subscriptions, the resources without an item read,
+# `gone` and `parentAbsent`.
+overlay: 1.0.0
+info:
+  title: Moneybird collection completeness (revision 2)
+  version: 2.0.0
+  x-requires:
+    - anyOf:
+        - crud-causality-v2-85a6105220036a98ef0d7cd6f228d4aae0036508-overlay.yaml
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/85a6105220036a98ef0d7cd6f228d4aae0036508/APIs/moneybird.com/v2-readonly/openapi.yaml
+actions:
+- target: $.components
+  update:
+    crudResources:
+      identity:
+        collections:
+          identities:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      ledger_account:
+        collections:
+          ledger_accounts:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      task_list_template:
+        collections:
+          task_list_templates:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      task_list:
+        collections:
+          task_lists:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      workflow:
+        collections:
+          workflows:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      asset:
+        collections:
+          assets:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      product:
+        collections:
+          products:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      contact:
+        collections:
+          contacts:
+            x-completeness:
+              absent: removed
+              notFound: unavailable
+      project:
+        collections:
+          projects:
+            x-completeness:
+              absent: removed
+              notFound: unavailable

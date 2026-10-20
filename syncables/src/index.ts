@@ -98,6 +98,8 @@ export type {
   FetchLike,
   ListMethod,
   Transport,
+  PurposedRequest,
+  RequestPurpose,
   TransportRequest,
   TransportResponse,
   HttpMethod,

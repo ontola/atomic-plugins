@@ -45,14 +45,29 @@ export function ontologyShortname(name: string): string {
     .join('-');
 }
 
+/**
+ * The one type a schema's values have, apart from `null`. OpenAPI 3.1
+ * (JSON Schema) writes a nullable field as a list, `['string', 'null']`;
+ * a list of two or more other types has no one type.
+ */
+function scalarType(schema: SchemaObject | undefined): string | undefined {
+  const type: unknown = schema?.type;
+  if (typeof type === 'string') return type;
+  if (!Array.isArray(type)) return undefined;
+  const named = type.filter((entry) => entry !== 'null');
+  return named.length === 1 && typeof named[0] === 'string'
+    ? named[0]
+    : undefined;
+}
+
 export function datatypeOf(
   schema: SchemaObject | undefined,
 ): Datatype | undefined {
-  switch (schema?.type) {
+  switch (scalarType(schema)) {
     case 'string':
-      return schema.format === 'date-time'
+      return schema?.format === 'date-time'
         ? DATATYPES.timestamp
-        : schema.format === 'date'
+        : schema?.format === 'date'
           ? DATATYPES.date
           : DATATYPES.string;
     case 'integer':
@@ -84,6 +99,12 @@ export function flattenSchema(schema: SchemaObject | undefined): SchemaObject {
 
 function claim(claimed: Map<string, string>, original: string): string {
   const shortname = ontologyShortname(original);
+  // `_` or `日付` has no letter or digit a shortname keeps; its term path
+  // would end in `/`. (Fields without one are skipped before this.)
+  if (shortname === '')
+    throw new Error(
+      `Ontology name ${JSON.stringify(original)} has no letter or digit for a shortname`,
+    );
   const existing = claimed.get(shortname);
   if (existing !== undefined && existing !== original) {
     throw new Error(
@@ -98,13 +119,18 @@ function claim(claimed: Map<string, string>, original: string): string {
  * Derives classes and properties from `components.crudResources`: one class
  * per resource, one property per distinct field shortname across all of
  * them. A field typed differently in two resources, or with no scalar
- * type, gets the `json` datatype. Two different names normalising to the
+ * type, gets the `json` datatype; a 3.1 type list such as `['string',
+ * 'null']` is typed by its one non-null type. Two different names normalising to the
  * same shortname (`updatedAt`/`updated_at` do not, `updated_at`/`Updated-At`
- * do) throw rather than silently merging. Expects local `$ref`s resolved.
+ * do) throw rather than silently merging. A resource name with no letter
+ * or digit throws too; a field name with none (`_`) gets no term. Expects
+ * local `$ref`s resolved.
  */
 export function deriveOntology(document: OpenApiDocument): Ontology {
   const title = document.info?.title?.trim() ?? '';
-  const base = title ? ontologyShortname(title) : 'ontology';
+  // A title without a letter or digit a shortname keeps (`日本語`) gives
+  // the default base, as no title does.
+  const base = (title ? ontologyShortname(title) : '') || 'ontology';
   const terms: Term[] = [];
   const classNames = new Map<string, string>();
   const propertyNames = new Map<string, string>();
@@ -125,6 +151,8 @@ export function deriveOntology(document: OpenApiDocument): Ontology {
     for (const [field, fieldSchema] of Object.entries(
       schema.properties ?? {},
     )) {
+      // No term can name it, and readPlatform keeps no value for it.
+      if (ontologyShortname(field) === '') continue;
       const shortname = claim(propertyNames, field);
       const datatype = datatypeOf(fieldSchema);
       let index = propertyIndex.get(shortname);

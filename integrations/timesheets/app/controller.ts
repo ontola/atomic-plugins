@@ -104,7 +104,12 @@ export type ViewState =
     }
   /** The host has no proxy relay (atomic-server#1624 not in this build). */
   | { kind: 'no-proxy' }
-  | { kind: 'not-connected' }
+  | {
+      kind: 'not-connected';
+      /** Why the last connect failed, when the proxy refused it for a
+       * reason connecting again does not fix (0.8.4). */
+      problem?: Problem;
+    }
   | { kind: 'connecting' }
   | {
       kind: 'setup';
@@ -273,6 +278,18 @@ export const SYNC_NOTE =
 /** The `local` state on a table that is bound but whose grant lapsed. */
 export const PAUSED_NOTE =
   'Syncing with Clockify is paused: this app may no longer edit this table’s rows, or keep its Clockify ids on them. Allow editing again to go on.';
+
+/**
+ * A connect or reconnect failure that has its own copy (0.8.4): a retired
+ * agent id, or the proxy's access check. Anything else stays `failed`.
+ */
+function connectProblem(error: unknown): Problem | undefined {
+  const problem = classify(error);
+
+  return problem.kind === 'agent-retired' || problem.kind === 'proxy-access'
+    ? problem
+    : undefined;
+}
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -517,7 +534,13 @@ export function createController(
 
         return set({ kind: 'not-connected' });
       } catch (error) {
-        return set({ kind: 'failed', message: message(error) });
+        const problem = connectProblem(error);
+
+        return set(
+          problem
+            ? { kind: 'not-connected', problem }
+            : { kind: 'failed', message: message(error) },
+        );
       }
     },
 
@@ -722,7 +745,17 @@ export function createController(
 
         return set(before);
       } catch (error) {
-        return set({ kind: 'failed', message: message(error) });
+        const problem = connectProblem(error);
+
+        // Over the data, as a failed sync would be.
+        return set(
+          problem
+            ? {
+                ...before,
+                last: { ok: false, error: problem.detail, at: now(), problem },
+              }
+            : { kind: 'failed', message: message(error) },
+        );
       }
     },
 
@@ -1360,6 +1393,9 @@ export function describe(state: ViewState): string {
     case 'no-proxy':
       return 'This host cannot reach the integration proxy on behalf of an app, so this app cannot import. Nothing was fetched.';
     case 'not-connected':
+      if (state.problem)
+        return `Not connected: the connection failed. ${state.problem.detail}`;
+
       return 'Not connected. Connect a Clockify account to import your completed time entries. Nothing is written to Clockify until you send a change.';
     case 'connecting':
       return 'Waiting for you to confirm the connection…';

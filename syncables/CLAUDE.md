@@ -103,7 +103,9 @@ Data flows through four stages, each its own directory under `src/`:
    lone-surrogate value, an unsafe integer, and a target template that
    is not a `/` path or holds a backslash, control character, space or
    DEL); nothing is fetched
-   (`unit/read/references.test.ts`, the spec's §7.6 example).
+   (`unit/read/references.test.ts`, the spec's §7.6 example). The value
+   rules are `segmentProblem` in `read/segment.ts`, which
+   `client/created-identity.ts` applies to a created record's identity too.
    `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
@@ -154,8 +156,21 @@ Data flows through four stages, each its own directory under `src/`:
    (`ResourceStore` in `store.ts`, one in-memory `Map` per collection path,
    CRUD semantics based on collection vs. item path and HTTP method) or
    falls back to serving the operation's documented example/generated schema
-   response verbatim. Resource collections are lazily seeded with
+   response verbatim. A Pagination Schemes 0.9.0 item-cursor scheme (a
+   query field with `fromLastItem`) is served as the page after the item
+   whose value the request names, with `hasMore`; each generated item gets
+   a unique value at that path (`unit/mock-server/item-cursor.test.ts`).
+   A page size, offset, page number or page token (this server's tokens
+   are offsets) that is not a whole number in range answers `400`
+   (`unit/mock-server/page-params.test.ts`).
+   Resource collections are lazily seeded with
    `SEED_COUNT` fake records (via `fake-data/generate.ts`) on first `GET`.
+   A POST to a collection whose create (or path item) declares an
+   `Idempotency-Key` header parameter is answered again with the first
+   record for a key it has seen with the same body, and `422` for another
+   body; bodies compare as JSON with sorted keys, or as text when not JSON
+   (`replays`, `bodyFingerprint`; `unit/mock-server/idempotency.test.ts`,
+   which also runs the client's lost-response retry against it).
 
 4. **`client/`** — `client.ts` is the browser-safe local-first core, exported
    by `syncables/browser`. `sync()` uses `readCollections`; `paginate()` uses
@@ -229,7 +244,13 @@ Data flows through four stages, each its own directory under `src/`:
    `lastSeen`, which the mark keeps and stores. GET validators reuse raw cached response bodies.
 
    All reads and writes use `ApiClientOptions.transport`, or `fetchTransport`
-   over supplied/global fetch. `auth.ts` holds credentials and an injected
+   over supplied/global fetch. Every request sets `TransportRequest.purpose`
+   (`RequestPurpose`; the internal senders, `Budget.send`, `requestJson`,
+   the zone reader, take `PurposedRequest`, so a missing one is a type
+   error, and `unit/read/request-purpose.test.ts` scans `src/` for request
+   literals without it). A response with `fromCache: true` gives the pacer
+   its counted request back (`Pacer.release`, watched beside the caller so
+   no turn is added) and is not counted by `Budget`. `auth.ts` holds credentials and an injected
    `authenticate(request, credentials)` adapter, plus API-key/bearer helpers.
    `node.ts`, exported by the main entry, adds environment fallback through
    `credentials.ts`: explicit fields override `SYNCABLES_*` values, with an
@@ -633,13 +654,16 @@ unescaped; `overlay-targets.test.ts` applies every overlay under
   make the scheme invalid. The
   client's conditional-cache check treats such an operation as paginated,
   and the mock server answers 500.
-  Only the query-parameter and body-field dimensions are actually
-  implemented — `AutoDetectObject.matchHeaders`/`matchResponseFields` and
-  `RequestPaginationFieldsObject.headerFields` are part of the type surface
-  (mirroring the spec) but nothing reads them yet, so a scheme that can only
-  be auto-detected via a request/response header (e.g. a `Link`-header
-  `nextLink` scheme, like GitHub's) needs an explicit `x-pagination` entry
-  until that's implemented.
+  `matchHeaders` and `matchResponseFields` (§6.3, off by default) are
+  read too: `declaresHeaders` (a success response, `200`-`299` or `2XX`,
+  declares every response `headers` name, case-insensitive) and
+  `declaresResponseFields` (its `application/json` schema has every
+  response `bodyFields` path, `splitPath`, through `properties` and
+  `allOf`; a path `splitPath` refuses counts as present, so the read
+  fails on it rather than reading one page). Only the description is
+  read, so a header it leaves out does not match. Request `headerFields`
+  are part of the type surface but not read. Tests:
+  `unit/pagination/autodetect-response.test.ts`.
 - `items.ts` locates which top-level response property actually holds the
   list of items — the extension itself only describes pagination metadata,
   not where items live, so this excludes whatever fields the scheme claims

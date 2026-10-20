@@ -13,6 +13,7 @@ import {
 import type {
   OpenApiDocument,
   OperationObject,
+  ParameterObject,
   SchemaObject,
 } from '../openapi/types.js';
 import { findRoute } from '../routing/router.js';
@@ -47,6 +48,7 @@ export function createMockServer(document: OpenApiDocument): MockServer {
   const resources = discoverResources(paths);
   const store = new ResourceStore();
   const paginatedLists = new Map<string, Record<string, unknown>[]>();
+  const replays: IdempotentReplays = new Map();
   const server: Server = createServer((req, res) => {
     handleRequest(
       req,
@@ -56,6 +58,7 @@ export function createMockServer(document: OpenApiDocument): MockServer {
       resources,
       store,
       paginatedLists,
+      replays,
     ).catch((error: unknown) => {
       sendJson(res, 500, { error: String(error) });
     });
@@ -80,6 +83,32 @@ export function createMockServer(document: OpenApiDocument): MockServer {
   };
 }
 
+/**
+ * The create answered for each idempotency key, per collection: the body
+ * the key was first sent with, and the record created for it.
+ */
+type IdempotentReplays = Map<
+  string,
+  { body: string; record: Record<string, unknown> }
+>;
+
+/**
+ * The `Idempotency-Key` header parameter (any case) a create operation or
+ * its path item declares, as the client looks for it.
+ */
+function declaredIdempotencyHeader(
+  pathItem: Record<string, unknown> | undefined,
+  operation: OperationObject,
+): string | undefined {
+  const parameters = [
+    ...((pathItem?.['parameters'] as ParameterObject[] | undefined) ?? []),
+    ...(operation.parameters ?? []),
+  ];
+  return parameters.find(
+    (p) => p.in === 'header' && /^idempotency-key$/i.test(p.name),
+  )?.name;
+}
+
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -88,6 +117,7 @@ async function handleRequest(
   resources: ResourceRoute[],
   store: ResourceStore,
   paginatedLists: Map<string, Record<string, unknown>[]>,
+  replays: IdempotentReplays,
 ): Promise<void> {
   // Real absolute base (not a placeholder), needed to build working
   // nextLink URLs for paginated responses.
@@ -134,10 +164,11 @@ async function handleRequest(
     }
   }
 
-  const body =
+  const raw =
     method === 'post' || method === 'put' || method === 'patch'
-      ? await readJsonBody(req)
+      ? await readBody(req)
       : undefined;
+  const body = raw?.json;
 
   const resource = resources.find(
     (route) =>
@@ -152,7 +183,46 @@ async function handleRequest(
   }
 
   if (resource?.collectionPath === match.template) {
-    handleCollectionRequest(req, method, resource, operation, store, body, res);
+    const header =
+      method === 'post'
+        ? declaredIdempotencyHeader(
+            paths[match.template] as Record<string, unknown> | undefined,
+            operation,
+          )
+        : undefined;
+    const value = header ? req.headers[header.toLowerCase()] : undefined;
+    const key = typeof value === 'string' && value !== '' ? value : undefined;
+    if (key !== undefined) {
+      // A create the document declares idempotent, sent again with the
+      // same key: the first answer again, not a second record. The same
+      // key with another body is refused, as the IETF Idempotency-Key
+      // draft and Stripe do. Bodies compare as JSON with sorted keys, or
+      // as text when they are not JSON (bodyFingerprint).
+      const seen = replays.get(`${match.template}\n${key}`);
+      if (seen) {
+        if (raw && seen.body === bodyFingerprint(raw))
+          sendJson(res, 201, seen.record);
+        else
+          sendJson(res, 422, {
+            error: 'Idempotency-Key reused with a different request body',
+          });
+        return;
+      }
+    }
+    const record = handleCollectionRequest(
+      req,
+      method,
+      resource,
+      operation,
+      store,
+      body,
+      res,
+    );
+    if (key !== undefined && record)
+      replays.set(`${match.template}\n${key}`, {
+        body: raw ? bodyFingerprint(raw) : '',
+        record,
+      });
     return;
   }
 
@@ -212,7 +282,7 @@ function handleCollectionRequest(
   store: ResourceStore,
   body: Record<string, unknown> | undefined,
   res: ServerResponse,
-): void {
+): Record<string, unknown> | undefined {
   if (method === 'get') {
     seedIfEmpty(resource, operation, store);
     const etag = store.etag(resource.collectionPath);
@@ -224,7 +294,7 @@ function handleCollectionRequest(
       return;
     }
     sendJson(res, 200, store.list(resource.collectionPath), headers);
-    return;
+    return undefined;
   }
 
   if (method === 'post') {
@@ -245,12 +315,32 @@ function handleCollectionRequest(
     };
     store.put(resource.collectionPath, record['id'] as string, record);
     sendJson(res, 201, record);
-    return;
+    return record;
   }
 
   sendJson(res, 405, { error: 'Method Not Allowed' });
+  return undefined;
 }
 
+/** A dot-path's value in an item: own properties, names split on `.`. */
+function itemValue(item: unknown, path: string): unknown {
+  let current: unknown = item;
+  for (const name of path.split('.'))
+    current =
+      current !== null &&
+      typeof current === 'object' &&
+      Object.hasOwn(current, name)
+        ? (current as Record<string, unknown>)[name]
+        : undefined;
+  return current;
+}
+
+/**
+ * The first query parameter with `role`. For a page token the caller asks
+ * for `pageToken`, then `cursor`: both are the request roles a `pageToken`
+ * scheme sends its next token in (a `cursor` field takes `nextCursor`),
+ * and this server answers either with an offset as its token.
+ */
 function fieldNameForRole(
   scheme: EffectiveScheme['scheme'],
   role: string,
@@ -303,6 +393,12 @@ function handlePaginatedListRequest(
   const { scheme } = effective;
   const responseSchema = responseSchemaFor(operation, [200]);
 
+  // Pagination Schemes 0.9.0 §4.3.3: the query field whose value is a
+  // field of the previous page's last item.
+  const itemCursor = Object.entries(scheme.request?.queryParameters ?? {}).find(
+    ([, field]) => typeof field.fromLastItem === 'string',
+  );
+  const itemPath = itemCursor?.[1].fromLastItem;
   let items = paginatedLists.get(pathTemplate);
   if (!items) {
     const itemSchema = paginationItemSchemaFor(responseSchema, scheme);
@@ -320,6 +416,12 @@ function handlePaginatedListRequest(
         id: randomUUID(),
       };
     });
+    // Each item gets its own value at the item cursor's path too (a
+    // schema's fixed example would repeat it), in list order.
+    if (itemPath && itemPath !== 'id')
+      items.forEach((item, i) =>
+        setNestedField(item, itemPath, `item_${String(i).padStart(6, '0')}`),
+      );
     paginatedLists.set(pathTemplate, items);
   }
 
@@ -333,20 +435,56 @@ function handlePaginatedListRequest(
   const shortSize = scheme.response?.shortPage?.size;
   const defaultSize =
     typeof shortSize === 'number' ? shortSize : DEFAULT_PAGE_SIZE;
-  const pageSize = pageSizeParam
-    ? Number(url.searchParams.get(pageSizeParam) ?? defaultSize)
-    : defaultSize;
+  // Pagination parameters are whole numbers, as a provider checks them: a
+  // page size of 0 would answer `hasMore` with the same offset forever, and
+  // one that is not a number (`limit=abc`) an empty page that ends the read.
+  const whole = (
+    name: string | undefined,
+    least: number,
+  ): number | undefined | 'invalid' => {
+    const raw = name === undefined ? null : url.searchParams.get(name);
+    if (raw === null) return undefined;
+    if (!/^\d+$/.test(raw)) return 'invalid';
+    const value = Number(raw);
+    return Number.isSafeInteger(value) && value >= least ? value : 'invalid';
+  };
+  const refuse = (name: string | undefined, least: number): void =>
+    sendJson(res, 400, {
+      error: `${String(name)} must be a whole number of at least ${least}`,
+    });
+  const requestedSize = whole(pageSizeParam, 1);
+  if (requestedSize === 'invalid') return refuse(pageSizeParam, 1);
+  const pageSize = requestedSize ?? defaultSize;
 
   let offset = 0;
-  if (offsetParam) {
-    offset = Number(url.searchParams.get(offsetParam) ?? '0');
+  if (itemCursor && itemPath) {
+    // After the item whose value the request names; the first page
+    // without one. A value no item has answers an empty page, and so does
+    // an empty one (`?starting_after=`), which names no item: the client
+    // sends no cursor at all on its first request.
+    const after = url.searchParams.get(itemCursor[0]);
+    if (after !== null) {
+      const at = items.findIndex(
+        (item) => String(itemValue(item, itemPath)) === after,
+      );
+      offset = at === -1 ? items.length : at + 1;
+    }
+  } else if (offsetParam) {
+    const requested = whole(offsetParam, 0);
+    if (requested === 'invalid') return refuse(offsetParam, 0);
+    offset = requested ?? 0;
   } else if (pageParam) {
     const start = pageStart(scheme);
-    const page = Number(url.searchParams.get(pageParam) ?? String(start));
-    offset = (page - start) * pageSize;
+    const page = whole(pageParam, start);
+    if (page === 'invalid') return refuse(pageParam, start);
+    offset = ((page ?? start) - start) * pageSize;
   } else if (pageTokenParam) {
-    const token = url.searchParams.get(pageTokenParam);
-    offset = token ? Number(token) : 0;
+    // This server's tokens are offsets; an empty one is the first page.
+    if (url.searchParams.get(pageTokenParam) !== '') {
+      const token = whole(pageTokenParam, 0);
+      if (token === 'invalid') return refuse(pageTokenParam, 0);
+      offset = token ?? 0;
+    }
   }
 
   const slice = items.slice(offset, offset + pageSize);
@@ -379,6 +517,9 @@ function handlePaginatedListRequest(
         break;
       case 'totalPages':
         setNestedField(body, path, Math.ceil(items.length / pageSize));
+        break;
+      case 'hasMore':
+        setNestedField(body, path, hasMore);
         break;
       case 'nextPageToken':
       case 'nextCursor':
@@ -473,25 +614,50 @@ function respondWithExample(
   sendJson(res, Number.parseInt(successCode, 10) || 200, body);
 }
 
-async function readJsonBody(
+async function readBody(
   req: IncomingMessage,
-): Promise<Record<string, unknown> | undefined> {
+): Promise<{ text: string; json: Record<string, unknown> | undefined }> {
   const chunks: Buffer[] = [];
   for await (const chunk of req as AsyncIterable<Buffer>) {
     chunks.push(chunk);
   }
-  if (chunks.length === 0) {
-    return undefined;
-  }
   const text = Buffer.concat(chunks).toString('utf8');
   if (!text) {
-    return undefined;
+    return { text, json: undefined };
   }
   try {
-    return JSON.parse(text) as Record<string, unknown>;
+    return { text, json: JSON.parse(text) as Record<string, unknown> };
   } catch {
-    return undefined;
+    return { text, json: undefined };
   }
+}
+
+/** JSON with every object's keys sorted, so key order does not matter. */
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object')
+    return `{${Object.keys(value)
+      .sort()
+      .map(
+        (key) =>
+          `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`,
+      )
+      .join(',')}}`;
+  return JSON.stringify(value) ?? 'null';
+}
+
+/**
+ * What makes two creates under one idempotency key the same request: the
+ * JSON body with its keys sorted, or the body text as sent when it is not
+ * JSON (so two different unparseable bodies differ).
+ */
+function bodyFingerprint(body: {
+  text: string;
+  json: Record<string, unknown> | undefined;
+}): string {
+  return body.json === undefined
+    ? `text:${body.text}`
+    : `json:${canonicalJson(body.json)}`;
 }
 
 function sendJson(

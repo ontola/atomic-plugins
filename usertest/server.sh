@@ -1,6 +1,6 @@
 #!/bin/sh
-# (Re)starts the test instance's atomic-server on the droplet. Run as root on
-# the droplet:
+# (Re)starts the test instance's atomic-server on the user-testing server.
+# Run as root (or with sudo) on that server:
 #
 #   sh server.sh <base-domain> [<atomic-server sha>]
 #   USERTEST_PLUGIN_ROUTES=read-write sh server.sh <base-domain> [<sha>]
