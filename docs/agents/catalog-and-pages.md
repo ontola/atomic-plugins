@@ -8,9 +8,8 @@ GitHub Pages publishes this repository's `main` from its root. A merge to
 - `integrations/catalog.json`, the plugin catalog atomic-server hosts read
   (`https://ontola.github.io/atomic-plugins/integrations/catalog.json`);
 - `apps/<id>/<version>/ui.js`, the drive app modules that catalog installs;
-- the dated catalogs `overlays/catalog/<date>.json` and the overlays, which the
-  integration proxy composes when it starts (each proxy release defaults to
-  one; its `CATALOG_PATH` can name another) (localthought.io reads it on restart; see
+- `overlays/catalog/2026-10-02.json` and the overlays, which the integration proxy
+  composes when it starts (localthought.io reads it on restart; see
   [proxy-release.md](proxy-release.md));
 - `ontology/`, the shared class terms.
 
