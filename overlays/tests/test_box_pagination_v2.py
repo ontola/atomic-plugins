@@ -114,6 +114,41 @@ class BoxPaginationV2Tests(unittest.TestCase):
         self.assertEqual(applied["/files/{file_id}/collaborations"], "boxMarker")
         self.assertEqual(applied["/folders/{folder_id}/items"], "boxOffset")
 
+    def test_each_application_is_the_scheme_its_parameters_call_for(self):
+        # Every operation: a marker list without usemarker pages by marker
+        # (with or without limit), every other list by offset; one application each.
+        for path, item in self.v2["paths"].items():
+            if "x-pagination" not in item.get("get", {}):
+                continue
+            names = parameters(self.v2, path)
+            if "marker" in names and "usemarker" not in names:
+                expected = "boxMarker" if "limit" in names else "boxMarkerNoLimit"
+            else:
+                expected = "boxOffset"
+                self.assertLessEqual({"offset", "limit"}, names, path)
+            with self.subTest(path=path):
+                self.assertEqual(item["get"]["x-pagination"], [{"scheme": expected}])
+
+    def test_the_three_schemes_are_exact(self):
+        schemes = copy.deepcopy(self.v2["components"]["paginationSchemes"])
+        for scheme in schemes.values():
+            self.assertTrue(scheme.pop("description"))
+        marker = lambda query: {"type": "pageToken", "autoDetect": False,
+                                "request": {"queryParameters": query},
+                                "response": {"envelope": {"itemsField": "entries"},
+                                             "bodyFields": {"next_marker": {"role": "nextCursor"}}}}
+        self.assertEqual(schemes, {
+            "boxOffset": {"type": "pageNumber", "autoDetect": False,
+                          "request": {"queryParameters": {"offset": {"role": "offset"},
+                                                          "limit": {"role": "pageSize"}}},
+                          "response": {"envelope": {"itemsField": "entries"},
+                                       "bodyFields": {"total_count": {"role": "totalCount"},
+                                                      "offset": {"role": "offset"},
+                                                      "limit": {"role": "pageSize"}}}},
+            "boxMarker": marker({"marker": {"role": "cursor"}, "limit": {"role": "pageSize"}}),
+            "boxMarkerNoLimit": marker({"marker": {"role": "cursor"}}),
+        })
+
     def test_only_spec_roles_and_types(self):
         for name, scheme in self.v2["components"]["paginationSchemes"].items():
             with self.subTest(scheme=name):

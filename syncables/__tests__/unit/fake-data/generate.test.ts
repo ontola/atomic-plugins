@@ -337,3 +337,18 @@ describe('generateFromSchema at the float limits', () => {
     expect(generateFromSchema(schema as never)).toBe(value);
   });
 });
+
+describe('generateFromSchema returns a copy of a schema value', () => {
+  it.each([
+    ['example', { type: 'object', example: { a: { b: 1 } } }],
+    ['examples', { type: 'object', examples: [{ a: { b: 1 } }] }],
+    ['const', { type: 'object', const: { a: { b: 1 } } }],
+    ['enum', { type: 'object', enum: [{ a: { b: 1 } }] }],
+  ])('from %s', (_label, schema) => {
+    const first = generateFromSchema(schema as never) as {
+      a: { b: number };
+    };
+    first.a.b = 2;
+    expect(generateFromSchema(schema as never)).toEqual({ a: { b: 1 } });
+  });
+});

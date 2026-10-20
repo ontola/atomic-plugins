@@ -44,7 +44,8 @@ import {
   lowerCaseHeaders,
   type ListMethod,
   type Transport,
-  type TransportRequest,
+  type PurposedRequest,
+  type RequestPurpose,
   type TransportResponse,
 } from './transport.js';
 
@@ -121,7 +122,7 @@ export class Budget {
     return Math.max(0, this.deadline - Date.now());
   }
 
-  async send(request: TransportRequest): Promise<TransportResponse> {
+  async send(request: PurposedRequest): Promise<TransportResponse> {
     for (let retries = 0; ; retries += 1) {
       if (Date.now() > this.deadline) {
         throw new BudgetExhausted('Read timed out');
@@ -133,6 +134,8 @@ export class Budget {
         );
       }
       const raw = await this.transport(request);
+      // A cache's answer asked nothing of the provider.
+      if (raw.fromCache === true) this.requests -= 1;
       const receivedAt = Date.now();
       const response = { ...raw, headers: lowerCaseHeaders(raw.headers) };
       if (retries >= this.limits.maxRetries) {
@@ -140,6 +143,7 @@ export class Budget {
       }
       const throttled = classifyThrottling(this.throttling, {
         status: response.status,
+        fromCache: response.fromCache === true,
         headers: response.headers,
         body: response.body,
         receivedAt,
@@ -394,6 +398,8 @@ export interface PageWalk {
   query: Record<string, string>;
   /** Fixed JSON body fields (POST only); the cursor is merged in per page. */
   body: Record<string, unknown>;
+  /** The requests' `purpose`: `list` (the default) or `feed`. */
+  purpose?: Extract<RequestPurpose, 'list' | 'feed'>;
   pageSize?: number;
   /**
    * Dot-path to the items array in each body, `''` for the body itself.
@@ -640,10 +646,11 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
       }
     }
 
-    const request: TransportRequest = {
+    const request: PurposedRequest = {
       url,
       method: walk.method,
       headers: { accept: 'application/json' },
+      purpose: walk.purpose ?? 'list',
     };
     if (walk.method === 'POST') {
       request.headers['content-type'] = 'application/json';
@@ -1083,10 +1090,11 @@ async function* walkItemCursor(
       url.searchParams.set(key, value);
     if (cursor !== undefined && field.location === 'queryParameters')
       url.searchParams.set(field.name, cursor);
-    const request: TransportRequest = {
+    const request: PurposedRequest = {
       url,
       method: walk.method,
       headers: { accept: 'application/json' },
+      purpose: walk.purpose ?? 'list',
     };
     if (walk.method === 'POST') {
       request.headers['content-type'] = 'application/json';
@@ -1181,9 +1189,12 @@ async function* walkItemCursor(
       throw new PageReadError(
         `the last item of ${after} has a ${field.path} of ${String(value)}, not a safe integer to continue from; the read is not complete`,
       );
+    // An empty string is no cursor: `?starting_after=` would ask for the
+    // first page again, or for nothing.
     if (
-      typeof value !== 'string' &&
-      !(typeof value === 'number' && Number.isSafeInteger(value))
+      value === '' ||
+      (typeof value !== 'string' &&
+        !(typeof value === 'number' && Number.isSafeInteger(value)))
     )
       throw new PageReadError(
         `the last item of ${after} has no usable ${field.path} to continue from; the read is not complete`,
@@ -1331,10 +1342,11 @@ async function* walkWindows(
     })) {
       url.searchParams.set(key, value);
     }
-    const request: TransportRequest = {
+    const request: PurposedRequest = {
       url,
       method: walk.method,
       headers: { ...values.headerFields, accept: 'application/json' },
+      purpose: walk.purpose ?? 'list',
     };
     if (walk.method === 'POST') {
       request.headers['content-type'] = 'application/json';

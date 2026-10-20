@@ -128,7 +128,7 @@ impl Drop for EndpointRead<'_> {
 /// The rate limits count refusals only (see [`super::limits`]). A network
 /// over its limit gets `429` for ids that are malformed or name no endpoint,
 /// after the lookup, and may have at most `INGRESS_BLOCKED_WAITERS`
-/// requests waiting for the lookup slot; beyond that its requests get `429`
+/// requests waiting for or holding the lookup slot; beyond that its requests get `429`
 /// at once, a real delivery included. A sender that points a provider's
 /// hooks at junk URLs makes the provider's own addresses collect refusals,
 /// so that queue is where the provider's real deliveries can still lose
@@ -215,7 +215,8 @@ async fn receive_checked(
     let gate = &webhooks.gate;
     let hook = {
         // A network over its refusal limit may queue for the lookup slot
-        // only while fewer than `INGRESS_BLOCKED_WAITERS` of its kind wait;
+        // only while fewer than `INGRESS_BLOCKED_WAITERS` of its kind wait
+        // for or hold it (the permit is kept through the lookup);
         // beyond that it gets `429` at once. The lookup semaphore is fair, so
         // those few cannot jump ahead of other networks' requests, and a
         // real delivery from a blocked network (a provider whose addresses
@@ -296,7 +297,8 @@ async fn receive_checked(
             &hook.platform,
         );
         // Only an endpoint's failed verifications count against it, and
-        // only after verifying: a delivery that verifies is never refused.
+        // only after verifying: the per-endpoint limit never refuses a
+        // delivery that verifies (the per-network queue above still can).
         if let Err(retry) = webhooks
             .limits
             .ingress_per_endpoint

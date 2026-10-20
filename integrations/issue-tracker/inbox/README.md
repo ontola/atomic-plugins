@@ -68,9 +68,11 @@ runner exists (docs/design/pieces.md D2/D5).
     0.2.0-draft ignores it), the old limits apply: past 6 MiB of base64 in
     one run the plugin stops collecting and goes on in the next run; one
     event over 7.5 MiB of base64 is refused with `lastError`; a page over
-    the 8 MiB fetch cap fails, and the next run asks for one event. A
-    single event over about 5.6 MiB raw then stalls the inbox until the
-    proxy drops it (7 days).
+    the 8 MiB fetch cap fails, and the next run asks for one event. That
+    success clears the error, so while the rest of the page is still over
+    the cap, runs alternate between that failure and a one-event success:
+    one event per two runs. A single event over about 5.6 MiB raw then
+    stalls the inbox until the proxy drops it (7 days).
 - **An abandoned first run leaves an orphan gap row and reconcile item.**
   If the very first run stops after its rows are written and the host
   never resumes it, no checkpoint names the subscription it created. The

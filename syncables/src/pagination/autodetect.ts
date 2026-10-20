@@ -3,6 +3,7 @@ import type {
   PaginationApplicationObject,
   PaginationSchemeObject,
 } from './types.js';
+import { splitPath } from './response-parser.js';
 import { validatePaginationScheme } from './validate.js';
 
 export interface EffectiveScheme {
@@ -93,6 +94,79 @@ function bodyFieldNames(operation: OperationObject): Set<string> {
   return new Set(Object.keys(schema?.properties ?? {}));
 }
 
+/** The operation's success responses: `200`-`299` and `2XX`. */
+function successResponses(operation: OperationObject): unknown[] {
+  const responses: unknown = operation.responses;
+  if (!isPlainObject(responses)) return [];
+  return Object.entries(responses)
+    .filter(([code]) => /^2(\d\d|XX)$/i.test(code))
+    .map(([, response]) => response);
+}
+
+/**
+ * §6.3 `matchHeaders`: one success response declares every name, compared
+ * without case (HTTP header names are case-insensitive).
+ */
+function declaresHeaders(operation: OperationObject, names: string[]): boolean {
+  return successResponses(operation).some((response) => {
+    if (!isPlainObject(response) || !isPlainObject(response['headers']))
+      return false;
+    const declared = new Set(
+      Object.keys(response['headers']).map((name) => name.toLowerCase()),
+    );
+    return names.every((name) => declared.has(name.toLowerCase()));
+  });
+}
+
+/** A schema's `properties`, with those of its `allOf` members merged in. */
+function schemaProperties(schema: unknown): Record<string, unknown> {
+  if (!isPlainObject(schema)) return {};
+  const merged: Record<string, unknown> = isPlainObject(schema['properties'])
+    ? { ...schema['properties'] }
+    : {};
+  if (Array.isArray(schema['allOf']))
+    for (const member of schema['allOf'])
+      Object.assign(merged, schemaProperties(member));
+  return merged;
+}
+
+/**
+ * §6.3 `matchResponseFields`: one success response's JSON schema has every
+ * field, each a dot-path read as the response parser reads it, through
+ * `properties` (and `allOf` members). A response without a JSON schema
+ * matches nothing.
+ */
+function declaresResponseFields(
+  operation: OperationObject,
+  paths: string[],
+): boolean {
+  return successResponses(operation).some((response) => {
+    if (!isPlainObject(response) || !isPlainObject(response['content']))
+      return false;
+    const media = response['content']['application/json'];
+    if (!isPlainObject(media) || !isPlainObject(media['schema'])) return false;
+    const root = media['schema'];
+    return paths.every((path) => {
+      let segments: string[];
+      try {
+        segments = splitPath(path);
+      } catch {
+        // A path the response parser cannot read either: counted as
+        // present, so the read applies the scheme and fails on the path
+        // rather than taking one page as the whole list.
+        return true;
+      }
+      let schema: unknown = root;
+      for (const segment of segments) {
+        const properties = schemaProperties(schema);
+        if (!Object.hasOwn(properties, segment)) return false;
+        schema = properties[segment];
+      }
+      return true;
+    });
+  });
+}
+
 /**
  * Default auto-detection rules (spec §6.2/§6.3): a dimension only
  * contributes to the match when the scheme actually declares fields for
@@ -129,6 +203,20 @@ function autoDetectMatches(
       const declared = bodyFieldNames(operation);
       results.push(required.every((name) => declared.has(name)));
     }
+  }
+
+  // Response dimensions, off by default (§6.3). They can only see what the
+  // operation's description declares: a header the description leaves out
+  // does not match, though the provider may send it.
+  if (options.matchResponseFields === true) {
+    const required = Object.keys(scheme.response?.bodyFields ?? {});
+    if (required.length > 0)
+      results.push(declaresResponseFields(operation, required));
+  }
+
+  if (options.matchHeaders === true) {
+    const required = Object.keys(scheme.response?.headers ?? {});
+    if (required.length > 0) results.push(declaresHeaders(operation, required));
   }
 
   if (results.length === 0) {

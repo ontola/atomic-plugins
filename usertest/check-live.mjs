@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Refuses a deploy that would change an app module under a version the
- * droplet already serves:
+ * user-testing server already serves:
  *
  *   node usertest/check-live.mjs https://catalog.<base-domain>/catalog.json [out]
  *   node usertest/check-live.mjs /srv/catalog/catalog.json [out] [--served /srv/catalog]
@@ -15,7 +15,7 @@
  * whose `app-module-integrity` differs was rebuilt into an existing version:
  * the app's code changed without a bump in catalog.mjs's VERSIONS, or the
  * build left out USERTEST_LOG_URL. Deploying it would overwrite that
- * version's ui.js on the droplet, and the host refuses a module whose bytes
+ * version's ui.js on the server, and the host refuses a module whose bytes
  * don't match the hash it installed with. Exits 1 with the app names in
  * that case; bump their versions and rebuild.
  *
@@ -26,7 +26,7 @@
  *
  * Absent passes, unreachable fails. Only a definite absence counts as a
  * first deploy: the line `NONE` on standard input (deploy.sh's marker for
- * "no catalog.json on the droplet"), a file that does not exist in a folder
+ * "no catalog.json on the server"), a file that does not exist in a folder
  * that does, or HTTP 404 (not after a redirect: a 3xx fails). A network
  * error or timeout, any other HTTP status, a read error, a missing folder (a
  * mistyped path), empty input or an empty file, and anything that is not a

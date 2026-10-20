@@ -183,6 +183,27 @@
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-D2ZK9Jdtxmjg61MOPcqmpO29Z13mieObEDt3mY/PQ//RZ9WdheVxz8b5HlQ9SPj9"
   },
   {
+    "https://atomicdata.dev/properties/localId": "google-keep",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "google-keep",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Google Keep",
+    "https://atomicdata.dev/properties/emoji": "📝",
+    "https://atomicdata.dev/properties/description": "Sync your Google Keep notes and lists with a table in your drive, both ways, while the app is open.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Imports the connected account's Google Keep notes (not those in Keep's trash) into the app's own table, one row per note: the title as Name and the body as Description, a list note as a Markdown checklist (- [ ] / - [x], one level of child items). Every minute while the app is open in anyone's browser it syncs both ways: a change in Keep updates its row, an edited row is sent to Keep, a row added here becomes a new note. A note changed on both sides is held as a conflict until you pick a version. A note trashed or deleted in Keep is marked so and its row kept. A row deleted here is neither imported again nor deleted in Keep unless you choose to.",
+    "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps and connect Google Keep through the host's consent bar. The app syncs when it is opened, on Sync now and every minute while it stays open; two open browsers take turns. Nothing runs while no one has it open.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Google offers the Keep API to Google Workspace accounts only; a personal Google account cannot connect (Google refuses the scope). The API has no update: an edited note is sent as a new note and the old one deleted, losing its colour, labels, pins and reminders, so a note that is shared or has an attachment is never replaced and its edit is held back instead. Images and drawings are not imported. One Google account per table. Declared, and tested against a synthetic fixture only: not verified against a live Workspace account.",
+    "https://atomicdata.dev/integrations/properties/keywords": "google keep notes lists checklists two-way sync drive app workspace",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Note",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Notes",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-keep/0.1.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-3OzvVJHaPQWxKk7FF6VqMHg4QnFxFwObW40SiIqcFssjUhJ0U2KzJqEPMVLj5G8+"
+  },
+  {
     "https://atomicdata.dev/properties/localId": "google-tasks",
     "https://atomicdata.dev/properties/isA": [
       "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
@@ -197,11 +218,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Google Tasks through the host's consent bar and tick the task lists to import. Tasks refresh whenever the app is opened, on Sync now and after you tick or untick a list. Nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Read-only: the proxy's Google Tasks access is the tasks.readonly scope, so closing, editing or creating a task here is not sent to Google, and a local edit to an imported column is overwritten at the next sync. Subtasks are imported flat, with the parent task's id as a column. A task gone from its list is never assumed completed: when Google's by-id check answers 404 or fails, the row keeps its last known values and says so; at most 50 such checks run per sync. Added as a view of another Issue table, the app imports nothing. One account per app. Waits for the stable ontology domain. Declared, and tested against a synthetic fixture only: not verified against a live Google account (Decision Inbox Q-098), including what Google answers by id for a deleted task.",
     "https://atomicdata.dev/integrations/properties/keywords": "google tasks todo task lists issues read-only drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.1",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Issue",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Issues",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-tasks/0.1.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-E5Asr2u/0Y5u1cJALrkP9XuMZCTnwxyF+DCfx4rAZ1JiX5bZC8T4OAL5P/lhxB6P"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-tasks/0.1.1/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-hSUbnUwhdFQuB5F7Xbh3MHkl0bfupa1R1A2btYKX2FQmIFBsSC3J5i8btnNs6/tq"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/money",
@@ -218,11 +239,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Upload an MT940 or camt.053 statement when you need it, on the importer's Import tab or from the Money app. No bank token and no live bank connection; nothing runs in the background.",
     "https://atomicdata.dev/integrations/properties/limitation": "MT940 (up to 512 KB) and camt.053 XML (up to 5 MB) files only, up to 500 transactions per file. No CSV or PDF, no payment initiation or live bank sync; bank-specific formats may need additional support. Installed from Drive apps, the Money app imports statements into its own table of the shared Bank transaction class; on another table of that class, or to save a category or note on the importer's table, it first needs you to allow it to edit the table. Waits for the stable ontology domain. Declared, and tested with synthetic statement files only at this version.",
     "https://atomicdata.dev/integrations/properties/keywords": "bank bunq banking finance accounting statement mt940 camt camt.053 iso20022 xml sepa import swift",
-    "https://atomicdata.dev/integrations/properties/version": "0.4.4",
+    "https://atomicdata.dev/integrations/properties/version": "0.4.5",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Bank transaction",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Bank transactions",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/money/0.4.4/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-wp6JuWXBkXHuiljnWSmNWrpoerWCqGaY0O6/MP+Yy89Nqjh9LCAYxu/lewvw5ObC"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/money/0.4.5/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-ZMTzhYaUVzj1YYYzME7Ck5X2ZCPMVHDgeTGHtNHmVfYJA50zz7GYkn+rX7TmE4nd"
   },
   {
     "https://atomicdata.dev/properties/localId": "moneybird",
@@ -260,11 +281,11 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps, connect Clockify through the host's consent bar (the API key is entered at the integration proxy, never in the drive), then choose a workspace and a look-back. It syncs when opened and on Sync now; nothing runs while the app is closed.",
     "https://atomicdata.dev/integrations/properties/limitation": "Write-back is declared, not verified: it is tested against the mock proxy only, and no write has been made to a live Clockify account through the app. Changes are found only while the app is open; a row deleted in the table is not noticed. Running timers, locked entries, breaks and entries with custom field values cannot be edited. Coordination between two open copies is advisory (the drive has no compare-and-swap), so two copies starting to send in the same moment can still both send, at worst creating a duplicate that the app then offers to remove; it has been tested with simulated devices only, not with two real browsers. The same field edited directly on two devices keeps the later edit. No tags, tasks, rates or custom fields. Tested against a mock proxy modelled on Clockify behaviour checked against a live account (2026-09-24); the app itself has not run against a live account or the real integration proxy. On a table that isn't the app's own, rows are never deleted (Allow editing doesn't cover it): a row whose entry is deleted in Clockify is kept, unsynced, for you to delete, and the table's existing rows are not uploaded. Waits for the stable ontology domain.",
     "https://atomicdata.dev/integrations/properties/keywords": "clockify time tracking timesheet week hours projects conflicts drive app",
-    "https://atomicdata.dev/integrations/properties/version": "0.8.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.8.4",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Time entry",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Time entries",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.8.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-xC5MeRRrcacIVGFM16VWgdMRqFY5qBZpKR5JURh5D00dbzj6XE4yXNrkuTAZsb32"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/timesheets/0.8.4/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-lvGEgIVWKrew56+XdM/y/aALluk0I5MB9jJvavrBIZ8EXjLaR8xckdI2pbgVRoqr"
   },
   {
     "@id": "https://atomicdata.dev/integrations/catalog/notion",

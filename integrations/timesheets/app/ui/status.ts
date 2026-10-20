@@ -35,6 +35,10 @@ export interface StatusInput {
 export const NEXT_STEP: Record<ProblemKind, string> = {
   reauth: 'Reconnect Clockify.',
   forbidden: 'Choose another workspace in Settings.',
+  'proxy-access':
+    "Ask whoever runs the integration proxy to let you use it; reconnecting won't help.",
+  'agent-retired':
+    "This Atomic agent's key was replaced; open Atomic with your new key, where your connections already are.",
   'rate-limited': 'Wait a moment, then try again.',
   network: 'Check your connection, then try again.',
   'too-many': 'Import 7 days instead.',

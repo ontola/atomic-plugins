@@ -2,6 +2,7 @@
 import type { OpenApiDocument } from '../openapi/types.js';
 import { readNestedField } from '../pagination/response-parser.js';
 import { isRecord } from '../read/model.js';
+import { segmentProblem } from '../read/segment.js';
 import { withoutOmitted, type FollowUp } from './compound-create.js';
 
 /**
@@ -77,6 +78,20 @@ export function createBody(
   return body;
 }
 
+/**
+ * Whether `value` can be a record's identity: a string `segmentProblem`
+ * accepts (nonempty, not `.` or `..`, not padded with whitespace, no NUL,
+ * no lone surrogate), or a safe integer. `.` and `..` would move the
+ * record's path (`/pets/..` normalises to `/`), a lone surrogate makes
+ * every later path to the record throw `URIError`, and an object, a
+ * boolean or a fraction would become a record id such as
+ * `[object Object]`. A numeric string past 2^53 is kept, as a string.
+ */
+function identityValue(value: unknown): boolean {
+  if (typeof value === 'string') return segmentProblem(value) === undefined;
+  return typeof value === 'number' && Number.isSafeInteger(value);
+}
+
 function escape(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
@@ -89,6 +104,9 @@ function escape(text: string): string {
  * template, anywhere in it and ending at its end, `?` or `#`; the values
  * read back are decoded strings. Otherwise each bound field is read from the
  * response body, and one that is absent or null leaves it undetermined.
+ * So does a value that cannot be an identity (`identityValue`): a dot
+ * segment, an empty string, an object, a boolean or a fraction, and a
+ * URL value that does not percent-decode.
  */
 export function createdIdentity(
   declaration: CreateDeclaration,
@@ -118,18 +136,21 @@ export function createdIdentity(
       const at = variables.indexOf(variable);
       const raw = at < 0 ? undefined : match[at + 1];
       if (raw === undefined) return undefined;
+      let value: string;
       try {
-        values[field] = decodeURIComponent(raw);
+        value = decodeURIComponent(raw);
       } catch {
         return undefined;
       }
+      if (!identityValue(value)) return undefined;
+      values[field] = value;
     }
     return values;
   }
   const values: Record<string, unknown> = {};
   for (const field of Object.values(declaration.bindings)) {
     const value = readNestedField(body, field);
-    if (value === undefined || value === null) return undefined;
+    if (!identityValue(value)) return undefined;
     values[field] = value;
   }
   return values;
