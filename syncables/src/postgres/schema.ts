@@ -43,4 +43,17 @@ CREATE TABLE IF NOT EXISTS syncables_cache.leases (
   request_key text NOT NULL, token uuid NOT NULL, expires_at timestamptz NOT NULL,
   PRIMARY KEY(owner,connection,authorization_context,request_key)
 );
+CREATE TABLE IF NOT EXISTS syncables_cache.json_nodes (
+  owner text NOT NULL, hash text NOT NULL, codec text NOT NULL,
+  raw_bytes integer NOT NULL CHECK(raw_bytes >= 0), data bytea NOT NULL,
+  PRIMARY KEY(owner,hash)
+);
+CREATE TABLE IF NOT EXISTS syncables_cache.json_responses (
+  owner text NOT NULL, attempt uuid NOT NULL, root_hash text, indexing_error text,
+  encoding_version integer NOT NULL DEFAULT 1 CHECK(encoding_version=1),
+  PRIMARY KEY(owner,attempt),
+  FOREIGN KEY(owner,attempt) REFERENCES syncables_cache.attempts(owner,id) ON DELETE CASCADE,
+  FOREIGN KEY(owner,root_hash) REFERENCES syncables_cache.json_nodes(owner,hash),
+  CHECK((root_hash IS NULL) <> (indexing_error IS NULL))
+);
 `;

@@ -1,16 +1,16 @@
-# CLI authentication scaffold
+# CLI device authentication and local data
 
 This CLI implements the first stages of [#566](https://github.com/ontola/atomic-plugins/issues/566)
 adds a CLI to the existing `syncables` npm package. Library imports and the
 `syncables/browser` entry remain unchanged. Importing either entry does not
 run the CLI or read CLI configuration.
 
-The scaffold tests device authorization, connection discovery and a GET through
-Local Thought. It also saves and lists definitions for Atomic, NextGraph and
-remoteStorage replication. It does **not** run these replication protocols,
-start a daemon or store tokens. Optional local PostgreSQL archival, caching and
-offline replay are now available; see the [cache guide](postgres-cache.md).
-Outgoing outbox persistence and runtime replication follow in later stages.
+The CLI tests device authorization, connection discovery and a GET through
+Local Thought, and saves replication definitions. The [standalone daemon
+guide](daemon.md) covers configured syncing, foreground polling/webhooks,
+macOS Keychain sessions and commit-pinned Git data browsing. Remote replication
+and outgoing writes remain planned. The [cache guide](postgres-cache.md)
+covers optional PostgreSQL archival and recorded-run replay.
 
 ## Build the source
 
@@ -19,7 +19,7 @@ The scaffold is on the PR branch, not the currently published npm release.
 For a fresh checkout from any directory:
 
 ```sh
-git clone --branch codex/syncables-cli-auth-scaffold \
+git clone --branch codex/syncables-daemon \
   https://github.com/ontola/atomic-plugins.git atomic-plugins-cli-test
 cd atomic-plugins-cli-test/syncables
 npm ci
@@ -125,7 +125,8 @@ read establishes live compatibility.
 Polling obeys the interval, pending/slow-down responses, denial and expiry,
 with a 15-minute command cap and 10-second request timeouts. Tokens stay in
 memory, are not printed/saved, and are discarded when the command exits.
-There is no refresh or session persistence yet, so each test authorizes again.
+The `auth-test` command does not persist or refresh sessions; daemon commands
+use the separate credential lifecycle described in the daemon guide.
 No provider credential is requested by or returned to the CLI.
 
 ## Configure replication destinations

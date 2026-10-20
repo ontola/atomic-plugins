@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import { DAEMON_HELP } from '../daemon/help.js';
 import { deviceLogin, listConnections, probeApi } from './auth.js';
 import {
   addConnection,
@@ -8,7 +9,7 @@ import {
   listReplication,
 } from './replication.js';
 
-const HELP = `Syncables CLI scaffold
+const HELP = `Syncables CLI
 
   syncables auth-test --client-id ID [--issuer URL] [--scope SCOPES]
     [--connection ID] [--path /repos/owner/repo/issues?per_page=1]
@@ -35,7 +36,7 @@ overrides are available until its discovery contract is deployed.
 Replication commands save/list non-secret configuration only. Authentication
 and runtime replication for all three backends are NOT implemented yet.
 The optional archive uses SYNCABLES_DATABASE_URL for local PostgreSQL only.
-Outbox, collection coverage and daemon/service commands follow in later stages.
+Remote replication and range-window coverage follow in later stages.
 `;
 
 async function main(): Promise<void> {
@@ -63,10 +64,18 @@ async function main(): Promise<void> {
         'run',
         'repeat',
         'max-age',
+        'config',
+        'collection',
+        'at',
+        'filter',
+        'order-by',
+        'page',
+        'page-size',
       ].map((key) => [key, { type: 'string' as const }]),
     );
   options.help = { type: 'boolean' };
   options.archive = { type: 'boolean' };
+  options.interactive = { type: 'boolean' };
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options,
@@ -74,7 +83,24 @@ async function main(): Promise<void> {
   const string = (key: string): string | undefined =>
     typeof values[key] === 'string' ? (values[key] as string) : undefined;
   if (values.help || !positionals.length) {
-    process.stdout.write(HELP);
+    process.stdout.write(HELP + DAEMON_HELP);
+    return;
+  }
+  if (
+    [
+      'login',
+      'logout',
+      'sync',
+      'daemon',
+      'status',
+      'browse',
+      'resource',
+      'history',
+      'tag',
+    ].includes(positionals[0])
+  ) {
+    const { daemonCommand } = await import('../daemon/commands.js');
+    await daemonCommand(positionals, values);
     return;
   }
   const directory = string('config-dir') ?? configDirectory();

@@ -3,3 +3,10 @@ export { PostgresArchive } from './archive.js';
 export type { Attempt, Run, StoredResponse, ResponseHead } from './archive.js';
 export type { ArchiveScope } from './identity.js';
 export { createCachingTransport, createReplayTransport } from './transport.js';
+export { indexJson, renderJson, nodeHash } from './json-graph.js';
+export type {
+  JsonGraph,
+  GraphNode,
+  GraphValue,
+  GraphLimits,
+} from './json-graph.js';

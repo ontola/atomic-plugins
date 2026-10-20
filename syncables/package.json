@@ -22,6 +22,10 @@
     "./postgres": {
       "types": "./build/src/postgres/index.d.ts",
       "default": "./build/src/postgres/index.js"
+    },
+    "./daemon": {
+      "types": "./build/src/daemon/index.d.ts",
+      "default": "./build/src/daemon/index.js"
     }
   },
   "files": [

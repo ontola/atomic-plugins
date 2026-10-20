@@ -94,3 +94,7 @@ jobs:
       - run: npm run prettier:check
       - run: npm test
       - run: npm run build
+      - name: Test the installed daemon executable with invented loopback data
+        run: |
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
+          node scripts/daemon-smoke.mjs "$RUNNER_TEMP"/syncables-*.tgz

@@ -10,6 +10,7 @@ import {
   type ArchiveScope,
 } from './identity.js';
 import { SCHEMA } from './schema.js';
+import { indexJson, renderJson } from './json-graph.js';
 
 export interface Attempt {
   id: string;
@@ -311,6 +312,20 @@ export class PostgresArchive {
   ): Promise<void> {
     const payload = await encode(response.body, this.maxBodyBytes);
     const headers = cleanHeaders(response.headers);
+    let root: string | null = null;
+    let indexingError: string | null = null;
+    const nodes: Payload[] = [];
+    // 304 bodies are empty: their effective body's graph belongs to the
+    // original response. Non-JSON/error text stays replayable as raw text.
+    try {
+      const graph = indexJson(response.body, { maxBytes: this.maxBodyBytes });
+      for (const bytes of graph.nodes.values())
+        nodes.push(await encode(bytes, this.maxBodyBytes));
+      root = graph.root;
+    } catch {
+      nodes.length = 0;
+      indexingError = 'Response is not indexable JSON within graph limits';
+    }
     await this.transaction(async (client) => {
       await client.query(
         'INSERT INTO syncables_cache.payloads(owner,hash,codec,raw_bytes,data) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
@@ -358,6 +373,26 @@ export class PostgresArchive {
       );
       if (!saved.rows.length)
         throw new Error('Request outcome is already settled');
+      // Insert bounded batches rather than one network round trip per node.
+      for (let offset = 0; offset < nodes.length; offset += 500) {
+        const batch = nodes.slice(offset, offset + 500);
+        await client.query(
+          `INSERT INTO syncables_cache.json_nodes(owner,hash,codec,raw_bytes,data)
+          SELECT $1,* FROM unnest($2::text[],$3::text[],$4::integer[],$5::bytea[])
+          ON CONFLICT DO NOTHING`,
+          [
+            attempt.scope.owner,
+            batch.map((n) => n.hash),
+            batch.map((n) => n.codec),
+            batch.map((n) => n.rawBytes),
+            batch.map((n) => n.bytes),
+          ],
+        );
+      }
+      await client.query(
+        'INSERT INTO syncables_cache.json_responses(owner,attempt,root_hash,indexing_error) VALUES($1,$2,$3,$4)',
+        [attempt.scope.owner, attempt.id, root, indexingError],
+      );
       const claim = await client.query(
         'SELECT 1 FROM syncables_cache.leases WHERE owner=$1 AND connection=$2 AND authorization_context=$3 AND request_key=$4 AND token=$5 AND expires_at>clock_timestamp() FOR UPDATE',
         [...scopeValues(attempt.scope), attempt.key, lease],
@@ -427,5 +462,56 @@ export class PostgresArchive {
         ? { response: (await this.hydrate(row)).response }
         : {}),
     };
+  }
+
+  /** Reads a response graph inside its recorded owner/run namespace. */
+  async jsonResponse(
+    owner: string,
+    run: string,
+    sequence: number,
+  ): Promise<{
+    root: string | null;
+    indexingError: string | null;
+    json?: string;
+  }> {
+    const result = await this.pool.query(
+      `SELECT j.root_hash,j.indexing_error FROM syncables_cache.attempts a
+      LEFT JOIN syncables_cache.json_responses j ON j.owner=a.owner AND j.attempt=coalesce(a.source_attempt,a.id)
+      WHERE a.owner=$1 AND a.run=$2 AND a.sequence=$3 AND a.outcome='response'`,
+      [owner, run, sequence],
+    );
+    if (!result.rows.length)
+      throw new Error('Response not found for this owner/run');
+    const root = result.rows[0].root_hash as string | null;
+    const indexingError = result.rows[0].indexing_error as string | null;
+    if (!root)
+      return {
+        root: null,
+        indexingError:
+          indexingError ??
+          'Response predates JSON indexing or has no JSON body',
+      };
+    const json = await renderJson(
+      root,
+      async (hash) => {
+        const node = await this.pool.query(
+          'SELECT hash,codec,raw_bytes,data FROM syncables_cache.json_nodes WHERE owner=$1 AND hash=$2',
+          [owner, hash],
+        );
+        const row = node.rows[0];
+        if (!row) throw new Error('Missing archived JSON node');
+        return decode(
+          {
+            hash: row.hash,
+            codec: row.codec,
+            rawBytes: row.raw_bytes,
+            bytes: row.data,
+          },
+          this.maxBodyBytes,
+        );
+      },
+      { maxBytes: this.maxBodyBytes },
+    );
+    return { root, indexingError, json };
   }
 }

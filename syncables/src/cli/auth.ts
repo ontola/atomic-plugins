@@ -29,6 +29,16 @@ export interface Hooks {
   sleep?: (milliseconds: number) => Promise<void>;
   now?: () => number;
   report: (message: string) => void;
+  /** Opt-in daemon handoff; secrets remain in memory or the supplied vault. */
+  onAuthorized?: (
+    session: Session & {
+      refreshToken: string;
+      expiresAt: number;
+      tokenEndpoint: string;
+      sessionId: string;
+      clientId: string;
+    },
+  ) => void;
 }
 
 export function safeUrl(input: string): URL {
@@ -204,10 +214,27 @@ export async function deviceLogin(
     if (poll.ok) {
       if (text(token.token_type, 'token type').toLowerCase() !== 'bearer')
         throw new Error('Unsupported Local Thought token type');
-      return {
+      const session = {
         issuer: safeUrl(options.issuer).origin,
         accessToken: text(token.access_token, 'access token'),
       };
+      if (hooks.onAuthorized) {
+        if (
+          typeof token.expires_in !== 'number' ||
+          !Number.isFinite(token.expires_in) ||
+          token.expires_in <= 0
+        )
+          throw new Error('Invalid access-token expiry');
+        hooks.onAuthorized({
+          ...session,
+          refreshToken: text(token.refresh_token, 'refresh token'),
+          expiresAt: now() + token.expires_in * 1000,
+          sessionId: text(token.session_id, 'session ID'),
+          clientId: options.clientId,
+          tokenEndpoint: endpoints.token,
+        });
+      }
+      return session;
     }
     if (token.error === 'authorization_pending') continue;
     if (token.error === 'slow_down') {
@@ -270,7 +297,7 @@ export function proxyRequest(
   const url = new URL(prefix + path.slice(1), session.issuer);
   if (!url.pathname.startsWith(prefix))
     throw new Error('API path escapes the selected connection');
-  return { url, method: 'GET', headers: {} };
+  return { url, method: 'GET', headers: {}, purpose: 'item' };
 }
 
 export function proxyReadTransport(

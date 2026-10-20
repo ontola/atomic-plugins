@@ -82,7 +82,13 @@ describe('every request syncables makes sets a purpose', () => {
       l.names.includes('receivedAt');
     const all = requestLiterals();
     expect(all.filter(isStoredResponse)).toHaveLength(1);
-    const literals = all.filter((l) => !isStoredResponse(l));
+    // requestIdentity serializes an archive/cache key, rather than sending a request.
+    const isStoredIdentity = (l: { at: string }): boolean =>
+      l.at.startsWith('postgres/identity.ts:');
+    expect(all.filter(isStoredIdentity)).toHaveLength(1);
+    const literals = all.filter(
+      (l) => !isStoredResponse(l) && !isStoredIdentity(l),
+    );
     const missing = literals.filter((l) => !l.purpose).map((l) => l.at);
     expect(missing).toEqual([]);
     // The senders the scan finds, per file: a new request literal (with or
@@ -93,6 +99,8 @@ describe('every request syncables makes sets a purpose', () => {
       perFile[file] = (perFile[file] ?? 0) + 1;
     }
     expect(perFile).toEqual({
+      'cli/auth.ts': 1,
+      'cli/cache.ts': 1,
       'client/client.ts': 6,
       'inbox/client.ts': 1,
       'read/pages.ts': 3,

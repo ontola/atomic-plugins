@@ -60,9 +60,12 @@ export function createCachingTransport(options: {
       options.run,
       request,
     );
-    const conditional = ['if-none-match', 'if-modified-since'].some(
-      (key) => key in identity.request.headers,
-    );
+    const conditional =
+      request.purpose === 'precondition' ||
+      request.purpose === 'inbox' ||
+      ['if-none-match', 'if-modified-since'].some(
+        (key) => key in identity.request.headers,
+      );
     const initial = await options.archive.head(
       options.scope,
       identity.cacheKey,
@@ -71,7 +74,7 @@ export function createCachingTransport(options: {
       const stored = await options.archive.responseById(options.scope, head.id);
       await options.archive.cacheHit(attempt, stored);
       options.onResponse?.({ origin: 'cache', response: stored.response });
-      return stored.response;
+      return { ...stored.response, fromCache: true };
     };
     const freshSince = async (): Promise<ResponseHead | undefined> => {
       if (conditional) return undefined;

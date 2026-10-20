@@ -5,8 +5,10 @@ import { randomUUID } from 'node:crypto';
 
 const devices = new Map();
 const tokens = new Set();
+const refreshTokens = new Map();
 const port = Number(process.env.SYNCABLES_MOCK_PORT ?? 11872);
 const origin = `http://127.0.0.1:${port}`;
+const owner = process.env.SYNCABLES_MOCK_OWNER ?? 'atomic:agent:demo';
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, origin);
@@ -74,6 +76,32 @@ const server = createServer(async (request, response) => {
     send(200, { approved: true });
   } else if (request.method === 'POST' && url.pathname === '/oauth/token') {
     if (
+      form.get('grant_type') === 'refresh_token' &&
+      form.get('client_id') === 'syncables-cli-demo'
+    ) {
+      const old = form.get('refresh_token');
+      const session = refreshTokens.get(old);
+      if (!session) {
+        send(400, { error: 'invalid_grant' });
+        return;
+      }
+      refreshTokens.delete(old);
+      tokens.delete(session.access);
+      const access = randomUUID();
+      const refresh = randomUUID();
+      tokens.add(access);
+      refreshTokens.set(refresh, { ...session, access });
+      send(200, {
+        access_token: access,
+        refresh_token: refresh,
+        token_type: 'Bearer',
+        expires_in: 300,
+        owner,
+        session_id: session.id,
+      });
+      return;
+    }
+    if (
       form.get('client_id') !== 'syncables-cli-demo' ||
       form.get('grant_type') !== 'urn:ietf:params:oauth:grant-type:device_code'
     ) {
@@ -93,14 +121,34 @@ const server = createServer(async (request, response) => {
     devices.delete(code);
     const token = randomUUID();
     tokens.add(token);
-    send(200, { access_token: token, token_type: 'Bearer', expires_in: 300 });
+    const refresh = randomUUID();
+    const id = randomUUID();
+    refreshTokens.set(refresh, { id, access: token });
+    send(200, {
+      access_token: token,
+      refresh_token: refresh,
+      token_type: 'Bearer',
+      expires_in: 300,
+      owner,
+      session_id: id,
+    });
+  } else if (
+    request.method === 'POST' &&
+    url.pathname === '/oauth/device/revoke'
+  ) {
+    const session = refreshTokens.get(form.get('token'));
+    if (session) {
+      tokens.delete(session.access);
+      refreshTokens.delete(form.get('token'));
+    }
+    send(200, {});
   } else if (request.method === 'GET' && url.pathname === '/connections') {
     if (!tokens.has(request.headers.authorization?.replace(/^Bearer /, ''))) {
       send(401, {});
       return;
     }
     send(200, {
-      owner: 'atomic:agent:demo',
+      owner,
       connections: [
         {
           connection_id: 'demo-connection',
@@ -123,6 +171,7 @@ const server = createServer(async (request, response) => {
       [
         {
           id: 1,
+          number: 1,
           title: 'Invented issue',
           state: 'open',
           body: 'An invented note for the compression test. '.repeat(100),

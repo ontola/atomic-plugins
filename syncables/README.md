@@ -79,13 +79,15 @@ changelog; the guide explains how to run that source before an npm release.
 
 ## Usage
 
-The source also includes an optional **CLI authentication scaffold** in the
-same npm package. It tests device login and read-only API access through Local
-Thought and saves/lists Atomic, NextGraph and remoteStorage connection
-definitions. Library imports remain unchanged. See the [CLI guide](docs/cli.md)
-for the local mock, the device-server dependency and the current limits, and the
-[local PostgreSQL cache guide](docs/postgres-cache.md) for compressed response
-archival and offline replay through the optional `syncables/postgres` entry.
+The source includes an experimental **standalone CLI and foreground daemon**
+in the same npm package. It reads configured collections, archives nested JSON
+by content hash in PostgreSQL, and stores JSON-AD resources and bundled schemas
+in Git. Local browse/history commands pin a commit or tag. See the
+[daemon guide](docs/daemon.md) for setup, supported incremental reads, queued
+webhook hints and limits, and [Versioned Atomic Data](../docs/design/versioned-atomic-data.md)
+for snapshot resolution. The [CLI guide](docs/cli.md) covers device login and
+read-only API probes. Replication definitions remain configuration only.
+Root/browser library imports do not start the daemon or load its storage.
 
 For published releases, install with `npm install syncables`. To build the
 current source, run these commands from `syncables/` with Node 22.11 or newer:

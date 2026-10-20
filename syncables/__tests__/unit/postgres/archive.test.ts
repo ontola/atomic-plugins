@@ -42,7 +42,14 @@ describe.skipIf(!database)('local PostgreSQL archive (real database)', () => {
   });
   afterAll(async () => {
     if (!archive) return;
-    for (const table of ['heads', 'leases', 'attempts', 'payloads', 'runs'])
+    for (const table of [
+      'heads',
+      'leases',
+      'attempts',
+      'payloads',
+      'runs',
+      'json_nodes',
+    ])
       await archive.pool.query(
         `DELETE FROM syncables_cache.${table} WHERE owner LIKE $1`,
         [`${prefix}%`],
@@ -66,7 +73,7 @@ describe.skipIf(!database)('local PostgreSQL archive (real database)', () => {
       },
     });
     const first = await live(request());
-    expect(await live(request())).toEqual(first);
+    expect(await live(request())).toEqual({ ...first, fromCache: true });
     expect(calls).toBe(1);
     await archive.finishRun(owner.owner, run);
     const payloads = await archive.pool.query(
@@ -98,6 +105,26 @@ describe.skipIf(!database)('local PostgreSQL archive (real database)', () => {
     } finally {
       await reopened.close();
     }
+  });
+
+  it('always refreshes a precondition read even when a reusable cached response exists', async () => {
+    const owner = scope('precondition');
+    const run = await archive.createRun(owner, 'fresh precondition');
+    let calls = 0;
+    const transport = createCachingTransport({
+      archive,
+      scope: owner,
+      run,
+      mode: 'cache',
+      maxAgeMs: 60_000,
+      upstream: async () => response(String(++calls)),
+    });
+    await transport({ ...request(), purpose: 'list' });
+    expect(
+      (await transport({ ...request(), purpose: 'precondition' })).body,
+    ).toBe('2');
+    expect(calls).toBe(2);
+    await archive.finishRun(owner.owner, run);
   });
 
   it('isolates owners, connections and authorization revisions', async () => {
@@ -171,7 +198,8 @@ describe.skipIf(!database)('local PostgreSQL archive (real database)', () => {
         upstream,
       });
       const results = await Promise.all([one(request()), two(request())]);
-      expect(results[0]).toEqual(results[1]);
+      expect(results[0].body).toBe(results[1].body);
+      expect(results.filter((r) => r.fromCache === true)).toHaveLength(1);
       expect(calls).toBe(1);
       await Promise.all([
         archive.finishRun(owner.owner, oneRun),
