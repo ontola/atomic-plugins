@@ -8,10 +8,14 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 - Overlay Requirements 0.1.0-draft at catalog load: a platform whose
   selected overlays include one with `info.x-requires` that no selected
   overlay meets, or `info.x-conflicts` naming a selected overlay, fails to
-  load, as an `extends` mismatch does; references resolve against the
-  overlay's own URL. A malformed declaration is an error too. No dated
-  catalog under `overlays/catalog/` is affected today: none selects an
-  overlay that states either field.
+  load, as an `extends` mismatch does: one platform's bad selection stops
+  the whole proxy from starting, not only that platform. References resolve
+  against the overlay's own URL, and selected URLs and references are
+  compared after the same URL normalization (host case, default port, dot
+  segments). A malformed declaration is an error naming the platform too,
+  including one that breaks the spec's §7 rule 3 (an overlay named twice in
+  a group or in `x-conflicts`, in both, or naming itself). No dated catalog
+  under `overlays/catalog/` breaks them today.
 - Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
   paced at the tier whose `plans` name the plan the catalog selection's
   `throttlingPlans` gives for it, else within every tier at once (each its

@@ -128,7 +128,8 @@ impl Catalog {
                 infos.push((overlay_url.clone(), overlay.info.take()));
                 apply_overlay(&mut document, overlay, &platform.openapi, overlay_url)?;
             }
-            let problems = overlay_requirement_problems(&platform.overlays, &infos)?;
+            let problems =
+                overlay_requirement_problems(&platform.name, &platform.overlays, &infos)?;
             if !problems.is_empty() {
                 return Err(format!(
                     "catalog selection for {} breaks Overlay Requirements: {}",
@@ -703,32 +704,75 @@ fn valid_platform_name(name: &str) -> Result<(), String> {
 /// every `info.x-requires` group of a selected overlay must be met by another
 /// overlay selected for the same platform, and no overlay its `info.x-conflicts`
 /// names may be selected. References resolve against the overlay's own URL.
-/// A malformed declaration is an error; the problems found are returned.
+/// Selected URLs and resolved references are compared after the same `url`
+/// crate normalization (host case, default port, dot segments), so a
+/// selection spelled `https://Example.org:443/a/./b.yaml` still names
+/// `https://example.org/a/b.yaml`. A malformed declaration, including one
+/// that breaks §7 rule 3 (an overlay named twice in a group or in
+/// `x-conflicts`, in both, or naming itself), is an error naming `platform`;
+/// the problems found are returned.
 fn overlay_requirement_problems(
+    platform: &str,
     selected: &[String],
     infos: &[(String, Option<Value>)],
 ) -> Result<Vec<String>, String> {
-    let present: std::collections::BTreeSet<&str> = selected.iter().map(String::as_str).collect();
+    let normalize = |url: &str| {
+        url::Url::parse(url)
+            .map(|url| url.to_string())
+            .unwrap_or_else(|_| url.to_string())
+    };
+    let present: std::collections::BTreeSet<String> =
+        selected.iter().map(|url| normalize(url)).collect();
     let mut problems = Vec::new();
     for (overlay_url, info) in infos {
         let Some(info) = info else { continue };
+        let malformed =
+            |what: &str| format!("catalog platform {platform}: overlay {overlay_url}: {what}");
+        let own_url = normalize(overlay_url);
         let resolve = |reference: &Value| -> Result<String, String> {
             let reference = reference
                 .as_str()
                 .filter(|r| !r.is_empty() && !r.contains(char::is_whitespace))
-                .ok_or_else(|| format!("{overlay_url}: an x-requires or x-conflicts reference is not a URI reference"))?;
-            url::Url::parse(overlay_url)
+                .ok_or_else(|| {
+                    malformed("an x-requires or x-conflicts reference is not a URI reference")
+                })?;
+            let url = url::Url::parse(overlay_url)
                 .and_then(|base| base.join(reference))
                 .map(|url| url.to_string())
-                .map_err(|err| format!("{overlay_url}: invalid reference {reference:?}: {err}"))
+                .map_err(|err| malformed(&format!("invalid reference {reference:?}: {err}")))?;
+            if url == own_url {
+                return Err(malformed(&format!(
+                    "reference {reference:?} names the overlay itself"
+                )));
+            }
+            Ok(url)
+        };
+        let resolve_all = |references: &[Value], field: &str| -> Result<Vec<String>, String> {
+            let mut resolved = Vec::new();
+            for reference in references {
+                let url = resolve(reference)?;
+                if resolved.contains(&url) {
+                    return Err(malformed(&format!("{field} names {url} twice")));
+                }
+                resolved.push(url);
+            }
+            Ok(resolved)
+        };
+        let conflicts = match info.get("x-conflicts") {
+            None => Vec::new(),
+            Some(conflicts) => {
+                let conflicts = conflicts
+                    .as_array()
+                    .filter(|conflicts| !conflicts.is_empty())
+                    .ok_or_else(|| malformed("info.x-conflicts must be a nonempty array"))?;
+                resolve_all(conflicts, "info.x-conflicts")?
+            }
         };
         if let Some(requires) = info.get("x-requires") {
             let groups = requires
                 .as_array()
                 .filter(|groups| !groups.is_empty())
-                .ok_or_else(|| {
-                    format!("{overlay_url}: info.x-requires must be a nonempty array")
-                })?;
+                .ok_or_else(|| malformed("info.x-requires must be a nonempty array"))?;
             for group in groups {
                 let alternatives = group
                     .as_object()
@@ -737,13 +781,15 @@ fn overlay_requirement_problems(
                     .and_then(Value::as_array)
                     .filter(|any_of| !any_of.is_empty())
                     .ok_or_else(|| {
-                        format!("{overlay_url}: each info.x-requires group must be {{anyOf: [...]}}, nonempty")
+                        malformed("each info.x-requires group must be {anyOf: [...]}, nonempty")
                     })?;
-                let resolved = alternatives
-                    .iter()
-                    .map(&resolve)
-                    .collect::<Result<Vec<_>, _>>()?;
-                if !resolved.iter().any(|url| present.contains(url.as_str())) {
+                let resolved = resolve_all(alternatives, "an info.x-requires group")?;
+                if let Some(url) = resolved.iter().find(|url| conflicts.contains(url)) {
+                    return Err(malformed(&format!(
+                        "{url} is both in info.x-requires and in info.x-conflicts"
+                    )));
+                }
+                if !resolved.iter().any(|url| present.contains(url)) {
                     problems.push(format!(
                         "{overlay_url} requires one of {}",
                         resolved.join(", ")
@@ -751,18 +797,9 @@ fn overlay_requirement_problems(
                 }
             }
         }
-        if let Some(conflicts) = info.get("x-conflicts") {
-            let conflicts = conflicts
-                .as_array()
-                .filter(|conflicts| !conflicts.is_empty())
-                .ok_or_else(|| {
-                    format!("{overlay_url}: info.x-conflicts must be a nonempty array")
-                })?;
-            for conflict in conflicts {
-                let url = resolve(conflict)?;
-                if present.contains(url.as_str()) {
-                    problems.push(format!("{overlay_url} conflicts with {url}"));
-                }
+        for url in conflicts {
+            if present.contains(&url) {
+                problems.push(format!("{overlay_url} conflicts with {url}"));
             }
         }
     }
@@ -904,17 +941,19 @@ mod tests {
             &["auth.yaml"][..],
         ] {
             assert_eq!(
-                overlay_requirement_problems(&selection(names), &infos(names)).unwrap(),
+                overlay_requirement_problems("fixture", &selection(names), &infos(names)).unwrap(),
                 Vec::<String>::new(),
                 "{names:?}"
             );
         }
         let names = ["completeness.yaml"];
-        let problems = overlay_requirement_problems(&selection(&names), &infos(&names)).unwrap();
+        let problems =
+            overlay_requirement_problems("fixture", &selection(&names), &infos(&names)).unwrap();
         assert_eq!(problems.len(), 1);
         assert!(problems[0].contains("requires one of"), "{problems:?}");
         let names = ["crud-v1.yaml", "crud-v2.yaml", "completeness.yaml"];
-        let problems = overlay_requirement_problems(&selection(&names), &infos(&names)).unwrap();
+        let problems =
+            overlay_requirement_problems("fixture", &selection(&names), &infos(&names)).unwrap();
         assert_eq!(
             problems,
             [format!(
@@ -931,11 +970,62 @@ mod tests {
             serde_json::json!({"x-requires": [{"anyOf": []}]}),
             serde_json::json!({"x-requires": [{"anyOf": ["a b.yaml"]}]}),
             serde_json::json!({"x-conflicts": "crud-v1.yaml"}),
+            // §7 rule 3: twice in a group, twice in x-conflicts, in both, itself.
+            serde_json::json!({"x-requires": [{"anyOf": ["crud-v2.yaml", "./crud-v2.yaml"]}]}),
+            serde_json::json!({"x-conflicts": ["crud-v1.yaml", "../1/crud-v1.yaml"]}),
+            serde_json::json!({
+                "x-requires": [{"anyOf": ["crud-v2.yaml"]}],
+                "x-conflicts": ["crud-v2.yaml"]
+            }),
+            serde_json::json!({"x-requires": [{"anyOf": ["completeness.yaml"]}]}),
+            serde_json::json!({"x-conflicts": [format!("{BASE}completeness.yaml")]}),
         ] {
             let infos = vec![(format!("{BASE}completeness.yaml"), Some(info.clone()))];
+            let selected = selection(&["completeness.yaml", "crud-v2.yaml"]);
+            let error = overlay_requirement_problems("fixture", &selected, &infos).unwrap_err();
             assert!(
-                overlay_requirement_problems(&selection(&["completeness.yaml"]), &infos).is_err(),
-                "{info}"
+                error.starts_with(&format!(
+                    "catalog platform fixture: overlay {BASE}completeness.yaml: "
+                )),
+                "{info}: {error}"
+            );
+        }
+    }
+
+    /// Selected URLs are compared after the same normalization as resolved
+    /// references: host case, an explicit default port and dot segments do
+    /// not hide a requirement that is met, nor a conflict.
+    #[test]
+    fn overlay_requirements_compare_normalized_urls() {
+        let info = serde_json::json!({
+            "x-requires": [{"anyOf": ["crud-v2.yaml"]}],
+            "x-conflicts": ["../1/crud-v1.yaml"]
+        });
+        let infos = vec![(format!("{BASE}completeness.yaml"), Some(info))];
+        for spelling in [
+            "https://Overlays.Example/APIs/example/1/crud-v2.yaml",
+            "https://overlays.example:443/APIs/example/1/crud-v2.yaml",
+            "https://overlays.example/APIs/example/./1/crud-v2.yaml",
+            "https://overlays.example/APIs/other/../example/1/crud-v2.yaml",
+        ] {
+            let selected = vec![format!("{BASE}completeness.yaml"), spelling.to_string()];
+            assert_eq!(
+                overlay_requirement_problems("fixture", &selected, &infos).unwrap(),
+                Vec::<String>::new(),
+                "{spelling}"
+            );
+            let conflicting = spelling.replace("crud-v2", "crud-v1");
+            let selected = vec![
+                format!("{BASE}completeness.yaml"),
+                spelling.to_string(),
+                conflicting.clone(),
+            ];
+            assert_eq!(
+                overlay_requirement_problems("fixture", &selected, &infos).unwrap(),
+                [format!(
+                    "{BASE}completeness.yaml conflicts with {BASE}crud-v1.yaml"
+                )],
+                "{conflicting}"
             );
         }
     }
@@ -2428,6 +2518,111 @@ mod tests {
             assert!(error.contains("but catalog OAD is"), "{error}");
             assert!(error.contains(&overlay_url));
         }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Overlay Requirements through a whole catalog load: the overlay's
+    /// `info` reaches the check, `../` references resolve against the
+    /// overlay's own URL, and every refusal names the platform.
+    #[tokio::test]
+    async fn catalog_load_checks_overlay_requirements() {
+        use crate::config::OVERLAYS_PAGES_BASE;
+        let root =
+            std::env::temp_dir().join(format!("overlay-requirements-{}", rand::random::<u64>()));
+        for dir in ["sub", "other"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        fs::write(
+            root.join("base.yaml"),
+            "openapi: 3.0.0\ninfo: {title: base, version: 1.0.0}\npaths: {}\n",
+        )
+        .unwrap();
+        let overlay = |info: Value| {
+            serde_json::json!({
+                "overlay": "1.0.0",
+                "info": info,
+                "actions": [{"target": "$", "update": {"x-fixture": true}}]
+            })
+            .to_string()
+        };
+        let plain = overlay(serde_json::json!({"title": "plain", "version": "1.0.0"}));
+        fs::write(root.join("sub/crud-v2.yaml"), &plain).unwrap();
+        fs::write(root.join("other/crud-v1.yaml"), &plain).unwrap();
+        let write_completeness = |extra: Value| {
+            let mut info = serde_json::json!({"title": "completeness", "version": "1.0.0"});
+            info.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            fs::write(root.join("sub/completeness.yaml"), overlay(info)).unwrap();
+        };
+        write_completeness(serde_json::json!({
+            "x-requires": [{"anyOf": ["../sub/crud-v2.yaml"]}],
+            "x-conflicts": ["../other/crud-v1.yaml"]
+        }));
+        let config = root.join("catalog.json");
+        let client = reqwest::Client::new();
+        let load = |overlays: &[&str]| {
+            let overlays: Vec<String> = overlays
+                .iter()
+                .map(|path| format!("{OVERLAYS_PAGES_BASE}{path}"))
+                .collect();
+            fs::write(
+                &config,
+                serde_json::json!({"platforms": [{
+                    "name": "fixture",
+                    "openapi": format!("{OVERLAYS_PAGES_BASE}base.yaml"),
+                    "overlays": overlays,
+                }]})
+                .to_string(),
+            )
+            .unwrap();
+            Catalog::load_with_mirror(config.to_str().unwrap(), &client, Some(&root))
+        };
+        let loaded = load(&["sub/crud-v2.yaml", "sub/completeness.yaml"])
+            .await
+            .unwrap();
+        let document: Value = serde_yaml::from_str(loaded.get("fixture").unwrap()).unwrap();
+        assert_eq!(document["x-fixture"], true);
+
+        let error = load(&["sub/completeness.yaml"]).await.err().unwrap();
+        assert_eq!(
+            error,
+            format!(
+                "catalog selection for fixture breaks Overlay Requirements: \
+                 {OVERLAYS_PAGES_BASE}sub/completeness.yaml requires one of \
+                 {OVERLAYS_PAGES_BASE}sub/crud-v2.yaml"
+            )
+        );
+        let error = load(&[
+            "sub/crud-v2.yaml",
+            "other/crud-v1.yaml",
+            "sub/completeness.yaml",
+        ])
+        .await
+        .err()
+        .unwrap();
+        assert!(
+            error.starts_with("catalog selection for fixture breaks Overlay Requirements: "),
+            "{error}"
+        );
+        assert!(
+            error.ends_with(&format!(
+                "conflicts with {OVERLAYS_PAGES_BASE}other/crud-v1.yaml"
+            )),
+            "{error}"
+        );
+
+        write_completeness(serde_json::json!({"x-requires": [{"anyOf": []}]}));
+        let error = load(&["sub/crud-v2.yaml", "sub/completeness.yaml"])
+            .await
+            .err()
+            .unwrap();
+        assert!(
+            error.starts_with(&format!(
+                "catalog platform fixture: overlay {OVERLAYS_PAGES_BASE}sub/completeness.yaml: "
+            )),
+            "{error}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
