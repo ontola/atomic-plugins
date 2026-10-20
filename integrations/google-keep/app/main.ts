@@ -156,10 +156,12 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     sync.disabled = state.kind === 'syncing';
 
     settings.hidden = !('settings' in state);
+
     if ('settings' in state && !dirty) {
       writeBack.checked = state.settings.writeBack;
       onlyTitle.value = state.settings.onlyTitle;
     }
+
     save.disabled = state.kind === 'syncing';
     const sending = 'settings' in state && state.settings.writeBack;
 
