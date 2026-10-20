@@ -66,6 +66,7 @@ export class DaemonRunner {
     readonly store: GitAtomicStore,
     readonly auth: RunnerAuth,
     private readonly fetchImpl: typeof fetch = globalThis.fetch,
+    private readonly message?: string,
   ) {}
   async initialize(): Promise<void> {
     await this.archive.initialize();
@@ -209,6 +210,8 @@ export class DaemonRunner {
               )({ ...request, headers: input.headers });
             },
             signal: controller.signal,
+            trigger: dueOnly ? 'scheduled' : 'manual',
+            ...(this.message === undefined ? {} : { message: this.message }),
           });
           await client.query(
             `UPDATE syncables_cache.daemon_jobs SET completed=$3,revision=$4,last_error=NULL,failures=0,

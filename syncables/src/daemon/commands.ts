@@ -6,7 +6,7 @@ import {
   selectedCollections,
   type DaemonConfig,
 } from './config.js';
-import { GitAtomicStore } from './git-store.js';
+import { GitAtomicStore, validateCommitMessage } from './git-store.js';
 import { DaemonAuth, KeychainCredentials } from './auth.js';
 import { DaemonRunner, jobStatuses } from './runner.js';
 import { SOURCE_ID, SOURCE_JSON } from './sync.js';
@@ -138,6 +138,14 @@ export async function daemonCommand(
     requireValue(string('config'), 'config'),
   );
   const command = positionals[0];
+  const message = string('message');
+  if (message !== undefined) {
+    if (command !== 'sync' && command !== 'daemon')
+      throw new Error('--message is supported by sync and daemon only');
+    validateCommitMessage(message);
+  }
+  if (string('subject') !== undefined && command !== 'history')
+    throw new Error('--subject is supported by history only');
   const archive = localArchive();
   const store = new GitAtomicStore(config.dataDirectory);
   const controller = new AbortController();
@@ -204,23 +212,35 @@ export async function daemonCommand(
             '}\n',
         );
       } else if (command === 'history') {
+        if (positionals[1] !== undefined && string('subject') !== undefined)
+          throw new Error('Select either an item ID or --subject IRI');
         const context = await store.context(scope);
         if (typeof context.resource !== 'string')
           throw new Error('Missing source resource context');
         const source = config.collections.find((c) => alias(c) === name)!;
         const subject =
-          positionals[1] === undefined
+          string('subject') ??
+          (positionals[1] === undefined
             ? undefined
             : itemSubject(
                 config.owner,
                 source,
                 context.resource,
                 positionals[1],
-              );
+              ));
+        if (
+          subject !== undefined &&
+          !/^(https?:\/\/|urn:)[^\s]+$/.test(subject)
+        )
+          throw new Error('Supply an absolute resource or schema IRI');
+        const commit = await store.resolveRevision(scope, string('at'));
+        const entries = await store.historyEntries(scope, subject, commit);
         write({
           collection: name,
+          commit,
           ...(subject ? { subject } : {}),
-          revisions: await store.history(scope, subject),
+          revisions: entries.map((entry) => entry.commit),
+          entries,
         });
       } else
         await browse({
@@ -255,7 +275,14 @@ export async function daemonCommand(
       write({ logout: 'complete' });
       return;
     }
-    const runner = new DaemonRunner(config, archive, store, auth);
+    const runner = new DaemonRunner(
+      config,
+      archive,
+      store,
+      auth,
+      globalThis.fetch,
+      message,
+    );
     const selectors = string('collections')?.split(',') ?? [];
     selectedCollections(config, selectors);
     await runner.initialize();

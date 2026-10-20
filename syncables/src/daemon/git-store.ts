@@ -10,6 +10,28 @@ export interface AtomicSnapshot {
   scope: string;
   resources: Map<string, string>;
   context: Record<string, unknown>;
+  /** Explicit intent creates a commit even when the tree is unchanged. */
+  message?: string;
+}
+export interface SnapshotRevision {
+  commit: string;
+  parents: string[];
+  date: string;
+  message: string;
+}
+
+export function validateCommitMessage(message: string, maxBytes = 8192): void {
+  if (
+    !message.trim() ||
+    Buffer.byteLength(message) > maxBytes ||
+    [...message].some((character) => {
+      const code = character.charCodeAt(0);
+      return (code < 32 && code !== 9 && code !== 10) || code === 127;
+    })
+  )
+    throw new Error(
+      `Commit message must be nonempty, at most ${maxBytes} UTF-8 bytes, without control characters`,
+    );
 }
 
 /** Local-only JSON-AD snapshots. Git versions data; this is not Atomic native sync. */
@@ -131,6 +153,8 @@ export class GitAtomicStore {
     expected?: string,
     signal?: AbortSignal,
   ): Promise<string> {
+    if (snapshot.message !== undefined)
+      validateCommitMessage(snapshot.message, 32768);
     if (signal?.aborted) throw new Error('Data snapshot publication stopped');
     const current = await this.head(snapshot.scope);
     if (current !== expected)
@@ -185,13 +209,14 @@ export class GitAtomicStore {
     ).trim();
     if (
       current &&
+      snapshot.message === undefined &&
       (await this.git(['rev-parse', current + '^{tree}'])).trim() === tree
     )
       return current;
     const commit = (
       await this.git(
         ['commit-tree', tree, ...(current ? ['-p', current] : [])],
-        'Syncables Atomic Data snapshot\n',
+        (snapshot.message ?? 'Syncables Atomic Data snapshot').trim() + '\n',
       )
     ).trim();
     // CAS publication is the only visible mutation; failed writers leave only
@@ -301,11 +326,40 @@ export class GitAtomicStore {
     ]);
     return names.trim() ? this.git(['show', commit + ':' + name]) : undefined;
   }
-  async history(scope: string, subject?: string): Promise<string[]> {
+  async history(
+    scope: string,
+    subject?: string,
+    at?: string,
+  ): Promise<string[]> {
     const head = await this.head(scope);
     if (!head) return [];
-    const args = ['rev-list', head];
+    const args = ['rev-list', await this.resolveRevision(scope, at)];
     if (subject) args.push('--', 'r-' + nodeHash(subject) + '.json');
     return (await this.git(args)).trim().split('\n').filter(Boolean);
+  }
+  /** Resource and schema histories use the same subject-path filter. */
+  async historyEntries(
+    scope: string,
+    subject?: string,
+    at?: string,
+  ): Promise<SnapshotRevision[]> {
+    if (!(await this.head(scope))) return [];
+    const args = [
+      'log',
+      '-z',
+      '--format=%H%x00%P%x00%aI%x00%B',
+      await this.resolveRevision(scope, at),
+    ];
+    if (subject) args.push('--', 'r-' + nodeHash(subject) + '.json');
+    const fields = (await this.git(args)).split('\0');
+    const entries: SnapshotRevision[] = [];
+    for (let i = 0; i + 3 < fields.length; i += 4)
+      entries.push({
+        commit: fields[i],
+        parents: fields[i + 1].split(' ').filter(Boolean),
+        date: fields[i + 2],
+        message: fields[i + 3].trimEnd(),
+      });
+    return entries;
   }
 }

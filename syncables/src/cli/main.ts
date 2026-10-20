@@ -71,6 +71,8 @@ async function main(): Promise<void> {
         'order-by',
         'page',
         'page-size',
+        'message',
+        'subject',
       ].map((key) => [key, { type: 'string' as const }]),
     );
   options.help = { type: 'boolean' };

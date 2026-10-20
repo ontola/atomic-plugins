@@ -114,7 +114,12 @@ try {
     assert.equal(await task.closed, 0, 'CLI command failed: ' + args[0]);
     return JSON.parse(task.output());
   }
-  const synced = await run(['sync', '--interactive']);
+  const synced = await run([
+    'sync',
+    '--interactive',
+    '--message',
+    'Capture a baseline\nReview schema α before proceeding',
+  ]);
   const commit = synced[0].result.revision;
   assert.match(commit, /^[a-f0-9]{64}$/);
   assert.equal(synced[0].result.records, 1);
@@ -183,6 +188,26 @@ try {
     'github-issues/example/tasks',
   ]);
   assert.ok(history.revisions.includes(commit));
+  const entry = history.entries.find((entry) => entry.commit === commit);
+  assert.ok(
+    entry.message.includes(
+      'Intent (user supplied):\n  Capture a baseline\n  Review schema α before proceeding',
+    ),
+  );
+  assert.ok(entry.message.includes('Syncables-Trigger: manual'));
+  assert.ok(entry.message.includes('Syncables-Run: ' + synced[0].result.run));
+  const schemaHistory = await run([
+    'history',
+    '--subject',
+    'urn:syncables:class:source-record',
+    '--collection',
+    'github-issues/example/tasks',
+    '--at',
+    'tag:baseline',
+  ]);
+  assert.equal(schemaHistory.commit, commit);
+  assert.deepEqual(schemaHistory.revisions, [commit]);
+  assert.equal(schemaHistory.entries[0].message, entry.message);
   const status = await run(['status']);
   assert.equal(status[0].state, 'idle');
   const rootImport = await exec(

@@ -34,8 +34,9 @@ import {
 } from '../postgres/index.js';
 import type { Transport, TransportResponse } from '../read/transport.js';
 import type { OpenApiDocument } from '../openapi/types.js';
-import { GitAtomicStore } from './git-store.js';
+import { GitAtomicStore, validateCommitMessage } from './git-store.js';
 import {
+  alias,
   collectionScope,
   itemSubject,
   type CollectionConfig,
@@ -127,6 +128,8 @@ export interface SyncCollectionOptions {
   auth: ArchiveScope;
   upstream: Transport;
   signal?: AbortSignal;
+  message?: string;
+  trigger?: 'manual' | 'scheduled';
 }
 export interface CollectionSyncResult {
   revision: string;
@@ -147,6 +150,7 @@ export async function syncCollection(
   options: SyncCollectionOptions,
 ): Promise<CollectionSyncResult> {
   const { prepared, archive, store, auth } = options;
+  if (options.message !== undefined) validateCommitMessage(options.message);
   const { document, source, scope } = prepared;
   if (source.connection !== auth.connection)
     throw new Error('Collection does not match the authenticated connection');
@@ -395,6 +399,26 @@ export async function syncCollection(
         {
           scope,
           resources,
+          message: [
+            `Sync ${alias(source)}: ${strategy} (${options.trigger ?? 'direct'})`,
+            '',
+            ...(options.message === undefined
+              ? []
+              : [
+                  'Intent (user supplied):',
+                  ...options.message
+                    .trim()
+                    .split('\n')
+                    .map((line) => '  ' + line),
+                  '',
+                ]),
+            'Syncables-Intent-Version: 1',
+            `Syncables-Trigger: ${options.trigger ?? 'direct'}`,
+            `Syncables-Collection: ${alias(source)}`,
+            `Syncables-Run: ${run}`,
+            `Syncables-Strategy: ${strategy}`,
+            `Syncables-Records: ${resources.size - 3}`,
+          ].join('\n'),
           context: {
             owner: auth.owner,
             connection: auth.connection,

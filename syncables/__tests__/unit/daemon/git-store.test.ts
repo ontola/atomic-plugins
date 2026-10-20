@@ -117,6 +117,89 @@ describe('local versioned Atomic Data snapshots', () => {
     expect(await store.resource('one', subject)).toBeUndefined();
     expect(await store.resource('one', subject, a)).toBeDefined();
   });
+  it('retains multiline intent, parent links and intent-only commits after reopening', async () => {
+    const store = await setup();
+    const snapshot = { scope: 'intent', context: {}, resources: resource('1') };
+    const message =
+      'Import the selected collection\n\nReview before changing schema — α';
+    const first = await store.commit({ ...snapshot, message });
+    const second = await store.commit(
+      { ...snapshot, message: 'Confirm unchanged data' },
+      first,
+    );
+    expect(second).not.toBe(first);
+    const reopened = new GitAtomicStore(store.directory);
+    const entries = await reopened.historyEntries(snapshot.scope);
+    expect(entries.map((entry) => entry.commit)).toEqual([second, first]);
+    expect(entries[0]).toMatchObject({
+      parents: [first],
+      message: 'Confirm unchanged data',
+    });
+    expect(entries[1]).toMatchObject({ parents: [], message });
+    expect(entries[0].date).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    // An intent-only commit belongs to collection history, not content history.
+    expect(await reopened.history(snapshot.scope, subject)).toEqual([first]);
+  });
+  it('filters schema history by IRI and pins it at a commit or tag', async () => {
+    const store = await setup();
+    const schema = 'urn:example:schema';
+    const resources = resource('1');
+    resources.set(schema, `{"@id":"${schema}","urn:example:version":1}`);
+    const snapshot = { scope: 'schemas', context: {}, resources };
+    const first = await store.commit({
+      ...snapshot,
+      message: 'Import resources and schemas',
+    });
+    await store.tag(snapshot.scope, 'before');
+    resources.set(schema, `{"@id":"${schema}","urn:example:version":2}`);
+    const second = await store.commit(
+      { ...snapshot, message: 'Revise the schema' },
+      first,
+    );
+    resources.set(subject, resource('2').get(subject)!);
+    const third = await store.commit(
+      { ...snapshot, message: 'Change only the item' },
+      second,
+    );
+    const removed = new Map(resources);
+    removed.delete(schema);
+    const fourth = await store.commit(
+      { ...snapshot, resources: removed, message: 'Remove the schema' },
+      third,
+    );
+    expect(
+      (await store.historyEntries(snapshot.scope, schema)).map(
+        (entry) => entry.commit,
+      ),
+    ).toEqual([fourth, second, first]);
+    expect(
+      (await store.historyEntries(snapshot.scope, schema, 'tag:before')).map(
+        (entry) => entry.commit,
+      ),
+    ).toEqual([first]);
+    expect(await store.history(snapshot.scope, schema, first)).toEqual([first]);
+    expect(
+      await store.historyEntries(snapshot.scope, 'urn:example:missing'),
+    ).toEqual([]);
+    const other = await store.commit({ ...snapshot, scope: 'other' });
+    await expect(
+      store.historyEntries(snapshot.scope, schema, other),
+    ).rejects.toThrow('does not belong');
+  });
+  it('rejects invalid intent without changing the published snapshot', async () => {
+    const store = await setup();
+    const snapshot = {
+      scope: 'messages',
+      context: {},
+      resources: resource('1'),
+    };
+    const first = await store.commit(snapshot);
+    for (const message of ['   ', 'hidden\0suffix', 'x'.repeat(32769)])
+      await expect(
+        store.commit({ ...snapshot, message }, first),
+      ).rejects.toThrow('Commit message');
+    expect(await store.head(snapshot.scope)).toBe(first);
+  });
   it('refuses unrelated existing directories and invalid Atomic subjects/properties', async () => {
     const store = await setup();
     await expect(

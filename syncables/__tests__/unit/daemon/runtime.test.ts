@@ -332,6 +332,7 @@ describe.skipIf(!database)(
         h.store,
         auth,
         fetchImpl,
+        'Collect a baseline for review',
       );
       await runner.initialize();
       expect(
@@ -349,6 +350,14 @@ describe.skipIf(!database)(
         ),
       ).toBe(false);
       expect((await runner.sync())[0]).toHaveProperty('result');
+      const manual = (await h.store.historyEntries(h.prepared.scope))[0];
+      expect(manual.message).toContain(
+        'Intent (user supplied):\n  Collect a baseline for review',
+      );
+      expect(manual.message).toContain('Syncables-Trigger: manual');
+      expect(manual.message).toContain('Syncables-Run: ');
+      expect(manual.message).toContain('Syncables-Strategy: full');
+      expect(manual.message).toContain('Syncables-Records: 1');
       expect((await jobStatuses(archive, h.config.owner))[0]).toMatchObject({
         state: 'pending',
         generation: '3',
@@ -372,6 +381,9 @@ describe.skipIf(!database)(
       expect((await restarted.sync([], undefined, true))[0]).toHaveProperty(
         'result',
       );
+      expect(
+        (await h.store.historyEntries(h.prepared.scope))[0].message,
+      ).toContain('Syncables-Trigger: scheduled');
       expect((await jobStatuses(archive, h.config.owner))[0]).toMatchObject({
         state: 'idle',
         generation: '3',

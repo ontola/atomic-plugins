@@ -89,7 +89,8 @@ schema dependency closure remain separate from storing a snapshot.
 Prepare a complete tree and commit before publishing it with compare-and-swap
 on the scope branch. Concurrent or stale writers cannot replace a newer head.
 Failed preparation can leave unreachable Git objects, but exposes no partial
-snapshot. Repeated unchanged trees reuse the existing commit. A → B → A has
+snapshot. Repeated unchanged trees reuse the existing commit unless an explicit
+commit message requests a new intent occurrence. A → B → A has
 three revision occurrences even when the final resource bytes equal the first.
 Deletion removes a resource from the new tree; retained commits still resolve
 it. No automatic history pruning or destructive Git GC is part of this pilot.
@@ -98,6 +99,32 @@ Git commits here are local snapshot versions. They are not Atomic signed
 commits, provider revisions, permissions, semantic merges or CRDT operations.
 Do not enable a remote, push, run hooks or install native peer replication as
 a side effect. This data repository is separate from the source-code checkout.
+
+## Commit messages as intent provenance
+
+Keep the reason for a successful local snapshot in its commit message, alongside
+the data and schemas that resulted. The standalone CLI accepts `--message` on
+`sync` and `daemon`; a daemon repeats that process's intent on each successful
+snapshot. Indent user-supplied intent separately from generated provenance.
+Generate an intent-format version, collection alias, trigger (manual/scheduled,
+or direct library use), archive run ID, read strategy and record count. The
+structured snapshot context remains the authority for checkpoints and scope;
+never parse human messages to decide authorization or resume a read.
+
+This experiments with intent sourcing as an explanation of observed versions,
+not as an executable event-sourcing protocol. A successful snapshot records
+the stated intent, not proof that a remote edit happened or a complete log of
+every attempted command. Failed or interrupted reads do not publish an intent
+commit; their evidence remains in archive/job state. Scheduled reads can
+coalesce polling, startup, retries and webhook hints, so they do not claim one
+particular delivery caused the snapshot. Pending/outgoing operations still need
+their own durable records before any provider write is attempted.
+
+Collection history includes intent-only commits with unchanged data; subject
+history selects changes/removal of that resource or schema. Both expose local
+commit messages, timestamps and parents and can be pinned at a commit/tag.
+Never rewrite old commits to add inferred intent. Commit messages carry no
+credentials or private signing keys and do not change the snapshot format.
 
 ## Syncables persistence boundary
 

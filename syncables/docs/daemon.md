@@ -21,6 +21,16 @@ Requirements: Node 22.11+, Git 2.29+ with SHA-256 repositories, and a separate
 local PostgreSQL database (tested with PostgreSQL 17). Nothing installs a
 background service or changes Heroku configuration.
 
+On a Mac using Homebrew, install/start PostgreSQL and add its tools to the
+current terminal's path first. This supplies `createdb` if your shell cannot
+find it:
+
+```sh
+brew install postgresql@17
+brew services start postgresql@17
+export PATH="$(brew --prefix postgresql@17)/bin:$PATH"
+```
+
 ```sh
 git clone --branch codex/syncables-daemon \
   https://github.com/ontola/atomic-plugins.git atomic-plugins-daemon
@@ -165,6 +175,77 @@ uses a JSON Pointer and scalar equality against the original source JSON;
 ordering uses a pointer and optional `:asc`/`:desc`, then stable subject order.
 Types sort by type name; missing values sort as `undefined`. Filtering/ordering
 unsafe numeric values is refused; returned resource text remains lossless.
+
+## Browsing history and recording intent
+
+Collection history includes every published snapshot. Item history filters by
+the item's stable subject; use `--subject IRI` instead of an item ID to inspect
+any resource or schema. All history commands return a pinned `commit`, the
+existing `revisions` list, and `entries` with commit ID, parent IDs, author
+timestamp (`date`) and full commit message. `--at` limits history to that
+snapshot and its ancestors. Dates describe local commits, not provider edits.
+
+```sh
+syncables history --collection github-issues/example/tasks --config /path/config.json
+syncables history 1 --collection github-issues/example/tasks --config /path/config.json
+syncables history --subject urn:syncables:class:source-record \
+  --collection github-issues/example/tasks --config /path/config.json
+syncables resource urn:syncables:class:source-record --at FULL_COMMIT_ID \
+  --collection github-issues/example/tasks --config /path/config.json
+syncables browse github-issues/example/tasks/1 --at FULL_COMMIT_ID \
+  --config /path/config.json
+```
+
+When running from source, replace `syncables` with
+`node build/src/cli/main.js`. For the demo, use
+`examples/daemon/config.demo.json` as the config path.
+
+Record your reason for a fetch with `--message`:
+
+```sh
+syncables sync --config /path/config.json \
+  --message "Capture a baseline before experimenting with the schema"
+syncables daemon --config /path/config.json \
+  --message "Keep my selected work collections available offline"
+```
+
+The supplied text appears under `Intent (user supplied)` in each successful
+snapshot's Git commit message. A daemon's message applies to every successful
+snapshot made by that process; it is not saved as configuration. Messages
+accept multiline text up to 8192 UTF-8 bytes. They remain in local Git history,
+so keep credentials out of them. A default summary and generated trailers record
+the collection alias, manual/scheduled trigger, archive run ID, full/bootstrap/
+delta strategy and resulting record count. Scheduled means the scheduler chose
+the run: polling, startup, retries and queued webhook hints can coalesce; it
+does not identify an individual webhook. A direct library call is marked
+`direct`. Existing commits retain their original messages without rewriting.
+
+This is intent provenance attached to successful observations. It is not an
+event-sourced command log: failed/cancelled requests have archive/job evidence
+but no successful Git snapshot, and messages are not executable instructions
+or proof of a provider-side change. The archive run ID links to local response
+evidence (`syncables cache replay --owner OWNER --run RUN_ID`). A full unchanged
+fetch still records its new run context. For direct `GitAtomicStore` users, an
+explicit `AtomicSnapshot.message` also creates a commit when the tree is
+unchanged; without a message, identical trees reuse the previous commit.
+Intent-only commits appear in collection history, while resource/schema history
+shows commits that changed that subject's content or presence. Bundled schemas
+usually have only their initial revision until their definitions change.
+
+The configured `dataDirectory` is a bare Git repository, so ordinary Git tools
+can inspect it without a checkout:
+
+```sh
+git --git-dir=/absolute/path/local-data.git log --all --date=iso --format=fuller
+git --git-dir=/absolute/path/local-data.git show --stat FULL_COMMIT_ID
+git --git-dir=/absolute/path/local-data.git diff OLD_COMMIT_ID NEW_COMMIT_ID
+git --git-dir=/absolute/path/local-data.git show FULL_COMMIT_ID:context.json
+```
+
+Use the full 64-character IDs returned by the CLI. `log --all` includes every
+collection scope; the CLI selects the configured collection for you. Resource
+filenames hash their subject IRIs, so the CLI is the easier way to select one.
+Inspect the repository read-only; leave its refs and files under daemon control.
 
 ## Queued webhooks
 
