@@ -67,7 +67,8 @@ bindings with your existing approved owner/connection. Use issuer
 and approved connection IDs with the existing `auth-test` command in the
 [CLI guide](cli.md); those identifiers are not owner keys.
 
-Paths in the config resolve relative to the config file. Each collection has:
+Paths in the config resolve relative to the config file. Restart the foreground
+daemon after editing its config or composed documents. Each collection has:
 
 | Field | Meaning |
 | --- | --- |
@@ -130,7 +131,8 @@ coverage, timestamp/high-water incremental strategies, conditional collection
 fetches, deletion feeds and time-zone conversion are deferred. Library readers
 still reject `incrementalSync`; the standalone adapter implements this subset.
 Declared blocked responses pause automatic reads until a new trigger/manual run;
-retry deadlines survive the failed read in scheduling state.
+retry deadlines survive the failed read in scheduling state. Backoff is per
+collection in this pilot; shared quota pacing across collections is deferred.
 
 All source records are projected as JSON-AD: stable `@id`, a source-record class,
 a string source ID, and original JSON in `urn:syncables:property:source-json`.

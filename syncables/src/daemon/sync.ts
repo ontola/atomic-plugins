@@ -410,6 +410,7 @@ export async function syncCollection(
           },
         },
         expected,
+        options.signal,
       );
       return { revision, run, records: resources.size - 3, strategy };
     } catch (error) {

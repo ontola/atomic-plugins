@@ -126,7 +126,12 @@ export class GitAtomicStore {
       ).trim() || undefined
     );
   }
-  async commit(snapshot: AtomicSnapshot, expected?: string): Promise<string> {
+  async commit(
+    snapshot: AtomicSnapshot,
+    expected?: string,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (signal?.aborted) throw new Error('Data snapshot publication stopped');
     const current = await this.head(snapshot.scope);
     if (current !== expected)
       throw new Error('Data snapshot changed; refresh before publishing');
@@ -135,6 +140,7 @@ export class GitAtomicStore {
       throw new Error('Data snapshot exceeds resource limit');
     let totalBytes = 0;
     for (const [subject, text] of snapshot.resources) {
+      if (signal?.aborted) throw new Error('Data snapshot publication stopped');
       totalBytes += Buffer.byteLength(text);
       if (totalBytes > 16 * 1024 * 1024)
         throw new Error('Data snapshot exceeds the 16 MiB stage limit');
@@ -190,6 +196,7 @@ export class GitAtomicStore {
     ).trim();
     // CAS publication is the only visible mutation; failed writers leave only
     // unreachable objects, never a partially visible data copy.
+    if (signal?.aborted) throw new Error('Data snapshot publication stopped');
     await this.git([
       'update-ref',
       this.ref(snapshot.scope),

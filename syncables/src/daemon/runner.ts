@@ -229,7 +229,7 @@ export class DaemonRunner {
             error instanceof Error &&
             /login|401|403|connection.*refused/i.test(error.message)
               ? 'Authorization needs attention; run login or check approved connections'
-              : 'Sync failed; previous snapshot/checkpoint retained';
+              : 'Sync did not finish; next attempt resumes from the published snapshot';
           const retry = Math.min(
             300,
             5 * 2 ** Math.min(Number(job.failures), 6),

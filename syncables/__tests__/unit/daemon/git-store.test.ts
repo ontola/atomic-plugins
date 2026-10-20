@@ -85,6 +85,30 @@ describe('local versioned Atomic Data snapshots', () => {
     const other = await store.commit({ ...base, scope: 'two' });
     await expect(store.list('one', other)).rejects.toThrow('does not belong');
   });
+  it('does not publish when cancellation arrives while preparing the tree', async () => {
+    const store = await setup();
+    const snapshot = {
+      scope: 'cancelled',
+      context: {},
+      resources: resource('1'),
+    };
+    const first = await store.commit(snapshot);
+    const controller = new AbortController();
+    const changed = resource('2');
+    const original = changed[Symbol.iterator].bind(changed);
+    changed[Symbol.iterator] = function* (): MapIterator<[string, string]> {
+      for (const entry of original()) yield entry;
+      controller.abort();
+    };
+    await expect(
+      store.commit(
+        { ...snapshot, resources: changed },
+        first,
+        controller.signal,
+      ),
+    ).rejects.toThrow('stopped');
+    expect(await store.head(snapshot.scope)).toBe(first);
+  });
   it('records removal without losing the old resource', async () => {
     const store = await setup();
     const base = { scope: 'one', context: {}, resources: resource('1') };
