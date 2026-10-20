@@ -102,8 +102,10 @@ syncables logout --config /absolute/path/config.json
 Use `node build/src/cli/main.js` instead of `syncables` when running from source.
 `login` saves device access/refresh tokens in macOS Keychain, never in Git,
 PostgreSQL, config or argv. Background runs reload them and serialize refresh
-rotation through a PostgreSQL lock. An uncertain refresh clears local tokens
-and requires another explicit login. `logout` removes local credentials and
+rotation through a PostgreSQL lock. A non-secret guard commits before refresh
+and clears after the rotated credentials are saved. A crash or uncertain
+response requires another explicit login, even if Keychain refuses deletion.
+A foreground in-memory grant cannot unblock stale saved credentials. `logout` removes local credentials and
 revokes the device session; revocation failure is reported. No owner key is
 requested. Persistent credential storage on other operating systems is deferred;
 `--interactive` remains available for foreground experiments.

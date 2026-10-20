@@ -4,6 +4,11 @@ CREATE TABLE IF NOT EXISTS syncables_cache.version (
   singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), version integer NOT NULL
 );
 INSERT INTO syncables_cache.version VALUES(true,1) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS syncables_cache.device_login_required (
+  owner text NOT NULL, issuer text NOT NULL, client_id text NOT NULL,
+  since timestamptz NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY(owner,issuer,client_id)
+);
 CREATE TABLE IF NOT EXISTS syncables_cache.payloads (
   owner text NOT NULL, hash text NOT NULL, codec text NOT NULL,
   raw_bytes integer NOT NULL CHECK(raw_bytes >= 0), data bytea NOT NULL,

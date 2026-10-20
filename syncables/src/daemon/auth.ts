@@ -51,7 +51,12 @@ export class KeychainCredentials implements CredentialStore {
         clearTimeout(timer);
         return code === 0
           ? done(Buffer.concat(chunks).toString('utf8'))
-          : reject(new Error('Keychain item unavailable or access refused'));
+          : reject(
+              Object.assign(
+                new Error('Keychain item unavailable or access refused'),
+                { code },
+              ),
+            );
       });
       child.stdin.on('error', () => {});
       child.stdin.end(input);
@@ -97,7 +102,9 @@ export class KeychainCredentials implements CredentialStore {
       'syncables-daemon',
       '-a',
       this.account,
-    ]).catch(() => {});
+    ]).catch((error: unknown) => {
+      if ((error as { code?: number }).code !== 44) throw error;
+    });
   }
 }
 export class DaemonAuth {
@@ -144,6 +151,11 @@ export class DaemonAuth {
         key,
       ]);
       if (this.credentials) await this.credentials.set(value);
+      if (this.credentials)
+        await client.query(
+          'DELETE FROM syncables_cache.device_login_required WHERE owner=$1 AND issuer=$2 AND client_id=$3',
+          [this.config.owner, this.config.issuer, this.config.clientId],
+        );
       this.value = value;
     } finally {
       await client
@@ -200,11 +212,26 @@ export class DaemonAuth {
           this.config.clientId,
         ]),
       ]);
+      if (this.credentials) {
+        const guard = await client.query(
+          'SELECT 1 FROM syncables_cache.device_login_required WHERE owner=$1 AND issuer=$2 AND client_id=$3',
+          [this.config.owner, this.config.issuer, this.config.clientId],
+        );
+        if (guard.rowCount)
+          throw new Error('Login required after interrupted refresh or logout');
+      }
       this.value = this.validate(
         this.credentials ? await this.credentials.get() : this.value,
       );
       if (this.value.expiresAt > Date.now() + 60_000) return this.value;
       const old = this.value;
+      // Commit before sending a rotating token: a crash/lost response must
+      // not let any later process reload and reuse the possibly consumed token.
+      if (this.credentials)
+        await client.query(
+          'INSERT INTO syncables_cache.device_login_required(owner,issuer,client_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+          [this.config.owner, this.config.issuer, this.config.clientId],
+        );
       try {
         const response = await this.fetchImpl(old.tokenEndpoint, {
           method: 'POST',
@@ -239,13 +266,18 @@ export class DaemonAuth {
           expiresAt: Date.now() + token.expires_in * 1000,
         };
         if (this.credentials) await this.credentials.set(next);
+        if (this.credentials)
+          await client.query(
+            'DELETE FROM syncables_cache.device_login_required WHERE owner=$1 AND issuer=$2 AND client_id=$3',
+            [this.config.owner, this.config.issuer, this.config.clientId],
+          );
         this.value = next;
         return next;
       } catch {
         // A lost response may have consumed the old refresh token. Never retry
         // it: clear local state and require another explicit device login.
         this.value = undefined;
-        await this.credentials?.delete();
+        await this.credentials?.delete().catch(() => {});
         throw new Error('Login required after failed or uncertain refresh');
       }
     } finally {
@@ -278,6 +310,11 @@ export class DaemonAuth {
         'syncables-auth',
         key,
       ]);
+      if (this.credentials)
+        await client.query(
+          'INSERT INTO syncables_cache.device_login_required(owner,issuer,client_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+          [this.config.owner, this.config.issuer, this.config.clientId],
+        );
       await this.logoutLocked();
     } finally {
       await client

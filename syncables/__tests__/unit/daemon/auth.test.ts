@@ -13,11 +13,17 @@ describe.skipIf(!database)(
   'daemon device credentials (real PostgreSQL locks; invented tokens)',
   () => {
     let archive: PostgresArchive;
+    const owners: string[] = [];
     beforeAll(async () => {
       archive = new PostgresArchive(database!);
       await archive.initialize();
     });
     afterAll(async () => {
+      if (archive)
+        await archive.pool.query(
+          'DELETE FROM syncables_cache.device_login_required WHERE owner=ANY($1::text[])',
+          [owners],
+        );
       await archive?.close();
     });
     function setup(): {
@@ -33,6 +39,7 @@ describe.skipIf(!database)(
         dataDirectory: '/unused',
         collections: [],
       };
+      owners.push(config.owner);
       let value: DeviceCredentials | undefined = {
         issuer: config.issuer,
         accessToken: 'expired',
@@ -96,6 +103,76 @@ describe.skipIf(!database)(
       expect(h.value()).toBeUndefined();
       await expect(auth.session()).rejects.toThrow('Login required');
       expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+    it('keeps a durable guard across restart even if the vault refuses deletion', async () => {
+      const h = setup();
+      const fetchImpl = vi.fn<typeof fetch>(async () => {
+        throw new Error('invented lost response');
+      });
+      const refused: CredentialStore = {
+        ...h.vault,
+        delete: async (): Promise<void> => {
+          throw new Error('vault refused');
+        },
+      };
+      const auth = new DaemonAuth(h.config, archive, refused, fetchImpl);
+      await expect(auth.session()).rejects.toThrow('uncertain refresh');
+      expect(h.value()?.refreshToken).toBe('refresh-old');
+      const restarted = new DaemonAuth(h.config, archive, refused, fetchImpl);
+      await expect(restarted.session()).rejects.toThrow('interrupted refresh');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+    it('requires fresh persistent login after a crash; an in-memory grant cannot unblock the stale vault', async () => {
+      const h = setup();
+      await archive.pool.query(
+        'INSERT INTO syncables_cache.device_login_required(owner,issuer,client_id) VALUES($1,$2,$3)',
+        [h.config.owner, h.config.issuer, h.config.clientId],
+      );
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        const path = new URL(String(input)).pathname;
+        if (path === '/.well-known/oauth-authorization-server')
+          return Response.json({
+            issuer: h.config.issuer,
+            device_authorization_endpoint: h.config.issuer + '/device',
+            token_endpoint: h.config.issuer + '/token',
+          });
+        if (path === '/device')
+          return Response.json({
+            device_code: 'invented-code',
+            user_code: 'TEST-CODE',
+            verification_uri: h.config.issuer + '/approve',
+            interval: 1,
+            expires_in: 60,
+          });
+        if (path === '/token')
+          return Response.json({
+            access_token: 'fresh-access',
+            refresh_token: 'fresh-refresh',
+            token_type: 'Bearer',
+            session_id: 'fresh-session',
+            expires_in: 600,
+          });
+        if (path === '/connections')
+          return Response.json({ owner: h.config.owner, connections: [] });
+        throw new Error('Unexpected invented request');
+      });
+      const persistent = new DaemonAuth(h.config, archive, h.vault, fetchImpl);
+      await expect(persistent.session()).rejects.toThrow('interrupted refresh');
+      expect(fetchImpl).not.toHaveBeenCalled();
+      const memory = new DaemonAuth(h.config, archive, undefined, fetchImpl);
+      await memory.login(() => {});
+      expect((await memory.session()).accessToken).toBe('fresh-access');
+      await expect(persistent.session()).rejects.toThrow('interrupted refresh');
+      await persistent.login(() => {});
+      expect((await persistent.session()).accessToken).toBe('fresh-access');
+      expect(
+        (
+          await archive.pool.query(
+            'SELECT 1 FROM syncables_cache.device_login_required WHERE owner=$1',
+            [h.config.owner],
+          )
+        ).rowCount,
+      ).toBe(0);
     });
     it('rejects a cross-owner or cross-origin vault entry and revokes only the stored device session', async () => {
       const h = setup();
