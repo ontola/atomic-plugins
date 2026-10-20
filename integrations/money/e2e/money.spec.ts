@@ -522,6 +522,27 @@ test.describe('money integration', () => {
     );
     await expect(syncCard).not.toContainText('Simulated host failure');
 
+    // The incomplete row completed in the host while the app stays open:
+    // the person fills its Amount (a write in the page, as typing in the
+    // table does). The app reads incomplete rows again whenever the table
+    // notifies a change. At the pin an edit of a row's property does not
+    // (a first run waited 30 s in vain); the next change to the table's
+    // children does, which here is the import below.
+    await expect(incomplete).toContainText('1 row is incomplete');
+    await page.evaluate(
+      async ({ subject, amount }) => {
+        const row = await window.store!.getResource(subject);
+        await row.set(amount, '-3.00');
+        await row.save();
+      },
+      { subject: stub, amount: p['bank-amount'].subject },
+    );
+    await expect
+      .poll(() => valueOf(page, stub, p['bank-amount'].subject), {
+        timeout: 30_000,
+      })
+      .toBe('-3.00');
+
     // An import that stops midway (0.4.2's card): the host refuses the
     // app's second write (its own writes go through /app-write). The same
     // statement under another account brings 2 new transactions.
@@ -602,6 +623,13 @@ test.describe('money integration', () => {
     );
     await sheet.getByRole('button', { name: 'Close' }).first().click();
     expect(await otherRows()).toBe(2);
+    // The row completed above, with the app open all along: in the ledger
+    // now, and no longer listed as incomplete or ignored by the card.
+    await expect(incomplete).toHaveCount(0, { timeout: 30_000 });
+    await expect(
+      app.getByRole('button', { name: /Typed by hand/ }).first(),
+    ).toBeVisible();
+    await expect(syncCard.locator('[data-key=ignored]')).toHaveCount(0);
   });
 
   test('Money app: a view of the importer’s Bank transactions table: import, statements, row editing, in-app check', async ({
