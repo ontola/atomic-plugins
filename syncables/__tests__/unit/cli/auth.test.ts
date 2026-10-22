@@ -54,6 +54,67 @@ const granted = {
 };
 
 describe('CLI device authorization', () => {
+  it('prints the complete approval link carrying the matching user code', async () => {
+    const complete = `${issuer}/approve?user_code=DEMO-CODE`;
+    const fake = fixture([
+      discovery,
+      {
+        ...device,
+        body: { ...device.body, verification_uri_complete: complete },
+      },
+      granted,
+    ]);
+    const messages: string[] = [];
+    await deviceLogin(
+      { issuer, clientId: 'demo' },
+      {
+        fetch: fake.fetch,
+        sleep: async () => {},
+        report: (message) => {
+          messages.push(message);
+        },
+      },
+    );
+    expect(messages.join('\n')).toContain('Open ' + complete + '\n');
+    expect(messages.join('\n')).toContain('Continue to owner approval');
+    expect(messages.join('\n')).not.toContain('invented-device-code');
+    expect(messages.join('\n')).not.toContain('invented-access-token');
+  });
+
+  it.each([
+    `https://other.example/approve?user_code=DEMO-CODE`,
+    `${issuer}/other?user_code=DEMO-CODE`,
+    `${issuer}/approve?user_code=OTHER-CODE`,
+    `${issuer}/approve?user_code=DEMO-CODE&user_code=OTHER-CODE`,
+    `${issuer}/approve`,
+  ])(
+    'rejects a complete approval URI outside the expected endpoint/code: %s',
+    async (complete) => {
+      const fake = fixture([
+        discovery,
+        {
+          ...device,
+          body: { ...device.body, verification_uri_complete: complete },
+        },
+      ]);
+      const messages: string[] = [];
+      await expect(
+        deviceLogin(
+          { issuer, clientId: 'demo' },
+          {
+            fetch: fake.fetch,
+            sleep: async () => {},
+            report: (message) => {
+              messages.push(message);
+            },
+          },
+        ),
+      ).rejects.toThrow('complete verification URI');
+      expect(messages).toEqual([]);
+      expect(fake.requests).toHaveLength(2);
+    },
+  );
+
   it('uses the published proxy device contract for login, discovery and an API read', async () => {
     const contract = JSON.parse(
       readFileSync(

@@ -133,7 +133,16 @@ node build/src/cli/main.js auth-test \
   --scope 'connections:read proxy:read'
 ```
 
-Open the printed approval link and select the existing GitHub connection.
+Open the complete approval link printed by the CLI and compare its user code
+with the terminal. At `localthought.io/device`, click **Continue to owner
+approval** to open the configured local bridge, normally
+`http://127.0.0.1:11873/`. The public `/device` page is an instruction/link page,
+not a form; the local bridge has the **User code** input and **Review request**
+button. If the code is not prefilled, paste it there, review the client/scopes,
+select the existing GitHub connection and approve. If the bridge cannot load,
+restart your existing owner bridge in the authenticated local worker; the CLI
+does not start it or need the owner's key. An expired request requires a new
+CLI login attempt.
 The output includes `owner` and each approved connection's `connection_id` and
 `platform`. These identifiers are not owner keys or access tokens. Copy them
 into `config.json`; keep credentials and owner signing keys out of that file.

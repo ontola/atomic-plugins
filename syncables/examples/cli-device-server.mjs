@@ -53,16 +53,19 @@ const server = createServer(async (request, response) => {
       device_code: deviceCode,
       user_code: userCode,
       verification_uri: `${origin}/device`,
+      verification_uri_complete: `${origin}/device?user_code=${userCode}`,
       expires_in: 300,
       interval: 1,
     });
   } else if (request.method === 'GET' && url.pathname === '/device') {
+    const supplied = url.searchParams.get('user_code') ?? '';
+    const prefilled = /^[A-F0-9]{8}$/.test(supplied) ? supplied : '';
     response.writeHead(200, {
       'content-type': 'text/html',
       'cache-control': 'no-store',
     });
     response.end(
-      '<h1>Syncables mock device approval</h1><p>Invented GitHub connection; no real permissions.</p><form method="POST" action="/approve"><label>Code <input name="code" required></label><button>Approve demo read access</button></form>',
+      `<h1>Syncables mock device approval</h1><p>Invented GitHub connection; no real permissions.</p><form method="POST" action="/approve"><label>Code <input name="code" value="${prefilled}" required></label><button>Approve demo read access</button></form>`,
     );
   } else if (request.method === 'POST' && url.pathname === '/approve') {
     const device = [...devices.values()].find(

@@ -182,6 +182,19 @@ export async function deviceLogin(
   const verification = safeUrl(
     text(device.verification_uri, 'verification URI'),
   );
+  let approval = verification;
+  if (device.verification_uri_complete !== undefined) {
+    approval = safeUrl(
+      text(device.verification_uri_complete, 'complete verification URI'),
+    );
+    if (
+      approval.origin !== verification.origin ||
+      approval.pathname !== verification.pathname ||
+      approval.searchParams.getAll('user_code').length !== 1 ||
+      approval.searchParams.get('user_code') !== userCode
+    )
+      throw new Error('Invalid complete verification URI for this user code');
+  }
   if (
     typeof device.expires_in !== 'number' ||
     !Number.isFinite(device.expires_in) ||
@@ -197,7 +210,7 @@ export async function deviceLogin(
     throw new Error('Invalid device polling interval');
   const deadline = started + Math.min(device.expires_in, 900) * 1000;
   hooks.report(
-    `Open ${verification.href}\nEnter code: ${userCode}\nWaiting for approval…`,
+    `Open ${approval.href}\nEnter code: ${userCode}\nIf the code is already filled in, compare it with this code.\nIf prompted, choose Continue to owner approval to review the request.\nWaiting for approval…`,
   );
   while (now() < deadline) {
     await sleep(Math.min(interval * 1000, Math.max(0, deadline - now())));
