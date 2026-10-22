@@ -1,0 +1,57 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Read-only Google Keep note snapshot",
+    "version": "1",
+    "description": "Minimal GET-only profile of Google Keep API v1 notes.list. Source: https://raw.githubusercontent.com/ontola/openapi-directory/091431739208d017c11b0b0589ab33293f8b3690/APIs/googleapis.com/keep/v1/openapi.yaml"
+  },
+  "servers": [{ "url": "https://keep.googleapis.com" }],
+  "paths": {
+    "/v1/notes": {
+      "get": {
+        "parameters": [
+          { "in": "query", "name": "filter", "schema": { "type": "string" } },
+          {
+            "in": "query",
+            "name": "pageSize",
+            "schema": { "type": "integer" }
+          },
+          { "in": "query", "name": "pageToken", "schema": { "type": "string" } }
+        ],
+        "x-pagination": [{ "scheme": "pages" }],
+        "responses": { "200": { "description": "A page of notes" } }
+      }
+    }
+  },
+  "components": {
+    "paginationSchemes": {
+      "pages": {
+        "type": "pageToken",
+        "autoDetect": false,
+        "request": {
+          "queryParameters": {
+            "pageToken": { "role": "pageToken" },
+            "pageSize": { "role": "pageSize" }
+          }
+        },
+        "response": {
+          "bodyFields": { "nextPageToken": { "role": "nextPageToken" } }
+        }
+      }
+    },
+    "crudResources": {
+      "note": {
+        "identity": {
+          "urlTemplate": "/v1/{name}",
+          "bindings": { "name": { "field": "name" } }
+        },
+        "collections": {
+          "notes": {
+            "urlTemplate": "/v1/notes",
+            "envelope": { "itemsField": "notes", "emptyWhenAbsent": true }
+          }
+        }
+      }
+    }
+  }
+}

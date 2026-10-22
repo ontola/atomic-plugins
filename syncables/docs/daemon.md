@@ -1,6 +1,6 @@
 # Standalone Syncables: local Git experiment
 
-This source branch adds a read-only standalone daemon to the existing
+The source implementation adds a read-only standalone daemon to the existing
 `syncables` executable. It stores original API response text and lossless,
 content-addressed nested JSON nodes in a separate local PostgreSQL database.
 The [JSON graph format and fixed vectors](json-graph-v1.md) define its persisted
@@ -32,7 +32,7 @@ export PATH="$(brew --prefix postgresql@17)/bin:$PATH"
 ```
 
 ```sh
-git clone --branch codex/syncables-daemon \
+git clone --branch main \
   https://github.com/ontola/atomic-plugins.git atomic-plugins-daemon
 cd atomic-plugins-daemon/syncables
 npm ci
@@ -71,12 +71,113 @@ There is no automatic pruning of response logs, inbox deliveries or Git history.
 
 ## Configure real collections
 
-Copy the demo config and its composed OpenAPI document into a private directory.
-Replace `owner`, `connection`, `issuer`, `clientId`, account labels and parent
-bindings with your existing approved owner/connection. Use issuer
-`https://localthought.io` and public client `syncables-cli`. Discover the owner
-and approved connection IDs with the existing `auth-test` command in the
-[CLI guide](cli.md); those identifiers are not owner keys.
+The implementation from PR #675 is now on `main`. If you cloned its earlier
+feature branch, update the source before trying real providers. From the
+repository root:
+
+```sh
+git switch main
+git pull --ff-only
+cd syncables
+npm ci
+npm run build:release
+```
+
+### Copy the two files
+
+Yes: the demo config is `examples/daemon/config.demo.json`, and its OpenAPI
+document is `examples/daemon/github-issues.json`. Here, "composed OpenAPI
+document" means the API description already contains the collection identity
+and paging metadata the daemon needs. The supplied small GitHub document is
+ready to use; you do not need to download or compose a full GitHub specification.
+
+Use a directory outside the source checkout for real data, for example
+`$HOME/.local/share/syncables-live`. Run these commands from the checkout's
+`syncables/` directory, the directory containing its `package.json`:
+
+```sh
+mkdir -p "$HOME/.local/share/syncables-live"
+chmod 700 "$HOME/.local/share/syncables-live"
+cp -n examples/daemon/config.demo.json "$HOME/.local/share/syncables-live/config.json"
+cp -n examples/daemon/github-issues.json "$HOME/.local/share/syncables-live/github-issues.json"
+chmod 600 "$HOME/.local/share/syncables-live/"*.json
+```
+
+`cp -n` preserves any copies you have already edited. Keep both files together.
+The config's `"document": "./github-issues.json"` resolves relative to the config
+file, as does `"dataDirectory": "./local-data.git"`. The resulting layout is:
+
+```text
+~/.local/share/syncables-live/
+  config.json             your edited config
+  github-issues.json      GET collection/pagination description
+  local-data.git/         created by sync; resources, schemas and history
+```
+
+`./data` at the repository root also works. Ignore it in Git before saving real
+data there (for example, put `/data/` in `.git/info/exclude`), and set permissions
+to 700. Check with `git check-ignore data/config.json` from the repository root.
+Do not commit its config, copied documents, responses or nested Git repository.
+The PostgreSQL response archive is separate and stays at the database selected
+by `SYNCABLES_DATABASE_URL`; it is not placed in this directory.
+
+### Connect and edit the copied config
+
+With your existing local owner approval bridge running, list the connections
+you approve for this test. This step needs no PostgreSQL connection and makes
+no provider API call:
+
+```sh
+node build/src/cli/main.js auth-test \
+  --issuer https://localthought.io --client-id syncables-cli \
+  --scope 'connections:read proxy:read'
+```
+
+Open the printed approval link and select the existing GitHub connection.
+The output includes `owner` and each approved connection's `connection_id` and
+`platform`. These identifiers are not owner keys or access tokens. Copy them
+into `config.json`; keep credentials and owner signing keys out of that file.
+For the previously tested `ontola/usertest-findings` repository, change:
+
+| Config field | Value for the real GitHub test |
+| --- | --- |
+| `owner` | `owner` from connection discovery |
+| `issuer` | `https://localthought.io` |
+| `clientId` | `syncables-cli` |
+| `collections[0].connection` | Approved `github-issues` connection ID |
+| `collections[0].account` | `ontola` (local account label) |
+| `collections[0].name` | `usertest-findings` (local collection label) |
+| `collections[0].bindings` | `{"owner":"ontola","repo":"usertest-findings"}` |
+| `collections[0].pollSeconds` | `0` for manual tests first |
+
+Keep `platform` as `github-issues`, `document` as `./github-issues.json`,
+`collection` as `issues` and `query` as `{"per_page":"100"}`. The profile's
+fixed query reads `state=all`, so the list includes closed issues and pull
+requests. Substitute your own namespace/repository in the labels and bindings
+to test another repo. Its GitHub App installation must include that repository.
+The top-level `owner` is your Atomic owner ID from discovery;
+`bindings.owner` is the GitHub namespace, such as `ontola`.
+
+In the same terminal, define a helper that selects the real config instead of
+the demo config. This replaces the earlier demo `cli` shell function:
+
+```sh
+export SYNCABLES_DATABASE_URL='postgresql://localhost/syncables_local'
+cli() {
+  node build/src/cli/main.js "$@" \
+    --config "$HOME/.local/share/syncables-live/config.json"
+}
+cli sync --collections github-issues/ontola/usertest-findings --interactive \
+  --message "First snapshot of the real repository"
+cli browse github-issues/ontola/usertest-findings
+cli history --collection github-issues/ontola/usertest-findings
+```
+
+This fetches the configured collection, not just one page. To check access
+before that full fetch, use `auth-test --path` as shown in the [CLI guide](cli.md).
+`--interactive` uses a fresh approval for each foreground process. After the
+first successful read, use `cli login` to save a separately approved session in
+macOS Keychain and run `cli sync`/`cli daemon` without `--interactive`.
 
 Paths in the config resolve relative to the config file. Restart the foreground
 daemon after editing its config or composed documents. Each collection has:
@@ -125,6 +226,104 @@ the owner refuses to start. One-shot and daemon reads share collection locks;
 a concurrent one-shot reports an already-running collection. Losing the daemon's
 database lock stops it, so restart after PostgreSQL recovers. Automatic launchd
 installation, IPC/attaching to a running job, and service management are deferred.
+
+## Add a Google Keep trial
+
+Use the same daemon and private config directory. A Google Keep provider
+connection must already exist at `localthought.io`, under the same Atomic owner
+as your GitHub connection. The device approval page must offer it for selection.
+Google Keep API access is for a Google Workspace account; use the account that
+owns the notes you intend to read. The CLI's `connections:read proxy:read`
+grant is separate from the Google OAuth authorization held by the proxy.
+
+If no Keep connection is available, connect the account using the existing
+Google Keep Drive app (`Integrations → Drive apps → Show experimental plugins`,
+install Google Keep, then `Connect Google Keep`). Keep "Send edits to Google
+Keep" off. If the platform is unavailable or OAuth configuration is missing,
+the authenticated local worker must finish the provider setup first: Keep API
+enabled, Workspace authorization, the `OAUTH_GOOGLE_KEEP_CLIENT_ID` and
+`OAUTH_GOOGLE_KEEP_CLIENT_SECRET` server settings, redirect
+`https://localthought.io/oauth/google-keep/callback`, and a catalog containing
+`google-keep`. Preserve existing platforms when selecting a catalog. No owner
+key or Google client secret belongs in the daemon config. This guide does not
+establish that the deployed Keep setup has been completed.
+
+Once the connection exists, rerun the connection-discovery command above and
+approve Keep. From the checkout's `syncables/` directory, copy its GET-only
+collection description:
+
+```sh
+cp -n examples/daemon/google-keep.json "$HOME/.local/share/syncables-live/google-keep.json"
+chmod 600 "$HOME/.local/share/syncables-live/google-keep.json"
+```
+
+Append this object to `collections` in the private `config.json`, replacing the
+connection placeholder with the approved `google-keep` connection ID:
+
+```json
+{
+  "platform": "google-keep",
+  "account": "workspace",
+  "name": "notes",
+  "connection": "REPLACE_WITH_APPROVED_GOOGLE_KEEP_CONNECTION_ID",
+  "document": "./google-keep.json",
+  "collection": "notes",
+  "bindings": {},
+  "query": { "pageSize": "100" },
+  "pollSeconds": 0
+}
+```
+
+To probe one page before importing the account's full note collection, approve
+the Keep connection for this command (select it explicitly with `--connection`
+if you approve multiple connections):
+
+```sh
+node build/src/cli/main.js auth-test \
+  --issuer https://localthought.io --client-id syncables-cli \
+  --scope 'connections:read proxy:read' \
+  --path '/v1/notes?pageSize=1'
+```
+
+This prints status and response size, not note contents. A successful device
+login alone does not establish successful Google API access. Using the real
+`cli` helper defined above, fetch and inspect:
+
+```sh
+cli sync --collections google-keep/workspace/notes --interactive \
+  --message "First read-only Google Keep snapshot"
+cli browse google-keep/workspace/notes --filter '/title="My test list"'
+cli history --collection google-keep/workspace/notes
+```
+
+Replace `My test list` with the title you want to inspect. The title filter is
+a local browse filter: the sync reads all pages of the
+approved account's default non-trashed note collection and archives their
+responses. Keep's API cannot limit list results by title. Its `name` field
+(`notes/NOTE_ID`) is the stable item ID. For one note's history, pass that whole
+ID: `cli history 'notes/NOTE_ID' --collection google-keep/workspace/notes`.
+For item browsing, encode its slash in the path:
+`cli browse google-keep/workspace/notes/notes%2FNOTE_ID`. Resource/schema pinning
+and intent messages work exactly as for GitHub.
+
+The profile follows `nextPageToken`, including after a short or empty page,
+and accepts Google's omitted `notes` field as an empty array. Malformed fields,
+failed pages and interrupted reads do not publish a partial snapshot. Each
+manual fetch is a full reconciliation. List bodies and attachment metadata are
+kept within the note's original JSON; attachment files are not downloaded.
+The daemon makes GET requests only and does not apply the Drive app's two-way
+mapping or replace/edit/delete Keep notes.
+
+For a second history entry, make an intentional change to a chosen issue/note
+in its provider UI, then rerun that collection's `cli sync --interactive` with
+a new `--message`. The daemon observes that change; it never performs it.
+Inspect `cli history ITEM_ID --collection ...` and use `--at FULL_COMMIT_ID`
+to compare the old and new local resources. After Keychain login, omit
+`--collections` to fetch both configured collections in one run. Select both
+connections when approving `cli login`; adding a config entry does not extend
+an existing session's connection grant. Starting
+`cli daemon` with `pollSeconds: 0` does not add periodic polling; change the
+desired collection to 300 and restart to poll it every five minutes.
 
 ## Incremental behavior and local history
 

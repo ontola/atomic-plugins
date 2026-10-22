@@ -15,11 +15,12 @@ covers optional PostgreSQL archival and recorded-run replay.
 ## Build the source
 
 Use Node 22.11 or newer, including Node 26. CI covers Node 22, 24 and 26.
-The scaffold is on the PR branch, not the currently published npm release.
+The source implementation is on `main`; it is not in the currently published
+npm release.
 For a fresh checkout from any directory:
 
 ```sh
-git clone --branch codex/syncables-daemon \
+git clone --branch main \
   https://github.com/ontola/atomic-plugins.git atomic-plugins-cli-test
 cd atomic-plugins-cli-test/syncables
 npm ci
@@ -27,11 +28,11 @@ npm run build:release
 node build/src/cli/main.js --help
 ```
 
-If using an existing checkout, ensure it has this branch and run commands
+If using an existing checkout, update `main` and run commands
 from its `syncables/` directory. `npm pkg get name scripts.cli:mock` should
 report package `syncables` and `node examples/cli-device-server.mjs`.
 A missing `cli:mock` script means the current package/checkout does not contain
-the scaffold; the clone above gives an independent test checkout.
+the implementation; the clone above gives an independent test checkout.
 
 The package has a `bin` named `syncables` pointing to `build/src/cli/main.js`.
 The commands below use the source build; the CLI is not claimed to be in the
