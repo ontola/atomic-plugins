@@ -98,6 +98,15 @@ Omit
 `--path` to test login and list connections without making a provider request.
 The command sends GET only; success logging does not imply write access.
 
+The CLI prints the complete approval URL containing `user_code` when the server
+supplies one. The public `localthought.io/device` page has no paste field: click
+**Continue to owner approval** to reach the existing local bridge. Compare its
+prefilled code with the terminal, or paste into that bridge's **User code**
+field, then **Review request**, select connections and approve. If the bridge
+is unavailable, restart the existing bridge through the authenticated local
+worker. Do not export an owner key to the CLI. Keep the requesting CLI running;
+if the request expires, start it again and use its new code.
+
 Success means the command prints the authenticated owner and accessible
 connections, then `apiAccess: verified`, `status: 200`, JSON content type and
 the response byte count. That is evidence of an actual GitHub API read through
