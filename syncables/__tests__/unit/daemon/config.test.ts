@@ -33,6 +33,14 @@ describe('configured daemon scope', () => {
       const config = await loadDaemonConfig(file);
       const source = config.collections[0];
       expect(source.document).toBe(join(dir, 'source.json'));
+      expect(config.checkoutDirectory).toBeUndefined();
+      await writeFile(
+        file,
+        JSON.stringify({ ...value, checkoutDirectory: 'my-data' }),
+      );
+      expect((await loadDaemonConfig(file)).checkoutDirectory).toBe(
+        join(dir, 'my-data'),
+      );
       expect(source.pollSeconds).toBe(0);
       expect(selectedCollections(config, ['example/work/entries'])).toEqual([
         source,

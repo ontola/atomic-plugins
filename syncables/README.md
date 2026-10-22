@@ -88,6 +88,9 @@ webhook hints and limits, and [Versioned Atomic Data](../docs/design/versioned-a
 for snapshot resolution. The [CLI guide](docs/cli.md) covers device login and
 read-only API probes. Replication definitions remain configuration only.
 Root/browser library imports do not start the daemon or load its storage.
+Successful syncs expose normal Git working folders for each collection;
+`syncables checkout` exposes existing snapshots without fetching again.
+Items and bundled schemas have document-scoped API resource classes.
 
 For published releases, install with `npm install syncables`. To build the
 current source, run these commands from `syncables/` with Node 22.11 or newer:

@@ -20,6 +20,7 @@ export interface DaemonConfig {
   issuer: string;
   clientId: string;
   dataDirectory: string;
+  checkoutDirectory?: string;
   collections: CollectionConfig[];
   webhookPort?: number;
 }
@@ -107,6 +108,14 @@ export async function loadDaemonConfig(file: string): Promise<DaemonConfig> {
       base,
       text(data.dataDirectory ?? './syncables-data.git', 'data directory'),
     ),
+    ...(data.checkoutDirectory === undefined
+      ? {}
+      : {
+          checkoutDirectory: resolve(
+            base,
+            text(data.checkoutDirectory, 'checkout directory'),
+          ),
+        }),
     collections,
     ...(port === undefined ? {} : { webhookPort: Number(port) }),
   };

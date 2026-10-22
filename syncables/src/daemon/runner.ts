@@ -14,9 +14,14 @@ import {
   type PreparedCollection,
   type CollectionSyncResult,
   SyncRetryError,
+  upgradeSourceClasses,
 } from './sync.js';
 import { alias, selectedCollections, type DaemonConfig } from './config.js';
-import type { GitAtomicStore } from './git-store.js';
+import {
+  CheckoutBlockedError,
+  type GitAtomicStore,
+  type CheckoutResult,
+} from './git-store.js';
 
 export interface RunnerAuth {
   session(): Promise<Session>;
@@ -126,7 +131,12 @@ export class DaemonRunner {
     signal?: AbortSignal,
     dueOnly = false,
   ): Promise<
-    { alias: string; result?: CollectionSyncResult; error?: string }[]
+    {
+      alias: string;
+      result?: CollectionSyncResult;
+      error?: string;
+      checkout?: CheckoutResult;
+    }[]
   > {
     const selected = new Set(
       selectedCollections(this.config, selectors).map(alias),
@@ -135,6 +145,7 @@ export class DaemonRunner {
       alias: string;
       result?: CollectionSyncResult;
       error?: string;
+      checkout?: CheckoutResult;
     }[] = [];
     for (const p of this.prepared) {
       const name = alias(p.source);
@@ -170,6 +181,9 @@ export class DaemonRunner {
           [this.config.owner, name],
         );
         try {
+          await this.store.checkout(p.scope, name);
+          if (await upgradeSourceClasses(p, this.store))
+            await this.store.checkout(p.scope, name);
           const session = await this.auth.session();
           const connections = await listConnections(session, this.fetchImpl);
           if (connections.owner !== this.config.owner)
@@ -226,13 +240,32 @@ export class DaemonRunner {
               p.source.pollSeconds,
             ],
           );
-          results.push({ alias: name, result });
+          try {
+            const checkout = await this.store.checkout(p.scope, name);
+            results.push({
+              alias: name,
+              result,
+              ...(checkout ? { checkout } : {}),
+            });
+          } catch (error) {
+            const message =
+              error instanceof CheckoutBlockedError
+                ? error.message
+                : 'Snapshot saved, but its working folder could not be updated; run checkout to retry';
+            await client.query(
+              "UPDATE syncables_cache.daemon_jobs SET state='checkout-blocked',last_error=$3 WHERE owner=$1 AND alias=$2",
+              [this.config.owner, name, message],
+            );
+            results.push({ alias: name, result, error: message });
+          }
         } catch (error) {
           const message =
-            error instanceof Error &&
-            /login|401|403|connection.*refused/i.test(error.message)
-              ? 'Authorization needs attention; run login or check approved connections'
-              : 'Sync did not finish; next attempt resumes from the published snapshot';
+            error instanceof CheckoutBlockedError
+              ? error.message
+              : error instanceof Error &&
+                  /login|401|403|connection.*refused/i.test(error.message)
+                ? 'Authorization needs attention; run login or check approved connections'
+                : 'Sync did not finish; next attempt resumes from the published snapshot';
           const retry = Math.min(
             300,
             5 * 2 ** Math.min(Number(job.failures), 6),
