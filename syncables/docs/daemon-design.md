@@ -13,7 +13,8 @@ and [#566](https://github.com/ontola/atomic-plugins/issues/566) (CLI and daemon)
 
 ## What exists and what is planned
 
-Status checked against repository source on 2026-10-16:
+Status checked against this implementation branch on 2026-10-20; see the
+[runnable daemon guide](daemon.md) for commands and current limits:
 
 | Area | Status and reference |
 | --- | --- |
@@ -21,10 +22,11 @@ Status checked against repository source on 2026-10-16:
 | Device-authentication backend and live read-only pilot | Merged in integration-proxy 0.4.0; [contract and operator guide](../../integration-proxy/DEVICE_AUTH.md). The laptop worker reports successful browser approval, bearer connection discovery, a proxied GitHub GET and session revocation on 2026-10-16; see the evidence below. Production owner-hub integration and live refresh testing remain follow-ups. |
 | CLI device test and replication definitions | In draft [PR #567](https://github.com/ontola/atomic-plugins/pull/567), with a [source-install/test guide](https://github.com/ontola/atomic-plugins/blob/codex/syncables-cli-auth-scaffold/syncables/docs/cli.md). Definitions are configuration only. |
 | Local PostgreSQL archive, read cache and recorded-run replay | Implemented in draft #567; [cache/replay guide](https://github.com/ontola/atomic-plugins/blob/codex/syncables-cli-auth-scaffold/syncables/docs/postgres-cache.md). Not yet merged or released as part of this design document. |
-| Content-addressed nested JSON nodes and observed revision history | Planned extension of #567's whole-response deduplication; no node graph or revision browser exists in that stage. |
+| Content-addressed nested JSON nodes and observed revision history | Implemented in this branch: lossless nested-hash PostgreSQL nodes and Git snapshot/item history. |
 | Compact collection coverage and disposable hydration | Planned for the daemon. Existing `ReadCoverage` is narrower than this design. |
-| Selected one-shot incremental fetch, webhook/poll scheduler and offline browser | Planned. The library currently refuses `incrementalSync` pagination schemes; conditional/full reads are not sync-token support. |
-| PostgreSQL outgoing outbox, persistent CLI credentials and launchd service | Planned for the daemon. Existing library outbox persistence is caller-supplied. |
+| Selected one-shot incremental fetch, webhook/poll scheduler and offline browser | Implemented in this branch: configured GET full reconciliation, a standalone query-token incremental subset, durable relay hints, polling and commit-pinned local browsing. The library reader still refuses `incrementalSync`. |
+| Credentials and service lifecycle | macOS Keychain adapter and serialized refresh implemented in this branch; live laptop validation remains. Foreground daemon only; launchd/IPC deferred. |
+| PostgreSQL outgoing outbox | Planned. This daemon is read-only; existing library outbox persistence is caller-supplied. |
 | Atomic, NextGraph, remoteStorage, Jazz and atproto runtime replication | Planned; only the first three have scaffold configuration commands. Configuring a destination does not establish replication. |
 | Retire the source and promote the local copy | Product direction; requires a separate migration plan and implementation. |
 
@@ -32,6 +34,21 @@ Live evidence below is attributed to **API keys (local)** on 2026-10-16. It
 establishes that tested device-flow contract and read, not continuous deployment
 health, every provider permission or a persistent daemon session. Mock tests
 and source/CI evidence remain separate from this live result.
+
+## Versioned Atomic Data update (2026-10-20)
+
+Michiel requested experimenting with all resources and schemas in Git, with
+commit/tag references. Adopt commit-pinned resource and schema resolution by
+default, as specified in [Versioned Atomic Data](../../docs/design/versioned-atomic-data.md).
+PostgreSQL retains response logs, scheduling/inbox state and outgoing intent;
+Git versions the daemon's projected Atomic data copy. The data-copy portions
+of the earlier PostgreSQL revision/index proposal below are superseded by
+that experiment. Neither Git history nor a JSON-AD file establishes native
+Atomic synchronization or complete schema validation.
+
+The remaining sections retain the broader architecture/roadmap. For shipped
+branch behavior, the status table and runnable guide take precedence over
+earlier command sketches and proposed persistence details below.
 
 ## Deployment and package boundaries
 
