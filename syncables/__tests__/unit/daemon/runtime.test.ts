@@ -2,7 +2,7 @@ import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostgresArchive } from '../../../src/postgres/archive.js';
 import { GitAtomicStore } from '../../../src/daemon/git-store.js';
@@ -194,6 +194,94 @@ describe.skipIf(!database)(
       ]);
       expect(
         await archive.jsonResponse(h.config.owner, first.run, 0),
+      ).toMatchObject({ root: expect.any(String) });
+    });
+    it('reads the Keep trial profile through empty continuation pages and retains history on an empty account or failed page', async () => {
+      const h = await setup();
+      const source = {
+        ...h.config.collections[0],
+        platform: 'google-keep',
+        document: resolve('examples/daemon/google-keep.json'),
+        collection: 'notes',
+        query: { pageSize: '100' },
+      };
+      const prepared = await prepareCollection(h.config.owner, source);
+      const read = (upstream: Transport): ReturnType<typeof syncCollection> =>
+        syncCollection({
+          prepared,
+          store: h.store,
+          archive,
+          auth: {
+            owner: h.config.owner,
+            connection: source.connection,
+            authorizationContext: 'invented-keep-grant',
+          },
+          upstream,
+        });
+      const pages = [
+        {
+          notes: [
+            {
+              name: 'notes/invented-a',
+              title: 'Imaginary checklist',
+              body: {
+                list: {
+                  listItems: [
+                    { text: { text: 'Fictional item' }, checked: false },
+                  ],
+                },
+              },
+            },
+          ],
+          nextPageToken: 'invented-page-2',
+        },
+        { nextPageToken: 'invented-page-3' },
+        {
+          notes: [{ name: 'notes/invented-b', title: 'Another invented note' }],
+        },
+      ];
+      const tokens: (string | null)[] = [];
+      const first = await read(async (request) => {
+        expect(request.method).toBe('GET');
+        expect(request.url.origin + request.url.pathname).toBe(
+          'https://keep.googleapis.com/v1/notes',
+        );
+        expect(request.url.searchParams.get('pageSize')).toBe('100');
+        tokens.push(request.url.searchParams.get('pageToken'));
+        return response(JSON.stringify(pages[tokens.length - 1]));
+      });
+      expect(tokens).toEqual([null, 'invented-page-2', 'invented-page-3']);
+      expect(first).toMatchObject({ records: 2, strategy: 'full' });
+      const subject = itemSubject(
+        h.config.owner,
+        source,
+        'note',
+        'notes/invented-a',
+      );
+      expect(
+        await h.store.resource(prepared.scope, subject, first.revision),
+      ).toContain('Fictional item');
+      const empty = await read(async () => response('{}'));
+      expect(empty.records).toBe(0);
+      expect(await h.store.resource(prepared.scope, subject)).toBeUndefined();
+      expect(await h.store.history(prepared.scope, subject)).toEqual([
+        empty.revision,
+        first.revision,
+      ]);
+      let calls = 0;
+      await expect(
+        read(async () =>
+          ++calls === 1
+            ? response(JSON.stringify(pages[0]))
+            : response('unavailable', 503),
+        ),
+      ).rejects.toThrow();
+      await expect(
+        read(async () => response('{"notes":{}}')),
+      ).rejects.toThrow();
+      expect(await h.store.head(prepared.scope)).toBe(empty.revision);
+      expect(
+        await archive.jsonResponse(h.config.owner, first.run, 1),
       ).toMatchObject({ root: expect.any(String) });
     });
     it('keeps the published head on a second-page error, cancellation, duplicate identity or unsafe numeric ID', async () => {
