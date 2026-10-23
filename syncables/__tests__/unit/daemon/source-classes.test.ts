@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -131,39 +131,17 @@ describe('OpenAPI-scoped API resource classes', () => {
     expect(await upgradeSourceClasses(prepared, store)).toBeUndefined();
     expect(await typeSourceRecord(item, sourceClass(prepared))).toBe(item);
   });
-  it('checks out and migrates old snapshots through the CLI without authentication or a database', async () => {
+  it('requires an explicit PostgreSQL migration and leaves legacy history untouched when the database is unconfigured', async () => {
     const { store, prepared, config } = await fixture();
     const first = await store.commit({
       scope: prepared.scope,
       context: {},
-      resources: new Map([
-        [
-          'urn:example:note',
-          JSON.stringify({
-            '@id': 'urn:example:note',
-            [IS_A]: [BASE],
-            [ID]: 'notes/1',
-            [JSON_PROP]: { title: 'Invented' },
-          }),
-        ],
-      ]),
+      resources: new Map(),
     });
     vi.stubEnv('SYNCABLES_DATABASE_URL', '');
-    const output = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
-    await daemonCommand(['checkout'], { config });
-    const rows = JSON.parse(String(output.mock.calls.at(-1)![0]));
-    expect(rows[0].alias).toBe('example/work/notes');
-    expect(rows[0].directory).toBe(
-      join(store.checkoutDirectory, 'example', 'work', 'notes'),
+    await expect(daemonCommand(['checkout'], { config })).rejects.toThrow(
+      'SYNCABLES_DATABASE_URL',
     );
-    expect(
-      await readFile(join(rows[0].directory, 'context.json'), 'utf8'),
-    ).toContain('itemClass');
-    expect(await store.history(prepared.scope)).toEqual([
-      rows[0].revision,
-      first,
-    ]);
-    await daemonCommand(['checkout'], { config });
-    expect(await store.history(prepared.scope)).toHaveLength(2);
+    expect(await store.history(prepared.scope)).toEqual([first]);
   });
 });

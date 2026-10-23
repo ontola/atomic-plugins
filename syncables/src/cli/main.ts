@@ -73,6 +73,10 @@ async function main(): Promise<void> {
         'page-size',
         'message',
         'subject',
+        'subtree',
+        'branches',
+        'output',
+        'source',
       ].map((key) => [key, { type: 'string' as const }]),
     );
   options.help = { type: 'boolean' };
@@ -94,6 +98,8 @@ async function main(): Promise<void> {
       'logout',
       'sync',
       'checkout',
+      'migrate',
+      'export',
       'daemon',
       'status',
       'browse',

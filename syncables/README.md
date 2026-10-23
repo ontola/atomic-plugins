@@ -81,14 +81,16 @@ changelog; the guide explains how to run that source before an npm release.
 
 The source includes an experimental **standalone CLI and foreground daemon**
 in the same npm package. It reads configured collections, archives nested JSON
-by content hash in PostgreSQL, and stores JSON-AD resources and bundled schemas
-in Git. Local browse/history commands pin a commit or tag. See the
+by content hash in PostgreSQL, together with JSON-AD resources, bundled schemas
+and snapshot revision history. Local browse/history commands pin a revision or tag.
+Git is an optional subtree export with messages, branches and ancestry; existing
+Git histories can be migrated without changing their original repositories. See the
 [daemon guide](docs/daemon.md) for setup, supported incremental reads, queued
 webhook hints and limits, and [Versioned Atomic Data](../docs/design/versioned-atomic-data.md)
 for snapshot resolution. The [CLI guide](docs/cli.md) covers device login and
 read-only API probes. Replication definitions remain configuration only.
 Root/browser library imports do not start the daemon or load its storage.
-Successful syncs expose normal Git working folders for each collection;
+Successful syncs expose normal working folders for each collection;
 `syncables checkout` exposes existing snapshots without fetching again.
 Items and bundled schemas have document-scoped API resource classes.
 

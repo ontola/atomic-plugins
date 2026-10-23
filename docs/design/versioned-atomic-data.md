@@ -1,5 +1,13 @@
 # Versioned Atomic Data: local Git experiment
 
+**2026-10-23 storage update:** The standalone daemon now uses PostgreSQL as its
+canonical snapshot store and Git as an explicit import/export format. The
+[daemon guide](../../syncables/docs/daemon.md#migrate-existing-histories-and-export-git)
+describes migration, normal folders and collection/item exports. Resource/schema
+pins, messages, tags and ancestry retain this document's resolution semantics;
+full revision IDs now identify PostgreSQL revisions, with legacy Git IDs mapped
+for compatibility. The Git experiment below records the original design.
+
 Michiel requested this experiment on 2026-10-20 for the standalone Syncables
 daemon: store all resources and all schemas in Git, and address either at a
 specific commit or tag. This document defines that local storage/resolution

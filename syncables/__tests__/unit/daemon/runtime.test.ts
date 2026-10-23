@@ -1,11 +1,11 @@
 import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PostgresArchive } from '../../../src/postgres/archive.js';
-import { GitAtomicStore } from '../../../src/daemon/git-store.js';
+import { PostgresHistoryStore } from '../../../src/daemon/history-store.js';
 import {
   prepareCollection,
   sourceClass,
@@ -76,7 +76,7 @@ const response = (
 ): ReturnType<Transport> => Promise.resolve({ status, headers, body });
 
 describe.skipIf(!database)(
-  'daemon snapshots and durable scheduling (real PostgreSQL and Git)',
+  'daemon snapshots and durable scheduling (real PostgreSQL)',
   () => {
     let archive: PostgresArchive;
     beforeAll(async () => {
@@ -86,6 +86,12 @@ describe.skipIf(!database)(
     afterAll(async () => {
       if (!archive) return;
       for (const table of [
+        'snapshot_import_refs',
+        'snapshot_imports',
+        'snapshot_git_tags',
+        'snapshot_refs',
+        'snapshot_members',
+        'snapshot_revisions',
         'daemon_inbox',
         'daemon_jobs',
         'heads',
@@ -106,7 +112,7 @@ describe.skipIf(!database)(
     });
     async function setup(incremental = false): Promise<{
       config: DaemonConfig;
-      store: GitAtomicStore;
+      store: PostgresHistoryStore;
       prepared: Awaited<ReturnType<typeof prepareCollection>>;
       sync: (
         upstream: Transport,
@@ -138,7 +144,11 @@ describe.skipIf(!database)(
           },
         ],
       };
-      const store = new GitAtomicStore(config.dataDirectory);
+      const store = new PostgresHistoryStore(
+        archive.pool,
+        config.owner,
+        join(directory, 'workspace'),
+      );
       await store.initialize();
       const prepared = await prepareCollection(
         config.owner,
@@ -193,7 +203,11 @@ describe.skipIf(!database)(
       ).toBeDefined();
       const second = await h.sync(async () => response('{"items":[]}'));
       expect(second.records).toBe(0);
-      const reopened = new GitAtomicStore(h.config.dataDirectory);
+      const reopened = new PostgresHistoryStore(
+        archive.pool,
+        h.config.owner,
+        h.store.checkoutDirectory,
+      );
       await reopened.initialize();
       expect(
         await reopened.resource(h.prepared.scope, subject),
@@ -450,7 +464,7 @@ describe.skipIf(!database)(
       const baseline = (await runner.sync())[0];
       expect(baseline).toHaveProperty('result');
       expect(baseline.checkout?.directory).toBe(
-        join(h.store.checkoutDirectory, 'example/test/entries'),
+        await realpath(join(h.store.checkoutDirectory, 'example/test/entries')),
       );
       expect(
         await readFile(
@@ -507,7 +521,7 @@ describe.skipIf(!database)(
         'Keep local work',
       );
       const blocked = (await runner.sync())[0];
-      expect(blocked.error).toContain('local edits');
+      expect(blocked.error).toContain('local additions');
       expect(blocked.result).toBeUndefined();
       await rm(join(baseline.checkout!.directory, 'local-edit.txt'));
     });

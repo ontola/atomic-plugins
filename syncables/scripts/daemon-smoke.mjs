@@ -208,6 +208,11 @@ try {
   assert.equal(schemaHistory.commit, commit);
   assert.deepEqual(schemaHistory.revisions, [commit]);
   assert.equal(schemaHistory.entries[0].message, entry.message);
+  const checked=await run(['checkout']);
+  assert.equal(checked[0].revision,(await run(['history','--collection','github-issues/example/tasks'])).commit);
+  const exported=await run(['export','git','--subtree','github-issues/example/tasks','--output',join(directory,'export')]);
+  assert.ok(exported.revisions >= 2);
+  assert.ok(exported.mapping[commit]);
   const status = await run(['status']);
   assert.equal(status[0].state, 'idle');
   const rootImport = await exec(
@@ -223,6 +228,12 @@ try {
   const { PostgresArchive } = await import('../build/src/postgres/archive.js');
   cleanup = new PostgresArchive(database);
   for (const table of [
+    'snapshot_import_refs',
+    'snapshot_imports',
+    'snapshot_git_tags',
+    'snapshot_refs',
+    'snapshot_members',
+    'snapshot_revisions',
     'daemon_inbox',
     'daemon_jobs',
     'heads',

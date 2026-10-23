@@ -1,3 +1,4 @@
+import type { SnapshotStore } from './snapshot-store.js';
 import { readFile } from 'node:fs/promises';
 import { load as parseYaml } from 'js-yaml';
 import { loadOpenApiDocument } from '../openapi/load.js';
@@ -35,7 +36,7 @@ import {
 } from '../postgres/index.js';
 import type { Transport, TransportResponse } from '../read/transport.js';
 import type { OpenApiDocument } from '../openapi/types.js';
-import { GitAtomicStore, validateCommitMessage } from './git-store.js';
+import { validateCommitMessage } from './git-store.js';
 import {
   alias,
   collectionScope,
@@ -146,7 +147,7 @@ export async function typeSourceRecord(
 /** Add API-specific class schemas to an old snapshot without a provider read. */
 export async function upgradeSourceClasses(
   prepared: PreparedCollection,
-  store: GitAtomicStore,
+  store: SnapshotStore,
 ): Promise<string | undefined> {
   const previous = await store.head(prepared.scope);
   if (!previous) return undefined;
@@ -242,7 +243,7 @@ export async function prepareCollection(
 export interface SyncCollectionOptions {
   prepared: PreparedCollection;
   archive: PostgresArchive;
-  store: GitAtomicStore;
+  store: SnapshotStore;
   auth: ArchiveScope;
   upstream: Transport;
   signal?: AbortSignal;
