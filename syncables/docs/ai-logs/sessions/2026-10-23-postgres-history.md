@@ -105,3 +105,10 @@ read-only native protocol, library reuse, and same-drive replication versus
 copying into another drive. The current core's concrete Db dependency means a
 PostgreSQL adapter or an embedded projection store is additional implementation
 work. This discussion did not authorize or add a new server runtime.
+
+Extended projection refusal coverage to SHA-256 Git commit signature headers and
+SSH-style annotated tag envelopes, alongside the existing unsigned round-trip
+tests. Full exports preserve these envelopes byte for byte; projections that
+would invalidate them fail without changing the PostgreSQL/source histories.
+The fixtures contain plainly invented envelopes and test projection policy,
+not cryptographic signature validity.

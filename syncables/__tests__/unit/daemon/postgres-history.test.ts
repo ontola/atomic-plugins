@@ -274,6 +274,76 @@ describe.skipIf(!database)(
       );
       expect(await store.head(scope)).toBe(next);
     });
+    it.each(['sha256-commit', 'ssh-tag'])(
+      'preserves %s envelopes on full exports and refuses invalidating projections',
+      async (kind) => {
+        const { store, git, scope, snapshot, dir } = await fixture();
+        const value = snapshot('1');
+        value.resources.set(
+          'urn:example:other',
+          '{"@id":"urn:example:other","urn:example:value":2}',
+        );
+        let tip = await git.commit(value);
+        if (kind === 'sha256-commit') {
+          const raw = await historyGit(git.directory, [
+            'cat-file',
+            'commit',
+            tip,
+          ]);
+          tip = (
+            await historyGit(
+              git.directory,
+              ['hash-object', '-w', '-t', 'commit', '--stdin'],
+              raw.replace('\n\n', '\ngpgsig-sha256 invented-test-envelope\n\n'),
+            )
+          ).trim();
+          await historyGit(git.directory, ['update-ref', scopeRef(scope), tip]);
+        } else {
+          const tag = (
+            await historyGit(
+              git.directory,
+              ['hash-object', '-w', '-t', 'tag', '--stdin'],
+              `object ${tip}\ntype commit\ntag signed\ntagger Test <test@example.invalid> 1700000000 +0000\n\nInvented envelope for projection policy only.\n-----BEGIN SSH SIGNATURE-----\ninvented-test-envelope\n-----END SSH SIGNATURE-----\n`,
+            )
+          ).trim();
+          await historyGit(git.directory, [
+            'update-ref',
+            'refs/tags/signed',
+            tag,
+          ]);
+        }
+        await importGitHistory(store, git.directory);
+        const full = await exportGitHistory(store, {
+          scope,
+          output: join(dir, 'full'),
+        });
+        expect(
+          await historyGit(full.directory, [
+            'for-each-ref',
+            '--format=%(refname) %(objectname)',
+          ]),
+        ).toBe(
+          await historyGit(git.directory, [
+            'for-each-ref',
+            '--format=%(refname) %(objectname)',
+          ]),
+        );
+        try {
+          await exportGitHistory(store, {
+            scope,
+            subject: SUBJECT,
+            output: join(dir, 'projection'),
+          });
+          throw new Error('Expected signed projection refusal');
+        } catch (error) {
+          expect(error).toBeInstanceOf(Error);
+          expect((error as Error).cause).toBeInstanceOf(Error);
+          expect(((error as Error).cause as Error).message).toContain(
+            'Cannot project',
+          );
+        }
+      },
+    );
     it('preserves disappearance, reappearance, empty projected commits and numeric lexemes in item exports', async () => {
       const { store, scope, snapshot, dir } = await fixture();
       const one = await store.commit(

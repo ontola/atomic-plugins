@@ -345,7 +345,7 @@ export async function exportGitHistory(
         if (
           (originalTree !== tree ||
             originalParents.some((p, i) => p !== parents[i])) &&
-          /^(gpgsig|mergetag) /m.test(headers)
+          /^(gpgsig(?:-sha256)?|mergetag) /m.test(headers)
         )
           throw new Error(
             'Cannot project signed Git commits; export the full collection',
@@ -369,7 +369,7 @@ export async function exportGitHistory(
       let id = map.get(ref.revision)!;
       if (ref.headers) {
         const old = /^object ([a-f0-9]+)$/m.exec(ref.headers)?.[1];
-        if (old !== id && /-----BEGIN PGP SIGNATURE-----/.test(ref.headers))
+        if (old !== id && /-----BEGIN /.test(ref.headers))
           throw new Error('Cannot project a signed Git tag');
         id = (
           await historyGit(
