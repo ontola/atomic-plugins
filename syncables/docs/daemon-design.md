@@ -570,7 +570,11 @@ persist destination definitions; they do not execute this plan.
 A second candidate, suggested by Michiel, is for the Syncables daemon to expose
 an Atomic-compatible sync peer backed by PostgreSQL. Consumers could subscribe
 to a virtual Syncables drive through the normal Atomic protocol. This remains
-a proposal; no sync endpoint is implemented by the storage migration.
+a proposal in the storage migration. The follow-up experimental
+[Atomic peer implementation](atomic-peer.md) uses an embedded Atomic projection
+store, explicit local signing authority and a loopback WebSocket listener.
+Its limits and validation are documented there; the design discussion below
+also describes requirements for broader implementations.
 
 The pipeline would be PostgreSQL snapshots → maintained native Atomic/Loro
 projection → sync protocol → replicas. Stable resource/schema identities,

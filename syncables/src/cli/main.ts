@@ -77,6 +77,11 @@ async function main(): Promise<void> {
         'branches',
         'output',
         'source',
+        'peer-binary',
+        'peer-directory',
+        'signer-file',
+        'reader',
+        'peer-port',
       ].map((key) => [key, { type: 'string' as const }]),
     );
   options.help = { type: 'boolean' };
@@ -101,6 +106,7 @@ async function main(): Promise<void> {
       'migrate',
       'export',
       'daemon',
+      'atomic-peer',
       'status',
       'browse',
       'resource',

@@ -3,6 +3,7 @@ import type { SnapshotStore } from './snapshot-store.js';
 import { resolve, dirname } from 'node:path';
 import { PostgresHistoryStore } from './history-store.js';
 import { importGitHistory, exportGitHistory } from './git-io.js';
+import { runAtomicPeer } from './atomic-peer.js';
 import { localArchive } from '../cli/cache.js';
 import {
   loadDaemonConfig,
@@ -170,6 +171,34 @@ export async function daemonCommand(
   try {
     await archive.initialize();
     await store.initialize();
+    if (command === 'atomic-peer') {
+      if (positionals.length !== 1)
+        throw new Error('Unexpected command arguments');
+      const name = requireValue(string('collection'), 'collection');
+      const source = selectedCollections(config, [name])[0];
+      const prepared = await prepareCollection(config.owner, source);
+      await runAtomicPeer(
+        store,
+        {
+          binary: resolve(requireValue(string('peer-binary'), 'peer-binary')),
+          directory: resolve(
+            requireValue(string('peer-directory'), 'peer-directory'),
+          ),
+          signerFile: resolve(
+            requireValue(string('signer-file'), 'signer-file'),
+          ),
+          owner: config.owner,
+          collection: name,
+          scope: prepared.scope,
+          readers: requireValue(string('reader'), 'reader').split(','),
+          port: Number(string('peer-port') ?? '9901'),
+          ...(string('at') ? { at: string('at')! } : {}),
+        },
+        controller.signal,
+        write,
+      );
+      return;
+    }
     if (command === 'migrate') {
       if (positionals.length !== 2 || positionals[1] !== 'git')
         throw new Error('Use migrate git --config FILE [--source ARCHIVE]');
