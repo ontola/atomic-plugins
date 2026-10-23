@@ -1,5 +1,9 @@
 # Standalone Syncables: PostgreSQL history and optional Git export
 
+For an illustrated overview of the whole stack, including OpenAPI extensions,
+worked GitHub/Keep examples and what a page proves, start with
+[How Syncables turns APIs into a local copy](how-it-works.md).
+
 The source implementation adds a read-only standalone daemon to the existing
 `syncables` executable. It stores original API response text and lossless,
 content-addressed nested JSON nodes in a separate local PostgreSQL database.
@@ -17,6 +21,8 @@ The October 16 live GitHub read verified that protocol. The new daemon and
 macOS Keychain adapter still need a laptop run against the deployed issuer.
 
 ## From a fetch to stored data
+
+![Original response text and extracted records are linked through shared nested JSON nodes.](images/response-and-json.svg)
 
 The current pipeline is:
 
@@ -61,6 +67,11 @@ There is no automatic schema migration when document bytes change, no global
 provider deletion inferred from missing collection membership, and no automatic
 publication of these local records into an Atomic drive yet. See the
 [one-way Atomic mirror plan](daemon-design.md#one-way-atomic-drive-mirror-next-milestone).
+
+For a worked example of values, bundled schemas, membership and commit messages
+over three revisions, see [snapshot history](how-it-works.md#values-schemas-membership-and-messages-have-history).
+For the distinction between returned items and contract-derived range/property
+coverage, see [what a page proves](how-it-works.md#what-a-page-proves-items-ranges-and-properties).
 
 ## Build and try invented data
 

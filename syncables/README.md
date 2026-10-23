@@ -15,6 +15,10 @@ restart; the default storage is in memory.
 
 ## From an API description to a local copy
 
+Read the illustrated [whole-stack explainer](docs/how-it-works.md) for the path
+from OpenAPI documents and overlays to local records, PostgreSQL history and
+optional Git export, with worked GitHub/Keep examples and page-coverage claims.
+
 Syncables builds on three complementary projects:
 
 | Project | What it contributes |
