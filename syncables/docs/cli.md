@@ -8,7 +8,8 @@ run the CLI or read CLI configuration.
 The CLI tests device authorization, connection discovery and a GET through
 Local Thought, and saves replication definitions. The [standalone daemon
 guide](daemon.md) covers configured syncing, foreground polling/webhooks,
-macOS Keychain sessions and commit-pinned Git data browsing. Remote replication
+macOS Keychain sessions, PostgreSQL revision-pinned browsing, legacy Git migration
+and optional Git subtree exports. Remote replication
 and outgoing writes remain planned. The [cache guide](postgres-cache.md)
 covers optional PostgreSQL archival and recorded-run replay.
 

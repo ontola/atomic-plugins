@@ -21,6 +21,8 @@ export interface DaemonConfig {
   clientId: string;
   dataDirectory: string;
   checkoutDirectory?: string;
+  /** PostgreSQL snapshot folders; separate from preserved legacy Git worktrees. */
+  workspaceDirectory?: string;
   collections: CollectionConfig[];
   webhookPort?: number;
 }
@@ -116,6 +118,10 @@ export async function loadDaemonConfig(file: string): Promise<DaemonConfig> {
             text(data.checkoutDirectory, 'checkout directory'),
           ),
         }),
+    workspaceDirectory: resolve(
+      base,
+      text(data.workspaceDirectory ?? './workspace', 'workspace directory'),
+    ),
     collections,
     ...(port === undefined ? {} : { webhookPort: Number(port) }),
   };

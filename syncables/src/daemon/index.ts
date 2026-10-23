@@ -6,3 +6,7 @@ export {
   type AtomicSnapshot,
   type SnapshotRevision,
 } from './git-store.js';
+
+export { PostgresHistoryStore } from './history-store.js';
+export type { SnapshotStore } from './snapshot-store.js';
+export { importGitHistory, exportGitHistory } from './git-io.js';

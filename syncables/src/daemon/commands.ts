@@ -1,3 +1,8 @@
+import { lstat, realpath } from 'node:fs/promises';
+import type { SnapshotStore } from './snapshot-store.js';
+import { resolve, dirname } from 'node:path';
+import { PostgresHistoryStore } from './history-store.js';
+import { importGitHistory, exportGitHistory } from './git-io.js';
 import { localArchive } from '../cli/cache.js';
 import {
   loadDaemonConfig,
@@ -6,7 +11,7 @@ import {
   selectedCollections,
   type DaemonConfig,
 } from './config.js';
-import { GitAtomicStore, validateCommitMessage } from './git-store.js';
+import { validateCommitMessage } from './git-store.js';
 import { DaemonAuth, KeychainCredentials } from './auth.js';
 import { DaemonRunner, jobStatuses } from './runner.js';
 import {
@@ -57,7 +62,7 @@ function pointer(value: unknown, path: string): unknown {
 }
 async function browse(options: {
   config: DaemonConfig;
-  store: GitAtomicStore;
+  store: SnapshotStore;
   scope: string;
   path: string[];
   at?: string;
@@ -151,40 +156,13 @@ export async function daemonCommand(
   }
   if (string('subject') !== undefined && command !== 'history')
     throw new Error('--subject is supported by history only');
-  const store = new GitAtomicStore(
-    config.dataDirectory,
-    config.checkoutDirectory,
-  );
-  if (command === 'checkout') {
-    if (positionals.length !== 1)
-      throw new Error('Unexpected command arguments');
-    await store.initialize();
-    const selected = selectedCollections(
-      config,
-      string('collections')?.split(',') ?? [],
-    );
-    const results: {
-      alias: string;
-      directory?: string;
-      revision?: string;
-      error?: string;
-    }[] = [];
-    for (const source of selected) {
-      const prepared = await prepareCollection(config.owner, source);
-      // Validate/create the existing checkout before any local schema migration.
-      await store.checkout(prepared.scope, alias(source));
-      await upgradeSourceClasses(prepared, store);
-      const checkout = await store.checkout(prepared.scope, alias(source));
-      results.push({
-        alias: alias(source),
-        ...(checkout ?? { error: 'No local snapshot; run sync first' }),
-      });
-    }
-    write(results);
-    if (results.some((r) => 'error' in r)) process.exitCode = 1;
-    return;
-  }
   const archive = localArchive();
+  const store = new PostgresHistoryStore(
+    archive.pool,
+    config.owner,
+    config.workspaceDirectory ??
+      resolve(dirname(config.dataDirectory), 'workspace'),
+  );
   const controller = new AbortController();
   const stop = (): void => controller.abort();
   process.once('SIGINT', stop);
@@ -192,6 +170,89 @@ export async function daemonCommand(
   try {
     await archive.initialize();
     await store.initialize();
+    if (command === 'migrate') {
+      if (positionals.length !== 2 || positionals[1] !== 'git')
+        throw new Error('Use migrate git --config FILE [--source ARCHIVE]');
+      write(
+        await importGitHistory(store, string('source') ?? config.dataDirectory),
+      );
+      return;
+    }
+    if (command === 'export') {
+      if (positionals.length !== 2 || positionals[1] !== 'git')
+        throw new Error(
+          'Use export git --subtree PLATFORM/ACCOUNT/COLLECTION --output DIRECTORY',
+        );
+      const path = requireValue(string('subtree'), 'subtree')
+        .replace(/^\//, '')
+        .split('/');
+      if (path.length < 3 || path.length > 4 || path.some((p) => !p))
+        throw new Error(
+          'Select a collection subtree, optionally followed by an encoded item ID',
+        );
+      const name = path.slice(0, 3).join('/');
+      const source = selectedCollections(config, [name])[0];
+      const job = (await jobStatuses(archive, config.owner)).find(
+        (j) => j.alias === name,
+      );
+      const scope =
+        job?.scope ?? (await prepareCollection(config.owner, source)).scope;
+      const at = string('at');
+      const branches = string('branches') ?? 'all';
+      if (branches !== 'all' && branches !== 'current')
+        throw new Error('Use --branches all or current');
+      const context = await store.context(scope, at);
+      if (path.length === 4 && typeof context.resource !== 'string')
+        throw new Error('Missing source resource context');
+      const subject =
+        path.length === 4
+          ? itemSubject(
+              config.owner,
+              source,
+              String(context.resource),
+              decodeURIComponent(path[3]),
+            )
+          : undefined;
+      write(
+        await exportGitHistory(store, {
+          scope,
+          output: requireValue(string('output'), 'output'),
+          branches,
+          ...(at ? { at } : {}),
+          ...(subject ? { subject } : {}),
+        }),
+      );
+      return;
+    }
+    if (command === 'checkout') {
+      if (positionals.length !== 1)
+        throw new Error('Unexpected command arguments');
+      const results: {
+        alias: string;
+        directory?: string;
+        revision?: string;
+        error?: string;
+      }[] = [];
+      for (const source of selectedCollections(
+        config,
+        string('collections')?.split(',') ?? [],
+      )) {
+        const prepared = await prepareCollection(config.owner, source);
+        await store.checkout(prepared.scope, alias(source));
+        await upgradeSourceClasses(prepared, store);
+        const checkout = await store.checkout(prepared.scope, alias(source));
+        results.push({
+          alias: alias(source),
+          ...(checkout ?? {
+            error:
+              'No PostgreSQL snapshot; run migrate git for existing histories or sync for new data',
+          }),
+        });
+      }
+      write(results);
+      if (results.some((r) => 'error' in r)) process.exitCode = 1;
+      return;
+    }
     if (command === 'status') {
       write(await jobStatuses(archive, config.owner));
       return;
@@ -227,9 +288,9 @@ export async function daemonCommand(
       const job = (await jobStatuses(archive, config.owner)).find(
         (j) => j.alias === name,
       );
-      if (!job)
-        throw new Error('Collection has not been initialized; run sync');
-      const scope = job.scope;
+      const source = config.collections.find((c) => alias(c) === name)!;
+      const scope =
+        job?.scope ?? (await prepareCollection(config.owner, source)).scope;
       if (command === 'tag') {
         if (!positionals[1]) throw new Error('Supply a tag name');
         write({
@@ -295,6 +356,34 @@ export async function daemonCommand(
     }
     if (positionals.length !== 1)
       throw new Error('Unexpected command arguments');
+    if (command === 'sync' || command === 'daemon') {
+      const legacy = await lstat(config.dataDirectory).catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error;
+          return undefined;
+        },
+      );
+      const imported = legacy
+        ? (
+            await archive.pool.query(
+              'SELECT 1 FROM syncables_cache.snapshot_import_refs WHERE owner=$1 AND source=$2 LIMIT 1',
+              [config.owner, await realpath(config.dataDirectory)],
+            )
+          ).rowCount !== 0
+        : false;
+      if (legacy && !imported) {
+        for (const source of selectedCollections(
+          config,
+          string('collections')?.split(',') ?? [],
+        )) {
+          const prepared = await prepareCollection(config.owner, source);
+          if (!(await store.head(prepared.scope)))
+            throw new Error(
+              'Existing Git archive found. Run migrate git before syncing into PostgreSQL; original history is preserved.',
+            );
+        }
+      }
+    }
     const auth = new DaemonAuth(
       config,
       archive,

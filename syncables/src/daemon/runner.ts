@@ -1,3 +1,4 @@
+import type { SnapshotStore } from './snapshot-store.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { PostgresArchive } from '../postgres/archive.js';
@@ -17,11 +18,7 @@ import {
   upgradeSourceClasses,
 } from './sync.js';
 import { alias, selectedCollections, type DaemonConfig } from './config.js';
-import {
-  CheckoutBlockedError,
-  type GitAtomicStore,
-  type CheckoutResult,
-} from './git-store.js';
+import { CheckoutBlockedError, type CheckoutResult } from './git-store.js';
 
 export interface RunnerAuth {
   session(): Promise<Session>;
@@ -68,7 +65,7 @@ export class DaemonRunner {
   constructor(
     readonly config: DaemonConfig,
     readonly archive: PostgresArchive,
-    readonly store: GitAtomicStore,
+    readonly store: SnapshotStore,
     readonly auth: RunnerAuth,
     private readonly fetchImpl: typeof fetch = globalThis.fetch,
     private readonly message?: string,

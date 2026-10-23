@@ -1,12 +1,12 @@
-# Standalone Syncables: local Git experiment
+# Standalone Syncables: PostgreSQL history and optional Git export
 
 The source implementation adds a read-only standalone daemon to the existing
 `syncables` executable. It stores original API response text and lossless,
 content-addressed nested JSON nodes in a separate local PostgreSQL database.
-Successful syncs also maintain normal checked-out working folders per collection.
+Successful syncs also maintain normal working folders per collection, without requiring Git.
 The [JSON graph format and fixed vectors](json-graph-v1.md) define its persisted
-node encoding. Its local data copy and bundled schemas live in a private bare Git
-repository. [Versioned Atomic Data](../../docs/design/versioned-atomic-data.md)
+node encoding. Its local data copy, bundled schemas, immutable revisions and named heads
+live in PostgreSQL. Git is an optional import/export format. [Versioned Atomic Data](../../docs/design/versioned-atomic-data.md)
 defines the experiment and commit/tag resolution contract.
 
 This implementation is unreleased. It reuses #567's CLI/archive work without
@@ -16,11 +16,58 @@ signing stays in the existing laptop bridge; the daemon receives device tokens.
 The October 16 live GitHub read verified that protocol. The new daemon and
 macOS Keychain adapter still need a laptop run against the deployed issuer.
 
+## From a fetch to stored data
+
+The current pipeline is:
+
+1. Pin the configured OpenAPI/profile bytes for this process. Scope the read to
+   the verified owner, provider connection, collection, bindings, query and
+   document hash. Open an archive run and follow the declared paging strategy.
+2. Record each request attempt and response in PostgreSQL. `payloads` stores
+   the original response text by SHA-256 (compressed when useful). These bytes
+   support exact recorded-response replay; whitespace and number spelling are
+   retained. Request history is separate from the accepted collection state.
+3. Index valid JSON into `json_nodes`: nested objects and arrays have hashed
+   canonical nodes; numbers retain their original lexemes. `json_responses`
+   links an attempt to its root, or records why indexing failed. Deduplication
+   uses `(owner, hash)`, rather than a separate object store per collection.
+   Raw text and the structured graph serve different purposes; the original
+   text is deliberately retained alongside the graph.
+4. Select collection items from that graph and wrap each in JSON-AD with its
+   stable source identity, source ID, original JSON and API-specific class.
+   Snapshot graphs reuse the original nested item nodes in `json_nodes`.
+   Bundle Class/property schema resources with the items. Unknown response
+   fields and large numbers are retained; this does not imply full OpenAPI
+   schema conformance checking.
+5. Only after the entire bounded read succeeds, publish a PostgreSQL revision:
+   `snapshot_revisions` records parents, context, messages and author metadata;
+   `snapshot_members` indexes subject-to-object roots for that revision;
+   `snapshot_refs` advances the head by compare-and-swap. State, bundled schemas
+   and a terminal incremental checkpoint are published together. Full reads
+   replace collection membership; incremental reads retain unchanged members
+   and apply declared changes/tombstones. Previous revisions retain earlier
+   values, schemas and membership, including disappearance/reappearance.
+6. Materialize the accepted head into the ordinary `workspace/` folder.
+   Filesystem failure cannot roll back an already saved PostgreSQL revision;
+   `checkout` retries publication locally. Git is generated only by an explicit
+   `export git` command and is not used to publish subsequent fetches.
+
+An incomplete read or failed head comparison leaves the previous head visible.
+Its recorded HTTP attempts can still exist: finishing an archive run and
+publishing a collection revision are separate transactions. A response log alone
+therefore does not prove that a new collection state was accepted. The scheduler
+row and working folder are derived status/views; snapshot refs are authoritative.
+There is no automatic schema migration when document bytes change, no global
+provider deletion inferred from missing collection membership, and no automatic
+publication of these local records into an Atomic drive yet. See the
+[one-way Atomic mirror plan](daemon-design.md#one-way-atomic-drive-mirror-next-milestone).
+
 ## Build and try invented data
 
-Requirements: Node 22.11+, Git 2.29+ with SHA-256 repositories, and a separate
+Requirements: Node 22.11+ and a separate
 local PostgreSQL database (tested with PostgreSQL 17). Nothing installs a
-background service or changes Heroku configuration.
+background service or changes Heroku configuration. Git 2.29+ with SHA-256
+repositories is required only for importing old histories or exporting to Git.
 
 On a Mac using Homebrew, install/start PostgreSQL and add its tools to the
 current terminal's path first. This supplies `createdb` if your shell cannot
@@ -54,7 +101,7 @@ node build/src/cli/main.js sync --config examples/daemon/config.demo.json --inte
 ```
 
 Open the printed mock approval URL and enter the displayed code. This grants
-access only to invented data. The command prints a Git revision and record
+access only to invented data. The command prints a PostgreSQL snapshot revision and record
 count. `--interactive` keeps tokens in memory and works without macOS Keychain.
 It requires a fresh explicit approval for every foreground process.
 
@@ -68,7 +115,7 @@ node build/src/cli/main.js history 1 --collection github-issues/example/tasks --
 
 Keep the configured `local-data.git` directory and PostgreSQL data private and
 outside your source checkout for real use. The demo directory is gitignored.
-There is no automatic pruning of response logs, inbox deliveries or Git history.
+There is no automatic pruning of response logs, inbox deliveries, JSON objects or revision history.
 
 ## Configure real collections
 
@@ -112,15 +159,16 @@ file, as does `"dataDirectory": "./local-data.git"`. The resulting layout is:
 ~/.local/share/syncables-live/
   config.json             your edited config
   github-issues.json      GET collection/pagination description
-  local-data.git/         private history store
-  data/                  automatic Git working folders, one per collection
+  local-data.git/         preserved legacy history (if upgrading)
+  data/                   preserved legacy Git worktrees (if upgrading)
+  workspace/              ordinary PostgreSQL snapshot folders
 ```
 
 `./data` at the repository root also works. Ignore it in Git before saving real
 data there (for example, put `/data/` in `.git/info/exclude`), and set permissions
 to 700. Check with `git check-ignore data/config.json` from the repository root.
 Do not commit its config, copied documents, responses or nested Git repository.
-The PostgreSQL response archive is separate and stays at the database selected
+PostgreSQL response objects and canonical snapshot history stay in the database selected
 by `SYNCABLES_DATABASE_URL`; it is not placed in this directory.
 
 ### Connect and edit the copied config
@@ -203,16 +251,18 @@ daemon after editing its config or composed documents. Each collection has:
 | `query`                 | Declared query parameters. Fixed collection values and paging/checkpoint controls cannot be replaced. |
 | `pollSeconds`           | Default 300; 5–86400 for polling, 0 for initial fetch plus webhook/manual triggers.                   |
 
-`dataDirectory` selects the private Git data repository. The optional
-`checkoutDirectory` selects the working-folder root (relative to the config);
-by default it is `data` beside `dataDirectory`. It must be outside the archive.
-For example, Keep notes appear at `data/google-keep/workspace/notes/`.
+`workspaceDirectory` selects the ordinary working-folder root, defaulting to
+`./workspace` relative to the config. For example, Keep notes appear at
+`workspace/google-keep/unhosted/notes/`. `dataDirectory` now selects the legacy
+Git archive for `migrate git` only. `checkoutDirectory` is retained in config
+for the legacy Git adapter and never repurposed by the PostgreSQL daemon.
+Existing repositories and their worktrees are not modified by migration.
 
 Config changes to owner, connection, collection definition, bindings or query
 create a separate
 data scope and bootstrap it. Changing a local label or poll interval does not
 change source identity. This pilot caps config at 100 collections, each read
-at 5,000 records/1,000 requests/120 seconds, each response at 8 MiB and a Git
+at 5,000 records/1,000 requests/120 seconds, each response at 8 MiB and a
 snapshot at 16 MiB. Incomplete reads retain the previous published snapshot.
 
 On macOS, with the existing approval bridge running:
@@ -347,7 +397,7 @@ For a declared `incrementalSync` scheme this daemon supports one query
 `syncToken`, normal page-token traversal, and one terminal `nextSyncToken` in
 the body or headers. Bootstrap reads a full snapshot; subsequent reads apply
 returned observations and declared list tombstones. Data and checkpoint publish
-in the same Git commit after responses are durable. Missing terminal tokens,
+in the same PostgreSQL snapshot revision after responses are durable. Missing terminal tokens,
 failed pages and interruptions never advance the checkpoint. HTTP 410 on a
 saved token retries a fresh bootstrap once. A new device session bootstraps.
 Only use this with a provider contract that guarantees complete changes and
@@ -425,9 +475,9 @@ syncables daemon --config /path/config.json \
 ```
 
 The supplied text appears under `Intent (user supplied)` in each successful
-snapshot's Git commit message. A daemon's message applies to every successful
+snapshot's PostgreSQL revision message and exported Git commit message. A daemon's message applies to every successful
 snapshot made by that process; it is not saved as configuration. Messages
-accept multiline text up to 8192 UTF-8 bytes. They remain in local Git history,
+accept multiline text up to 8192 UTF-8 bytes. They remain in PostgreSQL history and Git exports,
 so keep credentials out of them. A default summary and generated trailers record
 the collection alias, manual/scheduled trigger, archive run ID, full/bootstrap/
 delta strategy and resulting record count. Scheduled means the scheduler chose
@@ -437,75 +487,103 @@ does not identify an individual webhook. A direct library call is marked
 
 This is intent provenance attached to successful observations. It is not an
 event-sourced command log: failed/cancelled requests have archive/job evidence
-but no successful Git snapshot, and messages are not executable instructions
+but no successful snapshot, and messages are not executable instructions
 or proof of a provider-side change. The archive run ID links to local response
 evidence (`syncables cache replay --owner OWNER --run RUN_ID`). A full unchanged
-fetch still records its new run context. For direct `GitAtomicStore` users, an
+fetch still records its new run context. For direct snapshot store users, an
 explicit `AtomicSnapshot.message` also creates a commit when the tree is
 unchanged; without a message, identical trees reuse the previous commit.
 Intent-only commits appear in collection history, while resource/schema history
 shows commits that changed that subject's content or presence. Bundled schemas
 usually have only their initial revision until their definitions change.
 
-### Normal checked-out folders
+### Migrate existing histories and export Git
 
-Every successful sync creates or advances a normal Git working folder under
-`checkoutDirectory/platform/account/name`. These are linked worktrees of the
-private history repository: there is no clone, pull, duplicate object store or
-provider refetch needed to inspect the latest data. Sync output includes
-`checkout.directory` and its revision. The data and bundled schema resources
-are `r-<subject-hash>.json` files; `context.json` records the source context.
+Upgrade without refetching or using owner credentials:
 
 ```sh
-cd /absolute/path/data/google-keep/workspace/notes
-git status
-git log --format=fuller
-git show COMMIT_ID:context.json
-git diff OLD_COMMIT_ID NEW_COMMIT_ID
-```
-
-For existing installations, expose the saved snapshots without a login,
-PostgreSQL or any provider calls:
-
-```sh
+export SYNCABLES_DATABASE_URL='postgresql://localhost/syncables_local'
+syncables migrate git --config /absolute/path/config.json
+syncables export git --config /absolute/path/config.json \
+  --subtree google-keep/unhosted/notes --branches all --output /new/path/keep-export
+syncables export git --config /absolute/path/config.json \
+  --subtree github-issues/ontola/usertest-findings --output /new/path/issues-export
 syncables checkout --config /absolute/path/config.json
 ```
 
-This command also adds document-scoped API classes to old generic snapshots
-in a new local commit. Previous commits and tags remain intact. Each item
-retains the shared `urn:syncables:class:source-record` type and also has
-`urn:syncables:oad:<document-sha256>:class:<crud-resource>` as its specific
-API type. Its Class resource, the source-id/source-json property schemas, and
-the document-hash/resource provenance property schemas are versioned together.
-The document hash is of the exact input OAD/profile bytes, independent of its
-local filename. This labels the declared API kind; it does not claim that the
-payload was validated against every OpenAPI constraint. Original API data,
-including unknown fields and large number lexemes, is retained unchanged.
+Migration imports every branch/tag-reachable commit from the marked Syncables
+SHA-256 archive in `dataDirectory` (or `--source ARCHIVE`). It validates ownership,
+JSON-AD, file names and ancestry before atomically publishing PostgreSQL refs.
+Stop legacy writers during migration. Modified legacy refs cause a repeated
+migration to fail rather than rewind newer PostgreSQL history. An unchanged
+repeat is safe after new PostgreSQL syncs. Old Git commit IDs still resolve
+through the import mapping. Scheduler revision IDs are updated in the same
+transaction. No repository, worktree or provider is changed.
 
-Keep working folders clean: tracked edits, untracked/ignored files, local
-commits or attaching HEAD to your own branch block automatic updates with a
-folder-specific error. Syncables never resets, stashes, cleans or overwrites
-those edits. A dirty folder is checked before a provider read; Git's non-forced
-checkout also protects edits made during that read. If a snapshot was already
-saved when updating the working folder failed, sync output includes both its
-result and a checkout error; the job is `checkout-blocked`. Resolve the local
-work and rerun `checkout` without refetching.
+Exports require a nonexistent destination and create a normal checked-out
+SHA-256 Git repository. `--branches all` preserves all branch names, tags and
+ancestry for the selected collection, including merge parents and empty commits.
+A full imported collection round trip preserves the original blobs, commit
+headers, authors, timestamps, messages and IDs for Syncables-generated histories.
+The command returns a PostgreSQL-revision-to-Git-commit mapping for verification.
+`--at REVISION|tag:NAME` or `--branches current` exports the selected head's
+ancestry as `main`. A collection-specific `s-<scope-hash>` branch name is retained
+when exporting all branches. Git is a one-way export; edits in exported repos
+are not imported into an ongoing sync.
 
-Existing non-worktree directories, symlinks and worktrees from another archive
-are refused. An OAD/config change that creates another source scope will not
-silently replace an existing folder with unrelated history; choose another
-`checkoutDirectory` to inspect the new scope. The daemon loads the OAD at
-startup; hot reload and cross-version schema migration are not implemented.
-A per-folder empty lock under `dataDirectory/syncables-checkout-locks` prevents
-simultaneous materialization. If a process was killed during checkout, inspect
-the folder and ensure no checkout is running before removing the empty lock
-named by the error and retrying. No automatic stale-lock deletion occurs.
+Use `--subtree platform/account/collection/ENCODED_ITEM_ID` to project one item,
+retaining the context and all ancestor commits even while the item is absent.
+Encode slashes in item IDs as `%2F`. Projection can change Git IDs. Signed commits
+or tags are refused when projection would invalidate their signatures.
+The first version selects one collection or item; arbitrary composed subtrees,
+JSON-field projections and cross-collection workspace revision DAGs are future
+work. Original raw HTTP-response evidence remains in PostgreSQL and is not
+included in the collection export. Back up PostgreSQL to preserve that evidence.
 
-The archive can still be inspected with `git --git-dir=/absolute/path/local-data.git`.
-Leave its scope refs under daemon control. Worktree HEADs are detached so sync
-can advance a collection's published ref without making local edits appear as
-snapshot changes. Full 64-character IDs returned by the CLI pin reads to a
-specific collection revision.
+### Normal working folders
+
+Every successful sync creates or advances an ordinary folder under
+`workspaceDirectory/platform/account/name`. There is no `.git` directory here.
+Use the explicit export above when you want `git log`, `git diff` or a Git branch.
+Snapshot data and bundled schemas are `r-<subject-hash>.json` files;
+`context.json` records source context. `checkout.directory` identifies the folder.
+`syncables checkout --config FILE` materializes saved PostgreSQL snapshots without
+logging in or refetching. Existing Git users must migrate first. The original
+`data/` worktrees and archive remain usable until exports have been verified.
+
+Checkout also adds document-scoped API classes to older generic snapshots in
+a new PostgreSQL revision. Items retain `urn:syncables:class:source-record` and
+also have `urn:syncables:oad:<document-sha256>:class:<crud-resource>`. The Class
+and property schemas are versioned together with the data. The document hash
+identifies exact input bytes, independent of the file name. This labels the
+declared API kind; it does not validate every OpenAPI constraint. Unknown
+fields and numeric lexemes remain unchanged.
+
+Keep these working folders clean. `.syncables-snapshot.json` records revision
+and file hashes. Changed/missing files, additions, symlinks, unrelated directories
+or another source scope block automatic publication; edits are not reset or
+stashed. A dirty folder blocks the provider read. If edits appear during that
+read, the saved revision remains in PostgreSQL and the job reports
+`checkout-blocked`; resolve the edits and rerun checkout without refetching.
+The OAD is loaded at daemon startup; hot reload and cross-version schema
+migration are not implemented.
+
+Publication uses a sibling staging folder and a per-folder
+`.NAME.syncables-lock`. On advancement the previous folder is retained as
+`.NAME.previous-UUID` beside it for recovery, including edits racing publication.
+After a crash, inspect those folders and ensure no checkout is running before
+removing an empty lock or restoring a previous folder. No stale locks, previous
+folders, original repositories or histories are automatically deleted.
+
+PostgreSQL uses owner-scoped JSON hashes shared with archived HTTP JSON nodes,
+immutable snapshot revisions and compare-and-swap heads. Collection membership
+indexes link `(owner, revision, subject)` to a JSON graph root, so value changes,
+schema changes, disappearance and reappearance retain their previous states.
+The exact raw HTTP text is stored separately for lossless replay; its structured
+JSON graph shares nodes with snapshot values. Full 64-character revision IDs
+pin local reads. Config/OAD scope identity retains the existing daemon semantics;
+independent component IDs, mount occurrence locks and component forks are not
+introduced by this storage migration.
 
 ## Queued webhooks
 

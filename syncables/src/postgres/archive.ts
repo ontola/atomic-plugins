@@ -321,6 +321,8 @@ export class PostgresArchive {
       const graph = indexJson(response.body, { maxBytes: this.maxBodyBytes });
       for (const bytes of graph.nodes.values())
         nodes.push(await encode(bytes, this.maxBodyBytes));
+      // Snapshot writers share this table: acquire unique-key locks in hash order.
+      nodes.sort((a, b) => (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0));
       root = graph.root;
     } catch {
       nodes.length = 0;
