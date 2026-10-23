@@ -1,6 +1,6 @@
 import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,7 @@ import { PostgresArchive } from '../../../src/postgres/archive.js';
 import { GitAtomicStore } from '../../../src/daemon/git-store.js';
 import {
   prepareCollection,
+  sourceClass,
   syncCollection,
   SyncRetryError,
 } from '../../../src/daemon/sync.js';
@@ -181,6 +182,15 @@ describe.skipIf(!database)(
       expect(
         await h.store.resource(h.prepared.scope, subject, first.revision),
       ).toContain('1e400');
+      const stored = JSON.parse(
+        (await h.store.resource(h.prepared.scope, subject))!,
+      );
+      expect(stored['https://atomicdata.dev/properties/is-a']).toContain(
+        sourceClass(h.prepared),
+      );
+      expect(
+        await h.store.resource(h.prepared.scope, sourceClass(h.prepared)),
+      ).toBeDefined();
       const second = await h.sync(async () => response('{"items":[]}'));
       expect(second.records).toBe(0);
       const reopened = new GitAtomicStore(h.config.dataDirectory);
@@ -437,7 +447,18 @@ describe.skipIf(!database)(
           Buffer.from('{}'),
         ),
       ).toBe(false);
-      expect((await runner.sync())[0]).toHaveProperty('result');
+      const baseline = (await runner.sync())[0];
+      expect(baseline).toHaveProperty('result');
+      expect(baseline.checkout?.directory).toBe(
+        join(h.store.checkoutDirectory, 'example/test/entries'),
+      );
+      expect(
+        await readFile(
+          join(baseline.checkout!.directory, 'context.json'),
+          'utf8',
+        ),
+      ).toContain(baseline.result!.run);
+
       const manual = (await h.store.historyEntries(h.prepared.scope))[0];
       expect(manual.message).toContain(
         'Intent (user supplied):\n  Collect a baseline for review',
@@ -481,6 +502,14 @@ describe.skipIf(!database)(
       await expect(restarted.sync(['example/test/unknown'])).rejects.toThrow(
         'Unknown collection',
       );
+      await writeFile(
+        join(baseline.checkout!.directory, 'local-edit.txt'),
+        'Keep local work',
+      );
+      const blocked = (await runner.sync())[0];
+      expect(blocked.error).toContain('local edits');
+      expect(blocked.result).toBeUndefined();
+      await rm(join(baseline.checkout!.directory, 'local-edit.txt'));
     });
     it('authenticates webhook ingress and acknowledges only a durable deduplicated hint', async () => {
       const h = await setup();

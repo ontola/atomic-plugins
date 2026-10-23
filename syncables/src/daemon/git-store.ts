@@ -1,6 +1,13 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import {
+  lstat,
+  mkdir,
+  readFile,
+  realpath,
+  rmdir,
+  writeFile,
+} from 'node:fs/promises';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { indexJson, renderJson, nodeHash } from '../postgres/json-graph.js';
 
 const FORMAT = 'syncables-json-ad-git-v1\n';
@@ -35,15 +42,31 @@ export function validateCommitMessage(message: string, maxBytes = 8192): void {
 }
 
 /** Local-only JSON-AD snapshots. Git versions data; this is not Atomic native sync. */
+export interface CheckoutResult {
+  directory: string;
+  revision: string;
+}
+export class CheckoutBlockedError extends Error {}
+
 export class GitAtomicStore {
   readonly directory: string;
-  constructor(directory: string) {
+  readonly checkoutDirectory: string;
+  constructor(directory: string, checkoutDirectory?: string) {
     this.directory = resolve(directory);
+    this.checkoutDirectory = resolve(
+      checkoutDirectory ?? resolve(dirname(this.directory), 'data'),
+    );
+    if (
+      this.checkoutDirectory === this.directory ||
+      this.checkoutDirectory.startsWith(this.directory + sep)
+    )
+      throw new Error('checkoutDirectory must be outside the Git archive');
   }
   private async git(
     args: string[],
     input = '',
     allowMissing = false,
+    worktree?: string,
   ): Promise<string> {
     const env = { ...process.env };
     for (const key of Object.keys(env))
@@ -64,8 +87,11 @@ export class GitAtomicStore {
           'core.hooksPath=/dev/null',
           '-c',
           'protocol.allow=never',
-          '--git-dir',
-          this.directory,
+          '-c',
+          'core.fsmonitor=false',
+          '-c',
+          'submodule.recurse=false',
+          ...(worktree ? ['-C', worktree] : ['--git-dir', this.directory]),
           ...args,
         ],
         { env, stdio: ['pipe', 'pipe', 'pipe'] },
@@ -131,6 +157,153 @@ export class GitAtomicStore {
         throw new Error(
           'Refusing to use an existing repository not initialized by Syncables',
         );
+    }
+  }
+  /** Publish a normal working folder without cloning or rewriting any history. */
+  async checkout(
+    scope: string,
+    collection: string,
+  ): Promise<CheckoutResult | undefined> {
+    const parts = collection.split('/');
+    if (
+      parts.length !== 3 ||
+      parts.some((part) => !/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/.test(part))
+    )
+      throw new Error('Invalid checkout collection alias');
+    const directory = resolve(this.checkoutDirectory, ...parts);
+    const blocked = (reason: string): CheckoutBlockedError =>
+      new CheckoutBlockedError(`Working folder ${directory}: ${reason}`);
+    const ensureDirectory = async (path: string): Promise<void> => {
+      await mkdir(path, { recursive: true, mode: 0o700 });
+      const info = await lstat(path);
+      if (!info.isDirectory() || info.isSymbolicLink())
+        throw blocked('refusing a symlink or non-directory');
+    };
+    await ensureDirectory(this.checkoutDirectory);
+    // Check each alias component before descending through it.
+    for (let i = 1; i < parts.length; i++)
+      await ensureDirectory(
+        resolve(this.checkoutDirectory, ...parts.slice(0, i)),
+      );
+    const locks = resolve(this.directory, 'syncables-checkout-locks');
+    await ensureDirectory(locks);
+    const lock = resolve(locks, nodeHash(directory));
+    try {
+      await mkdir(lock, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST')
+        throw blocked(
+          `checkout is busy; an interrupted checkout may require removing the empty lock ${lock}`,
+        );
+      throw error;
+    }
+    try {
+      const revision = await this.head(scope);
+      const info = await lstat(directory).catch(
+        (error: NodeJS.ErrnoException) => {
+          if (error.code !== 'ENOENT') throw error;
+          return undefined;
+        },
+      );
+      if (info) {
+        if (!info.isDirectory() || info.isSymbolicLink())
+          throw blocked('refusing a symlink or non-directory');
+        const gitfile = await lstat(resolve(directory, '.git')).catch(
+          () => undefined,
+        );
+        if (!gitfile?.isFile() || gitfile.isSymbolicLink())
+          throw blocked(
+            'directory is not a managed Git worktree; move it aside or choose another checkoutDirectory',
+          );
+        const common = (
+          await this.git(
+            ['rev-parse', '--git-common-dir'],
+            '',
+            false,
+            directory,
+          )
+        ).trim();
+        if (
+          (await realpath(resolve(directory, common))) !==
+          (await realpath(this.directory))
+        )
+          throw blocked('worktree belongs to a different repository');
+        const metadata = (
+          await this.git(['rev-parse', '--git-dir'], '', false, directory)
+        ).trim();
+        const metadataPath = await realpath(resolve(directory, metadata));
+        const registration = relative(
+          await realpath(resolve(this.directory, 'worktrees')),
+          metadataPath,
+        );
+        if (
+          !registration ||
+          registration.startsWith('..') ||
+          registration.includes(sep)
+        )
+          throw blocked('worktree is not registered with this repository');
+        const backPointer = (
+          await readFile(resolve(metadataPath, 'gitdir'), 'utf8')
+        ).trim();
+        if (
+          (await realpath(backPointer)) !==
+          (await realpath(resolve(directory, '.git')))
+        )
+          throw blocked('worktree registration points to a different folder');
+        if (
+          (
+            await this.git(['symbolic-ref', '-q', 'HEAD'], '', true, directory)
+          ).trim()
+        )
+          throw blocked(
+            'HEAD is attached to a local branch; preserve your branch before resuming automatic checkout',
+          );
+        if (
+          (
+            await this.git(
+              [
+                'status',
+                '--porcelain=v1',
+                '--untracked-files=all',
+                '--ignored',
+              ],
+              '',
+              false,
+              directory,
+            )
+          ).trim()
+        )
+          throw blocked(
+            'local edits or untracked files need attention; no files were overwritten',
+          );
+        const previous = (
+          await this.git(['rev-parse', 'HEAD'], '', false, directory)
+        ).trim();
+        try {
+          await this.resolveRevision(scope, previous);
+        } catch {
+          throw blocked(
+            'HEAD does not belong to this collection history; local commits or a changed source need attention',
+          );
+        }
+        if (revision && previous !== revision)
+          // No force/reset: Git protects edits made after the status check too.
+          await this.git(
+            ['checkout', '--detach', revision],
+            '',
+            false,
+            directory,
+          ).catch(() => {
+            throw blocked(
+              'Git could not advance the checkout; inspect git status and retry checkout',
+            );
+          });
+      } else if (revision) {
+        await this.git(['worktree', 'add', '--detach', directory, revision]);
+      }
+      return revision ? { directory, revision } : undefined;
+    } finally {
+      await rmdir(lock);
     }
   }
   private ref(scope: string): string {

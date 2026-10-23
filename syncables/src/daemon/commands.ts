@@ -9,7 +9,12 @@ import {
 import { GitAtomicStore, validateCommitMessage } from './git-store.js';
 import { DaemonAuth, KeychainCredentials } from './auth.js';
 import { DaemonRunner, jobStatuses } from './runner.js';
-import { SOURCE_ID, SOURCE_JSON } from './sync.js';
+import {
+  SOURCE_ID,
+  SOURCE_JSON,
+  prepareCollection,
+  upgradeSourceClasses,
+} from './sync.js';
 
 function write(value: unknown): void {
   process.stdout.write(JSON.stringify(value, null, 2) + '\n');
@@ -146,8 +151,40 @@ export async function daemonCommand(
   }
   if (string('subject') !== undefined && command !== 'history')
     throw new Error('--subject is supported by history only');
+  const store = new GitAtomicStore(
+    config.dataDirectory,
+    config.checkoutDirectory,
+  );
+  if (command === 'checkout') {
+    if (positionals.length !== 1)
+      throw new Error('Unexpected command arguments');
+    await store.initialize();
+    const selected = selectedCollections(
+      config,
+      string('collections')?.split(',') ?? [],
+    );
+    const results: {
+      alias: string;
+      directory?: string;
+      revision?: string;
+      error?: string;
+    }[] = [];
+    for (const source of selected) {
+      const prepared = await prepareCollection(config.owner, source);
+      // Validate/create the existing checkout before any local schema migration.
+      await store.checkout(prepared.scope, alias(source));
+      await upgradeSourceClasses(prepared, store);
+      const checkout = await store.checkout(prepared.scope, alias(source));
+      results.push({
+        alias: alias(source),
+        ...(checkout ?? { error: 'No local snapshot; run sync first' }),
+      });
+    }
+    write(results);
+    if (results.some((r) => 'error' in r)) process.exitCode = 1;
+    return;
+  }
   const archive = localArchive();
-  const store = new GitAtomicStore(config.dataDirectory);
   const controller = new AbortController();
   const stop = (): void => controller.abort();
   process.once('SIGINT', stop);

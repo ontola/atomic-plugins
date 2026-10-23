@@ -93,6 +93,7 @@ async function main(): Promise<void> {
       'login',
       'logout',
       'sync',
+      'checkout',
       'daemon',
       'status',
       'browse',

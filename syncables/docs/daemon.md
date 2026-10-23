@@ -3,6 +3,7 @@
 The source implementation adds a read-only standalone daemon to the existing
 `syncables` executable. It stores original API response text and lossless,
 content-addressed nested JSON nodes in a separate local PostgreSQL database.
+Successful syncs also maintain normal checked-out working folders per collection.
 The [JSON graph format and fixed vectors](json-graph-v1.md) define its persisted
 node encoding. Its local data copy and bundled schemas live in a private bare Git
 repository. [Versioned Atomic Data](../../docs/design/versioned-atomic-data.md)
@@ -111,7 +112,8 @@ file, as does `"dataDirectory": "./local-data.git"`. The resulting layout is:
 ~/.local/share/syncables-live/
   config.json             your edited config
   github-issues.json      GET collection/pagination description
-  local-data.git/         created by sync; resources, schemas and history
+  local-data.git/         private history store
+  data/                  automatic Git working folders, one per collection
 ```
 
 `./data` at the repository root also works. Ignore it in Git before saving real
@@ -148,16 +150,16 @@ The output includes `owner` and each approved connection's `connection_id` and
 into `config.json`; keep credentials and owner signing keys out of that file.
 For the previously tested `ontola/usertest-findings` repository, change:
 
-| Config field | Value for the real GitHub test |
-| --- | --- |
-| `owner` | `owner` from connection discovery |
-| `issuer` | `https://localthought.io` |
-| `clientId` | `syncables-cli` |
-| `collections[0].connection` | Approved `github-issues` connection ID |
-| `collections[0].account` | `ontola` (local account label) |
-| `collections[0].name` | `usertest-findings` (local collection label) |
-| `collections[0].bindings` | `{"owner":"ontola","repo":"usertest-findings"}` |
-| `collections[0].pollSeconds` | `0` for manual tests first |
+| Config field                 | Value for the real GitHub test                  |
+| ---------------------------- | ----------------------------------------------- |
+| `owner`                      | `owner` from connection discovery               |
+| `issuer`                     | `https://localthought.io`                       |
+| `clientId`                   | `syncables-cli`                                 |
+| `collections[0].connection`  | Approved `github-issues` connection ID          |
+| `collections[0].account`     | `ontola` (local account label)                  |
+| `collections[0].name`        | `usertest-findings` (local collection label)    |
+| `collections[0].bindings`    | `{"owner":"ontola","repo":"usertest-findings"}` |
+| `collections[0].pollSeconds` | `0` for manual tests first                      |
 
 Keep `platform` as `github-issues`, `document` as `./github-issues.json`,
 `collection` as `issues` and `query` as `{"per_page":"100"}`. The profile's
@@ -191,18 +193,23 @@ macOS Keychain and run `cli sync`/`cli daemon` without `--interactive`.
 Paths in the config resolve relative to the config file. Restart the foreground
 daemon after editing its config or composed documents. Each collection has:
 
-| Field | Meaning |
-| --- | --- |
-| `platform/account/name` | Three local labels forming its CLI selector. `platform` must match the approved connection. |
-| `connection` | Existing integration-proxy connection ID. |
-| `document` | Local composed OpenAPI JSON/YAML file with CRUD collection metadata and pagination. |
-| `collection` | Unique collection name in `components.crudResources`. |
-| `bindings` | Explicit parent path variables; this pilot does not recursively discover accounts/parents. |
-| `query` | Declared query parameters. Fixed collection values and paging/checkpoint controls cannot be replaced. |
-| `pollSeconds` | Default 300; 5–86400 for polling, 0 for initial fetch plus webhook/manual triggers. |
+| Field                   | Meaning                                                                                               |
+| ----------------------- | ----------------------------------------------------------------------------------------------------- |
+| `platform/account/name` | Three local labels forming its CLI selector. `platform` must match the approved connection.           |
+| `connection`            | Existing integration-proxy connection ID.                                                             |
+| `document`              | Local composed OpenAPI JSON/YAML file with CRUD collection metadata and pagination.                   |
+| `collection`            | Unique collection name in `components.crudResources`.                                                 |
+| `bindings`              | Explicit parent path variables; this pilot does not recursively discover accounts/parents.            |
+| `query`                 | Declared query parameters. Fixed collection values and paging/checkpoint controls cannot be replaced. |
+| `pollSeconds`           | Default 300; 5–86400 for polling, 0 for initial fetch plus webhook/manual triggers.                   |
 
-`dataDirectory` selects the private Git data repository. Config changes to
-owner, connection, collection definition, bindings or query create a separate
+`dataDirectory` selects the private Git data repository. The optional
+`checkoutDirectory` selects the working-folder root (relative to the config);
+by default it is `data` beside `dataDirectory`. It must be outside the archive.
+For example, Keep notes appear at `data/google-keep/workspace/notes/`.
+
+Config changes to owner, connection, collection definition, bindings or query
+create a separate
 data scope and bootstrap it. Changing a local label or poll interval does not
 change source identity. This pilot caps config at 100 collections, each read
 at 5,000 records/1,000 requests/120 seconds, each response at 8 MiB and a Git
@@ -440,20 +447,65 @@ Intent-only commits appear in collection history, while resource/schema history
 shows commits that changed that subject's content or presence. Bundled schemas
 usually have only their initial revision until their definitions change.
 
-The configured `dataDirectory` is a bare Git repository, so ordinary Git tools
-can inspect it without a checkout:
+### Normal checked-out folders
+
+Every successful sync creates or advances a normal Git working folder under
+`checkoutDirectory/platform/account/name`. These are linked worktrees of the
+private history repository: there is no clone, pull, duplicate object store or
+provider refetch needed to inspect the latest data. Sync output includes
+`checkout.directory` and its revision. The data and bundled schema resources
+are `r-<subject-hash>.json` files; `context.json` records the source context.
 
 ```sh
-git --git-dir=/absolute/path/local-data.git log --all --date=iso --format=fuller
-git --git-dir=/absolute/path/local-data.git show --stat FULL_COMMIT_ID
-git --git-dir=/absolute/path/local-data.git diff OLD_COMMIT_ID NEW_COMMIT_ID
-git --git-dir=/absolute/path/local-data.git show FULL_COMMIT_ID:context.json
+cd /absolute/path/data/google-keep/workspace/notes
+git status
+git log --format=fuller
+git show COMMIT_ID:context.json
+git diff OLD_COMMIT_ID NEW_COMMIT_ID
 ```
 
-Use the full 64-character IDs returned by the CLI. `log --all` includes every
-collection scope; the CLI selects the configured collection for you. Resource
-filenames hash their subject IRIs, so the CLI is the easier way to select one.
-Inspect the repository read-only; leave its refs and files under daemon control.
+For existing installations, expose the saved snapshots without a login,
+PostgreSQL or any provider calls:
+
+```sh
+syncables checkout --config /absolute/path/config.json
+```
+
+This command also adds document-scoped API classes to old generic snapshots
+in a new local commit. Previous commits and tags remain intact. Each item
+retains the shared `urn:syncables:class:source-record` type and also has
+`urn:syncables:oad:<document-sha256>:class:<crud-resource>` as its specific
+API type. Its Class resource, the source-id/source-json property schemas, and
+the document-hash/resource provenance property schemas are versioned together.
+The document hash is of the exact input OAD/profile bytes, independent of its
+local filename. This labels the declared API kind; it does not claim that the
+payload was validated against every OpenAPI constraint. Original API data,
+including unknown fields and large number lexemes, is retained unchanged.
+
+Keep working folders clean: tracked edits, untracked/ignored files, local
+commits or attaching HEAD to your own branch block automatic updates with a
+folder-specific error. Syncables never resets, stashes, cleans or overwrites
+those edits. A dirty folder is checked before a provider read; Git's non-forced
+checkout also protects edits made during that read. If a snapshot was already
+saved when updating the working folder failed, sync output includes both its
+result and a checkout error; the job is `checkout-blocked`. Resolve the local
+work and rerun `checkout` without refetching.
+
+Existing non-worktree directories, symlinks and worktrees from another archive
+are refused. An OAD/config change that creates another source scope will not
+silently replace an existing folder with unrelated history; choose another
+`checkoutDirectory` to inspect the new scope. The daemon loads the OAD at
+startup; hot reload and cross-version schema migration are not implemented.
+A per-folder empty lock under `dataDirectory/syncables-checkout-locks` prevents
+simultaneous materialization. If a process was killed during checkout, inspect
+the folder and ensure no checkout is running before removing the empty lock
+named by the error and retrying. No automatic stale-lock deletion occurs.
+
+The archive can still be inspected with `git --git-dir=/absolute/path/local-data.git`.
+Leave its scope refs under daemon control. Worktree HEADs are detached so sync
+can advance a collection's published ref without making local edits appear as
+snapshot changes. Full 64-character IDs returned by the CLI pin reads to a
+specific collection revision.
 
 ## Queued webhooks
 

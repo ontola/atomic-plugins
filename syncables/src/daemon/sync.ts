@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { load as parseYaml } from 'js-yaml';
 import { loadOpenApiDocument } from '../openapi/load.js';
 import {
   discoverReadModel,
@@ -46,7 +47,7 @@ export const SOURCE_JSON = 'urn:syncables:property:source-json';
 export const SOURCE_ID = 'urn:syncables:property:source-id';
 const IS_A = 'https://atomicdata.dev/properties/is-a';
 const SOURCE_CLASS = 'urn:syncables:class:source-record';
-const schema = (): Map<string, string> =>
+const baseSchema = (): Map<string, string> =>
   new Map([
     [
       SOURCE_CLASS,
@@ -75,6 +76,119 @@ const schema = (): Map<string, string> =>
       }),
     ],
   ]);
+const OAD_HASH = 'urn:syncables:property:openapi-document-hash';
+const OAD_RESOURCE = 'urn:syncables:property:openapi-resource';
+export function sourceClass(prepared: PreparedCollection): string {
+  const collections = discoverReadModel(prepared.document).collections.filter(
+    (c) => c.name === prepared.source.collection,
+  );
+  if (collections.length !== 1)
+    throw new Error('Unknown or ambiguous metadata collection');
+  return `urn:syncables:oad:${prepared.documentHash}:class:${encodeURIComponent(collections[0].resource)}`;
+}
+export function sourceSchemas(
+  prepared: PreparedCollection,
+): Map<string, string> {
+  const schemas = baseSchema();
+  const classId = sourceClass(prepared);
+  const resource = discoverReadModel(prepared.document).collections.find(
+    (c) => c.name === prepared.source.collection,
+  )!.resource;
+  schemas.set(
+    classId,
+    JSON.stringify({
+      '@id': classId,
+      [IS_A]: ['https://atomicdata.dev/classes/Class'],
+      'https://atomicdata.dev/properties/description': `${prepared.document.info.title}: API resource ${resource}. The document hash identifies the declared contract, not a validation result.`,
+      'https://atomicdata.dev/properties/requires': [SOURCE_ID, SOURCE_JSON],
+      [OAD_HASH]: prepared.documentHash,
+      [OAD_RESOURCE]: resource,
+    }),
+  );
+  for (const property of [OAD_HASH, OAD_RESOURCE])
+    schemas.set(
+      property,
+      JSON.stringify({
+        '@id': property,
+        [IS_A]: ['https://atomicdata.dev/classes/Property'],
+        'https://atomicdata.dev/properties/datatype':
+          'https://atomicdata.dev/datatypes/string',
+      }),
+    );
+  return schemas;
+}
+/** Change only the type graph; number lexemes and all original fields survive. */
+export async function typeSourceRecord(
+  raw: string,
+  classId: string,
+): Promise<string> {
+  const graph = indexJson(raw);
+  const node = JSON.parse(graph.nodes.get(graph.root)!) as GraphNode;
+  if (node[2] !== 'object') throw new Error('Source record is not an object');
+  const entries = node[3] as [string, GraphValue][];
+  const priorTypes = (JSON.parse(raw) as Record<string, unknown>)[IS_A];
+  const retained = Array.isArray(priorTypes)
+    ? priorTypes.filter((type): type is string => typeof type === 'string')
+    : [];
+  const types = indexJson(
+    JSON.stringify([...new Set([classId, ...retained, SOURCE_CLASS])]),
+  );
+  for (const [hash, bytes] of types.nodes) graph.nodes.set(hash, bytes);
+  const found = entries.find(([key]) => key === IS_A);
+  if (found) found[1] = ['ref', types.root];
+  else entries.push([IS_A, ['ref', types.root]]);
+  entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const bytes = JSON.stringify(node);
+  const root = nodeHash(bytes);
+  graph.nodes.set(root, bytes);
+  return renderJson(root, async (hash) => graph.nodes.get(hash)!);
+}
+/** Add API-specific class schemas to an old snapshot without a provider read. */
+export async function upgradeSourceClasses(
+  prepared: PreparedCollection,
+  store: GitAtomicStore,
+): Promise<string | undefined> {
+  const previous = await store.head(prepared.scope);
+  if (!previous) return undefined;
+  const context = await store.context(prepared.scope, previous);
+  if (
+    context.itemClass === sourceClass(prepared) &&
+    context.documentHash === prepared.documentHash &&
+    context.classMapping === 'oad-resource-class-v1'
+  )
+    return undefined;
+  const resources = new Map<string, string>();
+  let changed = false;
+  for (const raw of await store.list(prepared.scope, previous)) {
+    const item = JSON.parse(raw) as Record<string, unknown>;
+    const typed = Object.hasOwn(item, SOURCE_ID)
+      ? await typeSourceRecord(raw, sourceClass(prepared))
+      : raw;
+    if (indexJson(raw).root !== indexJson(typed).root) changed = true;
+    resources.set(item['@id'] as string, typed);
+  }
+  for (const [subject, raw] of sourceSchemas(prepared)) {
+    const existing = resources.get(subject);
+    if (!existing || indexJson(existing).root !== indexJson(raw).root)
+      changed = true;
+    resources.set(subject, raw);
+  }
+  if (!changed) return undefined;
+  return store.commit(
+    {
+      scope: prepared.scope,
+      resources,
+      context: {
+        ...context,
+        classMapping: 'oad-resource-class-v1',
+        itemClass: sourceClass(prepared),
+        documentHash: prepared.documentHash,
+      },
+      message: `Describe API resource classes for ${alias(prepared.source)} without refetching`,
+    },
+    previous,
+  );
+}
 function objectRefs(
   graph: JsonGraph,
   parsed: unknown,
@@ -107,6 +221,7 @@ function adaptIncremental(document: OpenApiDocument): OpenApiDocument {
 export interface PreparedCollection {
   source: CollectionConfig;
   document: OpenApiDocument;
+  documentHash: string;
   scope: string;
 }
 export async function prepareCollection(
@@ -114,10 +229,13 @@ export async function prepareCollection(
   source: CollectionConfig,
 ): Promise<PreparedCollection> {
   const original = await readFile(source.document, 'utf8');
-  const document = adaptIncremental(await loadOpenApiDocument(source.document));
+  const document = adaptIncremental(
+    await loadOpenApiDocument(parseYaml(original) as Record<string, unknown>),
+  );
   return {
     source,
     document,
+    documentHash: nodeHash(original),
     scope: collectionScope(owner, source, nodeHash(original)),
   };
 }
@@ -222,6 +340,7 @@ export async function syncCollection(
     throw new Error(
       'Incremental daemon reads require one query syncToken field',
     );
+  const apiClass = sourceClass(prepared);
   const expected = await store.head(scope);
   const previous = expected ? await store.context(scope, expected) : {};
   const priorToken =
@@ -291,7 +410,7 @@ export async function syncCollection(
                 text,
               ]),
             )
-          : schema();
+          : sourceSchemas(prepared);
       const seen = new Set<string>();
       const query = { ...collection.listQuery, ...source.query };
       if (token) query[tokenFields[0][0]] = token;
@@ -350,7 +469,7 @@ export async function syncCollection(
           );
           const prefix = JSON.stringify({
             '@id': subject,
-            [IS_A]: [SOURCE_CLASS],
+            [IS_A]: [apiClass, SOURCE_CLASS],
             [SOURCE_ID]: id,
           });
           resources.set(
@@ -393,6 +512,9 @@ export async function syncCollection(
           );
         nextToken = found;
       }
+      const records = [...resources.values()].filter((raw) =>
+        Object.hasOwn(JSON.parse(raw) as object, SOURCE_ID),
+      ).length;
       await archive.finishRun(auth.owner, run);
       finished = true;
       const revision = await store.commit(
@@ -417,7 +539,7 @@ export async function syncCollection(
             `Syncables-Collection: ${alias(source)}`,
             `Syncables-Run: ${run}`,
             `Syncables-Strategy: ${strategy}`,
-            `Syncables-Records: ${resources.size - 3}`,
+            `Syncables-Records: ${records}`,
           ].join('\n'),
           context: {
             owner: auth.owner,
@@ -430,13 +552,16 @@ export async function syncCollection(
             run,
             strategy,
             mapping: 'source-json-ad-v1',
+            classMapping: 'oad-resource-class-v1',
+            itemClass: sourceClass(prepared),
+            documentHash: prepared.documentHash,
             ...(nextToken ? { syncToken: nextToken } : {}),
           },
         },
         expected,
         options.signal,
       );
-      return { revision, run, records: resources.size - 3, strategy };
+      return { revision, run, records, strategy };
     } catch (error) {
       if (!finished)
         await archive.finishRun(auth.owner, run, false).catch(() => {});
