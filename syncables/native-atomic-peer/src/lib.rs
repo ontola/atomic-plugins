@@ -439,6 +439,7 @@ impl Session {
         };
         if tag == protocol::tag::AUTH {
             // Failed reauthentication must not preserve the old identity/grants.
+            let was_subscribed = self.subscribed;
             self.agent = ForAgent::Public;
             self.subscribed = false;
             if frame.len() > 8192
@@ -460,6 +461,14 @@ impl Session {
             )
             .await;
             if frames.first().and_then(|f| f.first()) == Some(&protocol::tag::AUTH_OK) {
+                if was_subscribed {
+                    if let Ok(root) = peer.db.get_resource(&peer.drive.clone().into()).await {
+                        self.subscribed =
+                            atomic_lib::hierarchy::check_read(&peer.db, &root, &self.agent)
+                                .await
+                                .is_ok();
+                    }
+                }
                 frames = vec![protocol::encode_auth_ok_with_caps(CAPS)];
             }
             return frames;

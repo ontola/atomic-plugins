@@ -327,6 +327,30 @@ async fn unauthorized_reads_all_mutations_and_cross_origin_auth_are_refused() {
     let frames = session
         .handle(
             &peer,
+            &protocol::encode_auth(&reader, &format!("{}#{}", session.origin, session.nonce))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(frames[0][0], protocol::tag::AUTH_OK);
+    assert!(
+        session.subscribed,
+        "a still-authorized identity keeps its subscription"
+    );
+    let frames = session
+        .handle(
+            &peer,
+            &protocol::encode_auth(&stranger, &format!("{}#{}", session.origin, session.nonce))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(frames[0][0], protocol::tag::AUTH_OK);
+    assert!(
+        !session.subscribed,
+        "switching to a denied reader drops its subscription"
+    );
+    let frames = session
+        .handle(
+            &peer,
             &protocol::encode_auth(&owner, "https://another.example").unwrap(),
         )
         .await;

@@ -82,7 +82,10 @@ The full PostgreSQL-backed TypeScript suite passed all 1,825 tests in 104 files,
 including the real native process acceptance. Five native compatibility tests
 passed (four core replica/security/recovery cases and one real-process official
 WebSocket client case). Rust formatting/Clippy, TypeScript lint/formatting,
-release compilation, changelog checks and the installed-tarball smoke passed. Final check
+release compilation, changelog checks and the installed-tarball smoke passed. Final review added explicit
+reauthentication coverage: authorized identity changes retain subscriptions;
+unauthorized or failed authentication clears them. All five native tests and
+Clippy passed again after that change. Final check
 counts and PR state are recorded in the PR description. A selected live
 collection/reader test remains pending user-provided selection and authorized
 signing access; the issue must remain open while that acceptance step is missing.
