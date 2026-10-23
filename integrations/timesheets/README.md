@@ -322,8 +322,12 @@ into the view root.
   - _Not verified:_ the published terms are fetched from GitHub Pages by
     the server and the browser (the e2e needs ontola.github.io); a cold
     browser or server during a Pages outage fails as #177 spike S1 found
-    (H1). Not tried: a drive with many projects (each sync reads every
-    project row once and renames where Clockify's name differs). Tables
+    (H1). A drive with many projects: unit-tested at 300 projects, not
+    tried live (`app/manyProjects.test.ts`, against the in-memory fake
+    host). Each sync pages the project list in 50s (7 requests at 300),
+    looks up each project row once by its Clockify id and reads it once,
+    and saves only a row whose name Clockify changed (one more read each).
+    Time entries reuse those lookups. Tables
     the host's Time tracker template makes have a class of their own, so
     the app is not offered on them (a lens is #177 §3.1, not built).
 - **Observation log** (#123 M1, design #97). Once set up, the app syncs on
