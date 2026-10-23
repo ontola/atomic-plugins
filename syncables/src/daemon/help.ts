@@ -6,6 +6,10 @@ Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export on
     [--message "Why this sync is being run"]
   syncables daemon --config FILE [--collections platform/account/name,...] [--interactive]
     [--message "Intent attached to each successful snapshot in this process"]
+  syncables atomic-peer --config FILE --collection platform/account/name
+    --peer-binary /absolute/path/syncables-atomic-peer --peer-directory PRIVATE_DIRECTORY
+    --signer-file PRIVATE_EXPORTED_ATOMIC_SECRET_FILE --reader atomic:agent:ID[,ID]
+    [--peer-port 9901] [--at REVISION|tag:NAME]
   syncables checkout --config FILE [--collections platform/account/name,...]
   syncables migrate git --config FILE [--source LEGACY_ARCHIVE]
   syncables export git --config FILE --subtree platform/account/collection[/ENCODED_ITEM_ID]
@@ -32,6 +36,10 @@ Successful syncs update these folders automatically; local edits block updates. 
 subsequent pages; resource resolves schemas through the same command at --at.
 history returns commit messages, timestamps and parents; use either ITEM_ID
 or --subject IRI. --message is stored permanently in PostgreSQL history and Git exports; keep secrets out.
+atomic-peer serves one collection on loopback via the separately built native
+companion. It follows accepted PostgreSQL revisions, uses the explicitly selected
+owner signer, and rejects incoming writes. --at serves a pinned revision.
+See docs/atomic-peer.md for identity, lossless JSON and native build instructions.
 Webhook relay: loopback POST /webhooks/ENCODED_COLLECTION_ALIAS, Bearer
 SYNCABLES_WEBHOOK_TOKEN, x-syncables-delivery-id. See docs/daemon.md.
 `;
