@@ -92,3 +92,16 @@ walkthrough and a concrete, explicitly unimplemented one-way mirror milestone:
 pinned revisions, stable native identity/schema projection, local signing,
 durable acknowledgments/checkpoints, membership/deletion distinction and retry
 verification. No Atomic drive was modified and no replication runtime added.
+
+Final review corrected a bootstrap guard edge case: retaining an already imported
+archive must not block a newly configured collection or OAD scope. The guard
+checks the completed archive import, with CLI regression coverage that reaches
+an invented login failure for a new scope without accessing any credentials.
+
+The user subsequently proposed exposing a subset of the Atomic server at the
+sync level. Inspected the local atomic-server sync engine and wire protocol,
+then documented this alternative: virtual source drive, maintained Loro state,
+read-only native protocol, library reuse, and same-drive replication versus
+copying into another drive. The current core's concrete Db dependency means a
+PostgreSQL adapter or an embedded projection store is additional implementation
+work. This discussion did not authorize or add a new server runtime.

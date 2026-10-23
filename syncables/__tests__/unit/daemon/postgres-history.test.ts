@@ -25,6 +25,7 @@ import {
   exportGitHistory,
 } from '../../../src/daemon/git-io.js';
 import { nodeHash } from '../../../src/postgres/json-graph.js';
+import { DaemonAuth } from '../../../src/daemon/auth.js';
 import { daemonCommand } from '../../../src/daemon/commands.js';
 import { prepareCollection } from '../../../src/daemon/sync.js';
 
@@ -430,6 +431,9 @@ describe.skipIf(!database)(
       vi.stubEnv('SYNCABLES_DATABASE_URL', database!);
       const output = vi.spyOn(process.stdout, 'write').mockReturnValue(true);
       try {
+        await expect(daemonCommand(['sync'], { config })).rejects.toThrow(
+          'Run migrate git',
+        );
         await daemonCommand(['migrate', 'git'], { config });
         expect(JSON.parse(String(output.mock.calls.at(-1)![0])).revisions).toBe(
           1,
@@ -453,6 +457,32 @@ describe.skipIf(!database)(
         expect(JSON.parse(String(output.mock.calls.at(-1)![0])).revisions).toBe(
           2,
         );
+        // Preserving an imported archive must not block a later new source scope.
+        const nextSource = { ...source, connection: 'new-invented-connection' };
+        await writeFile(
+          config,
+          JSON.stringify({
+            version: 1,
+            owner,
+            dataDirectory: git.directory,
+            workspaceDirectory: join(dir, 'new-workspace'),
+            collections: [nextSource],
+          }),
+        );
+        const session = vi
+          .spyOn(DaemonAuth.prototype, 'session')
+          .mockRejectedValue(new Error('Login required: invented test'));
+        const previousExitCode = process.exitCode;
+        try {
+          await daemonCommand(['sync'], { config });
+          expect(session).toHaveBeenCalledOnce();
+          expect(
+            JSON.parse(String(output.mock.calls.at(-1)![0]))[0].error,
+          ).toContain('Authorization needs attention');
+        } finally {
+          session.mockRestore();
+          process.exitCode = previousExitCode;
+        }
       } finally {
         output.mockRestore();
         vi.unstubAllEnvs();

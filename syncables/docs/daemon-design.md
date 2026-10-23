@@ -565,6 +565,39 @@ and report conflicting local edits rather than silently overwriting them.
 Existing `replication add --backend atomic` / `replication list` commands only
 persist destination definitions; they do not execute this plan.
 
+### Atomic sync peer as an alternative source interface
+
+A second candidate, suggested by Michiel, is for the Syncables daemon to expose
+an Atomic-compatible sync peer backed by PostgreSQL. Consumers could subscribe
+to a virtual Syncables drive through the normal Atomic protocol. This remains
+a proposal; no sync endpoint is implemented by the storage migration.
+
+The pipeline would be PostgreSQL snapshots → maintained native Atomic/Loro
+projection → sync protocol → replicas. Stable resource/schema identities,
+genesis and permission metadata, signed writes, version vectors, reconciliation,
+subscriptions and reconnect recovery are required. Begin with read-only access
+to one collection; reject incoming mutations and advertise only supported
+capabilities. Search, plugins and application hosting are outside this subset.
+
+Reuse the existing `atomic_lib` core rather than independently implementing its
+wire format, signatures and permission rules. The current sync engine takes
+`atomic_lib::Db`; it has no ready-made PostgreSQL adapter. A prototype can embed
+a small Atomic projection store, or factor a storage interface and persist its
+native state in PostgreSQL. Fetched data/history remains authoritative in
+PostgreSQL. Persistent Loro documents/oplogs and projection checkpoints are
+additional derived representations: creating fresh Loro documents on every
+request would lose stable operation identities and incremental reconciliation.
+
+A native replica shares the **same drive identity**. Copying these records into
+a different existing drive remains an import/projection operation; native sync
+alone does not change their ownership namespace. Likewise, arbitrary local
+edits and bidirectional provider writes require policies beyond the read-only
+source. Prototype compatibility and restart/delta behavior with an unmodified
+Atomic client before choosing this interface over direct mirroring.
+
+Protocol references: [Atomic sync engine](https://github.com/ontola/atomic-server/blob/66880fc53f392771761bb4d967e1e443344a7e34/docs/src/sync-engine.md)
+and [wire protocol](https://github.com/ontola/atomic-server/blob/66880fc53f392771761bb4d967e1e443344a7e34/docs/src/websockets.md).
+
 ## Daemon lifecycle and replication destinations
 
 Run one unprivileged daemon per user, in the foreground under a macOS launchd

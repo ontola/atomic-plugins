@@ -1,4 +1,4 @@
-import { lstat } from 'node:fs/promises';
+import { lstat, realpath } from 'node:fs/promises';
 import type { SnapshotStore } from './snapshot-store.js';
 import { resolve, dirname } from 'node:path';
 import { PostgresHistoryStore } from './history-store.js';
@@ -363,7 +363,15 @@ export async function daemonCommand(
           return undefined;
         },
       );
-      if (legacy) {
+      const imported = legacy
+        ? (
+            await archive.pool.query(
+              'SELECT 1 FROM syncables_cache.snapshot_import_refs WHERE owner=$1 AND source=$2 LIMIT 1',
+              [config.owner, await realpath(config.dataDirectory)],
+            )
+          ).rowCount !== 0
+        : false;
+      if (legacy && !imported) {
         for (const source of selectedCollections(
           config,
           string('collections')?.split(',') ?? [],
@@ -371,7 +379,7 @@ export async function daemonCommand(
           const prepared = await prepareCollection(config.owner, source);
           if (!(await store.head(prepared.scope)))
             throw new Error(
-              'Existing Git archive found. Run migrate git before syncing into PostgreSQL; original history is preserved. A changed OpenAPI scope may require a separate configuration.',
+              'Existing Git archive found. Run migrate git before syncing into PostgreSQL; original history is preserved.',
             );
         }
       }
