@@ -16,6 +16,52 @@ signing stays in the existing laptop bridge; the daemon receives device tokens.
 The October 16 live GitHub read verified that protocol. The new daemon and
 macOS Keychain adapter still need a laptop run against the deployed issuer.
 
+## From a fetch to stored data
+
+The current pipeline is:
+
+1. Pin the configured OpenAPI/profile bytes for this process. Scope the read to
+   the verified owner, provider connection, collection, bindings, query and
+   document hash. Open an archive run and follow the declared paging strategy.
+2. Record each request attempt and response in PostgreSQL. `payloads` stores
+   the original response text by SHA-256 (compressed when useful). These bytes
+   support exact recorded-response replay; whitespace and number spelling are
+   retained. Request history is separate from the accepted collection state.
+3. Index valid JSON into `json_nodes`: nested objects and arrays have hashed
+   canonical nodes; numbers retain their original lexemes. `json_responses`
+   links an attempt to its root, or records why indexing failed. Deduplication
+   uses `(owner, hash)`, rather than a separate object store per collection.
+   Raw text and the structured graph serve different purposes; the original
+   text is deliberately retained alongside the graph.
+4. Select collection items from that graph and wrap each in JSON-AD with its
+   stable source identity, source ID, original JSON and API-specific class.
+   Snapshot graphs reuse the original nested item nodes in `json_nodes`.
+   Bundle Class/property schema resources with the items. Unknown response
+   fields and large numbers are retained; this does not imply full OpenAPI
+   schema conformance checking.
+5. Only after the entire bounded read succeeds, publish a PostgreSQL revision:
+   `snapshot_revisions` records parents, context, messages and author metadata;
+   `snapshot_members` indexes subject-to-object roots for that revision;
+   `snapshot_refs` advances the head by compare-and-swap. State, bundled schemas
+   and a terminal incremental checkpoint are published together. Full reads
+   replace collection membership; incremental reads retain unchanged members
+   and apply declared changes/tombstones. Previous revisions retain earlier
+   values, schemas and membership, including disappearance/reappearance.
+6. Materialize the accepted head into the ordinary `workspace/` folder.
+   Filesystem failure cannot roll back an already saved PostgreSQL revision;
+   `checkout` retries publication locally. Git is generated only by an explicit
+   `export git` command and is not used to publish subsequent fetches.
+
+An incomplete read or failed head comparison leaves the previous head visible.
+Its recorded HTTP attempts can still exist: finishing an archive run and
+publishing a collection revision are separate transactions. A response log alone
+therefore does not prove that a new collection state was accepted. The scheduler
+row and working folder are derived status/views; snapshot refs are authoritative.
+There is no automatic schema migration when document bytes change, no global
+provider deletion inferred from missing collection membership, and no automatic
+publication of these local records into an Atomic drive yet. See the
+[one-way Atomic mirror plan](daemon-design.md#one-way-atomic-drive-mirror-next-milestone).
+
 ## Build and try invented data
 
 Requirements: Node 22.11+ and a separate

@@ -85,3 +85,10 @@ DDL acquiring table locks in the opposite order to snapshot writes. History
 initialization now uses a schema-version marker and only executes the DDL once
 under its schema advisory lock. Existing initialized databases do not reacquire
 those index table locks during client startup.
+
+The user asked for a link documenting fetch storage and whether subsequent
+mirroring into an Atomic drive is planned. Added a sequential fetch-to-storage
+walkthrough and a concrete, explicitly unimplemented one-way mirror milestone:
+pinned revisions, stable native identity/schema projection, local signing,
+durable acknowledgments/checkpoints, membership/deletion distinction and retry
+verification. No Atomic drive was modified and no replication runtime added.

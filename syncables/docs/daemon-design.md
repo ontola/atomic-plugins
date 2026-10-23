@@ -1,5 +1,12 @@
 # Syncables CLI, local archive and migration design
 
+**2026-10-23 storage update:** PostgreSQL is now the canonical collection
+snapshot/history store; Git is an explicit legacy import and subtree export.
+See [the fetch-to-storage pipeline](daemon.md#from-a-fetch-to-stored-data) for
+the implemented behavior and [the Atomic mirror milestone below](#one-way-atomic-drive-mirror-next-milestone)
+for the proposed next step. Older Git/scaffold status sections remain historical
+context; Atomic destination commands still configure only, without runtime sync.
+
 This document records the product direction and architecture discussed with
 Michiel: put a new interface over an existing platform, keep a useful local
 copy through Syncables, and eventually make that copy authoritative where a
@@ -517,6 +524,46 @@ Reconcile an uncertain result before retrying. A database transaction cannot
 make an external API mutation exactly once. Record provider responses and
 outcomes durably, and test interruption both before dispatch and after a
 provider success whose acknowledgement was lost.
+
+## One-way Atomic drive mirror: next milestone
+
+**Plan only; runtime writes are not implemented.** Start with an explicitly
+configured, one-way mirror of selected PostgreSQL collections into an existing
+Atomic drive. Git export is independent of this path and is never a prerequisite.
+
+1. Configure the destination server/drive, selected collection scopes and an
+   existing local owner signer. Verify destination permissions before a run.
+   Keep provider access at integration-proxy and owner signing on the laptop.
+2. Pin a PostgreSQL snapshot revision. Build a projection of its records,
+   collection membership and bundled schema annotations. Persist a mapping from
+   `(destination, source subject/schema)` to stable native Atomic identities;
+   a retry or later source revision must update the same target identities.
+   Existing JSON-AD is an intermediate representation, not automatically a valid
+   native drive commit. Use the supported Atomic SDK/schema and commit APIs.
+3. Publish required native classes/properties and record data, preserving OAD
+   provenance and links to the source snapshot. Define lossless handling of raw
+   JSON and numbers that a native property datatype cannot express. Keep the
+   original PostgreSQL objects authoritative rather than coercing them silently.
+4. Track work and acknowledgments durably per destination, collection and source
+   revision. Retry idempotently after interruption. Advance the destination
+   checkpoint only after every required write is acknowledged/verified. If the
+   native API cannot publish the whole collection atomically, expose an
+   in-progress import and publish its completion marker last.
+5. Mirror collection membership changes, distinguishing absence from declared
+   deletion evidence. An item disappearing from one collection must not cause
+   an unconditional drive-wide resource deletion. PostgreSQL retains its history.
+6. Verify on invented data first: initial mirror, unchanged rerun, changed value,
+   changed schema, removal/reappearance, interruption and resume, and denied
+   permissions. Then mirror one explicitly chosen live collection/drive and
+   compare source and target counts, identities and values.
+
+The first milestone has one writer for a managed target subtree. Bidirectional
+provider writes, merging user edits, native historical revision replay and
+propagating component forks require separate policies. Target fields should
+carry source/revision provenance so later updates can identify managed state
+and report conflicting local edits rather than silently overwriting them.
+Existing `replication add --backend atomic` / `replication list` commands only
+persist destination definitions; they do not execute this plan.
 
 ## Daemon lifecycle and replication destinations
 
