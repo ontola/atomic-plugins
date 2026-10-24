@@ -121,6 +121,13 @@ date. Coverage of what was visible today does not close the past against
 backdated arrivals. Closure needs a documented finality/watermark guarantee,
 or a stated heuristic that may be reopened.
 
+“Visible” refers to the API view used for that response: it may be a stale
+replica or index, and pages in the same loop may use different snapshots.
+Two unchanged observations do not prove that any intervening change was
+undone; a persistent change might not have propagated to either read yet.
+See [repeated observations and append-only collections](how-it-works.md#repeated-observations-and-append-only-collections)
+for the stronger contracts needed to retire a key range permanently.
+
 Useful states for an unmatched leg are therefore:
 
 | State | Meaning |
