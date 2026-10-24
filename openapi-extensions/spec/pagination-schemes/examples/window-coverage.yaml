@@ -1,0 +1,57 @@
+openapi: 3.0.3
+info:
+  title: Illustrative bounded view with unordered items
+  version: 1.0.0
+servers:
+- url: https://api.example.com
+components:
+  paginationSchemes:
+    bookings:
+      type: rangeWindow
+      autoDetect: false
+      window:
+        unit: integer
+        format: integer
+        bounds: halfOpen
+        cap: 100
+        field: /id
+      request:
+        queryParameters:
+          start:
+            role: windowStart
+          end:
+            role: windowEnd
+      coverage:
+        basis: rangeWindow
+      freshness:
+        mode: unknown
+      consistency:
+        mode: responseSnapshot
+paths:
+  /bookings:
+    get:
+      parameters:
+      - name: start
+        in: query
+        required: true
+        schema:
+          type: integer
+      - name: end
+        in: query
+        required: true
+        schema:
+          type: integer
+      x-pagination:
+      - scheme: bookings
+      responses:
+        '200':
+          description: Unordered matches in the half-open ID window, capped at 100.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:
+                      type: integer

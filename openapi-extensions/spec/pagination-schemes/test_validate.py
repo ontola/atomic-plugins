@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.10.2: schema, document validator, examples, link resolution and range windows."""
+"""Pagination Schemes 0.11.0: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -9,7 +9,7 @@ from openapi_spec_validator import validate as validate_openapi
 from validate import LinkRefused, PageReadError, WindowReadError, halves, page_items, read_item_cursor, read_offsets, read_pages, read_range, resolve_link, response_incomplete, rfc3986_resolve, validate, window_request
 
 ROOT = pathlib.Path(__file__).parent
-EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml", "empty-when-absent.yaml", "offset-advance.yaml", "incomplete-marker.yaml", "item-cursor.yaml", "item-order.yaml")
+EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml", "empty-when-absent.yaml", "offset-advance.yaml", "incomplete-marker.yaml", "item-cursor.yaml", "item-order.yaml", "page-coverage.yaml", "window-coverage.yaml")
 
 
 def example(name):
