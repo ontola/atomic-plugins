@@ -33,7 +33,12 @@ struct Init {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 enum Command {
-    Project { projection: Projection },
+    Project {
+        projection: Projection,
+    },
+    ProjectTables {
+        projection: syncables_atomic_peer::tables::NativeProjection,
+    },
     Listen,
 }
 
@@ -191,6 +196,14 @@ async fn run() -> AtomicResult<()> {
                 let peer = peer.write().await;
                 let changed = peer.project(&projection).await?;
                 reply(&peer).await?; // Durable checkpoint before acknowledgement.
+                if !changed.is_empty() {
+                    let _ = publications.send(changed);
+                }
+            }
+            Command::ProjectTables { projection } => {
+                let peer = peer.write().await;
+                let changed = peer.project_tables(&projection).await?;
+                reply(&peer).await?;
                 if !changed.is_empty() {
                     let _ = publications.send(changed);
                 }
