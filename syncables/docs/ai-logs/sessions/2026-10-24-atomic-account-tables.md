@@ -35,6 +35,9 @@ native row classes/properties/views, and linked resources for nested objects and
 ordered arrays. OpenAPI list-response schemas seed declared columns, including
 empty collections; observed fields fill incomplete schemas. Original response
 and JSON-AD text remain in PostgreSQL. Unsafe numeric values use exact text.
+Default views prioritize populated representations so an empty declared numeric
+column cannot hide its populated exact-text variant, and avoid a duplicate title
+column while retaining every source field in the schema.
 
 The native companion accepts that graph as a distinct projection format. It
 persists identities and property ownership, journals publication, archives

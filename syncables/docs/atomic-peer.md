@@ -86,8 +86,8 @@ listener, discovery registration or service installer. Stop with Ctrl-C.
 
 Table row Classes declare native Properties through `requires` and `recommends`.
 Each table sets its `classtype` and has an ordered default table View. The default
-shows the title and up to nine source fields, prioritizing common identifiers,
-status and relationship fields; other columns remain available through the
+shows the title and up to nine source fields, prioritizing populated representations
+before common identifiers, status and relationship fields; other columns remain available through the
 column selector. Every field, including unfamiliar fields in observed records,
 is projected rather than discarded to fit the first visible columns.
 

@@ -234,6 +234,7 @@ export async function atomicTablesProjection(
     );
     const schemaFolder = folder(identity('schema-folder', name), name, schemas);
     const classes = new Map<string, { ref: Ref; columns: Map<string, Ref> }>();
+    const observedColumns = new Set<string>();
     const field = (
       path: string[],
       datatype: string,
@@ -475,7 +476,9 @@ export async function atomicTablesProjection(
         );
         if (!projected) continue;
         const prop = field(pointer(path, fieldName), projected.datatype);
-        cls.columns.set(fieldName + ':' + projected.datatype, prop);
+        const columnKey = fieldName + ':' + projected.datatype;
+        cls.columns.set(columnKey, prop);
+        if (path.length === 0) observedColumns.add(columnKey);
         props.push([prop, projected.value]);
       }
       add(key, parent, [cls.ref], props);
@@ -568,12 +571,19 @@ export async function atomicTablesProjection(
       'id',
     ];
     const columns = [...rowClass.columns]
+      // The core title already displays the source title; keep its native field
+      // available without spending a second default column on the same text.
+      .filter(([key]) => key !== 'title:string')
       .sort(([a], [b]) => {
         const rank = (s: string): number => {
           const i = priorities.indexOf(s.split(':')[0]);
           return i < 0 ? 100 : i;
         };
-        return rank(a) - rank(b) || compare(a, b);
+        return (
+          Number(observedColumns.has(b)) - Number(observedColumns.has(a)) ||
+          rank(a) - rank(b) ||
+          compare(a, b)
+        );
       })
       .map(([, v]) => v);
     const viewKey = identity('view', name);

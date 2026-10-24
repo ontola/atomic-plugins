@@ -161,7 +161,10 @@ describe('native Atomic collection tables', () => {
   it('retains exact unsafe numbers as native text, converts safe values and preserves ordered arrays', async () => {
     const f = fixture([
       {
-        prepared: prepared('values'),
+        prepared: prepared('values', 'work', 'example', {
+          type: 'object',
+          properties: { huge: { type: 'number' } },
+        }),
         rows: [
           '{"huge":900719925474099312345.00100,"overflow":1e9999,"decimal":0.1,"safe":42,"array":[true,null,{"nested":"yes"},[2,1]]}',
         ],
@@ -181,6 +184,21 @@ describe('native Atomic collection tables', () => {
       arrays.some((v) => Array.isArray(v.value) && v.value.length === 4),
     ).toBe(true);
     expect(JSON.stringify(p)).not.toContain('"type":"json"');
+    const huge = columns(p.resources).filter(
+      (r) => prop(r, 'name')?.value === 'Huge',
+    );
+    const exact = huge.find((r) =>
+      JSON.stringify(prop(r, 'datatype')).includes('/string'),
+    )!;
+    const declared = huge.find((r) =>
+      JSON.stringify(prop(r, 'datatype')).includes('/float'),
+    )!;
+    const view = p.resources.find((r) => isClass(r, 'View'))!;
+    const visible = JSON.stringify(prop(view, 'view-columns'));
+    // A declared numeric column must not hide its populated exact-text variant.
+    expect(visible.indexOf(JSON.stringify(exact.key))).toBeLessThan(
+      visible.indexOf(JSON.stringify(declared.key)),
+    );
   });
   it('keeps native row and schema keys across new revisions and rejects a wrong scope or OAD pin', async () => {
     const first = fixture([
