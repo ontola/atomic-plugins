@@ -211,12 +211,24 @@ The evidence has several parts:
 | Time | Request/response observation interval; a provider snapshot token or watermark only when its documented semantics support one |
 | Result | Item identities, versions and properties actually returned |
 
-“At this timestamp” needs care. The time we received the answer is an
-observation time, not automatically a server-wide snapshot time. If the API
-does not promise a consistent page, the result must retain that weaker
-consistency qualification. Independently complete pages also need not describe
-one common instant: insertions, deletions or changes to the filter/order field
-can matter between requests.
+A useful way to phrase that observation is:
+
+> Every visible item satisfying `account=savings AND status=booked AND
+> 9 < id ≤ 15` in the API view used to answer this request was returned,
+> under the provider's declared consistency contract.
+
+“Known to this API server at this moment” is an informal shorthand for that
+view, not a claim about everything already committed at the provider. A
+replica, cache or search index may not yet include a recent change. The time
+we received the answer is an observation time, not automatically the view's
+effective time or a server-wide snapshot time. A single response need not
+represent one coherent instant unless the provider guarantees it.
+
+Successive requests within one pagination loop may use different snapshots,
+or replicas at different stages of propagation. Independently exhaustive
+pages therefore need not describe one common instant. Insertions, deletions
+or changes to the filter/order field can matter between requests; sorting
+alone does not give the loop snapshot isolation.
 
 The [pagination specification](../../openapi-extensions/spec/pagination-schemes/README.md)
 already distinguishes last-item cursors and checked order from opaque tokens.
@@ -251,6 +263,56 @@ The archived graph preserves these differences. It does not yet turn them
 into a separate explicit property-coverage assertion. Likewise, range coverage
 for one filtered view does not establish global deletion; that depends on
 the separate [completeness contract](../../openapi-extensions/spec/collection-completeness/README.md).
+
+### Repeated observations and append-only collections
+
+Without stronger provider guarantees, periodic rereads let us retain a series
+of observations rather than a claim of continuous visibility. Identical
+results mean only that we observed the same selected/projected state twice.
+They do not prove that nothing changed between observations. Even “a change
+must have been undone” requires fresh, complete observations of that state:
+a lasting change might still be hidden by lag, and an event outside the
+selection or projection might never be observable there. Without a common
+snapshot, two equal pagination-loop results need not even be two coherent
+endpoint states.
+
+If a fresh authoritative state is genuinely the same at two instants, an
+intervening change affecting that state must have had no net effect by the
+second instant. State polling still cannot reconstruct every intervening
+event. Periodic rereads can eventually discover persistent changes when the
+provider converges, the records remain observable and the affected region
+continues to be revisited. Event/change feeds with retention and cursor
+guarantees can offer stronger history than state polling alone.
+
+For a genuinely append-only selected set, membership cannot disappear, so
+reliable comparable observations support stronger conclusions. Distinguish
+these independent contracts:
+
+| Contract | What it adds |
+| --- | --- |
+| Append-only membership | An observed member remains in the selected set. This does not imply that all its properties are immutable. |
+| Immutable records and stable selection/auth scope | The selected/projected state grows without updates, removal or permission-driven hiding. |
+| Ordered visibility or a closed-prefix watermark | Once a key prefix is closed, no previously unseen member can later appear inside it. Only then can a cursor safely retire that prefix permanently. |
+
+For fresh, complete, comparable observations of a fixed append-only view,
+equal membership at two instants rules out additions to that view between
+them: an addition could not have disappeared again. Stale or mixed-snapshot
+observations do not establish those premises.
+
+An auto-increment identifier alone establishes none of those lifecycle or
+visibility guarantees. For example, transaction A allocates ID 10 but has
+not committed; transaction B allocates 11 and commits first. A read returns
+11, then A commits. Continuing only with `after=11` misses 10 even though no
+record was ever deleted. This is an illustrative consequence of
+[PostgreSQL's sequence and transaction visibility rules](https://www.postgresql.org/docs/18/transaction-iso.html),
+not a statement that every API uses PostgreSQL. Replication or indexing can
+also expose records out of order. A `status=booked` filter can gain an older
+pending record later even when the underlying record set is create-only.
+
+Under a documented append-only, stable-view, closed-prefix contract, an
+observed prefix can be retained and only the tail needs traversal. Without
+that contract, rereads or a change feed remain necessary; a fixed overlap
+is a policy and not proof against arbitrarily late visibility.
 
 ## Editing, notifications and the next layers
 
