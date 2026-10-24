@@ -49,10 +49,13 @@ exact large IDs, gaps, non-unique/broken order, field escaping, query/header/bod
 bindings and local parameter refs, empty/final tails, explicit unordered windows,
 caps, errors and incomplete markers, scoped evidence, stale unchanged reads,
 concurrent delete/insert across snapshots, pending-to-booked/late visibility,
-independent guarantees, and snapshot pinning/composition failures.
+independent guarantees, and snapshot pinning/composition failures. Final
+review also made retirement require coverage and closure in the same coherent
+view: a later watermark cannot retroactively validate an older stale read.
+A regression retains that older coverage and later closure separately.
 
-Pinned Python requirements were installed in a temporary environment. All 449
+Pinned Python requirements were installed in a temporary environment. All 450
 tests across 13 extension folders passed, together with all 32 validator example
-documents. Pagination contributes 147 tests. Checked 42 local documentation links,
+documents. Pagination contributes 148 tests. Checked 42 local documentation links,
 JSON snippets and whitespace. Repository CI and merge gates apply to the PR.
 No secrets, private snapshots or owner keys were accessed.

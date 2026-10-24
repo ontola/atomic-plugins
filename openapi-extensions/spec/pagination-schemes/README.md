@@ -758,7 +758,8 @@ in this direction: new higher keys enter its prefix. A pinned snapshot alone
 freezes one read, not visibility in future reads.
 
 The provider promises that no member absent from its selected view at this
-response can **first become visible later** inside the prefix, for the same
+response can **first become visible later** inside the prefix (including reappearance of
+a member absent from that view), for the same
 fixed selection and authorization scope. This includes propagation of old
 commits, delayed indexing and old records newly matching a filter. This is a
 membership-addition closure guarantee, not a guarantee that existing values
@@ -767,7 +768,17 @@ prefix and from coherence of the answer. No generic bounded-lateness or
 business-date finality language is defined by this version.
 
 A client MUST NOT permanently retire discovery of a key region unless it
-has exhaustive coverage of that region and a compatible closed prefix.
+has exhaustive coverage of that region and a compatible closed prefix
+**for the same coherent API view**. A single `responseSnapshot` can bind one
+page to its own closure evidence; a checked `readSnapshot` can bind several
+pages and their closure evidence. Unknown coherence is insufficient for a
+permanent-retirement decision in this version. A later watermark does not
+retroactively validate an earlier possibly stale observation: a lower-key
+record could have become visible between those observations. A watermark
+returned alongside a pinned old snapshot must promise closure relative to
+that snapshot, not merely report the provider's latest unrelated horizon.
+More general cross-view transfer of closure needs an additional documented
+contract and is outside this version.
 Stopping refresh of existing records/membership additionally requires
 independent provider guarantees of immutability/append-only membership and
 stable selection/visibility. Those lifecycle guarantees are not new machine-

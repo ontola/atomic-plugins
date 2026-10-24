@@ -269,6 +269,21 @@ class ObservationTests(unittest.TestCase):
     def pinned(self):
         return document()['components']['paginationSchemes']['events']
 
+    def test_later_closure_does_not_retroactively_validate_stale_coverage(self):
+        model = scheme()
+        model['consistency'] = {'mode': 'responseSnapshot'}
+        model['closedPrefix'] = {'source': 'response', 'value': {'location': 'bodyFields', 'name': 'closed'}}
+        first = self.observe(body(11, closed=9), model)
+        # ID 10 has propagated by the time of this later watermark. A tail
+        # read after 11 returns no items and never repairs the old gap.
+        later = self.observe(body(closed=11), model, {('queryParameters', 'after'): 11},
+                             context=context(1, read='later-read'))
+        self.assertIsNone(later['coverage'])
+        self.assertEqual(later['closedPrefix']['through'], 11)
+        combined = collect_observations([first, later])
+        self.assertFalse(combined['singleSnapshot'])
+        self.assertNotIn('closedPrefix', combined)
+
     def test_read_snapshot_is_carried_and_checked(self):
         model = self.pinned()
         first = self.observe(body(10, snapshot='example-snapshot'), model)
