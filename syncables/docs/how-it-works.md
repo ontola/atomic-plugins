@@ -1,10 +1,12 @@
-# How Syncables turns APIs into a local copy
+# SyncD: turn API descriptions into local, versioned data
 
-Syncables lets an application work with a local copy of a remote API's
-collections. API descriptions tell it where records live, how to join pages,
-and which operations change them. Authentication and storage are separate
-choices: the same library can run in a browser with local records and an
-outbox, or behind a standalone command that saves read-only snapshots.
+**SyncD turns existing APIs into a local, versioned copy of your data.** Its
+generic Syncables client reads OpenAPI documents extended with declarative
+descriptions of pagination, record identities and synchronization behavior,
+reducing the need for custom client code for each service. SyncD runs this as
+a standalone daemon, preserving history and making your local data available
+offline through Git exports and Braid subscriptions.
+
 **SyncD** is Michiel's shorthand for that standalone **Syncables Daemon**;
 the library and executable are still named `syncables`.
 
