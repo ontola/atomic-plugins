@@ -81,3 +81,19 @@ The first CI run caught an omitted pnpm lockfile update in the shared
 issue-tracker lane; it installs Syncables with pnpm rather than npm. Regenerated
 the lockfile using CI's pnpm 10.15.1, verified a frozen lockfile check, and
 retained the existing dependency versions. No checks were bypassed.
+
+## Public explainer introduction
+
+The maintainer asked for a public link explaining SyncD, including the generic
+API client driven by declarative OpenAPI extension documents. Recommended the
+illustrated stack explainer and supplied an elevator pitch. The maintainer then
+requested: "ok you can work that pitch into the header and first paragraph of
+the explainer".
+
+Revised that document's title and opening paragraph to introduce SyncD through
+the pitch, naming the generic Syncables client, declarative pagination/identity/
+sync descriptions, standalone operation, local history, Git exports and Braid
+subscriptions. The subsequent explanation and implementation limits remain.
+Added a documentation changelog fragment. Changelog and whitespace checks pass;
+a repository search found no links to the old title's fragment. This change
+only edits documentation, so no additional runtime tests were run locally.
