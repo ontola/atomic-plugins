@@ -3,7 +3,7 @@ import type { SnapshotStore } from './snapshot-store.js';
 import { resolve, dirname } from 'node:path';
 import { PostgresHistoryStore } from './history-store.js';
 import { importGitHistory, exportGitHistory } from './git-io.js';
-import { runAtomicPeer } from './atomic-peer.js';
+import { runAtomicTablesPeer } from './atomic-peer.js';
 import { localArchive } from '../cli/cache.js';
 import {
   loadDaemonConfig,
@@ -174,10 +174,16 @@ export async function daemonCommand(
     if (command === 'atomic-peer') {
       if (positionals.length !== 1)
         throw new Error('Unexpected command arguments');
-      const name = requireValue(string('collection'), 'collection');
-      const source = selectedCollections(config, [name])[0];
-      const prepared = await prepareCollection(config.owner, source);
-      await runAtomicPeer(
+      if (string('collection') && string('collections'))
+        throw new Error('Use --collection or --collections, not both');
+      const selectors =
+        (string('collections') ?? string('collection'))?.split(',') ?? [];
+      const prepared = await Promise.all(
+        selectedCollections(config, selectors).map((source) =>
+          prepareCollection(config.owner, source),
+        ),
+      );
+      await runAtomicTablesPeer(
         store,
         {
           binary: resolve(requireValue(string('peer-binary'), 'peer-binary')),
@@ -188,8 +194,7 @@ export async function daemonCommand(
             requireValue(string('signer-file'), 'signer-file'),
           ),
           owner: config.owner,
-          collection: name,
-          scope: prepared.scope,
+          collections: prepared,
           readers: requireValue(string('reader'), 'reader').split(','),
           port: Number(string('peer-port') ?? '9901'),
           ...(string('at') ? { at: string('at')! } : {}),

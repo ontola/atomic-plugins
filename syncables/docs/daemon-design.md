@@ -567,37 +567,31 @@ persist destination definitions; they do not execute this plan.
 
 ### Atomic sync peer as an alternative source interface
 
-A second candidate, suggested by Michiel, is for the Syncables daemon to expose
-an Atomic-compatible sync peer backed by PostgreSQL. Consumers could subscribe
-to a virtual Syncables drive through the normal Atomic protocol. This remains
-a proposal in the storage migration. The follow-up experimental
-[Atomic peer implementation](atomic-peer.md) uses an embedded Atomic projection
-store, explicit local signing authority and a loopback WebSocket listener.
-Its limits and validation are documented there; the design discussion below
-also describes requirements for broader implementations.
+The optional [Atomic peer implementation](atomic-peer.md) now projects selected
+accepted PostgreSQL collections into one owner-scoped native drive. Folders are
+keyed by platform/account and contain one table per collection. Native classes,
+properties and views are generated from resolved OpenAPI item schemas plus
+observed fields; nested objects/arrays become linked native resources. Original
+JSON and source history remain in PostgreSQL. The earlier JSON-wrapper wire
+prototype remains a compatibility test path; the CLI uses the table format.
 
-The pipeline would be PostgreSQL snapshots → maintained native Atomic/Loro
-projection → sync protocol → replicas. Stable resource/schema identities,
-genesis and permission metadata, signed writes, version vectors, reconciliation,
-subscriptions and reconnect recovery are required. Begin with read-only access
-to one collection; reject incoming mutations and advertise only supported
-capabilities. Search, plugins and application hosting are outside this subset.
+The pipeline is PostgreSQL snapshots → maintained native Atomic/Loro projection
+→ sync protocol → replicas. The companion reuses pinned `atomic_lib` with an
+embedded redb projection store; it does not provide a PostgreSQL backend for the
+core. Persistent identities, Loro documents, a graph publication journal and
+property-ownership state support restart/delta reconciliation. Empty collections
+retain declared columns. Out-of-range/precision-sensitive numbers use exact
+native text. The source peer rejects incoming mutations and does not run search,
+plugins or application hosting.
 
-Reuse the existing `atomic_lib` core rather than independently implementing its
-wire format, signatures and permission rules. The current sync engine takes
-`atomic_lib::Db`; it has no ready-made PostgreSQL adapter. A prototype can embed
-a small Atomic projection store, or factor a storage interface and persist its
-native state in PostgreSQL. Fetched data/history remains authoritative in
-PostgreSQL. Persistent Loro documents/oplogs and projection checkpoints are
-additional derived representations: creating fresh Loro documents on every
-request would lose stable operation identities and incremental reconciliation.
-
-A native replica shares the **same drive identity**. Copying these records into
-a different existing drive remains an import/projection operation; native sync
-alone does not change their ownership namespace. Likewise, arbitrary local
-edits and bidirectional provider writes require policies beyond the read-only
-source. Prototype compatibility and restart/delta behavior with an unmodified
-Atomic client before choosing this interface over direct mirroring.
+A native replica shares the **same drive identity**. Copying data into an
+existing drive remains a separate import operation, requiring destination
+identity mappings, conflicting-edit/removal rules and acknowledgement handling.
+The dedicated source drive makes SyncD ownership and permissions explicit;
+references between drives can connect local workflows without copying records.
+A client/replication connection must separately be configured to keep a server
+replica live. Offline native catch-up projects current accepted heads; retained
+intermediate source history stays in PostgreSQL.
 
 Protocol references: [Atomic sync engine](https://github.com/ontola/atomic-server/blob/66880fc53f392771761bb4d967e1e443344a7e34/docs/src/sync-engine.md)
 and [wire protocol](https://github.com/ontola/atomic-server/blob/66880fc53f392771761bb4d967e1e443344a7e34/docs/src/websockets.md).

@@ -142,4 +142,4 @@ jobs:
       - name: PostgreSQL to native process acceptance
         run: |
           SYNCABLES_ATOMIC_PEER_BINARY="$PWD/native-atomic-peer/target/debug/syncables-atomic-peer" \
-            npx vitest run __tests__/unit/daemon/atomic-peer.test.ts --config __tests__/vitest.config.ts
+            npx vitest run __tests__/unit/daemon/atomic-peer.test.ts __tests__/unit/daemon/atomic-tables.test.ts --config __tests__/vitest.config.ts

@@ -613,8 +613,9 @@ Redeliveries are deduplicated per owner/collection/delivery ID. Hints arriving
 during a read remain pending for another read; polling reconciles missed hints.
 The relay must retry non-2xx responses and queue while the laptop is offline.
 
-A selected PostgreSQL collection can be served as a read-only native Atomic
-sync peer using the optional Rust companion; see [Atomic peer](atomic-peer.md).
+Selected PostgreSQL collections can be served as one read-only native Atomic
+drive using the optional Rust companion. Account folders contain a native table
+per collection; original JSON stays in PostgreSQL. See [Atomic peer](atomic-peer.md).
 It maintains a separate durable native projection and uses explicitly selected
 owner signing authority and readers. Direct target-drive mirrors,
 remoteStorage, NextGraph, Jazz and atproto destinations remain planned, as do

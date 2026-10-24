@@ -5,6 +5,7 @@ import { isAbsolute } from 'node:path';
 import { indexJson, nodeHash } from '../postgres/json-graph.js';
 import type { PostgresHistoryStore } from './history-store.js';
 import { SOURCE_ID } from './sync.js';
+import { atomicTablesProjection, TABLE_BINDING } from './atomic-tables.js';
 
 const MAX_BYTES = 64 * 1024 * 1024;
 const IS_A = 'https://atomicdata.dev/properties/is-a';
@@ -279,6 +280,94 @@ export async function runAtomicPeer(
           throw new Error(
             'Native Atomic peer recovery did not acknowledge the revision',
           );
+        status = await native.request({ type: 'listen' }, signal);
+        listening = true;
+        report(status);
+      }
+      await delay(1000, undefined, { signal });
+    }
+  } catch (error) {
+    if (!signal.aborted) throw error;
+  } finally {
+    await native.close();
+  }
+}
+
+export interface AtomicTablesPeerOptions
+  extends Omit<AtomicPeerOptions, 'collection' | 'scope'> {
+  collections: import('./sync.js').PreparedCollection[];
+}
+
+/** One owner-scoped drive containing native account folders and collection tables. */
+export async function runAtomicTablesPeer(
+  store: PostgresHistoryStore,
+  options: AtomicTablesPeerOptions,
+  signal: AbortSignal,
+  report: (status: AtomicPeerStatus) => void,
+): Promise<void> {
+  if (
+    ![options.binary, options.directory, options.signerFile].every(
+      isAbsolute,
+    ) ||
+    options.owner !== store.owner ||
+    !Number.isSafeInteger(options.port) ||
+    options.port < 1 ||
+    options.port > 65535 ||
+    !options.readers.length ||
+    options.readers.length > 100 ||
+    options.readers.some((r) => !r.startsWith('atomic:agent:')) ||
+    !options.collections.length ||
+    options.collections.length > 100 ||
+    (options.at && options.collections.length !== 1)
+  )
+    throw new Error(
+      'Invalid native table peer paths, collections, owner, readers or revision selection',
+    );
+  const native = new NativePeer(options.binary);
+  try {
+    let status = await native.request(
+      {
+        directory: options.directory,
+        signerFile: options.signerFile,
+        owner: options.owner,
+        collection: TABLE_BINDING,
+        readers: options.readers,
+        port: options.port,
+      },
+      signal,
+    );
+    let previous = '',
+      listening = false;
+    while (!signal.aborted) {
+      native.check();
+      const sources: import('./atomic-tables.js').TableSource[] = [];
+      for (const prepared of options.collections) {
+        const revision = options.at
+          ? await store.resolveRevision(prepared.scope, options.at)
+          : await store.head(prepared.scope);
+        if (!revision)
+          throw new Error(
+            `No accepted PostgreSQL revision for ${prepared.source.platform}/${prepared.source.account}/${prepared.source.name}`,
+          );
+        sources.push({ prepared, revision });
+      }
+      const signature = JSON.stringify(
+        sources.map((s) => [s.prepared.scope, s.revision]),
+      );
+      if (signature !== previous) {
+        const projection = await atomicTablesProjection(store, sources);
+        status = await native.request(
+          { type: 'projectTables', projection },
+          signal,
+        );
+        if (status.revision !== projection.revision)
+          throw new Error(
+            'Native table peer did not acknowledge the graph revision',
+          );
+        previous = signature;
+        report(status);
+      }
+      if (!listening) {
         status = await native.request({ type: 'listen' }, signal);
         listening = true;
         report(status);

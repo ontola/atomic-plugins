@@ -13,6 +13,8 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+pub mod tables;
+
 pub const PENDING_KEY: &[u8] = b"syncables:projection-pending:v1";
 
 pub const MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -127,7 +129,11 @@ impl Peer {
         let mut drive = if drives.is_empty() {
             let mut root = Resource::new("placeholder".into());
             root.set_class(urls::DRIVE)?;
-            root.set_name(&format!("Syncables {collection}"))?;
+            root.set_name(&if collection == tables::TABLE_BINDING {
+                "SyncD".into()
+            } else {
+                format!("Syncables {collection}")
+            })?;
             root.set_unsafe(urls::LOCAL_ID.into(), Value::String(binding.clone()))?;
             root.set_unsafe(urls::WRITE.into(), subjects([signer.subject.to_string()]))?;
             root.set_unsafe(
@@ -167,6 +173,26 @@ impl Peer {
             published: AtomicBool::new(false),
             class: String::new(),
         };
+        if collection == tables::TABLE_BINDING {
+            let id = peer
+                .ensure(
+                    "property",
+                    "source-revision",
+                    urls::PROPERTY,
+                    vec![
+                        (urls::SHORTNAME, Value::Slug("source-revision".into())),
+                        (
+                            urls::DESCRIPTION,
+                            Value::Markdown("Completed native table graph revision.".into()),
+                        ),
+                        (urls::DATATYPE_PROP, Value::AtomicUrl(urls::STRING.into())),
+                    ],
+                )
+                .await?;
+            peer.properties.insert("source-revision".into(), id);
+            peer.db.flush()?;
+            return Ok(peer);
+        }
         for (name, datatype, description) in [
             (
                 "source-subject",
@@ -270,7 +296,8 @@ impl Peer {
         })
     }
     pub async fn project(&self, projection: &Projection) -> AtomicResult<Vec<String>> {
-        if projection.owner != self.owner
+        if self.collection == tables::TABLE_BINDING
+            || projection.owner != self.owner
             || projection.collection != self.collection
             || projection.scope.is_empty()
             || projection.scope.len() > 8192
