@@ -76,3 +76,8 @@ history reset and transport limits. The installed tarball passes sync, the
 foreground daemon/webhook, offline Braid GET/subscription, graceful shutdown,
 local history/browsing and isolated import checks. TypeScript checking,
 lint/formatting, release build and changelog validation pass.
+
+The first CI run caught an omitted pnpm lockfile update in the shared
+issue-tracker lane; it installs Syncables with pnpm rather than npm. Regenerated
+the lockfile using CI's pnpm 10.15.1, verified a frozen lockfile check, and
+retained the existing dependency versions. No checks were bypassed.
