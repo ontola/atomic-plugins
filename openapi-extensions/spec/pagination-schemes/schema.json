@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ontola.github.io/atomic-plugins/openapi-extensions/spec/pagination-schemes/schema.json",
-  "title": "Pagination Schemes 0.10.2",
-  "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3), $defs.window the Range Window Object (§4.6.1), $defs.shortPage the Short Page Object (§4.4.5), $defs.incomplete the Incomplete Object (§4.4.6). Covers validation rules 1-4, 8-10, 12-16, 19, 20, 23, 24, 26, 27 and 30; validate.py adds 5, 11, 17, 18, 21, 22, 25, 28 and 29.",
+  "title": "Pagination Schemes 0.11.0",
+  "description": "A Pagination Scheme Object (§4.1). $defs.application is the Pagination Application Object (§5), $defs.linkResolution the Link Resolution Object (§4.4.3), $defs.window the Range Window Object (§4.6.1), $defs.shortPage the Short Page Object (§4.4.5), $defs.incomplete the Incomplete Object (§4.4.6). Covers validation rules 1-4, 8-10, 12-16, 19, 20, 23, 24, 26, 27 and 30, and the 0.11.0 guarantee/context object shapes; validate.py adds 5, 11, 17, 18, 21, 22, 25, 28 and 29.",
   "$ref": "#/$defs/scheme",
   "$defs": {
     "scheme": {
@@ -17,7 +17,11 @@
         },
         "window": { "$ref": "#/$defs/window" },
         "request": { "$ref": "#/$defs/request" },
-        "response": { "$ref": "#/$defs/response" }
+        "response": { "$ref": "#/$defs/response" },
+        "coverage": { "$ref": "#/$defs/coverage" },
+        "freshness": { "$ref": "#/$defs/freshness" },
+        "consistency": { "$ref": "#/$defs/consistency" },
+        "closedPrefix": { "$ref": "#/$defs/closedPrefix" }
       },
       "patternProperties": { "^x-": true },
       "additionalProperties": false,
@@ -295,6 +299,403 @@
       "if": { "properties": { "base": { "const": "declared" } } },
       "then": { "required": ["url"] },
       "else": { "not": { "required": ["url"] } }
+    },
+    "coverage": {
+      "type": "object",
+      "properties": {
+        "basis": {
+          "enum": [
+            "orderedCursor",
+            "rangeWindow"
+          ]
+        },
+        "initial": {
+          "enum": [
+            "unknown",
+            "unbounded"
+          ]
+        },
+        "terminal": {
+          "enum": [
+            "unknown",
+            "exhaustive"
+          ]
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "basis"
+      ],
+      "patternProperties": {
+        "^x-": true
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "basis": {
+                "const": "rangeWindow"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "initial"
+                  ]
+                },
+                {
+                  "required": [
+                    "terminal"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "freshness": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "unknown",
+            "eventual",
+            "bounded"
+          ]
+        },
+        "scope": {
+          "enum": [
+            "response",
+            "snapshotStart"
+          ]
+        },
+        "maxLagSeconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "patternProperties": {
+        "^x-": true
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "bounded"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "maxLagSeconds"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "maxLagSeconds"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "consistency": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "enum": [
+            "unknown",
+            "responseSnapshot",
+            "readSnapshot"
+          ]
+        },
+        "snapshot": {
+          "type": "object",
+          "properties": {
+            "request": {
+              "$ref": "#/$defs/guaranteeRequestValue"
+            },
+            "response": {
+              "$ref": "#/$defs/guaranteeResponseValue"
+            }
+          },
+          "required": [
+            "request",
+            "response"
+          ],
+          "patternProperties": {
+            "^x-": true
+          },
+          "additionalProperties": false
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "patternProperties": {
+        "^x-": true
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "readSnapshot"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "snapshot"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "snapshot"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "closedPrefix": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "enum": [
+            "lastItem",
+            "response"
+          ]
+        },
+        "value": {
+          "$ref": "#/$defs/guaranteeResponseValue"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "patternProperties": {
+        "^x-": true
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "source": {
+                "const": "response"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "value"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "value"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "guaranteeRequestValue": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "enum": [
+            "queryParameters",
+            "bodyFields",
+            "headerFields"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "location",
+        "name"
+      ],
+      "patternProperties": {
+        "^x-": true
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "location": {
+                "const": "bodyFields"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "name": {
+                "pattern": "^[^.]+(\\.[^.]+)*$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "guaranteeResponseValue": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "enum": [
+            "bodyFields",
+            "headers"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "location",
+        "name"
+      ],
+      "patternProperties": {
+        "^x-": true
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "location": {
+                "const": "bodyFields"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "name": {
+                "pattern": "^[^.]+(\\.[^.]+)*$"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "observationContext": {
+      "type": "object",
+      "properties": {
+        "documentRevision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "overlayRevisions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "scope": {
+          "type": "object",
+          "properties": {
+            "collection": {
+              "type": "string",
+              "minLength": 1
+            },
+            "selection": {
+              "type": "string",
+              "minLength": 1
+            },
+            "authorization": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "collection",
+            "selection",
+            "authorization"
+          ],
+          "patternProperties": {
+            "^x-": true
+          },
+          "additionalProperties": false
+        },
+        "read": {
+          "type": "string",
+          "minLength": 1
+        },
+        "request": {
+          "type": "string",
+          "minLength": 1
+        },
+        "response": {
+          "type": "string",
+          "minLength": 1
+        },
+        "observed": {
+          "type": "object",
+          "properties": {
+            "startedAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "endedAt": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "required": [
+            "startedAt",
+            "endedAt"
+          ],
+          "patternProperties": {
+            "^x-": true
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "documentRevision",
+        "overlayRevisions",
+        "scope",
+        "read",
+        "request",
+        "response",
+        "observed"
+      ],
+      "patternProperties": {
+        "^x-": true
+      },
+      "additionalProperties": false
     }
   }
 }

@@ -1,0 +1,137 @@
+openapi: 3.0.3
+info:
+  title: Illustrative scoped coverage and independently declared guarantees
+  version: 1.0.0
+  description: Synthetic examples, not claims about a real bank or API. Entries may
+    be stale; pinned events use one read snapshot and a separately promised closed
+    prefix.
+servers:
+- url: https://api.example.com
+components:
+  paginationSchemes:
+    entries:
+      type: pageToken
+      autoDetect: false
+      request:
+        queryParameters:
+          after:
+            role: cursor
+            fromLastItem: id
+            order: ascending
+          limit:
+            role: pageSize
+      response:
+        envelope:
+          itemsField: items
+        bodyFields:
+          has_more:
+            role: hasMore
+      coverage:
+        basis: orderedCursor
+      freshness:
+        mode: eventual
+      consistency:
+        mode: unknown
+    events:
+      type: pageToken
+      autoDetect: false
+      request:
+        queryParameters:
+          after:
+            role: cursor
+            fromLastItem: id
+            order: ascending
+          limit:
+            role: pageSize
+      response:
+        envelope:
+          itemsField: items
+        bodyFields:
+          has_more:
+            role: hasMore
+      coverage:
+        basis: orderedCursor
+        initial: unbounded
+        terminal: exhaustive
+      freshness:
+        mode: bounded
+        scope: snapshotStart
+        maxLagSeconds: 5
+      consistency:
+        mode: readSnapshot
+        snapshot:
+          request:
+            location: queryParameters
+            name: snapshot
+          response:
+            location: bodyFields
+            name: snapshot
+      closedPrefix:
+        source: lastItem
+        description: This illustrative immutable append-only log publishes IDs in
+          prefix-closed order. IDs are not merely allocated before commit.
+paths:
+  /entries:
+    get:
+      parameters:
+      - name: after
+        in: query
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+      x-pagination:
+      - scheme: entries
+      responses:
+        '200':
+          description: Illustrative exhaustive interval response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: &id001
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                  has_more:
+                    type: boolean
+                  snapshot:
+                    type: string
+  /events:
+    get:
+      parameters:
+      - name: after
+        in: query
+        schema:
+          type: string
+      - name: limit
+        in: query
+        schema:
+          type: integer
+      - name: snapshot
+        in: query
+        schema:
+          type: string
+      x-pagination:
+      - scheme: events
+      responses:
+        '200':
+          description: Illustrative exhaustive interval response.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items: *id001
+                  has_more:
+                    type: boolean
+                  snapshot:
+                    type: string
