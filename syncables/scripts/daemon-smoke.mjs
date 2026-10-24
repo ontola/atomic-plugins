@@ -215,6 +215,29 @@ try {
   assert.ok(exported.mapping[commit]);
   const status = await run(['status']);
   assert.equal(status[0].state, 'idle');
+  // The optional Braid listener works from the installed package while the
+  // provider issuer is stopped; it needs neither login nor a signing key.
+  const braidToken = 'invented-local-braid-smoke-reader';
+  const braid = launch(process.execPath, [cli, 'braid', '--config', file,
+    '--collections', 'github-issues/example/tasks', '--braid-port', String(await port())],
+    { ...env, SYNCABLES_BRAID_TOKEN: braidToken });
+  await waitUntil(() => braid.output().includes('"listening"'));
+  const braidEndpoint = JSON.parse(braid.output()).collections[0].url;
+  const braidSnapshot = await fetch(braidEndpoint, {
+    headers: { authorization: 'Bearer ' + braidToken },
+  });
+  assert.equal(braidSnapshot.status, 200);
+  const braidData = await braidSnapshot.json();
+  assert.equal(braidData.revision, checked[0].revision);
+  assert.equal(braidData.format, 'syncd-braid-collection-v1');
+  assert.ok(Object.keys(braidData.resources).length > 1);
+  const braidSubscribed = await fetch(braidEndpoint, {
+    headers: { authorization: 'Bearer ' + braidToken, Subscribe: '?1' },
+  });
+  assert.equal(braidSubscribed.status, 209);
+  await braidSubscribed.body.cancel();
+  braid.child.kill('SIGTERM');
+  assert.equal(await braid.closed, 0);
   const rootImport = await exec(
     process.execPath,
     [
@@ -248,7 +271,7 @@ try {
       [owner],
     );
   console.log(
-    'Installed tarball: sync, daemon/webhook, clean shutdown, offline hierarchy/filter/order/pinned browse, schema tag, history, status and isolated imports passed.',
+    'Installed tarball: sync, daemon/webhook, Braid GET/subscribe, clean shutdown, offline hierarchy/filter/order/pinned browse, schema tag, history, status and isolated imports passed.',
   );
 } finally {
   for (const child of children)

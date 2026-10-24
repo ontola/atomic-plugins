@@ -1,4 +1,8 @@
-# Standalone Syncables: PostgreSQL history and optional Git export
+# SyncD: standalone Syncables Daemon
+
+**SyncD** is Michiel's shorthand for the standalone **Syncables Daemon**.
+It runs through the existing `syncables daemon` command in the `syncables`
+npm package; the shorthand does not rename the executable or library.
 
 For an illustrated overview of the whole stack, including OpenAPI extensions,
 worked GitHub/Keep examples and what a page proves, start with
@@ -12,6 +16,13 @@ The [JSON graph format and fixed vectors](json-graph-v1.md) define its persisted
 node encoding. Its local data copy, bundled schemas, immutable revisions and named heads
 live in PostgreSQL. Git is an optional import/export format. [Versioned Atomic Data](../../docs/design/versioned-atomic-data.md)
 defines the experiment and commit/tag resolution contract.
+
+The intended external interfaces are **Git, Braid and AtomicSync**, all backed
+by the same PostgreSQL data/history. Current source implements Git import/export
+and an authenticated [read-only Braid listener](braid.md). A Git network server
+and AtomicSync peer are separate work. See the
+[three-interface design](daemon-design.md#syncd-interfaces-git-braid-and-atomicsync)
+for their roles and the implemented read-only Braid milestone.
 
 This implementation is unreleased. It reuses #567's CLI/archive work without
 changing that draft branch. Device authorization uses the deployed
