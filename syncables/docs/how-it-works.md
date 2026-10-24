@@ -5,6 +5,8 @@ collections. API descriptions tell it where records live, how to join pages,
 and which operations change them. Authentication and storage are separate
 choices: the same library can run in a browser with local records and an
 outbox, or behind a standalone command that saves read-only snapshots.
+**SyncD** is Michiel's shorthand for that standalone **Syncables Daemon**;
+the library and executable are still named `syncables`.
 
 This guide explains that stack using invented GitHub issues and Keep notes.
 For runnable commands, use the [local-first library guide](local-first.md) or
@@ -34,6 +36,13 @@ Read the diagram from top to bottom:
    its local copy. The experimental standalone CLI/daemon currently reads
    provider data into PostgreSQL and normal working folders. It does not send
    local edits back to providers.
+
+SyncD's [interface plan](daemon-design.md#syncd-interfaces-git-braid-and-atomicsync)
+offers three ways to consume the same accepted snapshots: Git for repository
+tooling, Braid for HTTP subscriptions, and AtomicSync for native Atomic
+replicas. Git import/export and [read-only Braid serving](braid.md) exist in
+current source; AtomicSync is planned separately. PostgreSQL remains the
+canonical store for all three.
 
 An overlay describes existing provider behavior; it does not make the provider
 implement a new guarantee. Likewise, the specifications cover more than every

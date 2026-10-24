@@ -5,13 +5,20 @@ adds a CLI to the existing `syncables` npm package. Library imports and the
 `syncables/browser` entry remain unchanged. Importing either entry does not
 run the CLI or read CLI configuration.
 
+**SyncD** is Michiel's shorthand for the standalone **Syncables Daemon**;
+its command remains `syncables daemon` in the existing `syncables` package.
+
 The CLI tests device authorization, connection discovery and a GET through
-Local Thought, and saves replication definitions. The [standalone daemon
+Local Thought, and saves replication definitions. The [SyncD daemon
 guide](daemon.md) covers configured syncing, foreground polling/webhooks,
 macOS Keychain sessions, PostgreSQL revision-pinned browsing, legacy Git migration
 and optional Git subtree exports. Remote replication
 and outgoing writes remain planned. The [cache guide](postgres-cache.md)
 covers optional PostgreSQL archival and recorded-run replay.
+
+The separate [`syncables braid` command](braid.md) serves selected accepted
+snapshots over authenticated, read-only Braid HTTP while offline or alongside
+the provider daemon. It does not require a provider session or signing key.
 
 ## Build the source
 

@@ -84,8 +84,11 @@ changelog; the guide explains how to run that source before an npm release.
 ## Usage
 
 The source includes an experimental **standalone CLI and foreground daemon**
-in the same npm package. It reads configured collections, archives nested JSON
-by content hash in PostgreSQL, together with JSON-AD resources, bundled schemas
+in the same npm package. **SyncD** is Michiel's shorthand for the standalone
+**Syncables Daemon**. The library/package and executable remain `syncables`;
+SyncD names the daemon, not a separate package or a new command. It reads
+configured collections, archives nested JSON by content hash in PostgreSQL,
+together with JSON-AD resources, bundled schemas
 and snapshot revision history. Local browse/history commands pin a revision or tag.
 Git is an optional subtree export with messages, branches and ancestry; existing
 Git histories can be migrated without changing their original repositories. See the
@@ -97,6 +100,12 @@ Root/browser library imports do not start the daemon or load its storage.
 Successful syncs expose normal working folders for each collection;
 `syncables checkout` exposes existing snapshots without fetching again.
 Items and bundled schemas have document-scoped API resource classes.
+
+The [SyncD interface plan](docs/daemon-design.md#syncd-interfaces-git-braid-and-atomicsync)
+puts **Git, Braid and AtomicSync** over the same PostgreSQL-backed data/history.
+Git import/export and [read-only Braid serving](docs/braid.md) exist in current
+source; an AtomicSync peer is planned separately. Native AtomicSync is distinct
+from importing records into an existing Atomic drive.
 
 For published releases, install with `npm install syncables`. To build the
 current source, run these commands from `syncables/` with Node 22.11 or newer:

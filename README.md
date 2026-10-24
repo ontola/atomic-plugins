@@ -13,7 +13,9 @@ deprecated.
   history intact.
 - `syncables/` — the `syncables` npm package (OpenAPI-driven mock server and
   sync client), migrated in from the standalone `localthought/syncables`
-  repo with its history intact.
+  repo with its history intact. **SyncD** is Michiel's shorthand for the
+  standalone **Syncables Daemon**; see its [guide](syncables/docs/daemon.md)
+  and [Git, Braid and AtomicSync interface plan](syncables/docs/daemon-design.md#syncd-interfaces-git-braid-and-atomicsync).
 - `overlays/` — OpenAPI Overlays for real providers and the dated `catalog/<date>.json`
   that `integration-proxy/` composes, migrated in from the standalone
   `localthought/overlays` repo with its history intact, and published by
