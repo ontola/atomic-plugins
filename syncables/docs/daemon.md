@@ -315,8 +315,9 @@ key or Google client secret belongs in the daemon config. This guide does not
 establish that the deployed Keep setup has been completed.
 
 Once the connection exists, rerun the connection-discovery command above and
-approve Keep. From the checkout's `syncables/` directory, copy its GET-only
-collection description:
+approve Keep. From the checkout's `syncables/` directory, copy the complete pinned Google Keep OpenAPI document with SyncD collection
+and pagination annotations. The daemon selects the GET collection and refuses
+non-GET collection operations; retaining the full schema does not enable writes:
 
 ```sh
 cp -n examples/daemon/google-keep.json "$HOME/.local/share/syncables-live/google-keep.json"

@@ -102,7 +102,7 @@ fn plan(owner: &Agent, revision: u8, present: bool) -> NativeProjection {
             ],
         ));
     }
-    serde_json::from_value(json!({"format":"atomic-tables-v1","owner":owner.subject.to_string(),"revision":format!("{revision:064x}"),"sources":[{"collection":"example/work/issues","revision":format!("{revision:064x}"),"documentHash":"a".repeat(64)}],"resources":resources})).unwrap()
+    serde_json::from_value(json!({"format":"atomic-tables-v2","owner":owner.subject.to_string(),"revision":format!("{revision:064x}"),"sources":[{"collection":"example/work/issues","revision":format!("{revision:064x}"),"documentHash":"a".repeat(64)}],"resources":resources})).unwrap()
 }
 async fn id(peer: &Peer, key: &str) -> String {
     import_identity::find_in_scope(
@@ -286,4 +286,50 @@ async fn invalid_native_graph_never_advances_publication() {
         peer.status().await.unwrap().revision,
         Some(format!("{:064x}", 1))
     );
+}
+
+#[tokio::test]
+async fn inline_json_survives_native_persistence_without_child_resources() {
+    let dir = tempfile::tempdir().unwrap();
+    let owner = Agent::new(Some("Invented compact owner")).unwrap();
+    let readers = vec![owner.subject.to_string()];
+    let peer = Peer::open(
+        dir.path(),
+        owner.clone(),
+        owner.subject.as_str(),
+        TABLE_BINDING,
+        &readers,
+    )
+    .await
+    .unwrap();
+    let mut projection = plan(&owner, 1, true);
+    let payload = json!({"comments":[{"body":"Hello","author":{"name":"Alice"}},null],"checks":[true,false],"empty":[]});
+    projection.resources.push(serde_json::from_value(node("payload", "account", vec![external(&format!("{C}Property"))], vec![
+        property("name", string("Body")),
+        property("shortname", string("invented-body")),
+        property("description", string("Invented inline body")),
+        property("datatype", json!({"type":"resource","value":external("https://atomicdata.dev/datatypes/json")})),
+    ])).unwrap());
+    projection
+        .resources
+        .iter_mut()
+        .find(|r| r.key == "row")
+        .unwrap()
+        .properties
+        .push(
+            serde_json::from_value(
+                json!({"property":local("payload"),"value":{"type":"json","value":payload}}),
+            )
+            .unwrap(),
+        );
+    let node_count = projection.resources.len();
+    peer.project_tables(&projection).await.unwrap();
+    assert_eq!(projection.resources.len(), node_count);
+    let row = id(&peer, "row").await;
+    let property = id(&peer, "payload").await;
+    let stored = peer.db.get_resource(&row.into()).await.unwrap();
+    match stored.get(&property).unwrap() {
+        Value::Json(value) => assert_eq!(value, &payload),
+        other => panic!("Expected native JSON, got {}", other),
+    }
 }

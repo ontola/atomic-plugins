@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { loadOpenApiDocument } from '../../../src/openapi/load.js';
+import { fileURLToPath } from 'node:url';
 import {
   atomicTablesProjection,
+  atomicItemSchema,
   type NativeResource,
   type NativeValue,
   type TableSource,
@@ -112,6 +115,114 @@ function columns(resources: NativeResource[]): NativeResource[] {
   return resources.filter((r) => isClass(r, 'Property'));
 }
 describe('native Atomic collection tables', () => {
+  it('uses the complete pinned Keep OAD, including response schemas and write operations', async () => {
+    const document = await loadOpenApiDocument(
+      fileURLToPath(
+        new URL('../../../examples/daemon/google-keep.json', import.meta.url),
+      ),
+    );
+    const source = prepared('notes');
+    source.document = document;
+    const item = atomicItemSchema(source);
+    expect(document.info.title).toBe('Google Keep API');
+    expect(document.paths['/v1/notes'].post).toBeDefined();
+    expect(item.properties?.body.properties?.text.properties?.text.type).toBe(
+      'string',
+    );
+    expect(
+      item.properties?.body.properties?.list.properties?.listItems.items
+        ?.properties?.checked.type,
+    ).toBe('boolean');
+    expect(item.properties?.permissions.items?.properties?.role.enum).toContain(
+      'OWNER',
+    );
+    const f = fixture([
+      {
+        prepared: source,
+        rows: [
+          '{"title":"Invented","body":{"list":{"listItems":[{"text":{"text":"Hello"},"checked":false}]}}}',
+        ],
+      },
+    ]);
+    const projection = await atomicTablesProjection(f.store, f.sources);
+    const body = columns(projection.resources).find(
+      (r) => prop(r, 'name')?.value === 'Body',
+    )!;
+    const schema = prop(body, 'jsonSchema')!.value as Record<string, unknown>;
+    let references = 0;
+    const check = (value: unknown): void => {
+      if (!value || typeof value !== 'object') return;
+      const reference = (value as Record<string, unknown>).$ref;
+      if (typeof reference === 'string' && reference.startsWith('#/')) {
+        references++;
+        const target = reference
+          .slice(2)
+          .split('/')
+          .map((x) => x.replace(/~1/g, '/').replace(/~0/g, '~'))
+          .reduce<unknown>(
+            (at, key) => (at as Record<string, unknown>)?.[key],
+            schema,
+          );
+        expect(target).toBeDefined();
+      }
+      Object.values(value).forEach(check);
+    };
+    check(schema);
+    expect(references).toBeGreaterThan(0);
+  });
+
+  it('distinguishes API identifiers and keeps the declared schema on inline JSON fields', async () => {
+    const body = {
+      type: 'object',
+      properties: {
+        text: { type: 'object', properties: { text: { type: 'string' } } },
+      },
+    };
+    const source = prepared('notes', 'work', 'example', {
+      type: 'object',
+      properties: { title: { type: 'string' }, name: { type: 'string' }, body },
+    });
+    const resources = source.document.components!.crudResources as Record<
+      string,
+      { identity: { bindings: object } }
+    >;
+    resources.record.identity.bindings = { id: { field: 'name' } };
+    const f = fixture([
+      {
+        prepared: source,
+        rows: [
+          JSON.stringify({
+            title: 'Invented note',
+            name: 'notes/one',
+            body: { text: { text: 'Hello' } },
+            permissions: [{ role: 'OWNER' }],
+          }),
+        ],
+      },
+    ]);
+    const p = await atomicTablesProjection(f.store, f.sources);
+    const props = columns(p.resources);
+    const identifier = props.find(
+      (r) => prop(r, 'name')?.value === 'API ID (name)',
+    );
+    expect(identifier).toBeDefined();
+    expect(
+      prop(props.find((r) => prop(r, 'name')?.value === 'Body')!, 'jsonSchema'),
+    ).toEqual({ type: 'json', value: body });
+    expect(
+      prop(
+        props.find((r) => prop(r, 'name')?.value === 'Source permissions')!,
+        'description',
+      )?.value,
+    ).toContain('do not grant Atomic');
+    expect(p.resources.filter((r) => r.key.startsWith('["row",'))).toHaveLength(
+      1,
+    );
+    expect(p.resources.some((r) => /nested|array-entry/.test(r.key))).toBe(
+      false,
+    );
+  });
+
   it('groups tables by platform/account and emits declared columns for an empty collection', async () => {
     const f = fixture([
       {
@@ -145,11 +256,10 @@ describe('native Atomic collection tables', () => {
           JSON.stringify(prop(r, 'datatype')).includes('/timestamp'),
       ),
     ).toBe(true);
+    expect(p.resources.some((r) => r.key.includes('nested'))).toBe(false);
     expect(
-      p.resources.some(
-        (r) => r.key.includes('nested') && prop(r, 'name')?.value === 'owner',
-      ),
-    ).toBe(true);
+      p.resources.flatMap((r) => r.properties.map((p) => p.value)),
+    ).toContainEqual({ type: 'json', value: { login: 'owner' } });
     expect(JSON.stringify(p)).not.toContain(SOURCE_JSON);
     expect(JSON.stringify(p)).not.toContain('source-json-ad');
     expect(p.sources).toHaveLength(3);
@@ -179,11 +289,11 @@ describe('native Atomic collection tables', () => {
     expect(values).toContainEqual({ type: 'string', value: '1e9999' });
     expect(values).toContainEqual({ type: 'float', value: 0.1 });
     expect(values).toContainEqual({ type: 'integer', value: 42 });
-    const arrays = values.filter((v) => v.type === 'resources');
-    expect(
-      arrays.some((v) => Array.isArray(v.value) && v.value.length === 4),
-    ).toBe(true);
-    expect(JSON.stringify(p)).not.toContain('"type":"json"');
+    expect(values).toContainEqual({
+      type: 'json',
+      value: [true, null, { nested: 'yes' }, [2, 1]],
+    });
+    expect(p.resources.some((r) => r.key.includes('array-entry'))).toBe(false);
     const huge = columns(p.resources).filter(
       (r) => prop(r, 'name')?.value === 'Huge',
     );
@@ -199,6 +309,50 @@ describe('native Atomic collection tables', () => {
     expect(visible.indexOf(JSON.stringify(exact.key))).toBeLessThan(
       visible.indexOf(JSON.stringify(declared.key)),
     );
+  });
+  it('keeps complete nested comments inside one row and declares only top-level fields', async () => {
+    const comments = [
+      { id: 'c1', body: 'Hello', author: { login: 'alice' }, deleted: null },
+      { id: 'c2', body: 'Reply', tags: [] },
+    ];
+    const f = fixture([
+      {
+        prepared: prepared('issues', 'work', 'github', {
+          type: 'object',
+          properties: {
+            title: { type: 'string' },
+            comments: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  author: {
+                    type: 'object',
+                    properties: { login: { type: 'string' } },
+                  },
+                },
+              },
+            },
+          },
+        }),
+        rows: [JSON.stringify({ title: 'Issue', comments })],
+      },
+    ]);
+    const p = await atomicTablesProjection(f.store, f.sources);
+    const rows = p.resources.filter((r) => r.key.startsWith('["row",'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].properties.map((p) => p.value)).toContainEqual({
+      type: 'json',
+      value: comments,
+    });
+    expect(p.resources.filter((r) => isClass(r, 'Class'))).toHaveLength(1);
+    expect(
+      columns(p.resources).filter((r) => prop(r, 'name')?.value === 'Comments'),
+    ).toHaveLength(1);
+    expect(
+      columns(p.resources).some((r) => prop(r, 'name')?.value === 'Login'),
+    ).toBe(false);
+    expect(p.format).toBe('atomic-tables-v2');
   });
   it('keeps native row and schema keys across new revisions and rejects a wrong scope or OAD pin', async () => {
     const first = fixture([

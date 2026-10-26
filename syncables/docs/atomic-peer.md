@@ -71,8 +71,8 @@ process memory and is not stored in the projection database.
 The projection directory is dedicated to this owner and projection format,
 created with `0700` permissions and no root symlinks. Preserve it across restarts:
 rebuilding in a new directory creates a different drive and new native operation
-identities. **Upgrade from the original single-collection JSON-wrapper prototype
-using a new directory.** Old directories are refused because their binding and
+identities. **Upgrade from the original JSON-wrapper or recursive nested-resource
+prototype using a new directory.** The compact projection is `atomic-tables-v2`. Old directories are refused because their binding and
 representation differ; old experimental drives are not silently rewritten.
 
 The peer binds `127.0.0.1`, with client URL `ws://127.0.0.1:9901/ws` and AUTH
@@ -102,25 +102,26 @@ of complete OpenAPI validation. Declared columns exist for empty collections.
   numbers. Values outside JavaScript's safe integer range, non-finite ranges or
   decimal precision become **exact numeric text**, never rounded numbers. Original
   numeric spelling remains in PostgreSQL even for ordinary native numbers.
-- Nested objects become linked native resources with their own Classes and
-  Properties. Arrays become ordered resource arrays of linked object/value
-  resources, retaining duplicates and empty arrays. Nested array identities are
-  positional within the source record; they do not assert provider-wide entity
-  identity. Null object fields are omitted; null array entries retain a position.
-- A record's title is selected from `title`, `name`, `displayName`, `summary` or
-  `login`, with a collection/path fallback. Source fields are still available.
-- Property identities include their source path and native datatype. If observed
-  values require different representations, distinct typed properties preserve
-  them; changing a Property's datatype does not reinterpret old native values.
+- Each API record is one row resource. Nested objects and arrays stay as native
+  inline JSON on that row, including comments, checklists, duplicate array values,
+  array order and nested nulls. Top-level null fields are omitted. Compound fields
+  do not create additional Classes or resources. Where declared, each JSON
+  Property retains its OpenAPI sub-schema in `jsonSchema`; this does not itself
+  make the current browser JSON cell render a schema-aware form.
+- Identity fields are labeled `API ID (<field>)` so a provider's `name` identifier
+  cannot be confused with Atomic's required display name. Imported `permissions`
+  is labeled `Source permissions`: its values are provider metadata and never
+  create Atomic read/write grants.
 
 Source subject, source ID, source revision, source hash and OpenAPI document hash
 are plain native provenance fields. **Original JSON responses, source JSON-AD
-wrappers and schema JSON are not exported into this drive.** PostgreSQL owns the
+wrappers and raw schema documents are not exported into this drive.** Field-level
+JSON schemas may be carried as Property metadata. PostgreSQL owns the
 original responses, immutable revisions and schema history. The Atomic drive is
 a derived representation for browsing, queries and native replication.
 
 Top-level row identities are stable per `(collection alias, source subject)`;
-account folders, tables, fields, nested paths and schemas also have persisted
+account folders, tables, fields and schemas also have persisted
 identities. A changed record updates the existing Loro document. Fields that
 become absent/null are removed only when previously managed by this projection.
 Resources no longer in the current graph are moved to a `previous-members`
@@ -184,7 +185,7 @@ SYNCABLES_ATOMIC_PEER_BINARY="$PWD/native-atomic-peer/target/debug/syncables-ato
 ```
 
 Tests use invented signers and data: multiple accounts/collections, empty declared
-schemas, numeric precision, nested resources, owner/scope isolation, stable
+schemas, numeric precision, inline nested JSON, identifier labels, owner/scope isolation, stable
 identities, unchanged/delta reconciliation, absence/reappearance, publication
 recovery and PostgreSQL updates/restart. Native acceptance uses the unmodified
 Atomic core replica and official WebSocket client. Real provider credentials

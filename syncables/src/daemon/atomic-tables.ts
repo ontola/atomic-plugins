@@ -1,4 +1,4 @@
-import type { SchemaObject } from '../openapi/types.js';
+import type { OpenApiDocument, SchemaObject } from '../openapi/types.js';
 import { discoverReadModel } from '../read/model.js';
 import {
   indexJson,
@@ -12,17 +12,25 @@ import type { PreparedCollection } from './sync.js';
 import { SOURCE_ID, SOURCE_JSON } from './sync.js';
 import { alias } from './config.js';
 
-export const TABLE_BINDING = 'syncables-atomic-tables-v1';
+export const TABLE_BINDING = 'syncables-atomic-tables-v2';
 const P = 'https://atomicdata.dev/properties/';
 const C = 'https://atomicdata.dev/classes/';
 const D = 'https://atomicdata.dev/datatypes/';
 type Ref = { local: string } | { external: string };
+export type JsonValue =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 export type NativeValue =
   | { type: 'string'; value: string }
   | { type: 'integer' | 'float'; value: number }
   | { type: 'boolean'; value: boolean }
   | { type: 'resource'; value: Ref }
-  | { type: 'resources'; value: Ref[] };
+  | { type: 'resources'; value: Ref[] }
+  | { type: 'json'; value: JsonValue };
 export interface NativeResource {
   key: string;
   parent: Ref;
@@ -30,7 +38,7 @@ export interface NativeResource {
   properties: { property: Ref; value: NativeValue }[];
 }
 export interface NativeTableProjection {
-  format: 'atomic-tables-v1';
+  format: 'atomic-tables-v2';
   owner: string;
   revision: string;
   sources: { collection: string; revision: string; documentHash: string }[];
@@ -56,7 +64,10 @@ function absoluteUri(value: string): boolean {
   }
 }
 const label = (key: string): string =>
-  key.replace(/[_-]/g, ' ').replace(/^./, (c) => c.toUpperCase());
+  key
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[_-]/g, ' ')
+    .replace(/^./, (c) => c.toUpperCase());
 const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 const pointer = (path: string[], key: string): string[] => [...path, key];
 const identity = (...parts: string[]): string => JSON.stringify(parts);
@@ -104,6 +115,47 @@ function combined(schema: SchemaObject = {}): SchemaObject {
     ) as Record<string, SchemaObject>,
   };
 }
+/** Carry recursive component references with the field's standalone schema. */
+function schemaValue(
+  schema: SchemaObject,
+  document: OpenApiDocument,
+): JsonValue {
+  const result = JSON.parse(JSON.stringify(schema)) as Record<
+    string,
+    JsonValue
+  >;
+  const definitions: Record<string, JsonValue> = Object.create(null);
+  const scan = (value: JsonValue): void => {
+    if (!value || typeof value !== 'object') return;
+    if (Array.isArray(value)) {
+      value.forEach(scan);
+      return;
+    }
+    const reference = value.$ref;
+    if (
+      typeof reference === 'string' &&
+      reference.startsWith('#/components/schemas/')
+    ) {
+      const name = reference
+        .split('/')[3]
+        .replace(/~1/g, '/')
+        .replace(/~0/g, '~');
+      if (!Object.hasOwn(definitions, name)) {
+        const target = document.components?.schemas?.[name];
+        if (!target)
+          throw new Error('Unresolved OpenAPI field schema reference');
+        definitions[name] = JSON.parse(JSON.stringify(target)) as JsonValue;
+        scan(definitions[name]);
+      }
+    }
+    Object.values(value).forEach(scan);
+  };
+  scan(result);
+  if (Object.keys(definitions).length)
+    result.components = { schemas: definitions };
+  return result;
+}
+
 /** Resolved list-response item schema, when the OpenAPI contract declares one. */
 export function atomicItemSchema(prepared: PreparedCollection): SchemaObject {
   const collection = discoverReadModel(prepared.document).collections.find(
@@ -235,10 +287,14 @@ export async function atomicTablesProjection(
     const schemaFolder = folder(identity('schema-folder', name), name, schemas);
     const classes = new Map<string, { ref: Ref; columns: Map<string, Ref> }>();
     const observedColumns = new Set<string>();
+    const idField = discoverReadModel(prepared.document).collections.find(
+      (collection) => collection.name === prepared.source.collection,
+    )!.idField;
     const field = (
       path: string[],
       datatype: string,
       description?: string,
+      schema: SchemaObject = {},
     ): Ref => {
       const key = identity('field', name, JSON.stringify(path), datatype);
       if (!resources.has(key)) {
@@ -247,7 +303,18 @@ export async function atomicTablesProjection(
           schemaFolder,
           [external(C + 'Property')],
           [
-            [external(P + 'name'), str(label(path.at(-1) ?? 'Value'))],
+            [
+              external(P + 'name'),
+              str(
+                path.length === 1 && path[0] === idField
+                  ? `API ID (${idField})`
+                  : path.length === 1 && path[0] === 'name'
+                    ? 'API name'
+                    : path.length === 1 && path[0] === 'permissions'
+                      ? 'Source permissions'
+                      : label(path.at(-1) ?? 'Value'),
+              ),
+            ],
             [
               external(P + 'shortname'),
               str('field-' + nodeHash(key).slice(0, 16)),
@@ -256,10 +323,24 @@ export async function atomicTablesProjection(
               external(P + 'description'),
               str(
                 description ??
-                  `API field ${path.join('.')}; native ${datatype}.`,
+                  `API field ${path.join('.')}; native ${datatype}.` +
+                    (path.length === 1 && path[0] === 'permissions'
+                      ? ' Imported provider permissions are data only; they do not grant Atomic read or write access.'
+                      : ''),
               ),
             ],
             [external(P + 'datatype'), ref(external(D + datatype))],
+            ...(datatype === 'json' && Object.keys(schema).length
+              ? ([
+                  [
+                    external(P + 'jsonSchema'),
+                    {
+                      type: 'json',
+                      value: schemaValue(schema, prepared.document),
+                    },
+                  ],
+                ] as [Ref, NativeValue][])
+              : []),
           ],
         );
         schemaResources.add(key);
@@ -277,32 +358,32 @@ export async function atomicTablesProjection(
       }
       return found;
     };
-    const declare = (path: string[], schema: SchemaObject, depth = 0): void => {
-      if (depth > 32) return;
+    const declare = (path: string[], schema: SchemaObject): void => {
       const cls = classFor(path);
       for (const [key, child] of Object.entries(
         combined(schema).properties ?? {},
       )) {
         const dt =
-          child.type === 'integer'
-            ? 'integer'
-            : child.type === 'number'
-              ? 'float'
-              : child.type === 'boolean'
-                ? 'boolean'
-                : child.type === 'object' || child.properties
-                  ? 'atomicURL'
-                  : child.type === 'array' || child.items
-                    ? 'resourceArray'
-                    : child.format === 'date-time'
-                      ? 'timestamp'
-                      : child.format === 'date'
-                        ? 'date'
-                        : ['uri', 'url', 'uri-reference'].includes(
-                              child.format ?? '',
-                            )
-                          ? 'uri'
-                          : 'string';
+          child.type === 'object' ||
+          child.properties ||
+          child.type === 'array' ||
+          child.items
+            ? 'json'
+            : child.type === 'integer'
+              ? 'integer'
+              : child.type === 'number'
+                ? 'float'
+                : child.type === 'boolean'
+                  ? 'boolean'
+                  : child.format === 'date-time'
+                    ? 'timestamp'
+                    : child.format === 'date'
+                      ? 'date'
+                      : ['uri', 'url', 'uri-reference'].includes(
+                            child.format ?? '',
+                          )
+                        ? 'uri'
+                        : 'string';
         cls.columns.set(
           key + ':' + dt,
           field(
@@ -311,11 +392,38 @@ export async function atomicTablesProjection(
             typeof child.description === 'string'
               ? child.description
               : undefined,
+            child,
           ),
         );
-        if (dt === 'atomicURL') declare(pointer(path, key), child, depth + 1);
-        if (dt === 'resourceArray' && child.items)
-          declare([...path, key, '[]'], child.items, depth + 1);
+      }
+    };
+    const jsonValue = (
+      graph: JsonGraph,
+      v: GraphValue,
+      depth = 0,
+    ): JsonValue => {
+      if (depth > 64) throw new Error('Atomic table nesting exceeds 64 levels');
+      switch (v[0]) {
+        case 'null':
+          return null;
+        case 'boolean':
+        case 'string':
+          return v[1];
+        // Reuse the scalar precision policy: unsafe numbers remain exact text.
+        case 'number':
+          return numberValue(v[1]).value as number | string;
+        case 'ref': {
+          const n = node(graph, v)!;
+          if (n[2] === 'array')
+            return (n[3] as GraphValue[]).map((child) =>
+              jsonValue(graph, child, depth + 1),
+            );
+          if (n[2] !== 'object') throw new Error('Unexpected API scalar node');
+          const out: { [key: string]: JsonValue } = Object.create(null);
+          for (const [key, child] of n[3] as [string, GraphValue][])
+            out[key] = jsonValue(graph, child, depth + 1);
+          return out;
+        }
       }
     };
     const itemSchema = atomicItemSchema(prepared);
@@ -325,13 +433,8 @@ export async function atomicTablesProjection(
     const value = (
       graph: JsonGraph,
       v: GraphValue,
-      key: string,
-      path: string[],
-      parent: Ref,
       schema: SchemaObject,
-      depth: number,
     ): { datatype: string; value: NativeValue } | undefined => {
-      if (depth > 64) throw new Error('Atomic table nesting exceeds 64 levels');
       switch (v[0]) {
         case 'null':
           return undefined;
@@ -373,69 +476,11 @@ export async function atomicTablesProjection(
             value: str(v[1]),
           };
         }
-        case 'ref': {
-          const n = node(graph, v)!;
-          if (n[2] === 'object') {
-            object(graph, v, key, path, parent, schema, depth + 1);
-            return { datatype: 'atomicURL', value: ref(local(key)) };
-          }
-          if (n[2] !== 'array') throw new Error('Unexpected API scalar node');
-          const children: Ref[] = [];
-          for (const [index, child] of (n[3] as GraphValue[]).entries()) {
-            const childKey = identity('array-entry', key, String(index));
-            const childPath = [...path, '[]'];
-            if (node(graph, child)?.[2] === 'object')
-              object(
-                graph,
-                child,
-                childKey,
-                childPath,
-                parent,
-                schema.items ?? {},
-                depth + 1,
-              );
-            else {
-              const cls = classFor(childPath);
-              const projected = value(
-                graph,
-                child,
-                identity('value', childKey),
-                [...childPath, 'value'],
-                local(childKey),
-                schema.items ?? {},
-                depth + 1,
-              );
-              const prop = field(
-                [...childPath, 'value'],
-                projected?.datatype ?? 'string',
-              );
-              cls.columns.set(
-                'value:' + (projected?.datatype ?? 'string'),
-                prop,
-              );
-              add(
-                childKey,
-                parent,
-                [cls.ref],
-                [
-                  [
-                    external(P + 'name'),
-                    str(
-                      child[0] === 'string'
-                        ? child[1]
-                        : `Item ${index + 1}${child[0] === 'null' ? ' (null)' : ''}`,
-                    ),
-                  ],
-                  ...(projected
-                    ? [[prop, projected.value] as [Ref, NativeValue]]
-                    : []),
-                ],
-              );
-            }
-            children.push(local(childKey));
-          }
-          return { datatype: 'resourceArray', value: refs(children) };
-        }
+        case 'ref':
+          return {
+            datatype: 'json',
+            value: { type: 'json', value: jsonValue(graph, v) },
+          };
       }
     };
     const object = (
@@ -445,7 +490,6 @@ export async function atomicTablesProjection(
       path: string[],
       parent: Ref,
       schema: SchemaObject,
-      depth: number,
       extra: [Ref, NativeValue][] = [],
     ): void => {
       const fields = entries(graph, v),
@@ -468,14 +512,15 @@ export async function atomicTablesProjection(
         const projected = value(
           graph,
           child,
-          identity('nested', key, fieldName),
-          pointer(path, fieldName),
-          local(key),
           combined(schema).properties?.[fieldName] ?? {},
-          depth,
         );
         if (!projected) continue;
-        const prop = field(pointer(path, fieldName), projected.datatype);
+        const prop = field(
+          pointer(path, fieldName),
+          projected.datatype,
+          undefined,
+          combined(schema).properties?.[fieldName],
+        );
         const columnKey = fieldName + ':' + projected.datatype;
         cls.columns.set(columnKey, prop);
         if (path.length === 0) observedColumns.add(columnKey);
@@ -509,7 +554,7 @@ export async function atomicTablesProjection(
       if (id[0] !== 'string')
         throw new Error('Atomic table source ID must be text');
       const key = identity('row', name, subject);
-      object(graph, source, key, [], local(tableKey), itemSchema, 0, [
+      object(graph, source, key, [], local(tableKey), itemSchema, [
         [sourceId, str(id[1])],
         [sourceSubject, str(subject)],
         [sourceRevision, str(revision.id)],
@@ -627,7 +672,7 @@ export async function atomicTablesProjection(
       compare(a.key, b.key),
   );
   const content = {
-    format: 'atomic-tables-v1' as const,
+    format: 'atomic-tables-v2' as const,
     owner: store.owner,
     sources,
     resources: ordered,

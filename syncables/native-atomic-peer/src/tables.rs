@@ -2,8 +2,8 @@
 use super::*;
 use atomic_lib::datatype::match_datatype;
 
-pub const TABLE_BINDING: &str = "syncables-atomic-tables-v1";
-const STATE_KEY: &[u8] = b"syncables:table-state:v1";
+pub const TABLE_BINDING: &str = "syncables-atomic-tables-v2";
+const STATE_KEY: &[u8] = b"syncables:table-state:v2";
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum Reference {
@@ -38,6 +38,7 @@ pub enum NativeValue {
     Boolean(bool),
     Resource(Reference),
     Resources(Vec<Reference>),
+    Json(serde_json::Value),
 }
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -97,7 +98,7 @@ fn rank(resource: &NativeResource) -> u8 {
 impl Peer {
     pub async fn project_tables(&self, projection: &NativeProjection) -> AtomicResult<Vec<String>> {
         if self.collection != TABLE_BINDING
-            || projection.format != "atomic-tables-v1"
+            || projection.format != "atomic-tables-v2"
             || projection.owner != self.owner
             || !revision(&projection.revision)
             || projection.resources.len() > 50_000
@@ -274,6 +275,7 @@ impl Peer {
                             NativeValue::Integer(n) => n.to_string(),
                             NativeValue::Float(n) => n.to_string(),
                             NativeValue::Boolean(v) => v.to_string(),
+                            NativeValue::Json(v) => serde_json::to_string(v)?,
                             _ => unreachable!(),
                         };
                         Value::new(&scalar, &match_datatype(&datatype))?
