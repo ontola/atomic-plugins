@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-geo-origin",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "bldg-geo-origin",
+  "https://atomicdata.dev/properties/name": "Geo origin",
+  "https://atomicdata.dev/properties/description": "Optional geographic anchor of the building origin, as JSON {\"lat\": number, \"lon\": number, \"alt\": number} (WGS 84, altitude in metres).",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/json"
+}

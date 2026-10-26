@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-scale",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "bldg-scale",
+  "https://atomicdata.dev/properties/name": "Scale",
+  "https://atomicdata.dev/properties/description": "A known size reference in the source that anchors real measurements, as JSON, for example {\"kind\": \"scale\", \"ratio\": 100} or {\"kind\": \"length\", \"metres\": 0.5, \"locator\": {...}}.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/json"
+}

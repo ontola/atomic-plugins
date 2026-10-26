@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-geometry",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "bldg-geometry",
+  "https://atomicdata.dev/properties/name": "Geometry",
+  "https://atomicdata.dev/properties/description": "The shape, as JSON whose layout depends on the geometry kind: wallAxis {start, end, height, thickness}; extrusion {polygon, depth}; opening {offset, width, height, sill}; mesh {file} linking a glTF/GLB. Metres, local to the storey. Checked by the app, not by the server.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/json"
+}

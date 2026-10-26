@@ -1,0 +1,24 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/building-space-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "building-space-v1",
+  "https://atomicdata.dev/properties/name": "Space",
+  "https://atomicdata.dev/properties/description": "A room or outdoor area (IfcSpace). Its boundary is stored, derived from walls, so rooms show before walls are confirmed. Origin and review properties record who proposed it.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://atomicdata.dev/properties/name",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-storey"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-usage",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-boundary",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-height",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-origin",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-review-state",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-confidence",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-uncertainty",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-created-by-run"
+  ]
+}

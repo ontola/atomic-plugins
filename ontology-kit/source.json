@@ -36,6 +36,81 @@
         "money-category",
         "money-note"
       ]
+    },
+    "v2": {
+      "name": "Buildings v1",
+      "description": "Classes of the AtomicBuildings digital-twin app: a home, its spaces and elements, the sources the user gave, the AI runs and evidence behind each fact, the questions the AI asks and the listings agents publish. Declared, not verified: no app writes these classes yet.",
+      "classes": [
+        "building-home-v1",
+        "building-site-v1",
+        "building-building-v1",
+        "building-storey-v1",
+        "building-space-v1",
+        "building-element-v1",
+        "building-source-v1",
+        "building-analysis-run-v1",
+        "building-evidence-v1",
+        "building-question-v1",
+        "building-listing-v1"
+      ],
+      "properties": [
+        "bldg-units",
+        "bldg-north-angle",
+        "bldg-address",
+        "bldg-cover-image",
+        "bldg-boundary",
+        "bldg-home",
+        "bldg-site",
+        "bldg-rotation",
+        "bldg-geo-origin",
+        "bldg-building",
+        "bldg-elevation",
+        "bldg-height",
+        "bldg-level",
+        "bldg-storey",
+        "bldg-space",
+        "bldg-usage",
+        "bldg-ifc-class",
+        "bldg-ifc-guid",
+        "bldg-hosted-by",
+        "bldg-geometry-kind",
+        "bldg-geometry",
+        "bldg-material",
+        "bldg-attributes",
+        "bldg-origin",
+        "bldg-review-state",
+        "bldg-confidence",
+        "bldg-uncertainty",
+        "bldg-created-by-run",
+        "bldg-source-file",
+        "bldg-media-kind",
+        "bldg-captured-at",
+        "bldg-scale",
+        "bldg-source-status",
+        "bldg-derived-from",
+        "bldg-model",
+        "bldg-model-version",
+        "bldg-started-at",
+        "bldg-inputs",
+        "bldg-run-status",
+        "bldg-source",
+        "bldg-locator",
+        "bldg-supports",
+        "bldg-property",
+        "bldg-question-kind",
+        "bldg-about",
+        "bldg-options",
+        "bldg-wants",
+        "bldg-why",
+        "bldg-answer",
+        "bldg-answer-sources",
+        "bldg-listing-status",
+        "bldg-asking-price",
+        "bldg-currency",
+        "bldg-public-address",
+        "bldg-published-at",
+        "bldg-public-selection"
+      ]
     }
   },
   "classes": {
@@ -107,6 +182,137 @@
         "bank-reference",
         "money-category",
         "money-note"
+      ]
+    },
+    "building-home-v1": {
+      "name": "Home",
+      "description": "A property: the digital twin of one house or apartment (IfcProject). The permission anchor of everything in it. Declared, not verified.",
+      "requires": ["https://atomicdata.dev/properties/name"],
+      "recommends": [
+        "bldg-units",
+        "bldg-north-angle",
+        "bldg-address",
+        "bldg-cover-image"
+      ]
+    },
+    "building-site-v1": {
+      "name": "Site",
+      "description": "The plot a building stands on (IfcSite).",
+      "requires": ["https://atomicdata.dev/properties/name"],
+      "recommends": ["bldg-boundary", "bldg-home"]
+    },
+    "building-building-v1": {
+      "name": "Building",
+      "description": "One building on a site (IfcBuilding). Storeys are local to its origin, rotated by its rotation.",
+      "requires": ["https://atomicdata.dev/properties/name"],
+      "recommends": ["bldg-site", "bldg-rotation", "bldg-geo-origin"]
+    },
+    "building-storey-v1": {
+      "name": "Storey",
+      "description": "One floor of a building (IfcBuildingStorey). Coordinates of what is on it are local to the storey.",
+      "requires": ["https://atomicdata.dev/properties/name", "bldg-building"],
+      "recommends": ["bldg-elevation", "bldg-height", "bldg-level"]
+    },
+    "building-space-v1": {
+      "name": "Space",
+      "description": "A room or outdoor area (IfcSpace). Its boundary is stored, derived from walls, so rooms show before walls are confirmed. Origin and review properties record who proposed it.",
+      "requires": ["https://atomicdata.dev/properties/name", "bldg-storey"],
+      "recommends": [
+        "bldg-usage",
+        "bldg-boundary",
+        "bldg-height",
+        "bldg-origin",
+        "bldg-review-state",
+        "bldg-confidence",
+        "bldg-uncertainty",
+        "bldg-created-by-run"
+      ]
+    },
+    "building-element-v1": {
+      "name": "Element",
+      "description": "A building element (IfcWall, IfcDoor, IfcWindow, ...) in one class: the IFC class is a property, not a type. Origin and review properties record who proposed it.",
+      "requires": ["https://atomicdata.dev/properties/name", "bldg-storey"],
+      "recommends": [
+        "bldg-ifc-class",
+        "bldg-ifc-guid",
+        "bldg-space",
+        "bldg-geometry-kind",
+        "bldg-geometry",
+        "bldg-material",
+        "bldg-hosted-by",
+        "bldg-attributes",
+        "bldg-origin",
+        "bldg-review-state",
+        "bldg-confidence",
+        "bldg-uncertainty",
+        "bldg-created-by-run"
+      ]
+    },
+    "building-source-v1": {
+      "name": "Source",
+      "description": "Something the user gave: a photo, video, PDF, floor plan, note or voice memo, as a File resource plus what is known about it.",
+      "requires": ["https://atomicdata.dev/properties/name"],
+      "recommends": [
+        "bldg-source-file",
+        "bldg-media-kind",
+        "bldg-captured-at",
+        "bldg-space",
+        "bldg-scale",
+        "bldg-source-status",
+        "bldg-derived-from"
+      ]
+    },
+    "building-analysis-run-v1": {
+      "name": "Analysis run",
+      "description": "One AI pass over sources: which model, what it read and how it ended. Its summary is the description. Resources it creates point back with created-by-run.",
+      "requires": ["https://atomicdata.dev/properties/name"],
+      "recommends": [
+        "bldg-model",
+        "bldg-model-version",
+        "bldg-started-at",
+        "bldg-inputs",
+        "https://atomicdata.dev/properties/description",
+        "bldg-run-status"
+      ]
+    },
+    "building-evidence-v1": {
+      "name": "Evidence",
+      "description": "A source and a place in it that supports a fact, so the app can show why the AI believes something and a person can reject it.",
+      "requires": ["bldg-source", "bldg-supports"],
+      "recommends": [
+        "bldg-locator",
+        "bldg-property",
+        "bldg-confidence",
+        "bldg-created-by-run"
+      ]
+    },
+    "building-question-v1": {
+      "name": "Building question",
+      "description": "The extras of a question the AI asks the user. Meant to sit on the same resource as issue-v1, which holds name, status, body and assignee; this class does not repeat them.",
+      "requires": ["bldg-question-kind"],
+      "recommends": [
+        "bldg-about",
+        "bldg-options",
+        "bldg-wants",
+        "bldg-why",
+        "bldg-answer",
+        "bldg-answer-sources",
+        "bldg-created-by-run"
+      ]
+    },
+    "building-listing-v1": {
+      "name": "Listing",
+      "description": "What an agent publishes about a home (schema.org RealEstateListing). Separate from the twin: the public selection says which confirmed parts may be shown. Title is the name, the text is the description.",
+      "requires": ["https://atomicdata.dev/properties/name", "bldg-home"],
+      "recommends": [
+        "https://atomicdata.dev/properties/description",
+        "bldg-listing-status",
+        "bldg-asking-price",
+        "bldg-currency",
+        "bldg-public-address",
+        "bldg-published-at",
+        "bldg-public-selection",
+        "bldg-cover-image"
       ]
     }
   },
@@ -222,6 +428,297 @@
       "name": "Note",
       "datatype": "https://atomicdata.dev/datatypes/string",
       "description": "The person's own note on this transaction. Never written by an importer."
+    },
+    "bldg-units": {
+      "name": "Units",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Length unit of the home. All stored lengths are metres; this is the display preference (for example metric or imperial)."
+    },
+    "bldg-north-angle": {
+      "name": "North angle",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Angle in degrees from the +Y axis to true north, counter-clockwise seen from above."
+    },
+    "bldg-address": {
+      "name": "Address",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Private street address of the property, as free text. Never published; a listing has its own public address."
+    },
+    "bldg-cover-image": {
+      "name": "Cover image",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "A File resource used as the cover image."
+    },
+    "bldg-boundary": {
+      "name": "Boundary",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "Polygon outline as a JSON array of [x, y] points in metres, in the coordinates of the containing storey (or of the site for a Site). Not self-closing; the last point connects to the first."
+    },
+    "bldg-home": {
+      "name": "Home",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "classtype": "building-home-v1",
+      "description": "The Home this resource belongs to."
+    },
+    "bldg-site": {
+      "name": "Site",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "classtype": "building-site-v1",
+      "description": "The Site a Building stands on."
+    },
+    "bldg-rotation": {
+      "name": "Rotation",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Rotation of the building around the Z axis, in degrees, relative to the site coordinates."
+    },
+    "bldg-geo-origin": {
+      "name": "Geo origin",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "Optional geographic anchor of the building origin, as JSON {\"lat\": number, \"lon\": number, \"alt\": number} (WGS 84, altitude in metres)."
+    },
+    "bldg-building": {
+      "name": "Building",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "classtype": "building-building-v1",
+      "description": "The Building a Storey is part of. Spatial containment is a link, not the resource parent."
+    },
+    "bldg-elevation": {
+      "name": "Elevation",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Height of the storey floor above the building origin, in metres, Z up."
+    },
+    "bldg-height": {
+      "name": "Height",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Floor-to-ceiling or floor-to-floor height, in metres."
+    },
+    "bldg-level": {
+      "name": "Level",
+      "datatype": "https://atomicdata.dev/datatypes/integer",
+      "description": "Storey number: 0 is ground floor, negative is below ground."
+    },
+    "bldg-storey": {
+      "name": "Storey",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "classtype": "building-storey-v1",
+      "description": "The Storey this resource is on. Coordinates of its geometry are local to this storey. Spatial containment is a link, not the resource parent."
+    },
+    "bldg-space": {
+      "name": "Space",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "classtype": "building-space-v1",
+      "description": "The Space (room) this resource is in or was captured in."
+    },
+    "bldg-usage": {
+      "name": "Usage",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "What the space is used for. One of: living, kitchen, bedroom, bathroom, hall, storage, technical, outdoor, other."
+    },
+    "bldg-ifc-class": {
+      "name": "IFC class",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "The IFC entity this element maps to, so an IFC export is a mapping and not a redesign. Not an exhaustive IFC list. One of: IfcWall, IfcSlab, IfcDoor, IfcWindow, IfcStair, IfcRoof, IfcColumn, IfcBeam, IfcCovering, IfcRailing, IfcFurnishingElement, IfcBuildingElementProxy."
+    },
+    "bldg-ifc-guid": {
+      "name": "IFC GUID",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Optional 22-character IFC GlobalId, kept so a re-export stays stable."
+    },
+    "bldg-hosted-by": {
+      "name": "Hosted by",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "classtype": "building-element-v1",
+      "description": "The Element that hosts this one, for openings: the wall a door or window sits in."
+    },
+    "bldg-geometry-kind": {
+      "name": "Geometry kind",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Which shape the geometry JSON holds. One of: wallAxis, extrusion, opening, mesh."
+    },
+    "bldg-geometry": {
+      "name": "Geometry",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "The shape, as JSON whose layout depends on the geometry kind: wallAxis {start, end, height, thickness}; extrusion {polygon, depth}; opening {offset, width, height, sill}; mesh {file} linking a glTF/GLB. Metres, local to the storey. Checked by the app, not by the server."
+    },
+    "bldg-material": {
+      "name": "Material",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Primary material as free text. Not a materials catalogue."
+    },
+    "bldg-attributes": {
+      "name": "Attributes",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "Type-specific fields (door swing, wall thickness, glazing) as a JSON object, validated per IFC class by a JSON Schema shipped next to the ontology."
+    },
+    "bldg-origin": {
+      "name": "Origin",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Who produced the fact. One of: user, ai, import."
+    },
+    "bldg-review-state": {
+      "name": "Review state",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Whether a person has reviewed the fact. Only confirmed facts are published. One of: proposed, confirmed, rejected."
+    },
+    "bldg-confidence": {
+      "name": "Confidence",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Confidence of the producer, from 0 to 1."
+    },
+    "bldg-uncertainty": {
+      "name": "Uncertainty",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Uncertainty of a measured value, in metres. Listings must show areas as indicative when this is set by an AI."
+    },
+    "bldg-created-by-run": {
+      "name": "Created by run",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "classtype": "building-analysis-run-v1",
+      "description": "The AnalysisRun that produced this resource. Rejecting a run's proposals is one filtered bulk edit on this property."
+    },
+    "bldg-source-file": {
+      "name": "File",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The Atomic File resource holding the media of this source."
+    },
+    "bldg-media-kind": {
+      "name": "Media kind",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "What the media is. One of: photo, video, pdf, floorplan, note, voice."
+    },
+    "bldg-captured-at": {
+      "name": "Captured at",
+      "datatype": "https://atomicdata.dev/datatypes/timestamp",
+      "description": "When the media was captured, milliseconds since the Unix epoch."
+    },
+    "bldg-scale": {
+      "name": "Scale",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "A known size reference in the source that anchors real measurements, as JSON, for example {\"kind\": \"scale\", \"ratio\": 100} or {\"kind\": \"length\", \"metres\": 0.5, \"locator\": {...}}."
+    },
+    "bldg-source-status": {
+      "name": "Source status",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Processing state of the source. One of: new, processing, processed, failed."
+    },
+    "bldg-derived-from": {
+      "name": "Derived from",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "classtype": "building-source-v1",
+      "description": "The sources this one was derived from, for example the video a frame was sampled from or the PDF a page came from."
+    },
+    "bldg-model": {
+      "name": "Model",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Name of the AI model that ran."
+    },
+    "bldg-model-version": {
+      "name": "Model version",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Exact version or snapshot of the model."
+    },
+    "bldg-started-at": {
+      "name": "Started at",
+      "datatype": "https://atomicdata.dev/datatypes/timestamp",
+      "description": "When the run started, milliseconds since the Unix epoch."
+    },
+    "bldg-inputs": {
+      "name": "Inputs",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "classtype": "building-source-v1",
+      "description": "The sources this run read."
+    },
+    "bldg-run-status": {
+      "name": "Run status",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "State of the run. One of: running, completed, failed."
+    },
+    "bldg-source": {
+      "name": "Source",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "classtype": "building-source-v1",
+      "description": "The source this evidence comes from."
+    },
+    "bldg-locator": {
+      "name": "Locator",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "Where in the source the evidence is, as JSON: page, bounding box, time range or frame, whichever the media kind has."
+    },
+    "bldg-supports": {
+      "name": "Supports",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The Element, Space or other resource this evidence supports."
+    },
+    "bldg-property": {
+      "name": "Property",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "Optional: the property of the supported resource this evidence is for, when it supports one value and not the whole resource."
+    },
+    "bldg-question-kind": {
+      "name": "Question kind",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "What kind of answer is wanted. One of: confirm, choose, measure, upload, text."
+    },
+    "bldg-about": {
+      "name": "About",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The resource the question is about."
+    },
+    "bldg-options": {
+      "name": "Options",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "For a choose question, the offered choices as a JSON array of strings."
+    },
+    "bldg-wants": {
+      "name": "Wants",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "For an upload or measure question, the media kind wanted. One of: photo, video, pdf, floorplan, note, voice."
+    },
+    "bldg-why": {
+      "name": "Why",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "What answering unlocks, as text shown to the person."
+    },
+    "bldg-answer": {
+      "name": "Answer",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "The answer as text: a value, a choice or free text."
+    },
+    "bldg-answer-sources": {
+      "name": "Answer sources",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "classtype": "building-source-v1",
+      "description": "Sources the person added to answer, such as a photo with a tape measure in frame."
+    },
+    "bldg-listing-status": {
+      "name": "Listing status",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Publication state of the listing. One of: draft, published, sold."
+    },
+    "bldg-asking-price": {
+      "name": "Asking price",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Asking price in the listing currency."
+    },
+    "bldg-currency": {
+      "name": "Currency",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "ISO 4217 currency code of the asking price."
+    },
+    "bldg-public-address": {
+      "name": "Public address",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Address shown publicly, which may be less exact than the private home address."
+    },
+    "bldg-published-at": {
+      "name": "Published at",
+      "datatype": "https://atomicdata.dev/datatypes/timestamp",
+      "description": "When the listing was published, milliseconds since the Unix epoch."
+    },
+    "bldg-public-selection": {
+      "name": "Public selection",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "Which Elements, Sources and storeys may be shown, as JSON {\"elements\": [...], \"sources\": [...], \"storeys\": [...]} of subjects. Unreviewed (proposed) facts are never published."
     }
   }
 }

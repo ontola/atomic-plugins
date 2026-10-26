@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-ifc-class",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "bldg-ifc-class",
+  "https://atomicdata.dev/properties/name": "IFC class",
+  "https://atomicdata.dev/properties/description": "The IFC entity this element maps to, so an IFC export is a mapping and not a redesign. Not an exhaustive IFC list. One of: IfcWall, IfcSlab, IfcDoor, IfcWindow, IfcStair, IfcRoof, IfcColumn, IfcBeam, IfcCovering, IfcRailing, IfcFurnishingElement, IfcBuildingElementProxy.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
+}

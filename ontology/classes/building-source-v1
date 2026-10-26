@@ -1,0 +1,22 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/building-source-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "building-source-v1",
+  "https://atomicdata.dev/properties/name": "Source",
+  "https://atomicdata.dev/properties/description": "Something the user gave: a photo, video, PDF, floor plan, note or voice memo, as a File resource plus what is known about it.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://atomicdata.dev/properties/name"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-source-file",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-media-kind",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-captured-at",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-space",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-scale",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-source-status",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-derived-from"
+  ]
+}

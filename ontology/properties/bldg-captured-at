@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-captured-at",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "bldg-captured-at",
+  "https://atomicdata.dev/properties/name": "Captured at",
+  "https://atomicdata.dev/properties/description": "When the media was captured, milliseconds since the Unix epoch.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/timestamp"
+}

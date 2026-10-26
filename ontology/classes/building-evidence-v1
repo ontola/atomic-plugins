@@ -1,0 +1,20 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/building-evidence-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "building-evidence-v1",
+  "https://atomicdata.dev/properties/name": "Evidence",
+  "https://atomicdata.dev/properties/description": "A source and a place in it that supports a fact, so the app can show why the AI believes something and a person can reject it.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-source",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-supports"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-locator",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-property",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-confidence",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-created-by-run"
+  ]
+}
