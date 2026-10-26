@@ -49,6 +49,12 @@ Object.assign(
   document.paths['/repos/{owner}/{repo}/issues'].get,
   annotations.paths['/repos/{owner}/{repo}/issues'].get,
 );
+if (
+  !document.paths[
+    annotations.components.crudResources.issue.identity.urlTemplate
+  ]?.get
+)
+  throw new Error('Issue identity must match a real upstream operation');
 document['x-syncd-source'] = {
   repository: 'https://github.com/ontola/openapi-directory',
   revision,

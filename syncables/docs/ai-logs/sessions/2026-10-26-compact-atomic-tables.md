@@ -19,3 +19,8 @@ Changed the experimental projector from recursive resources to inline native JSO
 Replaced the stripped Keep example with the complete pinned upstream document (all paths and response schemas), adding only collection/pagination annotations and provenance. Replaced the GitHub profile with a small annotation file and a reproducible preparation script that verifies the pinned full upstream contract; generated large contracts stay outside Git. Both live local configurations were switched to the full contracts. Read-only operation selection remains enforced by SyncD. Switching the local configuration required a new immutable source-document scope; refreshing private data remained blocked on device login renewal. No old snapshot provenance was rewritten.
 
 TypeScript type checks and six targeted table tests passed. Three native table tests passed, including inline JSON persistence and publication recovery; Rust formatting passed. PostgreSQL/peer integration and full CI remained pending at commit time. Browser transport work is in a separate atomic-server worktree and PR.
+
+CI found that the installed-daemon smoke test still read the removed GitHub
+profile. Moved that explicitly invented API into a test fixture and ran the
+installed npm tarball against a new disposable local PostgreSQL database;
+sync, webhook/daemon, browse/history, schema tags, export and cleanup passed.
