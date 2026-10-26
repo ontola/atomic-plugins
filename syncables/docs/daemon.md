@@ -131,13 +131,15 @@ npm ci
 npm run build:release
 ```
 
-### Copy the two files
+### Prepare the configuration and full contract
 
-Yes: the demo config is `examples/daemon/config.demo.json`, and its OpenAPI
-document is `examples/daemon/github-issues.json`. Here, "composed OpenAPI
-document" means the API description already contains the collection identity
-and paging metadata the daemon needs. The supplied small GitHub document is
-ready to use; you do not need to download or compose a full GitHub specification.
+The demo config is `examples/daemon/config.demo.json`, and its OpenAPI
+document is generated from the complete pinned upstream GitHub OAD. Run
+`node examples/daemon/prepare-github-issues.mjs` once before using the demo; it
+retains every upstream path and schema and adds the collection/pagination
+annotations from `github-issues.annotations.json`. The generated document is
+ignored by Git because it is large and reproducible. Read-only selection is
+enforced by the daemon, rather than by removing operations or schemas.
 
 Use a directory outside the source checkout for real data, for example
 `$HOME/.local/share/syncables-live`. Run these commands from the checkout's
@@ -147,18 +149,18 @@ Use a directory outside the source checkout for real data, for example
 mkdir -p "$HOME/.local/share/syncables-live"
 chmod 700 "$HOME/.local/share/syncables-live"
 cp -n examples/daemon/config.demo.json "$HOME/.local/share/syncables-live/config.json"
-cp -n examples/daemon/github-issues.json "$HOME/.local/share/syncables-live/github-issues.json"
+node examples/daemon/prepare-github-issues.mjs "$HOME/.local/share/syncables-live/generated/github-issues.json"
 chmod 600 "$HOME/.local/share/syncables-live/"*.json
 ```
 
 `cp -n` preserves any copies you have already edited. Keep both files together.
-The config's `"document": "./github-issues.json"` resolves relative to the config
+The config's `"document": "./generated/github-issues.json"` resolves relative to the config
 file, as does `"dataDirectory": "./local-data.git"`. The resulting layout is:
 
 ```text
 ~/.local/share/syncables-live/
   config.json             your edited config
-  github-issues.json      GET collection/pagination description
+  generated/github-issues.json  complete GitHub OAD plus collection/pagination annotations
   local-data.git/         preserved legacy history (if upgrading)
   data/                   preserved legacy Git worktrees (if upgrading)
   workspace/              ordinary PostgreSQL snapshot folders
@@ -209,7 +211,7 @@ For the previously tested `ontola/usertest-findings` repository, change:
 | `collections[0].bindings`    | `{"owner":"ontola","repo":"usertest-findings"}` |
 | `collections[0].pollSeconds` | `0` for manual tests first                      |
 
-Keep `platform` as `github-issues`, `document` as `./github-issues.json`,
+Keep `platform` as `github-issues`, `document` as `./generated/github-issues.json`,
 `collection` as `issues` and `query` as `{"per_page":"100"}`. The profile's
 fixed query reads `state=all`, so the list includes closed issues and pull
 requests. Substitute your own namespace/repository in the labels and bindings

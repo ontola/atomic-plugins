@@ -322,11 +322,11 @@ export async function atomicTablesProjection(
             [
               external(P + 'description'),
               str(
-                description ??
-                  `API field ${path.join('.')}; native ${datatype}.` +
-                    (path.length === 1 && path[0] === 'permissions'
-                      ? ' Imported provider permissions are data only; they do not grant Atomic read or write access.'
-                      : ''),
+                (description ??
+                  `API field ${path.join('.')}; native ${datatype}.`) +
+                  (path.length === 1 && path[0] === 'permissions'
+                    ? ' Imported provider permissions are data only; they do not grant Atomic read or write access.'
+                    : ''),
               ),
             ],
             [external(P + 'datatype'), ref(external(D + datatype))],

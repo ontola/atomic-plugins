@@ -180,7 +180,16 @@ describe('native Atomic collection tables', () => {
     };
     const source = prepared('notes', 'work', 'example', {
       type: 'object',
-      properties: { title: { type: 'string' }, name: { type: 'string' }, body },
+      properties: {
+        title: { type: 'string' },
+        name: { type: 'string' },
+        body,
+        permissions: {
+          type: 'array',
+          description: 'Provider ACL',
+          items: { type: 'object' },
+        },
+      },
     });
     const resources = source.document.components!.crudResources as Record<
       string,
