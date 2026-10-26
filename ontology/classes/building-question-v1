@@ -1,0 +1,22 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/building-question-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "building-question-v1",
+  "https://atomicdata.dev/properties/name": "Building question",
+  "https://atomicdata.dev/properties/description": "The extras of a question the AI asks the user. Meant to sit on the same resource as issue-v1, which holds name, status, body and assignee; this class does not repeat them.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-question-kind"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-about",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-options",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-wants",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-why",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-answer",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-answer-sources",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-created-by-run"
+  ]
+}

@@ -49,6 +49,43 @@ for what it has checked.
 baselines, import bookkeeping such as `work-source-id` or `bank-source-id`) is
 never part of a shared class: each sync part defines it in its own ontology.
 
+## Buildings (v2)
+
+Release `v2` ("Buildings v1") holds the classes of the AtomicBuildings
+digital-twin app: a home, its spaces and elements, the sources the user gave,
+the AI runs and evidence behind each fact, the questions the AI asks, and the
+listings agents publish. Spec: the AtomicBuildings schema proposal. Declared,
+not verified: no app has written or read these classes against the published
+URLs yet. Its subject constants are in `terms.v2.mjs`, not `terms.mjs` (see
+"Using the terms").
+
+| Class                      | Requires                       | Notes                                                                                   |
+| -------------------------- | ------------------------------ | --------------------------------------------------------------------------------------- |
+| `building-home-v1`         | `name`                         | The property; permission anchor                                                         |
+| `building-site-v1`         | `name`                         | Plot, with a boundary polygon                                                           |
+| `building-building-v1`     | `name`                         | Rotation and optional geo origin                                                        |
+| `building-storey-v1`       | `name`, `bldg-building`        | Elevation, height, level                                                                |
+| `building-space-v1`        | `name`, `bldg-storey`          | Usage, boundary; recommends the provenance and review properties                        |
+| `building-element-v1`      | `name`, `bldg-storey`          | One class for walls, doors, windows and so on, typed by `bldg-ifc-class`; geometry JSON |
+| `building-source-v1`       | `name`                         | File, media kind, capture time, derived-from                                            |
+| `building-analysis-run-v1` | `name`                         | One AI pass: model, version, inputs                                                     |
+| `building-evidence-v1`     | `bldg-source`, `bldg-supports` | Locator, confidence                                                                     |
+| `building-question-v1`     | `bldg-question-kind`           | Extras only; used on one resource together with `issue-v1`                              |
+| `building-listing-v1`      | `name`, `bldg-home`            | Public status, price, public selection                                                  |
+
+- Properties are shortnamed `bldg-*`; `name` and `description` are reused from
+  `https://atomicdata.dev/properties/`. Links use `atomicURL` or
+  `resourceArray` with a `classtype` where the target is a class here.
+- Provenance and review (`bldg-origin`, `bldg-review-state`,
+  `bldg-confidence`, `bldg-uncertainty`, `bldg-created-by-run`) are
+  recommended on Space and Element.
+- The tooling has no enum constraint on a property, so enumerated values
+  (IFC class, usage, media kind, origin, review state, question kind, listing
+  status and others) are `string`s whose description lists the allowed
+  values. Nothing enforces them; the app does.
+- Geometry is plain `json` (`bldg-geometry`, with `bldg-geometry-kind`); the
+  server does not check its shape.
+
 ## Base URL: one place
 
 `ontology-kit/base.json` holds the base, now
@@ -63,7 +100,7 @@ both the data browser and atomic-server accept (#177 spike S1, at atomic-server
 `2567fc30b`).
 
 `check` refuses the base written literally anywhere except `base.json`,
-`ontology/`, `terms.mjs`, built bundles (`plugin.js`, `apps/`) and Markdown.
+`ontology/`, `terms.mjs` and `terms.<release>.mjs`, built bundles (`plugin.js`, `apps/`) and Markdown.
 Code reads it through `terms.mjs` (or `readBase()` in `ontology.mjs`).
 
 ## Build and check
@@ -74,7 +111,8 @@ node ontology-kit/ontology.mjs check --published origin/main   # what CI runs
 node --test ontology-kit/                                      # unit tests
 ```
 
-`build` writes `ontology/` and `terms.mjs`/`terms.d.mts`, and deletes term files
+`build` writes `ontology/`, `terms.mjs`/`terms.d.mts` (the first release's
+terms) and `terms.<release>.mjs`/`.d.mts` per later release, and deletes term files
 the source no longer produces. Commit its output: Pages is a legacy build and
 serves only committed files. `check` fails on:
 
@@ -177,6 +215,13 @@ const { values, complete, missing } = fields.read(row.props, rowClass);
 const start = values[properties['work-start'].subject];
 ```
 
+- `terms.mjs` holds only the first release's terms (v1) and never grows:
+  every plugin bundles it, and a published plugin version is immutable, so a
+  new release must not change its bytes. The terms of each later release are in
+  their own `terms.<release>.mjs` (for example `terms.v2.mjs`), same shape;
+  import those from the plugins that use them, so existing bundles stay
+  unchanged. A term belongs to the first release that lists it in
+  `source.json`.
 - esbuild inlines both files into `plugin.js`/`ui.js`, so the bundle carries
   the subjects and the gate sees them. Types come from the `.d.mts` files next
   to them.
