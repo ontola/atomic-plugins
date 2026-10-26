@@ -6,6 +6,6 @@
   "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
   "https://atomicdata.dev/properties/shortname": "bldg-wants",
   "https://atomicdata.dev/properties/name": "Wants",
-  "https://atomicdata.dev/properties/description": "For an upload or measure question, the media kind wanted. One of: photo, video, pdf, floorplan, note, voice.",
+  "https://atomicdata.dev/properties/description": "For an upload or measure question, the media kind wanted. One of: photo, video, pdf, scan, floorplan, note, voice.",
   "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
 }

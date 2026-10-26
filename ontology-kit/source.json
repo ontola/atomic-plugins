@@ -584,7 +584,7 @@
     "bldg-media-kind": {
       "name": "Media kind",
       "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "What the media is. One of: photo, video, pdf, floorplan, note, voice."
+      "description": "What the media is. One of: photo, video, pdf, scan, floorplan, note, voice."
     },
     "bldg-captured-at": {
       "name": "Captured at",
@@ -672,7 +672,7 @@
     "bldg-wants": {
       "name": "Wants",
       "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "For an upload or measure question, the media kind wanted. One of: photo, video, pdf, floorplan, note, voice."
+      "description": "For an upload or measure question, the media kind wanted. One of: photo, video, pdf, scan, floorplan, note, voice."
     },
     "bldg-why": {
       "name": "Why",

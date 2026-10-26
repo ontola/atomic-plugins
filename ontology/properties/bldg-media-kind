@@ -6,6 +6,6 @@
   "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
   "https://atomicdata.dev/properties/shortname": "bldg-media-kind",
   "https://atomicdata.dev/properties/name": "Media kind",
-  "https://atomicdata.dev/properties/description": "What the media is. One of: photo, video, pdf, floorplan, note, voice.",
+  "https://atomicdata.dev/properties/description": "What the media is. One of: photo, video, pdf, scan, floorplan, note, voice.",
   "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
 }
