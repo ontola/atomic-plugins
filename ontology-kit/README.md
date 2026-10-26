@@ -56,7 +56,8 @@ digital-twin app: a home, its spaces and elements, the sources the user gave,
 the AI runs and evidence behind each fact, the questions the AI asks, and the
 listings agents publish. Spec: the AtomicBuildings schema proposal. Declared,
 not verified: no app has written or read these classes against the published
-URLs yet.
+URLs yet. Its subject constants are in `terms.v2.mjs`, not `terms.mjs` (see
+"Using the terms").
 
 | Class                      | Requires                       | Notes                                                                                   |
 | -------------------------- | ------------------------------ | --------------------------------------------------------------------------------------- |
@@ -99,7 +100,7 @@ both the data browser and atomic-server accept (#177 spike S1, at atomic-server
 `2567fc30b`).
 
 `check` refuses the base written literally anywhere except `base.json`,
-`ontology/`, `terms.mjs`, built bundles (`plugin.js`, `apps/`) and Markdown.
+`ontology/`, `terms.mjs` and `terms.<release>.mjs`, built bundles (`plugin.js`, `apps/`) and Markdown.
 Code reads it through `terms.mjs` (or `readBase()` in `ontology.mjs`).
 
 ## Build and check
@@ -110,7 +111,8 @@ node ontology-kit/ontology.mjs check --published origin/main   # what CI runs
 node --test ontology-kit/                                      # unit tests
 ```
 
-`build` writes `ontology/` and `terms.mjs`/`terms.d.mts`, and deletes term files
+`build` writes `ontology/`, `terms.mjs`/`terms.d.mts` (the first release's
+terms) and `terms.<release>.mjs`/`.d.mts` per later release, and deletes term files
 the source no longer produces. Commit its output: Pages is a legacy build and
 serves only committed files. `check` fails on:
 
@@ -213,6 +215,13 @@ const { values, complete, missing } = fields.read(row.props, rowClass);
 const start = values[properties['work-start'].subject];
 ```
 
+- `terms.mjs` holds only the first release's terms (v1) and never grows:
+  every plugin bundles it, and a published plugin version is immutable, so a
+  new release must not change its bytes. The terms of each later release are in
+  their own `terms.<release>.mjs` (for example `terms.v2.mjs`), same shape;
+  import those from the plugins that use them, so existing bundles stay
+  unchanged. A term belongs to the first release that lists it in
+  `source.json`.
 - esbuild inlines both files into `plugin.js`/`ui.js`, so the bundle carries
   the subjects and the gate sees them. Types come from the `.d.mts` files next
   to them.
@@ -232,7 +241,7 @@ The resolver is strict (#177 decision 1):
 - `read(row, rowClass)` returns the class's fields present in the row, by exact
   property subject, and `missing`/`complete` for its required ones, so the view
   shows an incomplete row instead of skipping it; `incompleteNote(missing,
-labels)` gives the note to show ("Incomplete: missing Name and Day"). Present
+  labels)` gives the note to show ("Incomplete: missing Name and Day"). Present
   means neither undefined, null nor the empty string. At the pin the server
   refuses a commit that lacks a required property of the row's class
   (`lib/src/resources.rs` `check_required_props`, presence only), so on that
@@ -293,7 +302,7 @@ run this way.
   ```
 
   The same check from a shell: `node ontology-kit/served.mjs
-classes/bank-transaction-v1`, or with no argument for every term file.
+  classes/bank-transaction-v1`, or with no argument for every term file.
 
 ## Not verified
 

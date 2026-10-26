@@ -210,6 +210,58 @@ test('a term keeps the release that first listed it as its parent', () => {
   );
 });
 
+test('terms.mjs holds only the first release, later releases get their own file', async () => {
+  const s = source();
+  s.releases.v2 = {
+    name: 'Release 2',
+    description: 'The second release.',
+    classes: ['box-v1'],
+    properties: ['size', 'colour'],
+  };
+  s.classes['box-v1'] = {
+    name: 'Box',
+    description: 'A box.',
+    requires: [NAME],
+    recommends: ['size', 'colour'],
+  };
+  s.properties.size = {
+    name: 'Size',
+    description: 'Its size.',
+    datatype: STRING,
+  };
+  const files = generate(s, BASE);
+  assert.deepEqual([...files.keys()].filter(p => p.includes('terms')).sort(), [
+    'ontology-kit/terms.d.mts',
+    'ontology-kit/terms.mjs',
+    'ontology-kit/terms.v2.d.mts',
+    'ontology-kit/terms.v2.mjs',
+  ]);
+  const dir = mkdtempSync(join(tmpdir(), 'atomic-ontology-terms2-'));
+
+  try {
+    for (const name of ['terms.mjs', 'terms.v2.mjs'])
+      writeFileSync(join(dir, name), files.get(`ontology-kit/${name}`));
+    const one = await import(pathToFileURL(join(dir, 'terms.mjs')).href);
+    const two = await import(pathToFileURL(join(dir, 'terms.v2.mjs')).href);
+    assert.deepEqual(Object.keys(one.releases), ['v1']);
+    assert.deepEqual(Object.keys(one.classes), ['thing-v1']);
+    assert.deepEqual(Object.keys(one.properties), ['colour', 'owner']);
+    assert.deepEqual(Object.keys(two.releases), ['v2']);
+    assert.deepEqual(Object.keys(two.classes), ['box-v1']);
+    assert.deepEqual(Object.keys(two.properties), ['size']);
+    assert.equal(two.BASE, BASE);
+    assert.deepEqual(two.classes['box-v1'].recommends, [
+      `${BASE}/properties/size`,
+      `${BASE}/properties/colour`,
+    ]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+
+  assert.doesNotMatch(files.get('ontology-kit/terms.d.mts'), /box-v1|size/);
+  assert.match(files.get('ontology-kit/terms.v2.d.mts'), /box-v1/);
+});
+
 test('generate refuses a source with problems', () => {
   const s = source();
   delete s.properties.colour.datatype;
