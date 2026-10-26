@@ -241,7 +241,7 @@ The resolver is strict (#177 decision 1):
 - `read(row, rowClass)` returns the class's fields present in the row, by exact
   property subject, and `missing`/`complete` for its required ones, so the view
   shows an incomplete row instead of skipping it; `incompleteNote(missing,
-  labels)` gives the note to show ("Incomplete: missing Name and Day"). Present
+labels)` gives the note to show ("Incomplete: missing Name and Day"). Present
   means neither undefined, null nor the empty string. At the pin the server
   refuses a commit that lacks a required property of the row's class
   (`lib/src/resources.rs` `check_required_props`, presence only), so on that
@@ -302,7 +302,7 @@ run this way.
   ```
 
   The same check from a shell: `node ontology-kit/served.mjs
-  classes/bank-transaction-v1`, or with no argument for every term file.
+classes/bank-transaction-v1`, or with no argument for every term file.
 
 ## Not verified
 
