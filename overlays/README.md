@@ -196,6 +196,41 @@ and stepped over under v3); run them from `syncables/` with
 `npx vitest run --root .. overlays/tests/<file>` (all of them:
 `overlays/tests/`), as Overlays CI's `reads` job does.
 
+## Newer revisions catalog: Discord, Asana and Todoist
+
+`catalog/2026-10-19-newer-revisions.json` is
+`catalog/2026-10-12-tasks-box-pages.json` with three platforms changed;
+every other entry is unchanged. No deployment selects it: the proxy's
+default `CATALOG_PATH` is still `catalog/2026-10-02-auth-profiles.json`.
+
+Discord:
+[pagination v4](APIs/discord.com/10/pagination-v4-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml)
+in place of v1. v4 carries v2's item cursors (`fromLastItem`), v3's joined
+private archived threads, and the guild audit log under `before`, each
+with Pagination Schemes 0.10.0 `order`. It needs syncables 0.25.0 or later
+(the first that checks `order`, see the file's header). A 0.9.x consumer
+that validates the document rejects `order`; one that does not validate
+reads without the check.
+
+Asana:
+[crud-causality v2](APIs/asana.com/1.0/crud-causality-v2-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml)
+in place of v1, which fixes `limit: '100'` on the four list reads. Without
+that limit, Asana truncates a list at about 1,000 objects and returns no
+`next_page`. The catalog also adds
+[completeness](APIs/asana.com/1.0/completeness-b58c91d9f59c6a10178916e7948793809edae46d-overlay.yaml),
+whose header says to compose it with v2 and not with v1.
+
+Todoist:
+[completeness v2](APIs/todoist.com/1/completeness-v2-ac07532b0a0ac101cf8bae2a54177fb1d8ea3779-overlay.yaml),
+which declares tasks and projects, is added. Its `info.x-requires` names
+the crud-causality overlay this catalog already selects.
+
+Moneybird's completeness v2 is left out: it requires a crud-causality
+revision that widens what Moneybird's reads return, which is a change of its
+own. `tests/test_completeness_requirements.py` and
+`tests/test_crud_reads_in_catalogs.py` check this catalog with the others,
+and `validate_oad_pins.py` checks its selections and action targets.
+
 ## Read and list tombstones
 
 Google Calendar v3 declares [Deletion Feeds 0.3.0-draft](../openapi-extensions/spec/deletion-feeds/README.md#43-tombstone-object)
@@ -1032,6 +1067,30 @@ Checks:
   served dated catalogs, every overlay and Pages-published OAD they list, and
   the pets demo's data match the built commit.
 
+Not a check, and not run in CI: `scripts/mutate_overlays.py` measures
+whether a test would notice a wrong overlay. It changes the overlays the test
+is about one small step at a time (drops an action, a key or a list item,
+flips a boolean, bumps an integer, swaps a short string such as `removed` for
+`deleted`; descriptions and targets stay), runs the test against each
+change, and counts the changes the test still passes. Run it on a new or
+changed test before review, naming the overlays under test:
+
+```sh
+python3 overlays/scripts/mutate_overlays.py --list test_discord_pagination_v3
+python3 overlays/scripts/mutate_overlays.py test_discord_pagination_v3 --survivors \
+  --overlay APIs/discord.com/10/pagination-v3-9d0d73c6b23cb07ca2d225fb8b3848fede322b21-overlay.yaml
+```
+
+It works in temporary copies of `overlays/`, `openapi-extensions/` and
+`integrations/` (four workers by default); a test that calls git needs
+`--in-place`, which mutates the checkout's files one at a time and restores
+each. `--cap N` samples N changes per overlay. On 2026-10-19 the full run of
+the Discord v2 overlay against its test as it then stood on `main` left 5
+of 28 changes unnoticed (`autoDetect`, the `after` role, an emptied
+`x-pagination`). Survivors in the catalog overlays a test composes only for
+context are not that test's concern. `python3
+overlays/scripts/mutate_overlays.py --help` has the details.
+
 ### What a completeness overlay is declared on
 
 A Collection Completeness overlay is a claim about a collection's read as one
@@ -1052,7 +1111,10 @@ info:
 ```
 
 `x-requires` is specified by
-[Overlay Requirements](../openapi-extensions/spec/overlay-requirements/README.md).
+[Overlay Requirements](../openapi-extensions/spec/overlay-requirements/README.md),
+as is `x-conflicts` (filenames the overlay must not be selected with). The
+test reads both through that specification's `validate.py`, so a malformed
+declaration fails, and refuses a catalog that selects a stated conflict.
 This repository additionally checks revision filenames
 (`<kind>[-vN]-<pin>-overlay.yaml`) against its dated catalogs and rejects
 another revision of a required kind. Published completeness overlays cannot
@@ -1630,6 +1692,23 @@ actual two-page Syncables imports for each new platform and both profiles in
 the proxy parser. The Google Tasks importer fixture is
 `tests/google_tasks_syncables.test.ts`; its composition checks are
 `tests/test_google_tasks_readonly.py`. Real-account sync is not certified.
+
+## ClickUp preparation
+
+`catalog/2026-10-08-gitlab-tasks-clickup.json` is a prepared fourteen-entry
+candidate. It preserves the thirteen GitLab/Google Tasks entries and adds
+three ClickUp GET operations. Task pages follow Pagination Schemes 0.6.0:
+`page` starts at 0, and a page with fewer than 100 tasks ends the list, with
+`assurance: assumed`, since ClickUp documents only the 100-task cap. Every
+task read is therefore not complete, and no deletion is inferred from it.
+Consumer validation passes with published Syncables 0.25.0 on Node 22 and
+the current repository source. Use that verified release: the published
+0.21.0 package still asks for page 1 first and skips page 0.
+
+ClickUp OAuth has no selectable read scopes; the proxy profile limits reads
+to these three operations, while the provider token can have broader access
+to selected Workspaces. OAuth client registration and a real account grant
+are pending. This candidate is not complete synchronization certification.
 
 ## Google Tasks deployment without GitLab
 

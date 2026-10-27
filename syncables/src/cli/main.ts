@@ -82,6 +82,8 @@ async function main(): Promise<void> {
         'signer-file',
         'reader',
         'peer-port',
+        'braid-port',
+        'braid-origin',
         'projection-contract',
       ].map((key) => [key, { type: 'string' as const }]),
     );
@@ -96,6 +98,12 @@ async function main(): Promise<void> {
     typeof values[key] === 'string' ? (values[key] as string) : undefined;
   if (values.help || !positionals.length) {
     process.stdout.write(HELP + DAEMON_HELP);
+    return;
+  }
+  if (positionals[0] === 'braid') {
+    if (positionals.length !== 1) throw new Error('Unexpected Braid arguments');
+    const { braidCommand } = await import('../daemon/braid-command.js');
+    await braidCommand(values);
     return;
   }
   if (

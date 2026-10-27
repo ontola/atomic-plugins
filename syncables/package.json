@@ -74,6 +74,7 @@
   "license": "Apache-2.0",
   "dependencies": {
     "@bokuweb/zstd-wasm": "0.0.27",
+    "braid-http": "1.4.10",
     "js-yaml": "~4.1",
     "pg": "8.23.1",
     "tslib": "~2.8"

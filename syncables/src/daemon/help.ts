@@ -11,6 +11,8 @@ Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export on
     --signer-file PRIVATE_EXPORTED_ATOMIC_SECRET_FILE --reader atomic:agent:ID[,ID]
     [--peer-port 9901] [--at REVISION|tag:NAME] [--projection-contract FILE]
   syncables checkout --config FILE [--collections platform/account/name,...]
+  syncables braid --config FILE --collections platform/account/name,...
+    [--braid-port 9888] [--braid-origin https://reader.example]
   syncables migrate git --config FILE [--source LEGACY_ARCHIVE]
   syncables export git --config FILE --subtree platform/account/collection[/ENCODED_ITEM_ID]
     --output NEW_DIRECTORY [--branches all|current] [--at REVISION|tag:NAME]
@@ -48,4 +50,9 @@ Use a new projection directory when upgrading from the JSON-wrapper prototype.
 See docs/atomic-peer.md for representation and native build instructions.
 Webhook relay: loopback POST /webhooks/ENCODED_COLLECTION_ALIAS, Bearer
 SYNCABLES_WEBHOOK_TOKEN, x-syncables-delivery-id. See docs/daemon.md.
+Braid: separate read-only loopback listener over accepted PostgreSQL snapshots,
+GET /collections/ENCODED_COLLECTION_ALIAS with Bearer SYNCABLES_BRAID_TOKEN.
+Set a dedicated 32–256 character token. Add Subscribe: true for live snapshots;
+reconnect with the last Version as Parents. HTTP 409 / Braid-Reset: true means
+request a fresh snapshot without Parents. No provider login or writes occur.
 `;

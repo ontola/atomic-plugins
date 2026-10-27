@@ -1,4 +1,12 @@
-# Standalone Syncables: PostgreSQL history and optional Git export
+# SyncD: standalone Syncables Daemon
+
+**SyncD** is Michiel's shorthand for the standalone **Syncables Daemon**.
+It runs through the existing `syncables daemon` command in the `syncables`
+npm package; the shorthand does not rename the executable or library.
+
+For an illustrated overview of the whole stack, including OpenAPI extensions,
+worked GitHub/Keep examples and what a page proves, start with
+[How Syncables turns APIs into a local copy](how-it-works.md).
 
 The source implementation adds a read-only standalone daemon to the existing
 `syncables` executable. It stores original API response text and lossless,
@@ -9,6 +17,13 @@ node encoding. Its local data copy, bundled schemas, immutable revisions and nam
 live in PostgreSQL. Git is an optional import/export format. [Versioned Atomic Data](../../docs/design/versioned-atomic-data.md)
 defines the experiment and commit/tag resolution contract.
 
+The intended external interfaces are **Git, Braid and AtomicSync**, all backed
+by the same PostgreSQL data/history. Current source implements Git import/export
+and an authenticated [read-only Braid listener](braid.md). A Git network server
+and AtomicSync peer are separate work. See the
+[three-interface design](daemon-design.md#syncd-interfaces-git-braid-and-atomicsync)
+for their roles and the implemented read-only Braid milestone.
+
 This implementation is unreleased. It reuses #567's CLI/archive work without
 changing that draft branch. Device authorization uses the deployed
 [integration-proxy contract](../../integration-proxy/DEVICE_AUTH.md). Owner
@@ -17,6 +32,8 @@ The October 16 live GitHub read verified that protocol. The new daemon and
 macOS Keychain adapter still need a laptop run against the deployed issuer.
 
 ## From a fetch to stored data
+
+![Original response text and extracted records are linked through shared nested JSON nodes.](images/response-and-json.svg)
 
 The current pipeline is:
 
@@ -61,6 +78,11 @@ There is no automatic schema migration when document bytes change, no global
 provider deletion inferred from missing collection membership, and no automatic
 publication of these local records into an Atomic drive yet. See the
 [one-way Atomic mirror plan](daemon-design.md#one-way-atomic-drive-mirror-next-milestone).
+
+For a worked example of values, bundled schemas, membership and commit messages
+over three revisions, see [snapshot history](how-it-works.md#values-schemas-membership-and-messages-have-history).
+For the distinction between returned items and contract-derived range/property
+coverage, see [what a page proves](how-it-works.md#what-a-page-proves-items-ranges-and-properties).
 
 ## Build and try invented data
 

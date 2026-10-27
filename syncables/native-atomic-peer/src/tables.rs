@@ -215,7 +215,7 @@ impl Peer {
                     Value::AtomicUrl(self.drive.clone().into()),
                 )?;
                 r.set_unsafe(urls::LOCAL_ID.into(), Value::String(identity))?;
-                let r = create_genesis(&self.db, r).await?;
+                let r = create_certified_genesis(&self.db, r).await?;
                 self.db.flush()?;
                 r.get_subject().to_string()
             };

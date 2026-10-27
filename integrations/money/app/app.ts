@@ -91,6 +91,7 @@ export async function mount(
     applyImport: () => void controller.applyImport(),
     openImporter: () => void controller.openImporter(),
     openRow: subject => void controller.openRow(subject),
+    removeDuplicates: () => void controller.removeDuplicates(),
     allowEditing: () => void controller.allowEditing(),
     toggleHelp: open => {
       controller.toggleHelp(open);

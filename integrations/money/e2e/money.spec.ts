@@ -602,6 +602,78 @@ test.describe('money integration', () => {
     );
     await sheet.getByRole('button', { name: 'Close' }).first().click();
     expect(await otherRows()).toBe(2);
+
+    // Duplicate rows (0.4.6, #587). The person copies one of the rows the
+    // app wrote by hand: the same transaction twice.
+    const written = (await rowsOf(page, own)).filter(
+      r => r[terms.properties['bank-account'].subject] === 'NL00BUNQ0000000001',
+    );
+    expect(written).toHaveLength(2);
+    // The server serves each row the app wrote with a createdAt, derived
+    // from its genesis commit (read here fresh from the server). The app
+    // doesn't pick the kept copy by it: its own read of a row it just wrote
+    // can lack it, so it keeps the lowest subject instead.
+    for (const row of written)
+      expect(
+        typeof row['https://atomicdata.dev/properties/createdAt'],
+        JSON.stringify(row),
+      ).toBe('number');
+    const transactions = app.getByRole('tab', { name: /^Transactions/ });
+    const counted = await transactions.textContent();
+    const copied = await page.evaluate(
+      async args => {
+        const store = window.store!;
+        type PropVals = NonNullable<
+          NonNullable<Parameters<typeof store.newResource>[0]>['propVals']
+        >;
+        // The row's own values as the server sent them (JSON), minus the
+        // subject and the server-managed atomic properties.
+        const propVals = Object.fromEntries(
+          Object.entries(args.row).filter(
+            ([key]) =>
+              key !== '@id' &&
+              !key.startsWith('https://atomicdata.dev/properties/'),
+          ),
+        ) as PropVals;
+        const copy = await store.newResource({
+          parent: args.table,
+          isA: [args.klass],
+          propVals,
+        });
+        await copy.save();
+
+        return copy.subject;
+      },
+      { row: written[0], table: own, klass: shared },
+    );
+    await expect.poll(otherRows, { timeout: 30_000 }).toBe(3);
+    const duplicates = app.getByRole('region', { name: 'Duplicate rows' });
+    await expect(duplicates).toContainText('1 row is a duplicate', {
+      timeout: 30_000,
+    });
+    // Counted once: the Transactions count is what it was.
+    expect(await transactions.textContent()).toBe(counted);
+    // The kept one is the lower subject, whichever was made first.
+    const original = String(written[0]['@id']);
+    const [kept, extra] = [original, copied].sort();
+    await expect(duplicates.locator('li')).toHaveAttribute(
+      'data-duplicate',
+      extra,
+    );
+    // Nothing is removed until the person presses the button.
+    expect(await otherRows()).toBe(3);
+    await duplicates.getByRole('button', { name: 'Remove duplicate' }).click();
+    await expect(duplicates).toContainText('Removed 1 duplicate row.', {
+      timeout: 30_000,
+    });
+    // Gone for good: a new view of the table lists no duplicate.
+    await page.reload();
+    await expect(transactions).toHaveText(counted ?? '', { timeout: 60_000 });
+    await expect(duplicates).toHaveCount(0);
+    await expect.poll(otherRows, { timeout: 30_000 }).toBe(2);
+    const left = (await rowsOf(page, own)).map(r => r['@id']);
+    expect(left).toContain(kept);
+    expect(left).not.toContain(extra);
   });
 
   test('Money app: a view of the importer’s Bank transactions table: import, statements, row editing, in-app check', async ({
@@ -1034,7 +1106,10 @@ async function rendersOf(
   );
 }
 
-/** The rows of `table` as the server has them: every property and value. */
+/**
+ * The rows of `table` as the server has them: every property and value, and
+ * the row's subject at `@id`.
+ */
 async function rowsOf(
   page: Page,
   table: string,
@@ -1050,7 +1125,10 @@ async function rowsOf(
       const row = await store.fetchResourceFromServer(member, {
         noWebSocket: true,
       });
-      rows.push(Object.fromEntries(Object.entries(row.getPropVals())));
+      rows.push({
+        ...Object.fromEntries(Object.entries(row.getPropVals())),
+        '@id': member,
+      });
     }
 
     return rows;

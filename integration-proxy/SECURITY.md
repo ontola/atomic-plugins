@@ -442,15 +442,30 @@ provider. What it changes for safety:
   keep sending. The only bound is the access policy: `ALLOWED_AGENTS` (an
   allowlist of owners) or a deployment's own `AccessPolicy`;
   `REVOKED_SUBJECTS` refuses known keys only, and anyone can make a new one.
-- **Bounded memory.** One log per declared bucket, keyed by platform and
-  bucket id from the server-owned catalog, never by anything a caller
-  sends; each log holds at most `requests` timestamps, and buckets above
-  10,000 are not paced.
+  Plan tiers make this worse: without a configured plan the proxy keeps
+  within every tier at once, so a long tier such as 30 per hour lets anyone
+  who can make a connection fill it and block every tenant of that platform
+  for up to an hour. A deployment that knows its plan should set it in the
+  catalog selection (`throttlingPlans`), which paces at that plan's tier
+  only.
+- **Bounded memory.** One log per declared bucket, or per tier of a bucket
+  with plan tiers, keyed by platform, bucket id and tier position from the
+  server-owned catalog, never by anything a caller sends; each log holds at
+  most `requests` timestamps. A bucket or tier above 10,000 requests per
+  window is not paced; for a tiered bucket the other tiers still count,
+  which paces below what Throttling requires (every tier at once) whenever
+  the left-out tier would have been the binding one.
 - **Nothing is learned about other tenants** beyond what a provider's `429`
   already shows: a `provider_quota` refusal says the shared bucket is full
   and when it frees, not who filled it.
-- **Fails open.** A malformed or unknown declaration paces nothing; the
-  provider's own limit still applies.
+- **Fails open.** A malformed or unknown declaration paces nothing, and a
+  tier above the cap is left out (above); the provider's own limit still
+  applies. A `throttlingPlans` entry that names no such bucket, a bucket
+  without tiers, or a plan no tier names is logged at catalog load and
+  ignored.
+- **The plan is public.** `GET /catalog/{platform}.selection.json` serves
+  the selection unauthenticated, so a configured `throttlingPlans` tells
+  anyone which provider plan the deployment is on.
 
 ## Key rotation (#410, unreleased)
 

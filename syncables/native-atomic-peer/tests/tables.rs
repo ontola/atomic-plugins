@@ -121,7 +121,7 @@ async fn native_tables_reconcile_preserve_identity_and_recover() {
     let dir = tempfile::tempdir().unwrap();
     let owner = Agent::new(Some("Invented table owner")).unwrap();
     let readers = vec![owner.subject.to_string()];
-    let peer = Peer::open(
+    let peer = common::open_peer(
         dir.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -230,7 +230,7 @@ async fn native_tables_reconcile_preserve_identity_and_recover() {
     peer.db.flush().unwrap();
     let drive = peer.drive.clone();
     drop(peer);
-    let peer = Peer::open(
+    let peer = common::open_peer(
         dir.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -258,7 +258,7 @@ async fn native_tables_reconcile_preserve_identity_and_recover() {
 async fn invalid_native_graph_never_advances_publication() {
     let dir = tempfile::tempdir().unwrap();
     let owner = Agent::new(None).unwrap();
-    let peer = Peer::open(
+    let peer = common::open_peer(
         dir.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -291,7 +291,7 @@ async fn inline_json_survives_native_persistence_without_child_resources() {
     let dir = tempfile::tempdir().unwrap();
     let owner = Agent::new(Some("Invented compact owner")).unwrap();
     let readers = vec![owner.subject.to_string()];
-    let peer = Peer::open(
+    let peer = common::open_peer(
         dir.path(),
         owner.clone(),
         owner.subject.as_str(),

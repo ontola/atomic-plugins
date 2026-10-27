@@ -15,3 +15,5 @@ export {
   type OwnedListProfile,
   type OwnedListSelection,
 } from './owned-list.js';
+export { startBraidServer } from './braid.js';
+export type { BraidCollection, BraidOptions, BraidServer } from './braid.js';

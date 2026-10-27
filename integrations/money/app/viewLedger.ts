@@ -47,6 +47,8 @@ export interface LedgerActions extends DetailActions {
   chooseFile(): void;
   /** Shows the row in the host, where its missing columns can be filled. */
   openRow(subject: string): void;
+  /** "Remove duplicates" (#587): only ever on the person's press. */
+  removeDuplicates(): void;
 }
 
 export interface Ctx {
@@ -533,7 +535,7 @@ export function incompleteRows(
   ctx: Ctx,
   actions: LedgerActions,
 ): HTMLElement | undefined {
-  const { state, locale } = ctx;
+  const { state } = ctx;
   const rows = state.incomplete;
   if (!rows.length) return undefined;
   const n = rows.length;
@@ -551,39 +553,159 @@ export function incompleteRows(
       h('strong', {}, `${n} ${n === 1 ? 'row is' : 'rows are'} incomplete`),
       `: not in any balance or total, and not compared with imports. Fill the ${n === 1 ? 'column' : 'columns'} in the table.`,
     ),
-    h(
-      'ul',
-      {},
-      rows.map(row => {
-        const { title } = titleOf(row);
-        const has = [
-          row.bookingDate ? shortDate(row.bookingDate, locale) : '',
-          row.account ? shortAccount(row.account) : '',
-          row.amount && row.currency
-            ? formatAmount(row.amount, row.currency, locale)
-            : row.amount || row.currency,
-        ].filter(Boolean);
-
-        return h(
-          'li',
-          { 'data-incomplete': row.subject },
-          h('span', { class: 'm-t' }, title),
-          has.length
-            ? h('span', { class: 'pl-muted pl-num' }, has.join(' · '))
-            : undefined,
-          h('strong', {}, row.incomplete),
-          state.canOpenRows
-            ? button('Open row', {
-                key: `open-row:${row.subject}`,
-                ariaLabel: `Open row ${title}`,
-                onClick: () => actions.openRow(row.subject),
-              })
-            : undefined,
-        );
-      }),
+    exceptionalRows(ctx, actions, rows, 'incomplete', row =>
+      h('strong', {}, row.incomplete),
     ),
     state.openFailure
       ? h('p', { class: 'pl-muted m-small' }, state.openFailure)
+      : undefined,
+  );
+}
+
+/** The common row summary and navigation for rows outside the ledger. */
+function exceptionalRows<T extends Txn>(
+  { state, locale }: Ctx,
+  actions: LedgerActions,
+  rows: T[],
+  kind: 'incomplete' | 'duplicate',
+  rowDetail: (row: T) => HTMLElement,
+): HTMLElement {
+  return h(
+    'ul',
+    {},
+    rows.map(row => {
+      const { title } = titleOf(row);
+      const has = [
+        row.bookingDate ? shortDate(row.bookingDate, locale) : '',
+        row.account ? shortAccount(row.account) : '',
+        row.amount && row.currency
+          ? formatAmount(row.amount, row.currency, locale)
+          : row.amount || row.currency,
+        ...(kind === 'duplicate' ? [row.category, row.note] : []),
+      ].filter(Boolean);
+
+      return h(
+        'li',
+        { [`data-${kind}`]: row.subject },
+        h('span', { class: 'm-t' }, title),
+        has.length
+          ? h('span', { class: 'pl-muted pl-num' }, has.join(' · '))
+          : undefined,
+        rowDetail(row),
+        state.canOpenRows
+          ? button('Open row', {
+              key: `open-${kind === 'incomplete' ? 'row' : 'duplicate'}:${row.subject}`,
+              ariaLabel: `Open row ${title}`,
+              onClick: () => actions.openRow(row.subject),
+            })
+          : undefined,
+      );
+    }),
+  );
+}
+
+const rowsWord = (n: number) => (n === 1 ? 'row' : 'rows');
+
+/** What the last "Remove duplicates" did, in one or two sentences. */
+function dedupeOutcome(state: State): string | undefined {
+  const outcome = state.dedupe;
+  if (!outcome) return undefined;
+
+  switch (outcome.status) {
+    case 'removing':
+      return 'Removing duplicates…';
+    case 'stopped':
+      return outcome.message;
+
+    case 'done': {
+      const parts = [
+        outcome.removed
+          ? `Removed ${outcome.removed} duplicate ${rowsWord(outcome.removed)}.`
+          : '',
+        outcome.kept
+          ? `${outcome.kept} kept: ${outcome.kept === 1 ? 'its' : 'their'} category or note differs from the row ${outcome.kept === 1 ? 'it copies' : 'they copy'}. Open ${outcome.kept === 1 ? 'it' : 'them'} to decide.`
+          : '',
+        outcome.skipped
+          ? `${outcome.skipped} ${outcome.skipped === 1 ? 'group was' : 'groups were'} left as ${outcome.skipped === 1 ? 'it was' : 'they were'}: read again, ${outcome.skipped === 1 ? 'its rows' : 'their rows'} had changed or the kept row was gone.`
+          : '',
+        outcome.failed
+          ? `Couldn't remove ${outcome.failed} ${rowsWord(outcome.failed)} this time; try again.${outcome.details ? ` (${outcome.details})` : ''}`
+          : '',
+      ].filter(Boolean);
+
+      return parts.join(' ') || 'Nothing to remove.';
+    }
+  }
+}
+
+/**
+ * Rows that copy another row of the table (`state.duplicates`, #587): one
+ * transaction written twice. Above the ledger, outside its filters, like
+ * incomplete rows: each with what it has, the row it copies and "Open row".
+ * None of them is in a balance, total or count. "Remove duplicates" is only
+ * offered on the app's own table: the host lets an app delete no other rows
+ * (not even with "Allow editing"). Nothing is ever removed without that
+ * press.
+ */
+export function duplicateRows(
+  ctx: Ctx,
+  actions: LedgerActions,
+): HTMLElement | undefined {
+  const { state } = ctx;
+  const rows = state.duplicates;
+  const outcome = dedupeOutcome(state);
+  if (!rows.length && !outcome) return undefined;
+  const n = rows.length;
+  const byKept = new Map(state.rows.map(row => [row.subject, row]));
+  const busy = state.dedupe?.status === 'removing';
+  // The host lets an app delete only rows of its own table.
+  const canRemove = n > 0 && state.source === 'own';
+
+  return h(
+    'section',
+    {
+      class: 'm-incomplete m-duplicates',
+      role: 'region',
+      'aria-label': 'Duplicate rows',
+    },
+    n
+      ? h(
+          'p',
+          {},
+          h(
+            'strong',
+            {},
+            `${n} ${n === 1 ? 'row is a duplicate' : 'rows are duplicates'}`,
+          ),
+          `: the same transaction as another row of this table, so counted once in every balance and total.`,
+          canRemove
+            ? ' Removing reads the rows again first, moves a category or note only a copy has onto the row that stays, and leaves a copy whose category or note differs.'
+            : ' Apps may not delete rows in this table: remove the copies in the table itself.',
+        )
+      : undefined,
+    n
+      ? exceptionalRows(ctx, actions, rows, 'duplicate', row => {
+          const of = byKept.get(row.duplicateOf);
+
+          return h(
+            'span',
+            { class: 'pl-muted' },
+            of ? `Copy of ${titleOf(of).title}` : 'Copy of another row',
+          );
+        })
+      : undefined,
+    canRemove
+      ? button(
+          busy ? 'Removing…' : `Remove ${n === 1 ? 'duplicate' : 'duplicates'}`,
+          {
+            key: 'remove-duplicates',
+            disabled: busy,
+            onClick: actions.removeDuplicates,
+          },
+        )
+      : undefined,
+    outcome
+      ? h('p', { class: 'pl-muted m-small', role: 'status' }, outcome)
       : undefined,
   );
 }
@@ -767,6 +889,8 @@ function ledger(ctx: Ctx, actions: LedgerActions): HTMLElement[] {
   const body: HTMLElement[] = derived.filtered.length
     ? [stripView(ctx, derived, actions), filters(ctx, derived, actions)]
     : [filters(ctx, derived, actions)];
+  const duplicates = duplicateRows(ctx, actions);
+  if (duplicates) body.unshift(duplicates);
   if (incomplete) body.unshift(incomplete);
 
   if (!derived.filtered.length) body.push(noResults(ctx, actions));

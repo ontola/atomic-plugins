@@ -188,9 +188,9 @@ const project = (base = fixture(), p = profile): NativeTableProjection =>
 describe('generic snapshot owned-list projection', () => {
   it('opens the typed List with the data browser table view', () => {
     const plan = project();
-    const [list] = classed(plan, 'List');
+    const [list] = classed(plan, profile.listClassName);
     expect(list.classes[0]).toEqual(external(C + 'Table'));
-    expect(list.classes).toContainEqual(local(named(plan, 'List').key));
+    expect(list.classes).toContainEqual(local(named(plan, profile.listClassName).key));
   });
 
   it('declares the mandatory Atomic Property and Class schema fields for public signed publication', () => {
