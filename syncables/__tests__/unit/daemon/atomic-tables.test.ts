@@ -11,7 +11,7 @@ import {
 import type { PostgresHistoryStore } from '../../../src/daemon/history-store.js';
 import type { PreparedCollection } from '../../../src/daemon/sync.js';
 import { SOURCE_ID, SOURCE_JSON } from '../../../src/daemon/sync.js';
-import { indexJson } from '../../../src/postgres/json-graph.js';
+import { indexJson, nodeHash } from '../../../src/postgres/json-graph.js';
 import type { SchemaObject } from '../../../src/openapi/types.js';
 const P = 'https://atomicdata.dev/properties/',
   C = 'https://atomicdata.dev/classes/';
@@ -21,7 +21,7 @@ function prepared(
   platform = 'example',
   schema: SchemaObject = {},
 ): PreparedCollection {
-  return {
+  const result: PreparedCollection = {
     source: {
       platform,
       account,
@@ -68,6 +68,8 @@ function prepared(
       },
     },
   };
+  result.documentHash = nodeHash(JSON.stringify(result.document));
+  return result;
 }
 function fixture(
   inputs: { prepared: PreparedCollection; rows: string[]; revision?: string }[],
@@ -115,6 +117,113 @@ function columns(resources: NativeResource[]): NativeResource[] {
   return resources.filter((r) => isClass(r, 'Property'));
 }
 describe('native Atomic collection tables', () => {
+  it('shares operation schemas across accounts while retaining distinct account tables', async () => {
+    const schema = {
+      type: 'object',
+      properties: { title: { type: 'string' }, body: { type: 'object' } },
+    };
+    const work = prepared('notes', 'work', 'example', schema);
+    const home = prepared('notes', 'home', 'example', schema);
+    work.document.paths['/items'].get!.operationId = 'listNotes';
+    home.document.paths['/items'].get!.operationId = 'listNotes';
+    home.source.name = 'Personal notes';
+    const f = fixture([
+      { prepared: work, rows: ['{"title":"Work"}'] },
+      { prepared: home, rows: ['{"title":"Home"}'] },
+    ]);
+    const projection = await atomicTablesProjection(f.store, f.sources);
+    const classes = projection.resources.filter((r) => isClass(r, 'Class'));
+    const tables = projection.resources.filter((r) => isClass(r, 'Table'));
+    expect(classes).toHaveLength(1);
+    expect(prop(classes[0], 'name')?.value).toContain('listNotes');
+    expect(classes[0].key).not.toContain('work');
+    expect(classes[0].key).not.toContain('home');
+    expect(tables).toHaveLength(2);
+    expect(prop(tables[0], 'classtype')).toEqual(prop(tables[1], 'classtype'));
+    expect(tables[0].parent).not.toEqual(tables[1].parent);
+    expect(
+      columns(projection.resources).filter(
+        (r) => prop(r, 'name')?.value === 'Body',
+      ),
+    ).toHaveLength(1);
+    const schemas = projection.resources.filter(
+      (r) =>
+        isClass(r, 'Folder') &&
+        'local' in r.parent &&
+        r.parent.local === 'schemas',
+    );
+    expect(schemas).toHaveLength(1);
+    expect(prop(schemas[0], 'name')?.value).toContain('GET /items');
+  });
+
+  it('separates different response operations within the same OAD', async () => {
+    const first = prepared('notes');
+    const document = first.document;
+    document.paths['/archived'] = structuredClone(document.paths['/items']);
+    const resource = (
+      document.components!.crudResources as Record<
+        string,
+        {
+          collections: Record<
+            string,
+            { urlTemplate: string; envelope: { itemsField: null } }
+          >;
+        }
+      >
+    ).record;
+    resource.collections.archived = {
+      urlTemplate: '/archived',
+      envelope: { itemsField: null },
+    };
+    const second = structuredClone(first);
+    second.source.name = 'Archived notes';
+    second.source.collection = 'archived';
+    second.scope += '/archived';
+    first.documentHash = second.documentHash = nodeHash(
+      JSON.stringify(document),
+    );
+    const f = fixture([
+      { prepared: first, rows: [] },
+      { prepared: second, rows: [] },
+    ]);
+    const projection = await atomicTablesProjection(f.store, f.sources);
+    const classes = projection.resources.filter((r) => isClass(r, 'Class'));
+    expect(classes).toHaveLength(2);
+    expect(classes[0].key).not.toBe(classes[1].key);
+    expect(classes.map((r) => prop(r, 'description')?.value)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('GET /items'),
+        expect.stringContaining('GET /archived'),
+      ]),
+    );
+  });
+
+  it('keeps declared class definitions independent of observed records and changes identities with the OAD', async () => {
+    const source = prepared('notes', 'work', 'example', {
+      type: 'object',
+      properties: { title: { type: 'string' } },
+    });
+    const empty = fixture([{ prepared: source, rows: [] }]);
+    const populated = fixture([
+      { prepared: source, rows: ['{"title":"Invented","extra":42}'] },
+    ]);
+    const first = await atomicTablesProjection(empty.store, empty.sources);
+    const second = await atomicTablesProjection(
+      populated.store,
+      populated.sources,
+    );
+    const getClass = (resources: NativeResource[]): NativeResource =>
+      resources.find((r) => isClass(r, 'Class'))!;
+    expect(getClass(first.resources)).toEqual(getClass(second.resources));
+    const changed = structuredClone(source);
+    changed.documentHash = 'b'.repeat(64);
+    const other = fixture([{ prepared: changed, rows: [] }]);
+    const third = await atomicTablesProjection(other.store, other.sources);
+    expect(getClass(third.resources).key).not.toBe(
+      getClass(first.resources).key,
+    );
+  });
+
   it('uses the complete pinned Keep OAD, including response schemas and write operations', async () => {
     const document = await loadOpenApiDocument(
       fileURLToPath(

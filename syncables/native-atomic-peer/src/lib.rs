@@ -28,7 +28,6 @@ pub const CAPS: &[&str] = &[
     "sync-probe",
     "get-many",
     "canonical-scheme",
-    "sparse-sync",
 ];
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -86,7 +85,6 @@ async fn create_genesis(db: &Db, resource: Resource) -> AtomicResult<Resource> {
             commit,
             &atomic_lib::commit::CommitOpts {
                 validate_schema: true,
-                validate_constraints: true,
                 validate_signature: true,
                 update_index: true,
                 ..atomic_lib::commit::CommitOpts::no_validations_no_index()
@@ -121,7 +119,11 @@ impl Peer {
         db.populate().await?;
         db.set_default_agent(signer.clone()); // In memory only; never persist a private key.
         db.add_resource(&signer.to_resource()?).await?;
-        let binding = serde_json::to_string(&("syncables-peer-v1", canonical(owner), collection))?;
+        let legacy_binding =
+            serde_json::to_string(&("syncables-peer-v1", canonical(owner), collection))?;
+        // A bracket-prefixed String is guessed to be a ResourceArray by this
+        // core pin. Keep the owner/collection tuple unambiguous on every read.
+        let binding = format!("syncables-peer-v1:{legacy_binding}");
         let mut drives = db
             .all_resources(false)
             .filter(|r| r.has_class(urls::DRIVE))
@@ -144,10 +146,30 @@ impl Peer {
             db.flush()?;
             root
         } else {
-            if drives.len() != 1 || text(&drives[0], urls::LOCAL_ID).as_deref() != Some(&binding) {
+            if drives.len() != 1 {
                 return Err("Projection directory belongs to another owner or collection".into());
             }
-            drives.remove(0)
+            let root = drives.remove(0);
+            // Match the authoritative String, rather than its lossy legacy
+            // ResourceArray projection, before migrating an existing binding.
+            let stored_binding = db
+                .kv
+                .get(Tree::LoroSnapshots, root.get_subject().pure_id().as_bytes())?
+                .and_then(|snapshot| atomic_lib::loro::AtomicLoroDoc::from_snapshot(&snapshot).ok())
+                .and_then(|doc| doc.get_string_property(urls::LOCAL_ID));
+            if stored_binding.as_deref() != Some(&binding)
+                && stored_binding.as_deref() != Some(&legacy_binding)
+            {
+                return Err("Projection directory belongs to another owner or collection".into());
+            }
+            // Hydrate existing CRDT state before any signed migration or grant edit.
+            let mut root = db.get_resource(root.get_subject()).await?;
+            if stored_binding.as_deref() == Some(&legacy_binding) {
+                root.set_unsafe(urls::LOCAL_ID.into(), Value::String(binding.clone()))?;
+                root.save(&db).await?;
+                db.flush()?;
+            }
+            root
         };
         // Reader changes are explicit configuration changes; never retain an old grant.
         let mut grants: Vec<String> = readers
@@ -532,7 +554,8 @@ impl Session {
         if !peer.published.load(Ordering::Acquire) {
             return vec![protocol::encode_error(
                 0,
-                protocol::error_code::BUSY,
+                // This core pin predates a structured recovery/busy error.
+                protocol::error_code::UNKNOWN,
                 "Projection recovery required",
             )];
         }

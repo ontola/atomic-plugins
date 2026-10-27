@@ -284,19 +284,53 @@ export async function atomicTablesProjection(
       `${prepared.source.account} (${prepared.source.platform})`,
       local('drive'),
     );
-    const schemaFolder = folder(identity('schema-folder', name), name, schemas);
+    // A contract operation defines the schema. Account aliases and bound path
+    // values select tables, and must not create another copy of that schema.
+    const collection = discoverReadModel(prepared.document).collections.find(
+      (candidate) => candidate.name === prepared.source.collection,
+    )!;
+    const operation =
+      prepared.document.paths[collection.url]?.[
+        collection.method.toLowerCase() as 'get' | 'post'
+      ];
+    const responseCode =
+      Object.keys(operation?.responses ?? {}).find((code) =>
+        /^2\d\d$/.test(code),
+      ) ?? '';
+    const schemaIdentity = nodeHash(
+      identity(
+        'openapi-operation',
+        prepared.documentHash,
+        collection.method,
+        collection.url,
+        responseCode,
+        'application/json',
+        collection.itemsField ?? '',
+        collection.idField,
+      ),
+    );
+    const operationLabel = `${collection.method} ${collection.url}`;
+    const schemaLabel = `${prepared.document.info.title} · ${operationLabel}`;
+    const schemaFolder = folder(
+      identity('schema-folder', schemaIdentity),
+      schemaLabel,
+      schemas,
+    );
     const classes = new Map<string, { ref: Ref; columns: Map<string, Ref> }>();
     const observedColumns = new Set<string>();
-    const idField = discoverReadModel(prepared.document).collections.find(
-      (collection) => collection.name === prepared.source.collection,
-    )!.idField;
+    const idField = collection.idField;
     const field = (
       path: string[],
       datatype: string,
       description?: string,
       schema: SchemaObject = {},
     ): Ref => {
-      const key = identity('field', name, JSON.stringify(path), datatype);
+      const key = identity(
+        'field',
+        schemaIdentity,
+        JSON.stringify(path),
+        datatype,
+      );
       if (!resources.has(key)) {
         add(
           key,
@@ -353,7 +387,10 @@ export async function atomicTablesProjection(
       const id = JSON.stringify(path);
       let found = classes.get(id);
       if (!found) {
-        found = { ref: local(identity('class', name, id)), columns: new Map() };
+        found = {
+          ref: local(identity('class', schemaIdentity, id)),
+          columns: new Map(),
+        };
         classes.set(id, found);
       }
       return found;
@@ -428,6 +465,11 @@ export async function atomicTablesProjection(
     };
     const itemSchema = atomicItemSchema(prepared);
     declare([], itemSchema);
+    // Observed fields may still be retained on rows and shown by their table,
+    // but they do not change the declared Class when account data changes.
+    const declaredColumns = new Map(
+      [...classes].map(([path, cls]) => [path, [...cls.columns.values()]]),
+    );
     const tableKey = identity('table', name),
       rowClass = classFor([]);
     const value = (
@@ -563,6 +605,7 @@ export async function atomicTablesProjection(
     }
     for (const [path, cls] of classes) {
       const key = (cls.ref as { local: string }).local;
+      if (resources.has(key)) continue;
       add(
         key,
         schemaFolder,
@@ -572,7 +615,7 @@ export async function atomicTablesProjection(
             external(P + 'name'),
             str(
               path === '[]'
-                ? prepared.source.name + ' record'
+                ? `${prepared.document.info.title} · ${typeof itemSchema.title === 'string' ? itemSchema.title : (operation?.operationId ?? operationLabel)} item`
                 : JSON.parse(path).join('.') + ' record',
             ),
           ],
@@ -583,14 +626,14 @@ export async function atomicTablesProjection(
           [
             external(P + 'description'),
             str(
-              'Native Atomic fields projected by SyncD. Original responses remain in PostgreSQL.',
+              `Native Atomic fields from ${operationLabel}, application/json response ${responseCode}, items ${collection.itemsField || '(root)'}, OpenAPI ${prepared.documentHash}. Original responses remain in PostgreSQL.`,
             ),
           ],
           [external(P + 'requires'), refs([external(P + 'name')])],
           [
             external(P + 'recommends'),
             refs([
-              ...cls.columns.values(),
+              ...(declaredColumns.get(path) ?? []),
               ...(path === '[]'
                 ? [sourceId, sourceSubject, sourceRevision, sourceHash]
                 : []),

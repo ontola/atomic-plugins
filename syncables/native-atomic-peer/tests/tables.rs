@@ -1,3 +1,4 @@
+mod common;
 use atomic_lib::{
     agents::{Agent, ForAgent},
     import_identity,
@@ -172,10 +173,7 @@ async fn native_tables_reconcile_preserve_identity_and_recover() {
     );
     let vvs = engine::build_drive_vvs(&replica, &std::collections::HashSet::new());
     let frames = session
-        .handle(
-            &peer,
-            &protocol::encode_sync_sparse(&peer.drive, &engine::compute_drive_hash_v2(&vvs), &vvs),
-        )
+        .handle(&peer, &common::sync_frame(&peer.drive, &vvs))
         .await;
     for f in frames {
         if f[0] == protocol::tag::SYNC_PUSH {
@@ -303,7 +301,7 @@ async fn inline_json_survives_native_persistence_without_child_resources() {
     .await
     .unwrap();
     let mut projection = plan(&owner, 1, true);
-    let payload = json!({"comments":[{"body":"Hello","author":{"name":"Alice"}},null],"checks":[true,false],"empty":[]});
+    let payload = json!({"comments":[{"body":"Hello","author":{"name":"Alice","nickname":null}},null],"checks":[true,false],"empty":[]});
     projection.resources.push(serde_json::from_value(node("payload", "account", vec![external(&format!("{C}Property"))], vec![
         property("name", string("Body")),
         property("shortname", string("invented-body")),
@@ -327,9 +325,37 @@ async fn inline_json_survives_native_persistence_without_child_resources() {
     assert_eq!(projection.resources.len(), node_count);
     let row = id(&peer, "row").await;
     let property = id(&peer, "payload").await;
-    let stored = peer.db.get_resource(&row.into()).await.unwrap();
+    let stored = peer.db.get_resource(&row.clone().into()).await.unwrap();
     match stored.get(&property).unwrap() {
         Value::Json(value) => assert_eq!(value, &payload),
         other => panic!("Expected native JSON, got {}", other),
     }
+    let replica = Db::init_memory(None).await.unwrap();
+    replica
+        .add_resource(&owner.to_resource().unwrap())
+        .await
+        .unwrap();
+    let mut session = Session::new("http://127.0.0.1:9901".into());
+    let auth =
+        protocol::encode_auth(&owner, &format!("{}#{}", session.origin, session.nonce)).unwrap();
+    assert_eq!(
+        session.handle(&peer, &auth).await[0][0],
+        protocol::tag::AUTH_OK
+    );
+    let frames = session
+        .handle(
+            &peer,
+            &common::sync_frame(&peer.drive, &std::collections::HashMap::new()),
+        )
+        .await;
+    for frame in frames {
+        if frame[0] == protocol::tag::SYNC_PUSH {
+            let push = protocol::decode_sync_push(&frame[1..]).unwrap();
+            engine::import_sync_push(&push, &replica, &ForAgent::from(owner.clone()), false)
+                .await
+                .unwrap();
+        }
+    }
+    let imported = replica.get_resource(&row.into()).await.unwrap();
+    assert!(matches!(imported.get(&property).unwrap(), Value::Json(value) if value == &payload));
 }

@@ -75,6 +75,12 @@ identities. **Upgrade from the original JSON-wrapper or recursive nested-resourc
 prototype using a new directory.** The compact projection is `atomic-tables-v2`. Old directories are refused because their binding and
 representation differ; old experimental drives are not silently rewritten.
 
+On this pin, an existing matching owner/collection binding is read from its
+authoritative Loro String and rewritten by a signed commit with a plain-text
+prefix. This avoids the core's legacy guessing of a JSON-array String as a
+resource list. The exact binding must match before migration; the drive and row
+identities remain the same, and other owners or collections remain refused.
+
 The peer binds `127.0.0.1`, with client URL `ws://127.0.0.1:9901/ws` and AUTH
 origin `http://127.0.0.1:9901`. Only the owner and explicit reader agents may
 read. Reader grants are replaced on restart; no public grant is created.
@@ -93,8 +99,18 @@ is projected rather than discarded to fit the first visible columns.
 
 The generator uses the resolved OpenAPI list-response item schema when available,
 including envelope paths, declared fields and date/URI formats. Observed fields
-complete sparse or missing schemas. This is a presentation mapping, not a claim
-of complete OpenAPI validation. Declared columns exist for empty collections.
+complete sparse or missing table views without changing the declared Class. This is
+a presentation mapping, not a claim of complete OpenAPI validation. Declared
+columns exist for empty collections.
+
+Declared Classes and Properties are shared across accounts using the same pinned
+OpenAPI operation. Their import identities include the OAD document hash, HTTP
+method and path template, selected response code/media type, item-envelope path
+and declared ID field. Account names, configured collection labels, bound path
+values and current records are excluded. Schema folders show the API title and
+operation; class labels use the schema title or operation ID when available.
+Tables and their membership remain scoped to each account/collection. A changed
+OAD revision or response projection gets a separate schema identity.
 
 - Strings and booleans become native values. Declared date-time strings become
   millisecond timestamps when valid; declared dates and URIs retain their types.
@@ -107,7 +123,8 @@ of complete OpenAPI validation. Declared columns exist for empty collections.
   array order and nested nulls. Top-level null fields are omitted. Compound fields
   do not create additional Classes or resources. Where declared, each JSON
   Property retains its OpenAPI sub-schema in `jsonSchema`; this does not itself
-  make the current browser JSON cell render a schema-aware form.
+  imply a schema-aware editing form. The candidate23 browser uses supported
+  schemas for compact readable cell previews and retains the full JSON editor.
 - Identity fields are labeled `API ID (<field>)` so a provider's `name` identifier
   cannot be confused with Atomic's required display name. Imported `permissions`
   is labeled `Source permissions`: its values are provider metadata and never
@@ -121,8 +138,8 @@ original responses, immutable revisions and schema history. The Atomic drive is
 a derived representation for browsing, queries and native replication.
 
 Top-level row identities are stable per `(collection alias, source subject)`;
-account folders, tables, fields and schemas also have persisted
-identities. A changed record updates the existing Loro document. Fields that
+account folders and tables also have persisted identities. Schema identities
+follow the operation key above, so another account does not duplicate a Class. A changed record updates the existing Loro document. Fields that
 become absent/null are removed only when previously managed by this projection.
 Resources no longer in the current graph are moved to a `previous-members`
 folder. They are retained for identity/history and reappearance restores the
@@ -144,12 +161,20 @@ complete collection. Table provenance identifies each collection's accepted
 PostgreSQL revision; the drive marker identifies the combined graph.
 
 The companion pins `atomic_lib` at
-`66880fc53f392771761bb4d967e1e443344a7e34` and uses its redb backend, genesis
+`30994948b5adadd765ecfcdccdf0aad14ef5be1a` and uses its redb backend, genesis
 certificates, signatures, Loro state, permissions and wire codecs. Implemented
 frames are AUTH, HELLO, GET/GET_MANY, SUB/UNSUB, SYNC and KEEPALIVE. All incoming
 mutations are refused, including owner-signed commits. Capabilities advertise
 only this subset. Search, plugins, application hosting, provider writeback and
 merging consumer edits are outside this peer.
+
+This core pin uses full version-vector reconciliation and does not advertise
+sparse sync. Native datatype and required-property validation remain enabled;
+the pin has no Class value-constraint validation API. Generated Classes use
+`requires` and `recommends`, and `jsonSchema` remains field metadata. Replicas
+import accepted row state through this same core's sync admission rules.
+An interrupted projection refuses reads with the pin's generic error code and
+an explicit `Projection recovery required` message until replay completes.
 
 The previous wrapper-oriented programmatic `runAtomicPeer` path remains for
 prototype compatibility tests; the CLI uses `runAtomicTablesPeer` and the new

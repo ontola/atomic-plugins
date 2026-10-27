@@ -1,3 +1,4 @@
+mod common;
 use atomic_lib::{
     agents::{Agent, ForAgent},
     sync::{engine, protocol},
@@ -46,12 +47,8 @@ async fn authenticate(peer: &Peer, reader: &Agent) -> Session {
 async fn reconcile(peer: &Peer, session: &mut Session, replica: &Db) -> (usize, usize) {
     let subjects = engine::collect_drive_subjects(replica, &peer.drive.clone().into()).await;
     let vvs = engine::build_drive_vvs(replica, &subjects);
-    let hash = engine::compute_drive_hash_v2(&vvs);
     let frames = session
-        .handle(
-            peer,
-            &protocol::encode_sync_sparse(&peer.drive, &hash, &vvs),
-        )
+        .handle(peer, &common::sync_frame(&peer.drive, &vvs))
         .await;
     let mut entries = 0;
     let mut bytes = 0;
@@ -258,15 +255,14 @@ async fn unauthorized_reads_all_mutations_and_cross_origin_auth_are_refused() {
     for frame in [
         protocol::encode_get(1, &peer.drive),
         protocol::encode_sub(&peer.drive),
-        protocol::encode_sync_sparse(&peer.drive, "", &HashMap::new()),
-        protocol::encode_sync_probe_v2(
+        protocol::encode_sync(&peer.drive, "", &[], &HashMap::new()),
+        protocol::encode_sync_probe(
             &peer.drive,
-            &engine::drive_sync_hash_for_wire_version(
+            &engine::drive_sync_hash_for_wire(
                 &peer.db,
                 &peer.drive,
                 &ForAgent::from(owner.subject.to_string()),
                 engine::WireScheme::CANONICAL,
-                2,
             )
             .await
             .unwrap(),
@@ -298,7 +294,12 @@ async fn unauthorized_reads_all_mutations_and_cross_origin_auth_are_refused() {
         .await
         .unwrap();
     edit.set_name("Consumer edit that must be refused").unwrap();
-    let commit = edit.sign_pending(&owner, &peer.db).await.unwrap().unwrap();
+    let commit = edit
+        .get_commit_builder()
+        .clone()
+        .sign(&owner, &peer.db, &edit)
+        .await
+        .unwrap();
     let signed = commit
         .into_resource(&peer.db)
         .await
@@ -462,10 +463,9 @@ async fn interrupted_projection_is_replayed_before_it_can_be_served() {
     .unwrap();
     let mut session = authenticate(&peer, &owner).await;
     let frames = session.handle(&peer, &protocol::encode_get(1, &id)).await;
-    assert_eq!(
-        protocol::decode_error(&frames[0][1..]).unwrap().code,
-        protocol::error_code::BUSY
-    );
+    let refusal = protocol::decode_error(&frames[0][1..]).unwrap();
+    assert_eq!(refusal.code, protocol::error_code::UNKNOWN);
+    assert_eq!(refusal.message, "Projection recovery required");
     // The checkpoint equals the requested source revision, but a pending journal
     // forces reconciliation instead of taking the unchanged fast path.
     assert!(!peer.project(&first).await.unwrap().is_empty());
@@ -487,4 +487,101 @@ async fn interrupted_projection_is_replayed_before_it_can_be_served() {
         .handle(&peer, &protocol::encode_get(2, &peer.drive))
         .await;
     assert_eq!(frames[0][0], protocol::tag::UPDATE);
+}
+
+#[tokio::test]
+async fn legacy_binding_is_matched_exactly_and_migrated_with_stable_drive_identity() {
+    use atomic_lib::{urls, Value};
+    let directory = tempfile::tempdir().unwrap();
+    let owner = Agent::new(Some("Invented legacy owner")).unwrap();
+    let readers = vec![owner.subject.to_string()];
+    let collection = "invented/work/notes";
+    let peer = Peer::open(
+        directory.path(),
+        owner.clone(),
+        owner.subject.as_str(),
+        collection,
+        &readers,
+    )
+    .await
+    .unwrap();
+    let first = projection(&owner, 1, "1", true);
+    peer.project(&first).await.unwrap();
+    let drive = peer.drive.clone();
+    let legacy =
+        serde_json::to_string(&("syncables-peer-v1", owner.subject.to_string(), collection))
+            .unwrap();
+    let mut root = peer.db.get_resource(&drive.clone().into()).await.unwrap();
+    root.set_unsafe(urls::LOCAL_ID.into(), Value::String(legacy.clone()))
+        .unwrap();
+    root.save(&peer.db).await.unwrap();
+    let before = peer
+        .db
+        .get_resource(&drive.clone().into())
+        .await
+        .unwrap()
+        .get(urls::LAST_COMMIT)
+        .unwrap()
+        .to_string();
+    peer.db.flush().unwrap();
+    drop(peer);
+    let peer = Peer::open(
+        directory.path(),
+        owner.clone(),
+        owner.subject.as_str(),
+        collection,
+        &readers,
+    )
+    .await
+    .unwrap();
+    assert_eq!(peer.drive, drive);
+    assert_eq!(peer.status().await.unwrap().revision, Some(first.revision));
+    let root = peer.db.get_resource(&drive.clone().into()).await.unwrap();
+    let expected = format!("syncables-peer-v1:{legacy}");
+    assert!(
+        matches!(root.get(urls::LOCAL_ID).unwrap(), Value::String(value) if value == &expected)
+    );
+    let migrated_commit = root.get(urls::LAST_COMMIT).unwrap().to_string();
+    assert_ne!(
+        migrated_commit, before,
+        "migration is an ordinary signed commit"
+    );
+    drop(peer);
+    let peer = Peer::open(
+        directory.path(),
+        owner.clone(),
+        owner.subject.as_str(),
+        collection,
+        &readers,
+    )
+    .await
+    .unwrap();
+    assert_eq!(peer.drive, drive);
+    let mut root = peer.db.get_resource(&drive.into()).await.unwrap();
+    assert_eq!(
+        root.get(urls::LAST_COMMIT).unwrap().to_string(),
+        migrated_commit
+    );
+    // This distinct collection normalizes to the same Internal subject in the
+    // old materialized array; exact matching must still refuse it.
+    let wrong = serde_json::to_string(&(
+        "syncables-peer-v1",
+        owner.subject.to_string(),
+        "internal:/invented/work/notes",
+    ))
+    .unwrap();
+    root.set_unsafe(urls::LOCAL_ID.into(), Value::String(wrong))
+        .unwrap();
+    root.save(&peer.db).await.unwrap();
+    peer.db.flush().unwrap();
+    drop(peer);
+    assert!(Peer::open(
+        directory.path(),
+        owner.clone(),
+        owner.subject.as_str(),
+        collection,
+        &readers
+    )
+    .await
+    .is_err());
 }

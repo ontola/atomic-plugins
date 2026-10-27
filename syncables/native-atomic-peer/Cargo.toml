@@ -7,7 +7,7 @@ publish = false
 [dependencies]
 # Protocol, signatures, permissions and persistent Loro state come from the
 # same core as Atomic clients. Upgrade this pin only with compatibility tests.
-atomic_lib = { git = "https://github.com/ontola/atomic-server", rev = "66880fc53f392771761bb4d967e1e443344a7e34", features = ["db-redb", "ws"] }
+atomic_lib = { git = "https://github.com/ontola/atomic-server", rev = "30994948b5adadd765ecfcdccdf0aad14ef5be1a", features = ["db-redb", "ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-std", "io-util", "sync", "time"] }
 tokio-tungstenite = "0.29"
 futures = "0.3"

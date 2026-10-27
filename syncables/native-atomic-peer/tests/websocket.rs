@@ -109,6 +109,7 @@ async fn official_ws_client_authenticates_subscribes_reconnects_and_gets_refusal
         .server_capabilities()
         .contains(&"canonical-scheme".into()));
     assert!(!client.server_capabilities().contains(&"ephemeral".into()));
+    assert!(!client.server_capabilities().contains(&"sparse-sync".into()));
     client
         .send_binary(protocol::encode_get(10, &complete.drive))
         .await
