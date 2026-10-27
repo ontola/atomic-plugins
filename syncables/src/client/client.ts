@@ -10,6 +10,7 @@ import {
 import {
   createBody,
   createDeclaration,
+  committedIdentity,
   createdIdentity,
   type CreateDeclaration,
 } from './created-identity.js';
@@ -2771,6 +2772,73 @@ export function createApiClient(
     }
   }
 
+  /**
+   * An unbound create (CRUD Causality §4.3.2) is remembered for
+   * `matchUnboundCreates` only when the body it sent carries a declared
+   * unique value: matching on the other fields alone could take a record
+   * someone else created with the same values.
+   */
+  function rememberUnbound(
+    write: QueuedWrite,
+    body: Record<string, unknown>,
+  ): void {
+    const route = write.route;
+    if (
+      completeScopes.has(write.scope) &&
+      uniqueFieldsOf(route).some(
+        (field) =>
+          field !== route.collection.idField &&
+          Object.hasOwn(body, field) &&
+          body[field] !== null &&
+          body[field] !== undefined &&
+          body[field] !== '',
+      )
+    )
+      unboundKnown.set(write, {
+        known: new Set(remote(write.scope).keys()),
+        sent: structuredClone(body),
+        read: readsStarted,
+      });
+  }
+
+  /**
+   * A create a Committed Error Object (CRUD Causality 0.8.0 §4.3.3) says
+   * was applied: bound to the identity the error named, as a 2xx would
+   * bind it, the record being what was sent. Without the id field among
+   * the values, it is applied but unbound: uncertain, never sent again.
+   */
+  function committedCreate(
+    write: QueuedWrite,
+    declared: CreateDeclaration,
+    identity: Record<string, string>,
+    status: number,
+  ): WriteOutcome {
+    const idField = write.route.collection.idField;
+    const id = identity[idField];
+    if (id === undefined) {
+      // Applied but unbound, as a 2xx without a usable identity: the
+      // fields the error did name are kept on the local record, and a
+      // later read may bind it (matchUnboundCreates).
+      write.data = { ...(write.data as Record<string, unknown>), ...identity };
+      rememberUnbound(
+        write,
+        createBody(declared, write.data as Record<string, unknown>),
+      );
+      write.unbound = true;
+      write.lastStatus = status;
+      write.lastError = `Create answered ${status}, which the document says follows an applied create (CRUD Causality §4.3.3), but without the record's ${idField}; the record is unbound and is not sent again`;
+      return { status: 'uncertain' };
+    }
+    const record = withIdentity(
+      createBody(declared, write.data as Record<string, unknown>),
+      identity,
+    );
+    if (id !== write.id) remote(write.scope).delete(write.id);
+    remote(write.scope).set(id, record);
+    setLastKnown(keyFor(write.scope, id), record);
+    return settled(write, id);
+  }
+
   function settled(write: QueuedWrite, resolvedId: string): WriteOutcome {
     revisions.set(write.scope, (revisions.get(write.scope) ?? 0) + 1);
     for (const id of new Set([write.id, resolvedId])) {
@@ -3494,26 +3562,7 @@ export function createApiClient(
             (isRecord(result) ? result[idField] : undefined);
           if (!identity || id === undefined || id === null || id === '') {
             write.unbound = true;
-            // Remembered only when the body carries a declared unique
-            // value: matching on the other fields alone could take a record
-            // someone else created with the same values.
-            if (
-              completeScopes.has(write.scope) &&
-              isRecord(body) &&
-              uniqueFieldsOf(route).some(
-                (field) =>
-                  field !== route.collection.idField &&
-                  Object.hasOwn(body, field) &&
-                  body[field] !== null &&
-                  body[field] !== undefined &&
-                  body[field] !== '',
-              )
-            )
-              unboundKnown.set(write, {
-                known: new Set(remote(write.scope).keys()),
-                sent: structuredClone(body),
-                read: readsStarted,
-              });
+            if (isRecord(body)) rememberUnbound(write, body);
             throw new UnusableResponseError(
               'Create response does not identify the created record as its x-crud declares (CRUD Causality §4.3.2); the record is unbound and is not sent again',
             );
@@ -3552,6 +3601,45 @@ export function createApiClient(
       accepted();
       return settled(write, resolvedId);
     } catch (error) {
+      // CRUD Causality 0.8.0 §4.3.3: an error response the provider
+      // documents as sent only after the create was applied (Notion's 503
+      // with additional_data.committed_resource_id). The create is
+      // applied, never sent again, and bound to the identity it names,
+      // before throttling or the retry path (which would resend a 503).
+      // A status a committedErrors entry lists can follow an applied
+      // create even when this answer does not name the object: the
+      // outcome is unknown, as for any other such 5xx.
+      const appliedMaybe =
+        mayHaveApplied(error) ||
+        (write.type === 'create' &&
+          error instanceof HttpStatusError &&
+          (route.create?.committedErrors ?? []).some((entry) =>
+            entry.status.includes(error.status),
+          ));
+      if (
+        write.type === 'create' &&
+        route.create &&
+        error instanceof HttpStatusError
+      ) {
+        const committed = committedIdentity(
+          route.create,
+          error.status,
+          error.body,
+        );
+        if (committed) {
+          accepted();
+          const outcome = committedCreate(
+            write,
+            route.create,
+            committed,
+            error.status,
+          );
+          // Unbound: the local record shows the fields the error named.
+          if (outcome.status === 'uncertain')
+            await rebuild(write.scope, write.id);
+          return outcome;
+        }
+      }
       // Throttling under the document's x-throttling (a matching signal, or
       // a 429), with the earliest retry time; decided once per response.
       const verdict =
@@ -3658,7 +3746,7 @@ export function createApiClient(
       if (
         failureClass === 'auth' &&
         write.type === 'create' &&
-        mayHaveApplied(error) &&
+        appliedMaybe &&
         !usableKey(write)
       )
         failureClass = 'retry';
@@ -3697,7 +3785,7 @@ export function createApiClient(
       // record is read back (§4.7.2 step 6): it waits for a complete read of
       // its collection, and is sent then only if the field is still missing.
       // A throttled answer is a refusal to wait out, not an unknown outcome.
-      if (write.followUp && !throttled && mayHaveApplied(error)) {
+      if (write.followUp && !throttled && appliedMaybe) {
         write.followUp.reason = 'unknown';
         write.awaitingRefresh = true;
         return { status: 'retry', delayMs: 0 };
@@ -3706,7 +3794,7 @@ export function createApiClient(
       // create happened, and a replay would return the same unusable body.
       if (
         write.type === 'create' &&
-        mayHaveApplied(error) &&
+        appliedMaybe &&
         (!usableKey(write) || error instanceof UnusableResponseError)
       )
         return { status: 'uncertain' };
