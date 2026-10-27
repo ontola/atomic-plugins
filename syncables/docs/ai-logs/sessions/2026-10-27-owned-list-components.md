@@ -52,3 +52,10 @@ The data browser shows the ordered item table in the destination drive with
 Name, Checked and Position columns. No browser renderer code was modified.
 Astra's final review found no blockers for the nonempty snapshot import; signed
 empty-list persistence remains unverified, although graph generation is tested.
+
+CI found a formatting-only issue in the new presentation regression after its
+provider-neutral fixture label was corrected during integration. Applied
+Prettier and reran the full package formatting check, lint, typecheck and the
+23 focused tests. The consolidated base adds a Braid dependency; local
+validation uses isolated task dependencies rather than modifying the shared
+worktree dependency installation.
