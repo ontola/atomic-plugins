@@ -95,7 +95,7 @@ try {
   config.dataDirectory = join(directory, 'data.git');
   config.webhookPort = await port();
   config.collections[0].document = resolve(
-    'examples/daemon/github-issues.json',
+    '__tests__/fixtures/daemon-smoke-api.json',
   );
   config.collections[0].pollSeconds = 0;
   const file = join(directory, 'config.json');
