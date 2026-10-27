@@ -645,4 +645,51 @@ mod tests {
         )
         .await;
     }
+
+    /// A database failure inside a transfer answers `503 unavailable` with
+    /// the fixed message only: the server's message and SQLSTATE, which can
+    /// name tables, columns and values, go to the log, never to the caller.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_database_failure_reaches_the_caller_without_server_detail() {
+        let admin = crate::security::tests::admin().await;
+        let schema = format!("transfer_fail_{:016x}", rand::random::<u64>());
+        admin
+            .batch_execute(&format!("CREATE SCHEMA \"{schema}\""))
+            .await
+            .unwrap();
+        let mut url = url::Url::parse(&crate::security::tests::test_database_url()).unwrap();
+        url.query_pairs_mut()
+            .append_pair("options", &format!("-csearch_path={schema}"));
+        let security =
+            crate::security::Security::connect(url.as_str(), crate::security::tests::TEST_KEY)
+                .await
+                .unwrap();
+        admin
+            .batch_execute(&format!("DROP TABLE \"{schema}\".retired_agents"))
+            .await
+            .unwrap();
+        let s = state(Some(security));
+        let (old, new) = (fresh(), fresh());
+        let now = unique_now_ms();
+        let response = send(
+            &s,
+            transfer_request(&s, &old, &new, PUBLIC_ORIGIN, now, now),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("\"unavailable\""), "{body}");
+        for detail in ["retired_agents", "42P01", "does not exist", "relation"] {
+            assert!(!body.contains(detail), "{detail} in {body}");
+        }
+        drop(s);
+        admin
+            .batch_execute(&format!("DROP SCHEMA \"{schema}\" CASCADE"))
+            .await
+            .unwrap();
+    }
 }

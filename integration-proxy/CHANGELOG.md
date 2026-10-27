@@ -13,6 +13,11 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   count, which paces below what Throttling requires when the dropped tier
   would have been the binding one. Tier logs are keyed by bucket id and tier
   position, so a bucket id can never collide with another bucket's tier.
+
+- Owner writes and key transfers share the startup schema lock, like device
+  transactions, so a rolling instance's DDL cannot deadlock a transfer's
+  upgrade from a row-locking read to an update.
+
 - Key rotation (#410): `POST /agents/transfer`, signed by the old agent with
   a proof by the new one, moves the old agent's connections and runtimes to
   the new id in one transaction and retires the old id (new `retired_agents`

@@ -4,6 +4,7 @@
 
 | Behavior | Coverage |
 | --- | --- |
+| Startup schema changes wait for an in-flight owner write before taking relation locks; the writer can upgrade its row-locking read to an update without a deadlock | `security::tests::startup_schema_does_not_deadlock_an_owner_write` |
 | Agent ids: `atomic:agent:` and `did:ad:agent:`, both base64 alphabets, padding, one canonical output; non-agent ids, malformed and weak keys refused | `src/agent_id.rs` |
 | Cross-implementation: atomic-server's golden v2 vectors verify here, each message is rebuilt byte for byte, re-signing with the vector's key gives its signature, other bodies, methods and URLs fail; the vendored copy is atomic-server's file at the recorded commit (its SHA-256 checked, and the copy compared with an `ATOMIC_SERVER_CHECKOUT` when set) | `signature::tests::atomic_server_v2_vectors_verify_here`, `signature::tests::the_vendored_v2_vectors_are_atomic_servers_recorded_file` |
 | v2 message layout and body hash; signed URL from `BASE_URL`, not `Host` | `src/signature.rs`; `proxy::postgres_each_verification_step_fails_closed` (spoofed `Host`, signature over the internal URL) |
