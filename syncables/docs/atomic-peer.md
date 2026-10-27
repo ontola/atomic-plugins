@@ -103,14 +103,12 @@ complete sparse or missing table views without changing the declared Class. This
 a presentation mapping, not a claim of complete OpenAPI validation. Declared
 columns exist for empty collections.
 
-Declared Classes and Properties are shared across accounts using the same pinned
-OpenAPI operation. Their import identities include the OAD document hash, HTTP
-method and path template, selected response code/media type, item-envelope path
-and declared ID field. Account names, configured collection labels, bound path
-values and current records are excluded. Schema folders show the API title and
-operation; class labels use the schema title or operation ID when available.
-Tables and their membership remain scoped to each account/collection. A changed
-OAD revision or response projection gets a separate schema identity.
+Declared Classes and Properties are shared across accounts and operations using
+the same pinned OAD and declared `components.crudResources` resource. Collection
+aliases, bound path values and current records do not define a Class. The
+resource's declared schema supplies its fields, with the selected response schema
+as a fallback. Tables and their membership remain scoped to each
+account/collection. A changed source OAD gets a separate schema namespace.
 
 - Strings and booleans become native values. Declared date-time strings become
   millisecond timestamps when valid; declared dates and URIs retain their types.
@@ -118,10 +116,11 @@ OAD revision or response projection gets a separate schema identity.
   numbers. Values outside JavaScript's safe integer range, non-finite ranges or
   decimal precision become **exact numeric text**, never rounded numbers. Original
   numeric spelling remains in PostgreSQL even for ordinary native numbers.
-- Each API record is one row resource. Nested objects and arrays stay as native
+- Each API record is one row resource. Unannotated nested objects and arrays stay as native
   inline JSON on that row, including comments, checklists, duplicate array values,
   array order and nested nulls. Top-level null fields are omitted. Compound fields
-  do not create additional Classes or resources. Where declared, each JSON
+  do not create additional Classes or resources. Explicit embedded-resource
+  declarations can instead produce links as described below. Where declared, each JSON
   Property retains its OpenAPI sub-schema in `jsonSchema`; this does not itself
   imply a schema-aware editing form. The candidate23 browser uses supported
   schemas for compact readable cell previews and retains the full JSON editor.
@@ -139,11 +138,60 @@ a derived representation for browsing, queries and native replication.
 
 Top-level row identities are stable per `(collection alias, source subject)`;
 account folders and tables also have persisted identities. Schema identities
-follow the operation key above, so another account does not duplicate a Class. A changed record updates the existing Loro document. Fields that
+follow the resource key above, so another account does not duplicate a Class. A changed record updates the existing Loro document. Fields that
 become absent/null are removed only when previously managed by this projection.
 Resources no longer in the current graph are moved to a `previous-members`
 folder. They are retained for identity/history and reappearance restores the
 same native row. Collection absence is not treated as provider deletion.
+
+## Explicit embedded resources and offline reprojection
+
+The experimental [Embedded Resources declaration](../../openapi-extensions/spec/embedded-resources/README.md)
+describes a field as one embedded representation, or an array of representations,
+of another declared CRUD resource. The target's identity bindings and the source
+request context identify each target. An OAD `$ref` supplies a schema shape only;
+it never implies an entity relationship.
+
+Declared embeddings produce native `atomicURL` or `resourceArray` Properties
+with a target Class. Repeated targets share a resource within the account and
+API identity scope. The account's related tables are marked as referenced
+subsets, not complete API collections. Extraction is bounded and nonrecursive;
+unannotated comments remain on the issue. Provider permission fields never grant
+Atomic access, and embedding extraction makes no API requests.
+
+Missing/null single values produce no link; an empty array produces an empty
+resource list. If any array member cannot be identified, the complete field
+falls back to JSON with diagnostics. Embedded summaries supply partial fields;
+conflicting observations are reported rather than arbitrarily overwriting one
+another. Bare null fields from these summaries or explicit JSON fallbacks are
+recorded as sorted field paths in `embedded-null-fields` metadata, because a
+native top-level null means property removal. Nested nulls remain inline JSON.
+Accepted source JSON remains in PostgreSQL.
+
+To apply relationship metadata to already accepted data, create a separately
+source-hash-bound projection contract:
+
+```sh
+node examples/daemon/prepare-github-relationships.mjs \
+  /absolute/path/to/accepted-github-oad.json \
+  /absolute/private/path/github-projection.json
+# Add to the atomic-peer command:
+# --projection-contract /absolute/private/path/github-projection.json
+```
+
+The file holds `{ "sourceDocumentHash": "…", "overlay": { … } }`, or an array
+of such contracts for different source documents. Projection overlays can add
+explicit CRUD relationship/target metadata. They cannot change servers,
+authentication, operations, existing identities, collection reads or accepted
+snapshot provenance. The original document hash and revision remain intact;
+the table records a separate projection-contract hash. Changing the contract
+and restarting the peer reprojects the same accepted data without another
+provider read. Invalid contracts fail before the native peer allocates a drive.
+
+The example is a local experiment, not a change to the integration proxy's
+published catalog. Public schema generation and shared schema URLs are separate
+work. A switch from JSON to a relation creates a new Property identity; the
+existing populated Property's datatype is not mutated.
 
 ## Publication and read-only protocol
 
