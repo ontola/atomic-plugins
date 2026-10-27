@@ -139,10 +139,7 @@ impl Catalog {
             refuse_ref_path_items(&platform.name, &document)?;
             if let Some(selection) = platform.selection {
                 for problem in crate::pacing::plan_selection_problems(&document, &selection) {
-                    tracing::warn!(
-                        platform = %platform.name,
-                        "throttlingPlans: {problem}; the bucket keeps within every tier"
-                    );
+                    tracing::warn!(platform = %platform.name, "{problem}");
                 }
                 selections.insert(platform.name.clone(), Value::Object(selection));
             }
@@ -973,6 +970,37 @@ mod tests {
             "/v1/items",
             "idempotency-key"
         ));
+    }
+
+    /// The catalog selection's `throttlingPlans` reaches the pacing:
+    /// `paced_buckets` hands it to `selected_buckets` for the platform it
+    /// belongs to, so the configured tier alone is paced; without it, or for
+    /// another platform's selection, every tier is.
+    #[test]
+    fn throttling_plans_from_the_selection_reach_the_pacing() {
+        use serde_json::json;
+        let document = json!({"servers":[{"url":"https://example.com/v1"}],
+            "x-throttling": {"limits": {"source": {"partitionBy": ["sourceIp"], "tiers": [
+                {"plans": ["FREE"], "requests": 30, "window": {"seconds": 3600}},
+                {"plans": ["PRO"], "requests": 20, "window": {"seconds": 1}}]}},
+                "applies": ["source"]},
+            "paths": {"/items": {"get": {}}}});
+        let tiers = |selection: Value| -> Vec<Option<usize>> {
+            super::Catalog::from_test_document("test", document.clone(), selection)
+                .paced_buckets("test", "GET", "/v1/items")
+                .into_iter()
+                .map(|bucket| bucket.tier)
+                .collect()
+        };
+        assert_eq!(
+            tiers(json!({"throttlingPlans": {"source": "PRO"}})),
+            [Some(1)]
+        );
+        assert_eq!(tiers(json!({})), [Some(0), Some(1)]);
+        assert_eq!(
+            tiers(json!({"throttlingPlans": {"source": "GOLD"}})),
+            [Some(0), Some(1)]
+        );
     }
 
     #[test]

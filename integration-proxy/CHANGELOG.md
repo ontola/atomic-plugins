@@ -21,10 +21,15 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   overlay's own URL. A malformed declaration is an error too. No dated
   catalog under `overlays/catalog/` is affected today: none selects an
   overlay that states either field.
+
 - Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
   paced at the tier whose `plans` name the plan the catalog selection's
   `throttlingPlans` gives for it, else within every tier at once (each its
-  own count). Unknown entries are logged at load and ignored.
+  own count). Unknown entries are logged at load and ignored. A tier above
+  the 10,000-requests cap is dropped (not paced) while the other tiers still
+  count, which paces below what Throttling requires when the dropped tier
+  would have been the binding one. Tier logs are keyed by bucket id and tier
+  position, so a bucket id can never collide with another bucket's tier.
 
 - Owner writes and key transfers share the startup schema lock, like device
   transactions, so a rolling instance's DDL cannot deadlock a transfer's
