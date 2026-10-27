@@ -1,0 +1,81 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Read-only GitHub issue snapshot",
+    "version": "1"
+  },
+  "servers": [
+    {
+      "url": "https://api.github.com"
+    }
+  ],
+  "paths": {
+    "/repos/{owner}/{repo}/issues": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "state",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "per_page",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "x-pagination": [
+          {
+            "scheme": "links"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Issues and pull requests"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "paginationSchemes": {
+      "links": {
+        "type": "nextLink",
+        "response": {
+          "headers": {
+            "Link": {
+              "role": "nextLink"
+            }
+          }
+        }
+      }
+    },
+    "crudResources": {
+      "issue": {
+        "identity": {
+          "urlTemplate": "/repos/{owner}/{repo}/issues/{number}",
+          "bindings": {
+            "number": {
+              "field": "number"
+            }
+          }
+        },
+        "collections": {
+          "issues": {
+            "urlTemplate": "/repos/{owner}/{repo}/issues",
+            "envelope": {
+              "itemsField": null
+            },
+            "listQuery": {
+              "state": "all"
+            }
+          }
+        }
+      }
+    }
+  }
+}

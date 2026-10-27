@@ -1,6 +1,6 @@
 # OpenAPI Webhook Subscriptions Extension
 
-**Spec version:** 0.1.0-draft
+**Spec version:** 0.2.0-draft
 
 ---
 
@@ -369,27 +369,50 @@ examples. [examples/receiver.yaml](examples/receiver.yaml) is a receiver
 document with the field and these proposed routes, all signed by the
 consumer agent except the provider-facing one:
 
-| Route (proposed)                                                      | Request                                     | Answer                                                                           |
-| --------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------- |
-| `POST /webhooks/{endpointId}`                                         | A provider delivery                         | 2xx after commit (§5.3); never signed by a consumer.                             |
-| `POST /connections/{connectionId}/subscriptions`                      | source kind, access parameters, event types | `Subscription`: `provisioning`, or `needs-reconciliation` with `reason: initial` |
-| `GET /subscriptions/{subscriptionId}`                                 |                                             | `Subscription`                                                                   |
-| `DELETE /subscriptions/{subscriptionId}`                              |                                             | `Subscription` (`cleanup-pending` or `closed`)                                   |
-| `POST /subscriptions/{subscriptionId}/renew`                          | `Renewal`                                   | `Subscription`, or `ReconciliationRequired`                                      |
-| `GET /subscriptions/{subscriptionId}/events?generation=&after=&wait=` |                                             | `EventPage`                                                                      |
-| `POST /subscriptions/{subscriptionId}/ack`                            | `Acknowledgement`                           | `Acknowledgement` (the current acknowledged cursor)                              |
-| `POST /subscriptions/{subscriptionId}/reconciled`                     | `ReconciliationComplete`                    | `Subscription`                                                                   |
+| Route (proposed)                                                                       | Request                                     | Answer                                                                           |
+| -------------------------------------------------------------------------------------- | ------------------------------------------- | -------------------------------------------------------------------------------- |
+| `POST /webhooks/{endpointId}`                                                          | A provider delivery                         | 2xx after commit (§5.3); never signed by a consumer.                             |
+| `POST /connections/{connectionId}/subscriptions`                                       | source kind, access parameters, event types | `Subscription`: `provisioning`, or `needs-reconciliation` with `reason: initial` |
+| `GET /subscriptions/{subscriptionId}`                                                  |                                             | `Subscription`                                                                   |
+| `DELETE /subscriptions/{subscriptionId}`                                               |                                             | `Subscription` (`cleanup-pending` or `closed`)                                   |
+| `POST /subscriptions/{subscriptionId}/renew`                                           | `Renewal`                                   | `Subscription`, or `ReconciliationRequired`                                      |
+| `GET /subscriptions/{subscriptionId}/events?generation=&after=&limit=&maxBytes=&wait=` |                                             | `EventPage`                                                                      |
+| `POST /subscriptions/{subscriptionId}/ack`                                             | `Acknowledgement`                           | `Acknowledgement` (the current acknowledged cursor)                              |
+| `POST /subscriptions/{subscriptionId}/reconciled`                                      | `ReconciliationComplete`                    | `Subscription`                                                                   |
 
 Fetch returns events after `after` (or from the barrier or the earliest
-retained event when omitted), at most `fetch.maxEvents`, waiting up to
-`min(wait, fetch.maxWaitSeconds)` when there are none. Server-sent events
-may later signal that data is available, using the same cursors.
+retained event when omitted), at most `min(limit, fetch.maxEvents)`, waiting
+up to `min(wait, fetch.maxWaitSeconds)` when there are none. Server-sent
+events may later signal that data is available, using the same cursors.
+
+`maxBytes` (an integer, at least 1; 0.2.0-draft) bounds the page's payload
+bytes: the lengths of its events' `payload.body` strings (base64, so one
+byte per character), added up. The envelopes and the rest of the page are
+not counted, so a consumer that must keep a whole response under a cap
+asks for less than that cap. The receiver takes events in cursor order:
+
+- An event whose body fits within what is left of `maxBytes` is returned
+  whole.
+- An event whose body does not fit ends the page before it (`more: true`),
+  unless it is the first event of the page. Then, as its body alone is
+  over `maxBytes`, it is returned without its body: `payload.omitted: true`
+  and no `body`, while `mediaType`, `bytes` and `sha256` stay. The page
+  ends after it.
+
+So a page never carries more than `maxBytes` of payload, and holds at least
+one event whenever one is available. An event returned without its body is
+acknowledged like any other, and its body is then released like any other:
+the consumer decides whether to keep the event without its payload, to read
+the source through the provider's API instead, or to record a gap of its
+own. Without `maxBytes` no body is omitted. A `maxBytes` that is not an
+integer of at least 1 is refused with `400`.
 
 An event carries an allowlisted envelope and the raw body: `cursor`,
 `generation`, `deliveryId`, `eventType`, `action`, `receivedAt`, `source`
 (kind and key), and `payload` with `mediaType`, `bytes`, `sha256` (hex, of
-the raw body) and `body` (the raw body, base64). No provider header,
-signature or secret is passed on.
+the raw body) and `body` (the raw body, base64), or `omitted: true` instead
+of `body` when `maxBytes` left it out. No provider header, signature or
+secret is passed on.
 
 Acknowledgement is monotonic: acknowledging a cursor at or before the
 acknowledged one changes nothing and returns the current one; a later cursor
@@ -426,8 +449,10 @@ rules a schema cannot express:
 
 It checks records too: a `reconcile` result has a generation and barrier and
 a `resubscribe` result has neither; an `initial` gap has no generation; an
-event's `bytes` and `sha256` match its base64 `body`; an event page's events
-are in its generation and have distinct cursors; a subscription in
+event's `bytes` and `sha256` match its base64 `body`; an event has exactly
+one of `body` and `omitted: true`, and one without its body is the only
+event of its page; an event page's events are in its generation and have
+distinct cursors; a subscription in
 `needs-reconciliation` carries its barrier; and `progressDeadlineAt` is
 `null` exactly when nothing is pending.
 
@@ -466,5 +491,16 @@ python3 validate.py examples/receiver.yaml examples/records.json
 
 ## Reference Implementation
 
-None yet. Planned in the integration proxy for ontola/atomic-plugins#369,
-steps 2 and 3, behind a configuration switch that is off by default.
+The integration proxy (`integration-proxy/src/webhooks/`), for
+ontola/atomic-plugins#369, behind `WEBHOOKS_ENABLED`, which is off by
+default. Its consumer is syncables' `InboxClient` and `InboxConsumer`
+(`syncables/src/inbox/`).
+
+## Changes
+
+- 0.2.0-draft: `GET .../events` takes `limit` (already served, now
+  specified) and `maxBytes`, which bounds a page's payload bytes; an event
+  whose body alone is over it comes back with `payload.omitted: true` and
+  no `body` (§7). The schema's `Event.payload` allows that form, and the
+  validator checks it.
+- 0.1.0-draft: records, lifecycle, gaps and limits.

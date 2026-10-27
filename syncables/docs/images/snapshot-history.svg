@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="645" viewBox="0 0 1200 645" role="img" aria-labelledby="title desc">
+<title id="title">A history of values, schemas and membership</title><desc id="desc">Revision A holds issue 42 with title Draft and schema S1. Revision B changes its title to Ready and keeps S1. Revision C omits the issue from this collection. Parents and commit messages preserve earlier states. Pinning B resolves B data and schemas.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#536b80"/></marker></defs>
+<rect width="1200" height="645" rx="18" fill="#fafbf9"/>
+<g font-family="system-ui, sans-serif" fill="#17324d">
+<text x="40" y="53" font-size="29" font-weight="700">A history of values, schemas and membership</text>
+<rect x="40" y="150" width="320" height="170" rx="13" fill="#d9f2e9" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="59" y="183" font-size="22" font-weight="650">A · Baseline</text>
+<text x="59" y="215" font-size="20" font-weight="400">Issue 42 → object A</text>
+<text x="59" y="244" font-size="20" font-weight="400">Title: Draft</text>
+<text x="59" y="273" font-size="20" font-weight="400">Schema → S1</text>
+<rect x="440" y="150" width="320" height="170" rx="13" fill="#d9f2e9" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="459" y="183" font-size="22" font-weight="650">B · Before review</text>
+<text x="459" y="215" font-size="20" font-weight="400">Issue 42 → object B</text>
+<text x="459" y="244" font-size="20" font-weight="400">Title: Ready</text>
+<text x="459" y="273" font-size="20" font-weight="400">Schema → S1</text>
+<rect x="840" y="150" width="320" height="170" rx="13" fill="#edf1f5" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="859" y="183" font-size="22" font-weight="650">C · Refresh</text>
+<text x="859" y="215" font-size="20" font-weight="400">Issue 42: absent</text>
+<text x="859" y="244" font-size="20" font-weight="400">from this collection</text>
+<text x="859" y="273" font-size="20" font-weight="400">Schema → S1</text>
+<path d="M440 235 H360" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M840 235 H760" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<text x="55" y="120" font-size="19" font-weight="400">Oldest</text>
+<text x="1015" y="120" font-size="19" font-weight="650">Head → C</text>
+<text x="365" y="274" font-size="17" font-weight="400">parent</text>
+<text x="765" y="274" font-size="17" font-weight="400">parent</text>
+<rect x="40" y="390" width="520" height="125" rx="13" fill="#ece5fa" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="59" y="423" font-size="22" font-weight="650">Pin revision B</text>
+<text x="59" y="455" font-size="20" font-weight="400">Resolve B’s membership, objects and schemas.</text>
+<text x="59" y="484" font-size="20" font-weight="400">Later updates do not alter that snapshot.</text>
+<rect x="640" y="390" width="520" height="125" rx="13" fill="#fff0d8" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="659" y="423" font-size="22" font-weight="650">Absence keeps its context</text>
+<text x="659" y="455" font-size="20" font-weight="400">C records collection membership.</text>
+<text x="659" y="484" font-size="20" font-weight="400">It does not prove global provider deletion.</text>
+<text x="40" y="570" font-size="21" font-weight="400">Revisions retain parent links, context, messages and author/committer metadata.</text>
+<text x="40" y="605" font-size="21" font-weight="400">These are collection-scoped histories; Git export is optional.</text>
+</g></svg>

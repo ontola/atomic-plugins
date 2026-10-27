@@ -89,6 +89,9 @@ def check_reconciliation(result, label):
 
 def check_event(event, label):
     payload = event["payload"]
+    if payload.get("omitted"):
+        # Left out by maxBytes: nothing to check bytes and sha256 against.
+        return
     try:
         body = base64.b64decode(payload["body"], validate=True)
     except binascii.Error:
@@ -126,6 +129,9 @@ def check_page(page, label):
     for index, event in enumerate(page["events"]):
         require(event["generation"] == page["generation"], f"{label}.events[{index}]: another generation")
         check_event(event, f"{label}.events[{index}]")
+        if event["payload"].get("omitted"):
+            require(len(page["events"]) == 1,
+                    f"{label}.events[{index}]: an event without its body is the only event of its page")
     if page["more"]:
         require(page["next"] is not None, f"{label}: more without next")
     if page["events"]:

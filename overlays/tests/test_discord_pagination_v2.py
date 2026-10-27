@@ -85,6 +85,19 @@ class DiscordPaginationV2Tests(unittest.TestCase):
         self.assertIn("user", schemas["GuildBanResponse"]["required"])
         self.assertNotIn("user", schemas["ScheduledEventUserResponse"].get("required", []))
 
+    def test_the_scheme_and_its_applications_are_exact(self):
+        scheme = copy.deepcopy(self.alone["components"]["paginationSchemes"]["afterUserId"])
+        self.assertTrue(scheme.pop("description"))
+        self.assertEqual(scheme, {
+            "type": "pageToken", "autoDetect": False,
+            "request": {"queryParameters": {"after": {"role": "cursor", "fromLastItem": "user.id"},
+                                            "limit": {"role": "pageSize"}}},
+        })
+        for document in (self.alone, self.catalog):
+            for path in (BANS, EVENT_USERS):
+                with self.subTest(path=path):
+                    self.assertEqual(document["paths"][path]["get"]["x-pagination"], [{"scheme": "afterUserId"}])
+
     def test_reads_follow_the_last_user_id_until_an_empty_page(self):
         scheme = self.alone["components"]["paginationSchemes"]["afterUserId"]
         pages = {None: [{"user": {"id": "10"}, "reason": None}, {"user": {"id": "20"}, "reason": "spam"}],

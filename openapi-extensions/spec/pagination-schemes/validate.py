@@ -1,4 +1,4 @@
-"""Validate Pagination Schemes 0.6.0 in an OpenAPI document, resolve links, read short-page lists and range windows.
+"""Validate Pagination Schemes 0.11.0 in an OpenAPI document, resolve links, read short-page lists and range windows.
 
 `validate(document)` checks every scheme in `components.paginationSchemes`
 (or the provisional Swagger 2.0 root `x-paginationSchemes`) and every
@@ -9,7 +9,9 @@ base has the origin of one of each explicitly applying operation's servers
 window (rule 14), is applied alone (rule 17) and names parameters the
 operation has (rule 18), and that a Short Page Object has the request fields
 it needs (rules 21 and 22). Rules 6 and 7 need the response schemas and are
-not checked. Ordinary OpenAPI validation is separate.
+not checked. Rules 31-35 validate the independent 0.11.0 guarantee objects
+and their effective request carriers. Ordinary OpenAPI validation is separate.
+The per-response evidence implementation is in observe.py.
 
 `read_pages(...)` is a reference implementation of a page-number read with
 `start` and a Short Page Object (§4.4.5).
@@ -27,6 +29,7 @@ some inputs), and the string it returns is the one to request.
 import copy
 import datetime
 import json
+import math
 import pathlib
 import re
 import sys
@@ -218,6 +221,7 @@ def validate(document):
         errors += found
         if not found:
             errors += [f"{location}.{problem}" for problem in _item_cursor_problems(scheme)]
+            errors += [f"{location}.{problem}" for problem in _guarantee_problems(scheme)]
         if not found and scheme.get("type") == "rangeWindow":
             problem = _window_carrier_problem(scheme)
             if problem:
@@ -268,6 +272,13 @@ def validate(document):
             errors += [f"{where}(merged).{problem}" for problem in _short_page_problems(merged, applied=True)]
             errors += [f"{where}(merged).{problem}" for problem in _advance_problems(merged)]
             errors += [f"{where}(merged).{problem}" for problem in _item_cursor_problems(merged)]
+            errors += [f"{where}(merged).{problem}" for problem in _guarantee_problems(merged)]
+            for locator in _guarantee_requests(merged):
+                kind = FIELD_LOCATIONS[locator["location"]]
+                name = locator["name"]
+                key = name.lower() if kind == "header" else name
+                if kind and (kind, key) not in operation_parameters(document, item, operation):
+                    errors.append(f"{where}.guarantees: operation has no {kind} parameter {name!r} (rule 35)")
             if merged.get("type") == "rangeWindow":
                 problem = _window_carrier_problem(merged)
                 if problem:
@@ -297,6 +308,53 @@ def validate(document):
                     )
     if errors:
         raise ValueError("\n".join(errors))
+
+
+def _guarantee_requests(scheme):
+    """Request parameters whose meaning is used by an explicit guarantee."""
+    if scheme.get("coverage", {}).get("basis") == "orderedCursor":
+        for location, name, _ in _item_cursor_fields(scheme):
+            yield {"location": location, "name": name}
+    snapshot = scheme.get("consistency", {}).get("snapshot")
+    if snapshot:
+        yield snapshot["request"]
+
+
+def _guarantee_problems(scheme):
+    """0.11.0 semantic rules 31-35, also applied after overrides."""
+    problems = []
+    if not any(k in scheme for k in ("coverage", "freshness", "consistency", "closedPrefix")):
+        return problems
+    if scheme.get("autoDetect") is not False:
+        problems.append("autoDetect: guarantees require false and explicit application (rule 31)")
+    lag = scheme.get("freshness", {}).get("maxLagSeconds")
+    if isinstance(lag, float) and not math.isfinite(lag):
+        problems.append("freshness.maxLagSeconds: must be finite (rule 34)")
+    coverage = scheme.get("coverage", {})
+    if coverage.get("basis") == "orderedCursor":
+        fields = _item_cursor_fields(scheme)
+        if scheme.get("type") != "pageToken" or len(fields) != 1:
+            problems.append("coverage: orderedCursor needs one fromLastItem field in a pageToken scheme (rule 32)")
+        elif scheme["request"][fields[0][0]][fields[0][1]].get("order") not in ("ascending", "descending"):
+            problems.append("coverage: orderedCursor needs a checked order on its unique strict-bound field (rule 32)")
+    if coverage.get("basis") == "rangeWindow":
+        if scheme.get("type") != "rangeWindow" or not scheme.get("window", {}).get("field"):
+            problems.append("coverage: rangeWindow needs a rangeWindow scheme with a nonempty window.field (rule 32)")
+    if "closedPrefix" in scheme and coverage.get("basis") != "orderedCursor":
+        problems.append("closedPrefix: only with orderedCursor coverage in this version (rule 33)")
+    consistency = scheme.get("consistency", {})
+    if scheme.get("freshness", {}).get("scope") == "snapshotStart" and consistency.get("mode") != "readSnapshot":
+        problems.append("freshness.scope: snapshotStart requires readSnapshot consistency (rule 34)")
+    if consistency.get("mode") == "readSnapshot":
+        locator = consistency["snapshot"]["request"]
+        for location in FIELD_LOCATIONS:
+            for name in scheme.get("request", {}).get(location, {}):
+                same_name = name.lower() == locator["name"].lower() if location == "headerFields" else name == locator["name"]
+                if location == "bodyFields":
+                    same_name = same_name or name.startswith(locator["name"] + ".") or locator["name"].startswith(name + ".")
+                if location == locator["location"] and same_name:
+                    problems.append("consistency.snapshot.request: must not reuse a pagination field (rule 35)")
+    return problems
 
 
 def resolve_link(value, *, request_url, server_url, resolution=None):
@@ -824,7 +882,7 @@ def read_item_cursor(scheme, request, *, page_size=None, identity=_default_ident
         value = page[-1]
         for segment in path.split("."):
             value = value.get(segment) if isinstance(value, dict) else None
-        if isinstance(value, bool) or not isinstance(value, (str, int)):
+        if isinstance(value, bool) or not isinstance(value, (str, int)) or value == "":
             raise PageReadError(f"the last item has no usable {path} to continue from")
         following = str(value) if isinstance(value, int) else value
         if following == cursor:

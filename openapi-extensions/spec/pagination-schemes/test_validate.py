@@ -1,4 +1,4 @@
-"""Pagination Schemes 0.10.1: schema, document validator, examples, link resolution and range windows."""
+"""Pagination Schemes 0.11.0: schema, document validator, examples, link resolution and range windows."""
 import copy
 import pathlib
 import unittest
@@ -9,7 +9,7 @@ from openapi_spec_validator import validate as validate_openapi
 from validate import LinkRefused, PageReadError, WindowReadError, halves, page_items, read_item_cursor, read_offsets, read_pages, read_range, resolve_link, response_incomplete, rfc3986_resolve, validate, window_request
 
 ROOT = pathlib.Path(__file__).parent
-EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml", "empty-when-absent.yaml", "offset-advance.yaml", "incomplete-marker.yaml", "item-cursor.yaml", "item-order.yaml")
+EXAMPLES = ("relative-next-link.yaml", "declared-base.yaml", "range-window.yaml", "short-page.yaml", "empty-when-absent.yaml", "offset-advance.yaml", "incomplete-marker.yaml", "item-cursor.yaml", "item-order.yaml", "page-coverage.yaml", "window-coverage.yaml")
 
 
 def example(name):
@@ -985,6 +985,21 @@ class ItemCursorTests(unittest.TestCase):
         self.assertTrue(all(("queryParameters", "ending_before") not in values for values in calls))
         self.assertEqual([values.get(("queryParameters", "starting_after")) for values in calls],
                          [None, "cus_001", "cus_003"])
+
+    def test_an_empty_cursor_value_is_an_error_and_never_sent(self):
+        scheme = self.scheme(self.document())
+        sent = []
+        pages = iter([{"data": [{"id": "a"}, {"id": ""}], "has_more": True}, {"data": []}])
+
+        def request(values):
+            sent.append(values)
+            return next(pages)
+
+        with self.assertRaises(PageReadError) as raised:
+            read_item_cursor(scheme, request)
+        self.assertIn("no usable id", str(raised.exception))
+        self.assertEqual(len(sent), 1)  # the empty value was not sent
+        self.assertNotIn(("queryParameters", "starting_after"), sent[0])  # the first request leaves it out
 
     def test_a_marked_page_is_not_complete(self):
         scheme = copy.deepcopy(self.scheme(self.document()))
