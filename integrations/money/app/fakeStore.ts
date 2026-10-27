@@ -21,7 +21,7 @@
  * - `other`: a table of some other class; `none`: no table.
  * Test-only; not bundled.
  */
-import { entries } from '../identity.js';
+import { contentFingerprint, entries } from '../identity.js';
 import { parseBankStatement } from '../statement.js';
 import { STATEMENT_CLASS } from './own.js';
 import {
@@ -82,6 +82,10 @@ export const sharedProperty = (shortname: string) =>
     ? SHARED_SUBJECT[shortname as SharedField]
     : `${APP_ONTOLOGY}/${shortname}`;
 
+/** The host's refusal of a row destroy outside the app (atomic-server). */
+export const ROW_DESTROY_REFUSED =
+  'Letting an app edit rows does not let it delete them.';
+
 export const REFUSED =
   'This app may only write its own data. Writing here needs rights its key does not have.';
 
@@ -93,11 +97,41 @@ export type SeedRow = Partial<Record<Shortname, string>> & {
   'bank-value-date': string;
 };
 
-/** A synthetic row: an invented bunq-style IBAN, the amount as reference. */
+/**
+ * A synthetic row: an invented bunq-style IBAN, the amount as reference,
+ * and the importer's content fingerprint (`../identity.ts`)
+ * over the row's own values, unless `extra` sets one (`''` for a row
+ * without).
+ */
 export const seedRow = (
   amount: string,
   date: string,
   extra: Partial<SeedRow> = {},
+): SeedRow => {
+  const row = baseRow(amount, date, extra);
+  if ('bank-fingerprint' in extra) return row;
+
+  return {
+    ...row,
+    'bank-fingerprint': contentFingerprint(
+      'mt940',
+      { account: row['bank-account'], currency: row['bank-currency'] },
+      {
+        date: row['bank-value-date'],
+        bookingDate: row['bank-booking-date'] ?? '',
+        amount: row['bank-amount'],
+        code: row['bank-transaction-code'] ?? '',
+        reference: row['bank-reference'] ?? '',
+        description: row['bank-description'] ?? '',
+      },
+    ),
+  };
+};
+
+const baseRow = (
+  amount: string,
+  date: string,
+  extra: Partial<SeedRow>,
 ): SeedRow => {
   const account = extra['bank-account'] ?? 'NL42BUNQ0123456789';
   const currency = extra['bank-currency'] ?? 'EUR';
@@ -150,6 +184,8 @@ export interface FakeStore extends PluginStore {
   }[];
   /** Resources made with `newResource`, in order. */
   readonly created: string[];
+  /** Resources destroyed, in order. */
+  readonly destroyed: string[];
   /** Adds rows to the table, notifying subscribers of the table. */
   addRows(rows: SeedRow[]): string[];
   /** Fails the next `n` saves with `message`. */
@@ -322,6 +358,7 @@ export function fakeStore({
   const saves: FakeStore['saves'] = [];
   const schemaSaves: FakeStore['saves'] = [];
   const created: string[] = [];
+  const destroyed: string[] = [];
   const listeners = new Map<string, Set<() => void>>();
   const subscribed = new Set<string>();
   let failing = 0;
@@ -409,7 +446,18 @@ export function fakeStore({
         return this;
       },
       async destroy() {
+        await Promise.resolve();
+
+        // As the host (hostStore.ts at the pin): a row grant lets an app
+        // edit the viewed table's rows, never delete them.
+        if (!within(subject))
+          throw new Error(isRow(subject) ? ROW_DESTROY_REFUSED : REFUSED);
+        const current = resources.get(subject);
+        if (!current) throw new Error(`No resource ${subject}`);
         resources.delete(subject);
+        destroyed.push(subject);
+        const parent = current[atomic.parent];
+        if (typeof parent === 'string') notify(parent);
       },
     };
   };
@@ -457,6 +505,7 @@ export function fakeStore({
     resources,
     runs,
     created,
+    destroyed,
     get accessRequests() {
       return accessRequests;
     },

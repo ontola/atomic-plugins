@@ -90,8 +90,11 @@ blocks the import. Without references, statement metadata and
 line position identify records; content fingerprints block ambiguous overlap
 with earlier exports. Identical legitimate rows within a statement are retained.
 Import is append-only: local edits are not overwritten. Deleted imports may be
-recreated on another import. Native `localId` identities are unique within the destination on one AtomicServer: a
-concurrent duplicate create is rejected and must be previewed again. The shared
+recreated on another import. A `localId` is unique per importer run only (the
+host's plan refuses one reused within a run, atomic-server
+`server/src/plugins/plan.rs`); across runs the importer dedupes by planning
+against the rows it read, like the Money app. Whether two importer runs at the
+same moment can both create a row is not verified. The shared
 `importBaseline` records source values and protects local edits. Independent
 offline peers still need collision resolution after synchronization.
 
@@ -173,6 +176,53 @@ table it is decides how an import gets in (`controller.ts` `Source`):
   Uncategorised filters, a day-grouped ledger (a table at 560 px and wider,
   a list of buttons below), 200 rows at a time. Amounts are formatted from
   their exact strings (`app/amounts.ts`); sums use `parser.ts`'s `units()`.
+- **Duplicate rows** (0.4.6; #587). Two or more complete rows that agree
+  on `bank-source-id`, a non-empty `bank-fingerprint` and every bank field
+  (account, currency, amount, value date, booking date, description,
+  reference, code; `SAME_FIELDS` in `app/duplicates.ts`) are one
+  transaction written twice (two tabs importing the same file at once, a
+  write that failed on the app's side but landed, a copy made by hand).
+  Rows without a source id or a fingerprint are never grouped, and rows
+  that share both but differ in a bank field (an amount edited after the
+  import) are not duplicates: hiding one would hide money. One row of a
+  group is kept; the others are listed in a "Duplicate rows" region above
+  the ledger, each with "Copy of" the kept row and "Open row", and are in
+  no balance, total, count or filter (`state.duplicates` apart from
+  `state.rows`). The kept row is the one with the lowest subject, so every
+  tab and device keeps the same row. Not the earliest: the server serves a
+  `createdAt` it derives from each row's genesis commit
+  (`lib/src/resources.rs`, `materialize_genesis_metadata` at the pin; the
+  e2e checks that a fresh fetch of each row the app wrote carries one), yet
+  a first e2e run that picked the earliest kept the person's later copy:
+  the app's read of the row it had written evidently lacked it (likely the
+  host's cached copy; not verified further). A pick that can differ between
+  tabs could have two tabs remove both copies.
+
+  Nothing is removed by reading. "Remove duplicates" is offered on the
+  app's own table only: the host lets an app delete no row of another
+  table, not even after "Allow editing" (atomic-server `hostStore.ts`,
+  "Letting an app edit rows does not let it delete them."), so there the
+  region says to remove the copies in the table itself. On the press the
+  app plans from the table as it is then, not from what it read before: it
+  lists the table once, leaves a group alone whose kept row is no longer
+  listed, reads every row of each group again, and groups those reads
+  anew, so a copy whose amount was edited meanwhile is not removed. Then
+  it copies a category or note only a copy has onto the kept row, never
+  over one the kept row has, and destroys every copy that still agrees
+  with the kept row on every bank field and whose category and note are
+  empty or the kept row's; one whose category or note differs is left
+  listed for the person to open. A destroy that fails counts as done when
+  a listing that still shows the kept row no longer lists the copy (it was
+  gone already); otherwise it is reported ("Couldn't remove 1 row this
+  time; try again."). A press while an import is writing does nothing and
+  says so. Unit: `app/duplicates.test.ts`, `app/view.test.ts`. E2E (the
+  installed-app test): a copy the person makes of a row the app wrote is
+  listed, the Transactions count stays the same, nothing is removed before
+  the press, and after "Remove duplicate" and a reload the table lists no
+  duplicate and the server keeps only the lower subject. (Before a reload
+  the page's own copy of the table's children still listed the destroyed
+  row; the app itself had already dropped it.)
+
 - **Incomplete rows** (0.4.1; #177, ontology-kit's rule: show an incomplete
   row, never skip it). A row of the table's class that lacks one of the four
   required fields (account, currency, amount, value date; absent or the
@@ -336,8 +386,9 @@ the calendar, timesheets and issue-tracker apps do at the pin.
   blocks the file, and a reference-free overlap with an earlier import is
   refused, before anything is written. Not covered: two copies of the app
   importing the same file at the same moment can both write a row (the
-  importer's server-side `localId` uniqueness has no equivalent for app
-  writes); the next check shows such a row as "already imported" twice.
+  importer's `localId` is unique per importer run only, and app writes have
+  no equivalent); since 0.4.6 such a row is listed as a duplicate, counted
+  once, and removed on "Remove duplicates" (see "Duplicate rows" below).
 - **Reading is strict.** The shared fields are read by subject only, through
   `ontology-kit/resolver.mjs`: no lookup by shortname or column. An amount
   that is not an exact decimal with at most five fraction digits is shown
@@ -386,6 +437,73 @@ minified, one module). Screenshots, axe and the render budget:
 
 ## Verified
 
+Review cleanup for 0.4.6 (2026-10-27): the duplicate and incomplete row lists
+share their rendering, duplicate grouping helpers are private, and the importer,
+app check and fixtures share the identity helpers. The removal outcomes still
+distinguish skipped groups from copies retained for conflicting annotations;
+those counts describe different units. The second bank-field check before
+removal and the first failure's cause are retained.
+
+The updated app module is 128,567 bytes. Money's 346 unit tests pass (two
+existing live checks skipped), along with typecheck, lint and JavaScript-only
+certification. Chromium renders identical duplicate/incomplete region DOM
+before and after this refactor at 1200px and 390px. Usertest-10 is recorded,
+not deployed. The same unit, type and lint checks pass after merging current `main` and
+linking a fresh checkout at pin `30994948`. All ten published-app builds and
+the ontology validator pass against current `main`; no published bytes were
+changed. The real-host E2E results below cover the earlier candidate; they
+were not rerun for this structural cleanup.
+
+The initial 0.4.6 candidate (app module `apps/money/0.4.6/ui.js`, 128,819 bytes; `plugin.js`
+again 0.3.0's bundle with only the manifest's `version` changed) a
+transaction written twice is found when the table is read (#587, Decision
+Inbox Q-115; app only, no host change): see "Duplicate rows" under
+[Money app](#money-app-app). What covers it:
+
+- Unit (`app/duplicates.test.ts`): the grouping (never without a source
+  id or a fingerprint, never across a fingerprint or any bank field, an
+  amount of -100 against -40 included), the same kept row whatever order
+  the rows are read in (two tabs), the sums and the count taking one row
+  per group, nothing removed by reading; on the press: a category moved
+  onto the kept row and only untouched copies destroyed (a copy whose note
+  differs is left), a copy already gone counting as removed, a failed
+  destroy of a copy still listed counting as failed, the kept row deleted
+  elsewhere after load (its copy left), a note added to the copy after
+  load (moved onto the kept row before the copy goes), the kept row's
+  category changed elsewhere (not overwritten), a copy's amount edited
+  after load (left), a press during an import (nothing done, said), and a
+  table that is not the app's own (no removal; the fake host refuses the
+  destroy with the host's message). `app/view.test.ts`: the region, the
+  strip summing once, removal on press, and no button with the host's
+  reason on another table.
+- A no-reference twin (two identical rows without a bank reference in one
+  statement) whose write failed is no longer refused afterwards as an
+  overlap: a fingerprint match counts as an earlier import only when the
+  row is from another statement (`check.ts`, `sameStatement`). Unit:
+  `app/check.test.ts` (the second twin proposed; the same content in
+  another statement still refused). The sandbox importer (`plugin.ts`)
+  keeps the old rule; it is not changed in this release.
+- E2E: the installed-app test's last step (above).
+
+Not covered:
+
+- Removal on a table that is not the app's own: the host refuses it, so
+  the person removes the copies in the table.
+- The press reads the rows again through the host, which may answer from
+  its cache; a change made on another device in the moment between that
+  read and the destroy is not seen.
+- Two tabs pressing at once keep the same row, so neither removes it, and
+  the slower one counts a copy already gone as removed; that race is
+  unit-tested with one controller only (a copy deleted before the press),
+  not with two.
+- An incomplete row is never grouped; a duplicate that is also incomplete
+  is listed as incomplete.
+
+The six money e2e tests (`e2e/money.spec.ts` and `moneybird.spec.ts`), the
+duplicate step and the server's `createdAt` check included, passed again
+after the review fixes on 2026-10-19 at 0.4.6 against the pin `7dab1ce`
+(the build VPS's source build), in 8.3 minutes.
+
 At 0.4.5 (app module `apps/money/0.4.5/ui.js`, 122,855 bytes; `plugin.js`
 again 0.3.0's bundle with only the manifest's `version` changed) the paths
 by which one copy of the app wrote a row twice after a failed or overlapping
@@ -413,7 +531,8 @@ what covers it:
   new. Unit: a listing answering `[]` after the failure (the row written
   before it was proposed again), and two checks in a row while it does (4
   rows for 2 before this). The cost: a row deleted elsewhere still counts
-  as already imported until the app is loaded again.
+  as already imported until the app is opened again (a new view); the
+  in-app "Try again" reloads the table but keeps the rows this view wrote.
 - Every check of a file waits for any import under way, whether or not its
   sheet was closed, and reads the table first. Unit: the file checked again
   at once after a failure (2 proposed at 0.4.4), after closing during an
@@ -436,6 +555,14 @@ neither covers it. These cases remain:
 - a listing that is short without an error (the host's `[]`, or a skipped
   page) for rows this copy of the app never saw, in particular while the
   app loads: a load during such a failure starts from the short listing.
+
+Also found in this review, older than #539 and not a duplicate: two
+identical transactions without a bank reference in one statement
+("twins", told apart only by position) where the write of the second
+failed could not be completed afterwards; the next check found the first
+twin's row by fingerprint and refused the file as an overlap
+(`OVERLAP_WITHOUT_REFERENCES`). Fixed in 0.4.6 (above) for the app's own
+check; the sandbox importer keeps the old rule.
 
 The app can't choose a row's subject (under a DID drive the server mints it
 from the signed genesis commit), so a second write can't be made to land on
