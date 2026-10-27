@@ -216,6 +216,55 @@ test('generate refuses a source with problems', () => {
   assert.throws(() => generate(s, BASE), /colour: datatype/);
 });
 
+test('a later release gets its own terms-v<N>.mjs and leaves terms.mjs byte for byte', async () => {
+  const before = generate(source(), BASE);
+  const next = source();
+  next.releases.v2 = {
+    name: 'Release 2',
+    description: 'The second release.',
+    classes: ['other-v1'],
+    properties: ['size'],
+  };
+  next.classes['other-v1'] = {
+    name: 'Other',
+    description: 'Another thing.',
+    requires: [NAME],
+    recommends: ['size'],
+  };
+  next.properties.size = {
+    name: 'Size',
+    description: 'Its size.',
+    datatype: 'https://atomicdata.dev/datatypes/integer',
+  };
+  const after = generate(next, BASE);
+
+  for (const file of ['ontology-kit/terms.mjs', 'ontology-kit/terms.d.mts'])
+    assert.equal(after.get(file), before.get(file), file);
+
+  const dir = mkdtempSync(join(tmpdir(), 'atomic-ontology-terms-'));
+
+  try {
+    writeFileSync(
+      join(dir, 'terms-v2.mjs'),
+      after.get('ontology-kit/terms-v2.mjs'),
+    );
+    const terms = await import(pathToFileURL(join(dir, 'terms-v2.mjs')).href);
+    assert.deepEqual(Object.keys(terms.releases), ['v2']);
+    assert.deepEqual(Object.keys(terms.classes), ['other-v1']);
+    assert.deepEqual(Object.keys(terms.properties), ['size']);
+    assert.deepEqual(terms.classes['other-v1'].recommends, [
+      `${BASE}/properties/size`,
+    ]);
+    assert.match(
+      after.get('ontology-kit/terms-v2.d.mts'),
+      /readonly size: PropertyTerm/,
+    );
+    assert.doesNotMatch(after.get('ontology-kit/terms-v2.d.mts'), /colour/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the generated terms.mjs exports the same subjects', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'atomic-ontology-terms-'));
 
