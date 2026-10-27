@@ -6,8 +6,8 @@ Causality on the catalog composition), checks the operations that use each
 scheme and that their parameters exist, reads synthetic audit log pages with
 the reference `read_item_cursor` (descending entry ids with `before`, an
 empty page ending the read, and out-of-order pages that must fail), and checks
-that v4 is v3 plus the audit log scheme and its application. No dated catalog
-selects it. No provider is called; the pinned OAD is downloaded by its
+that v4 is v3 plus the audit log scheme and its application. Its first dated
+catalog selection is checked too. No provider is called; the pinned OAD is downloaded by its
 full-SHA URL.
 """
 import copy
@@ -127,10 +127,12 @@ class DiscordPaginationV4Tests(unittest.TestCase):
         rest4 = [a for a in v4["actions"][1:] if a["target"] != f"$.paths['{AUDIT}'].get"]
         self.assertEqual(rest4, v3["actions"][1:])
 
-    def test_no_dated_catalog_selects_it(self):
+    def test_first_dated_catalog_selection(self):
+        first = "2026-10-19-newer-revisions.json"
         for catalog in (ROOT / "catalog").glob("*.json"):
-            with self.subTest(catalog=catalog.name):
-                self.assertNotIn(V4, catalog.read_text(encoding="utf-8"))
+            if catalog.name <= first:
+                with self.subTest(catalog=catalog.name):
+                    self.assertEqual(V4 in catalog.read_text(encoding="utf-8"), catalog.name == first)
 
 
 if __name__ == "__main__":
