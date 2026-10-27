@@ -1,0 +1,43 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/de95e5bf40f54e3752281a771a786854038d683b/APIs/clickup.com/v2-readonly/openapi.yaml
+info:
+  title: ClickUp filtered Workspace task pagination
+  version: 1.0.0
+  description: >-
+    Pagination Schemes 0.6.0: ClickUp documents zero-based page numbers
+    ("Page to fetch (starts at 0)") and "Responses are limited to 100 tasks
+    per page"; the response holds only `tasks`, with no continuation or
+    count field. The page role starts at 0, and a page with fewer than 100
+    tasks ends the list. ClickUp does not document that a short page is
+    the last one, so the end is assumed: a read is not complete, and no
+    absence is inferred from it.
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      workspaceTaskPages:
+        type: pageNumber
+        autoDetect: false
+        description: >-
+          page starts at 0; responses are limited to 100 tasks per page; the
+          response has no continuation or count field
+          (https://developer.clickup.com/reference/getfilteredteamtasks,
+          checked 2026-10-08).
+        request:
+          queryParameters:
+            page:
+              role: page
+              start: 0
+        response:
+          envelope:
+            itemsField: tasks
+          shortPage:
+            size: 100
+            assurance: assumed
+            description: >-
+              The reference documents only "Responses are limited to 100 tasks
+              per page"; it does not say that a short page is the last one.
+- target: $.paths['/v2/team/{team_Id}/task'].get
+  update:
+    x-pagination:
+    - scheme: workspaceTaskPages

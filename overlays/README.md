@@ -1693,6 +1693,23 @@ the proxy parser. The Google Tasks importer fixture is
 `tests/google_tasks_syncables.test.ts`; its composition checks are
 `tests/test_google_tasks_readonly.py`. Real-account sync is not certified.
 
+## ClickUp preparation
+
+`catalog/2026-10-08-gitlab-tasks-clickup.json` is a prepared fourteen-entry
+candidate. It preserves the thirteen GitLab/Google Tasks entries and adds
+three ClickUp GET operations. Task pages follow Pagination Schemes 0.6.0:
+`page` starts at 0, and a page with fewer than 100 tasks ends the list, with
+`assurance: assumed`, since ClickUp documents only the 100-task cap. Every
+task read is therefore not complete, and no deletion is inferred from it.
+Consumer validation passes with published Syncables 0.25.0 on Node 22 and
+the current repository source. Use that verified release: the published
+0.21.0 package still asks for page 1 first and skips page 0.
+
+ClickUp OAuth has no selectable read scopes; the proxy profile limits reads
+to these three operations, while the provider token can have broader access
+to selected Workspaces. OAuth client registration and a real account grant
+are pending. This candidate is not complete synchronization certification.
+
 ## Google Tasks deployment without GitLab
 
 `catalog/2026-10-08-google-tasks.json` preserves all eleven production entries
