@@ -357,8 +357,19 @@ the calendar, timesheets and issue-tracker apps do at the pin.
   Rows you add there need account, currency, amount and value date to be in
   the ledger; since 0.4.1 a row without one of them is listed as incomplete
   above it, with "Open row", instead of being skipped (see "Incomplete
-  rows" under [Money app](#money-app-app)). This path has unit tests only;
-  no E2E (the E2E's incomplete row is on the app's own table).
+  rows" under [Money app](#money-app-app)). The incomplete-row path has
+  unit tests only (the E2E's incomplete row is on the app's own table).
+
+  Since 2026-10-19 the e2e covers importing into such a table: on a
+  hand-made "Cash book" of the shared class with two rows typed by hand,
+  the app proposes the synthetic MT940's 2 transactions, Import asks in the
+  host's bar ("Let this app edit rows") and writes nothing before "Allow
+  editing"; then the server holds the 2 hand rows and the 2 imported rows
+  of the shared class (the amounts the exact strings `-12.34` and `20`),
+  the card says "Synced just now" and "2 imported here at the last sync"
+  and no longer asks for editing, and the strip shows the statement's
+  closing balance, €107.66. The six money e2e tests passed with it on
+  2026-10-19 at 0.4.5 against the pin `7dab1ce`, in 9.2 minutes.
 
 - **Needs GitHub Pages.** The server fetches each shared term once, on first
   use, and keeps it; the browser fetches it through its local-database
@@ -531,9 +542,10 @@ the exact strings (`-12.34`, `2026-09-02`), its statement rows give the strip
 nothing new and a changed booking is blocked; and Add view on the importer's
 table offers the installed app (the importer's class found by shortname on
 the app's first open), where the 0.3.0 flow runs unchanged. Not verified by
-an E2E: importing into a hand-made `bank-transaction-v1` table after "Allow
-editing" (unit tests only), and a host that serves the real catalog (the
-lane's dev-server serves the committed `apps/money/0.4.0/ui.js`).
+an E2E at 0.4.0: importing into a hand-made `bank-transaction-v1` table after
+"Allow editing" (verified since 2026-10-19, see "Shared class" above), and a
+host that serves the real catalog (the lane's dev-server serves the committed
+`apps/money/0.4.0/ui.js`).
 
 Earlier releases:
 

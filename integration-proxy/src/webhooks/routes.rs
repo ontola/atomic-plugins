@@ -10,7 +10,7 @@
 //! | `GET /subscriptions/{id}` | the subscription |
 //! | `DELETE /subscriptions/{id}` | ends it |
 //! | `POST /subscriptions/{id}/renew` | access check, then a new lease |
-//! | `GET /subscriptions/{id}/events?after=&limit=&wait=` | a page; waits up to `wait` (at most 25) seconds for one |
+//! | `GET /subscriptions/{id}/events?after=&limit=&maxBytes=&wait=` | a page of at most `maxBytes` payload bytes; waits up to `wait` (at most 25) seconds for one |
 //! | `POST /subscriptions/{id}/ack` `{generation, cursor}` | acknowledges up to the cursor |
 //! | `POST /subscriptions/{id}/reconciled` `{generation, barrier}` | access check, then `active` |
 
@@ -363,6 +363,11 @@ pub async fn renew(
 pub struct EventsQuery {
     after: Option<String>,
     limit: Option<i64>,
+    /// Payload bytes per page, base64 (Webhook Subscriptions 0.2.0-draft
+    /// §7). Zero, or anything that is not an integer, is refused with `400`
+    /// by the query extractor.
+    #[serde(rename = "maxBytes")]
+    max_bytes: Option<std::num::NonZeroU64>,
     wait: Option<u64>,
     /// Accepted for the spec's route; the cursor carries the generation.
     #[allow(dead_code)]
@@ -416,7 +421,14 @@ pub async fn events(
         notified.as_mut().enable();
         match webhooks
             .store
-            .fetch(&id, &binding.consumer, query.after.as_deref(), limit, now())
+            .fetch_within(
+                &id,
+                &binding.consumer,
+                query.after.as_deref(),
+                limit,
+                query.max_bytes.map(std::num::NonZeroU64::get),
+                now(),
+            )
             .await
         {
             Ok(page)

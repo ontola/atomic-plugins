@@ -1,0 +1,46 @@
+[
+  {
+    "input": "{}",
+    "root": "498d308ed3f13b1f6a8bb65a4f78d1c227873b8df7e9cf196e96bde25770f549",
+    "nodes": {
+      "498d308ed3f13b1f6a8bb65a4f78d1c227873b8df7e9cf196e96bde25770f549": "[\"syncables-json-node\",1,\"object\",[]]"
+    }
+  },
+  {
+    "input": "[]",
+    "root": "6d026c27630ed6eff3a69162ec64ae0526d1aa61913eda750a58773ad3c8d903",
+    "nodes": {
+      "6d026c27630ed6eff3a69162ec64ae0526d1aa61913eda750a58773ad3c8d903": "[\"syncables-json-node\",1,\"array\",[]]"
+    }
+  },
+  {
+    "input": "9007199254740993",
+    "root": "d7086203835a90996c9bcef7ac00d6a7304da863aa267c0431efac52bb48a5cb",
+    "nodes": {
+      "d7086203835a90996c9bcef7ac00d6a7304da863aa267c0431efac52bb48a5cb": "[\"syncables-json-node\",1,\"scalar\",[\"number\",\"9007199254740993\"]]"
+    }
+  },
+  {
+    "input": "[1.0,-0,1e400]",
+    "root": "957c017dc0043ff5d58d7893f4a2b25fa61528033f3f9e9371896b9966e4b876",
+    "nodes": {
+      "957c017dc0043ff5d58d7893f4a2b25fa61528033f3f9e9371896b9966e4b876": "[\"syncables-json-node\",1,\"array\",[[\"number\",\"1.0\"],[\"number\",\"-0\"],[\"number\",\"1e400\"]]]"
+    }
+  },
+  {
+    "input": "{\"\\ue000\":1,\"\\ud800\\udc00\":2}",
+    "root": "5ba1df166a4c38e6a401f29812af9329af5f00b150f05fb2711bb950e5ae3fc5",
+    "nodes": {
+      "5ba1df166a4c38e6a401f29812af9329af5f00b150f05fb2711bb950e5ae3fc5": "[\"syncables-json-node\",1,\"object\",[[\"𐀀\",[\"number\",\"2\"]],[\"\",[\"number\",\"1\"]]]]"
+    }
+  },
+  {
+    "input": "{\"b\":{\"x\":1},\"a\":[{\"x\":1}]}",
+    "root": "cf1be0b1e663a7b7da604f66dc81c2e71214e6ecbcf29e92a95d34eb62117406",
+    "nodes": {
+      "9c32ecf2b4a4d477f0da7f80f275d36573d5058a58a205245cfef944f07efaa5": "[\"syncables-json-node\",1,\"object\",[[\"x\",[\"number\",\"1\"]]]]",
+      "60928d28fccd18a58d72acee84b70e4a711e8deb28ff74e1365026df7b89e328": "[\"syncables-json-node\",1,\"array\",[[\"ref\",\"9c32ecf2b4a4d477f0da7f80f275d36573d5058a58a205245cfef944f07efaa5\"]]]",
+      "cf1be0b1e663a7b7da604f66dc81c2e71214e6ecbcf29e92a95d34eb62117406": "[\"syncables-json-node\",1,\"object\",[[\"a\",[\"ref\",\"60928d28fccd18a58d72acee84b70e4a711e8deb28ff74e1365026df7b89e328\"]],[\"b\",[\"ref\",\"9c32ecf2b4a4d477f0da7f80f275d36573d5058a58a205245cfef944f07efaa5\"]]]]"
+    }
+  }
+]

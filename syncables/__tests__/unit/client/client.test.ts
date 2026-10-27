@@ -157,6 +157,8 @@ describe('createApiClient conditional sync', () => {
     expect(responseStatuses).toContain(304);
 
     await client.create('/pets', { name: 'Whiskers', tag: 'cat' });
+    // create() returns the optimistic record; observe the acknowledged write.
+    await waitUntil(() => client.pendingWrites().length === 0);
 
     const third = await client.sync();
     expect(third.changed).toEqual(['/pets']);

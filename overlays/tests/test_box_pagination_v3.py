@@ -95,7 +95,8 @@ class BoxPaginationV3Tests(unittest.TestCase):
                    if p["name"] == "box")
         self.assertEqual(box["overlays"], [PAGES + V3])
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
-            if catalog.name != CATALOG:
+            # A later dated catalog carries the selection forward.
+            if catalog.name < CATALOG:
                 with self.subTest(catalog=catalog.name):
                     self.assertNotIn(V3, catalog.read_text(encoding="utf-8"))
 

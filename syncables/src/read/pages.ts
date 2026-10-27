@@ -1189,9 +1189,12 @@ async function* walkItemCursor(
       throw new PageReadError(
         `the last item of ${after} has a ${field.path} of ${String(value)}, not a safe integer to continue from; the read is not complete`,
       );
+    // An empty string is no cursor: `?starting_after=` would ask for the
+    // first page again, or for nothing.
     if (
-      typeof value !== 'string' &&
-      !(typeof value === 'number' && Number.isSafeInteger(value))
+      value === '' ||
+      (typeof value !== 'string' &&
+        !(typeof value === 'number' && Number.isSafeInteger(value)))
     )
       throw new PageReadError(
         `the last item of ${after} has no usable ${field.path} to continue from; the read is not complete`,

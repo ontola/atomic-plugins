@@ -72,6 +72,26 @@ class StripePaginationV2Tests(unittest.TestCase):
         self.assertEqual(declared, lists)
         self.assertEqual(len(declared), 99)
 
+    def test_every_list_applies_exactly_the_cursor_scheme(self):
+        # Every operation, not a sample: an empty or extra x-pagination entry
+        # would still count as "declared" above.
+        applied = {path: item["get"]["x-pagination"] for path, item in self.composed["paths"].items()
+                   if "x-pagination" in (item.get("get") or {})}
+        self.assertEqual(len(applied), 99)
+        for path, applications in applied.items():
+            with self.subTest(path=path):
+                self.assertEqual(applications, [{"scheme": "cursor"}])
+
+    def test_the_cursor_scheme_is_exact(self):
+        scheme = copy.deepcopy(self.composed["components"]["paginationSchemes"]["cursor"])
+        self.assertTrue(scheme.pop("description"))
+        self.assertEqual(scheme, {
+            "type": "pageToken", "autoDetect": False,
+            "request": {"queryParameters": {"starting_after": {"role": "cursor", "fromLastItem": "id"},
+                                            "limit": {"role": "pageSize"}}},
+            "response": {"envelope": {"itemsField": "data"}, "bodyFields": {"has_more": {"role": "hasMore"}}},
+        })
+
     def test_the_pinned_document_describes_the_cursor_as_the_place_in_the_list(self):
         texts = {path: " ".join((self.query(path)["starting_after"].get("description") or "").split())
                  for path, item in self.composed["paths"].items() if "x-pagination" in (item.get("get") or {})}

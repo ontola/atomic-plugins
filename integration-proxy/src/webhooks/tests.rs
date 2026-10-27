@@ -545,6 +545,103 @@ async fn the_progress_deadline_expires_a_renewing_consumer_that_never_acknowledg
     env.drop_schema().await;
 }
 
+/// `maxBytes` (Webhook Subscriptions 0.2.0-draft §7): a page never carries
+/// more base64 payload than asked, holds at least one event, and an event
+/// over the limit alone comes back alone, without its body, and is
+/// acknowledged like any other.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn fetch_within_max_bytes_omits_only_an_event_over_it_alone() {
+    let env = env(Policy::pilot(1 << 30)).await;
+    let owner = agent("max-bytes");
+    let connection = env.connection(&owner).await;
+    let hook = env.shared().await;
+    let sub = env
+        .subscribe(&owner, &connection, &hook.hook_id, "p-1", at(0))
+        .await
+        .unwrap();
+    // Raw sizes; in base64 400, 4000, 400 and 400 bytes.
+    for (id, bytes) in [("d-1", 300), ("d-2", 3000), ("d-3", 300), ("d-4", 300)] {
+        env.deliver(&hook.endpoint_id, id, "p-1", bytes, at(1))
+            .await;
+    }
+    let whole = env
+        .store
+        .fetch(&sub.id, &owner, None, 10, at(2))
+        .await
+        .unwrap();
+    assert_eq!(whole.events.len(), 4);
+    assert!(whole
+        .events
+        .iter()
+        .all(|e| !e.payload.omitted && e.payload.body.is_some()));
+    let carried = |page: &super::store::EventPage| -> usize {
+        page.events
+            .iter()
+            .map(|e| e.payload.body.as_deref().map_or(0, str::len))
+            .sum()
+    };
+    let ids = |page: &super::store::EventPage| -> Vec<String> {
+        page.events.iter().map(|e| e.delivery_id.clone()).collect()
+    };
+    let fetch = |max: u64| {
+        env.store
+            .fetch_within(&sub.id, &owner, None, 10, Some(max), at(3))
+    };
+    let ack = |page: &super::store::EventPage| {
+        let cursor = page.next.clone().unwrap();
+        let (store, id, owner) = (&env.store, &sub.id, &owner);
+        async move {
+            store
+                .acknowledge(id, owner, None, &cursor, at(3))
+                .await
+                .unwrap();
+        }
+    };
+
+    // d-2 does not fit after d-1: the page ends before it.
+    let page = fetch(1000).await.unwrap();
+    assert_eq!(ids(&page), ["d-1"]);
+    assert!(page.more);
+    assert_eq!(carried(&page), 400);
+    ack(&page).await;
+
+    // d-2 is over the limit alone: it comes back alone, without its body,
+    // with its size and digest.
+    let page = fetch(1000).await.unwrap();
+    assert_eq!(ids(&page), ["d-2"]);
+    assert!(page.more, "d-3 and d-4 follow");
+    let payload = &page.events[0].payload;
+    assert!(payload.omitted);
+    assert_eq!(payload.body, None);
+    assert_eq!(payload.bytes, 3000);
+    assert_eq!(payload.sha256, whole.events[1].payload.sha256);
+    let json = serde_json::to_value(&page).unwrap();
+    assert_eq!(json["events"][0]["payload"]["omitted"], true);
+    assert!(json["events"][0]["payload"].get("body").is_none());
+    assert!(
+        serde_json::to_value(&whole).unwrap()["events"][0]["payload"]
+            .get("omitted")
+            .is_none(),
+        "a whole event names no omission"
+    );
+    ack(&page).await;
+
+    // Exactly at the limit, both fit.
+    let page = fetch(800).await.unwrap();
+    assert_eq!(ids(&page), ["d-3", "d-4"]);
+    assert!(!page.more);
+    assert_eq!(carried(&page), 800);
+    assert_eq!(page.events[0].payload.body, whole.events[2].payload.body);
+    ack(&page).await;
+
+    // An omitted event was released like any other.
+    let view = env.store.get(&sub.id, &owner, at(4)).await.unwrap();
+    assert_eq!(view.pending.events, 0);
+    env.check_invariants().await;
+    env.drop_schema().await;
+}
+
 /// The deadline is measured from the later of the last acknowledgement and
 /// the moment pending became non-empty, and is cleared while nothing is
 /// pending.
