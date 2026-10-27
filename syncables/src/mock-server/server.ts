@@ -435,9 +435,26 @@ function handlePaginatedListRequest(
   const shortSize = scheme.response?.shortPage?.size;
   const defaultSize =
     typeof shortSize === 'number' ? shortSize : DEFAULT_PAGE_SIZE;
-  const pageSize = pageSizeParam
-    ? Number(url.searchParams.get(pageSizeParam) ?? defaultSize)
-    : defaultSize;
+  // Pagination parameters are whole numbers, as a provider checks them: a
+  // page size of 0 would answer `hasMore` with the same offset forever, and
+  // one that is not a number (`limit=abc`) an empty page that ends the read.
+  const whole = (
+    name: string | undefined,
+    least: number,
+  ): number | undefined | 'invalid' => {
+    const raw = name === undefined ? null : url.searchParams.get(name);
+    if (raw === null) return undefined;
+    if (!/^\d+$/.test(raw)) return 'invalid';
+    const value = Number(raw);
+    return Number.isSafeInteger(value) && value >= least ? value : 'invalid';
+  };
+  const refuse = (name: string | undefined, least: number): void =>
+    sendJson(res, 400, {
+      error: `${String(name)} must be a whole number of at least ${least}`,
+    });
+  const requestedSize = whole(pageSizeParam, 1);
+  if (requestedSize === 'invalid') return refuse(pageSizeParam, 1);
+  const pageSize = requestedSize ?? defaultSize;
 
   let offset = 0;
   if (itemCursor && itemPath) {
@@ -453,14 +470,21 @@ function handlePaginatedListRequest(
       offset = at === -1 ? items.length : at + 1;
     }
   } else if (offsetParam) {
-    offset = Number(url.searchParams.get(offsetParam) ?? '0');
+    const requested = whole(offsetParam, 0);
+    if (requested === 'invalid') return refuse(offsetParam, 0);
+    offset = requested ?? 0;
   } else if (pageParam) {
     const start = pageStart(scheme);
-    const page = Number(url.searchParams.get(pageParam) ?? String(start));
-    offset = (page - start) * pageSize;
+    const page = whole(pageParam, start);
+    if (page === 'invalid') return refuse(pageParam, start);
+    offset = ((page ?? start) - start) * pageSize;
   } else if (pageTokenParam) {
-    const token = url.searchParams.get(pageTokenParam);
-    offset = token ? Number(token) : 0;
+    // This server's tokens are offsets; an empty one is the first page.
+    if (url.searchParams.get(pageTokenParam) !== '') {
+      const token = whole(pageTokenParam, 0);
+      if (token === 'invalid') return refuse(pageTokenParam, 0);
+      offset = token ?? 0;
+    }
   }
 
   const slice = items.slice(offset, offset + pageSize);

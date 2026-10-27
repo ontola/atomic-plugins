@@ -45,8 +45,17 @@ npx vitest run __tests__/unit/client/client.test.ts --config __tests__/vitest.co
 npx vitest run -t "keeps a local copy in sync" --config __tests__/vitest.config.ts
 ```
 
-This package has no `main.ts`/CLI entrypoint — it's a library (`build/src/index.js`,
-see `package.json` `exports`), so there's no `npm start`.
+The library entrypoints remain `build/src/index.js` and `build/src/browser.js`.
+An isolated CLI executable at `src/cli/main.ts` is exposed as the npm `syncables`
+bin; it is not imported by either library entrypoint. See `docs/cli.md` for the
+authentication/configuration scaffold and `npm run cli:mock` for its local test
+server. There is still no `npm start` or installed daemon.
+
+The additive Node-only `syncables/postgres` subpath implements the optional
+local archive/caching/replay stage (`docs/postgres-cache.md`). Keep it and CLI
+database imports out of root/browser entrypoints. PostgreSQL integration tests
+use `SYNCABLES_TEST_DATABASE_URL`; CI supplies a disposable PostgreSQL 17 service
+for every Node matrix job. With that variable absent, database cases skip.
 
 ## Architecture
 
@@ -94,7 +103,9 @@ Data flows through four stages, each its own directory under `src/`:
    lone-surrogate value, an unsafe integer, and a target template that
    is not a `/` path or holds a backslash, control character, space or
    DEL); nothing is fetched
-   (`unit/read/references.test.ts`, the spec's §7.6 example).
+   (`unit/read/references.test.ts`, the spec's §7.6 example). The value
+   rules are `segmentProblem` in `read/segment.ts`, which
+   `client/created-identity.ts` applies to a created record's identity too.
    `read/produced-classes.ts` reads Produced Classes 0.1.1-draft
    (`x-produces`, `openapi-extensions/spec/produced-classes/`) as metadata
    only: `checkProduces`/`absoluteIri`/`sameSubject` port the spec's
@@ -149,6 +160,9 @@ Data flows through four stages, each its own directory under `src/`:
    query field with `fromLastItem`) is served as the page after the item
    whose value the request names, with `hasMore`; each generated item gets
    a unique value at that path (`unit/mock-server/item-cursor.test.ts`).
+   A page size, offset, page number or page token (this server's tokens
+   are offsets) that is not a whole number in range answers `400`
+   (`unit/mock-server/page-params.test.ts`).
    Resource collections are lazily seeded with
    `SEED_COUNT` fake records (via `fake-data/generate.ts`) on first `GET`.
    A POST to a collection whose create (or path item) declares an
@@ -1044,8 +1058,8 @@ retention limit and leases on a simulated clock.
   `@typescript-eslint/explicit-function-return-type` as a warning, and a
   vitest plugin scoped to `__tests__/**`. Prettier config (`.prettierrc`) is
   applied via `eslint-config-prettier`, so ESLint won't fight Prettier.
-- Node engine is pinned to `>= 22.11 < 23` (see `package.json`
-  `engines`/`volta`).
+- Node runtime requires `>= 22.11`; CI covers Node 22, 24 and 26. The Volta
+  Node 22 pin is a reproducible development default, not an upper runtime limit.
 
 ## Changelog fragments
 
@@ -1091,4 +1105,5 @@ This project is NLnet-funded and follows [NLnet's Generative AI policy](https://
 - **Redact before committing.** Review the log for credentials, personal information (emails, etc.), and other session-identifying detail that isn't needed to understand what was asked and produced; mark redactions inline as `[redacted]` rather than deleting silently.
 - **No retroactive backfill required.** Per the policy's exception for already-ongoing projects, don't try to reconstruct historical sessions that predate `docs/ai-logs/` — if you find an old `Claude-Session:` link with no matching log, add it to [`docs/ai-logs/pending-historical-sessions.md`](docs/ai-logs/pending-historical-sessions.md) instead of fabricating a transcript.
 - **Keep the README in sync.** If how AI is used on this project changes in a way that makes the README's "Generative AI use" section inaccurate, update that section too.
-- **Don't present AI output as unassisted human work,** and don't skip human review/testing before committing — both are conditions of the policy, not just house style.
+- **Keep AI assistance explicit.** Do not present AI output as unassisted human work; record the maintainer's review or delegation and the validation performed in the session log.
+- **Publishing authorized work.** Michiel authorizes committing, pushing, opening a PR, and merging code within the agreed task once the applicable tests and required CI checks are green, without another confirmation between those steps. Preserve AI disclosure and session logs, respect repository merge gates, and never bypass checks with admin rights.

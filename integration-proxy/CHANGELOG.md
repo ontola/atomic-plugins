@@ -5,6 +5,14 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
 ## Unreleased
 
+- Webhook inbox (`WEBHOOKS_ENABLED`, off by default): `GET
+  /subscriptions/{id}/events` takes `maxBytes` (Webhook Subscriptions
+  0.2.0-draft). A page carries at most that many bytes of base64 payload.
+  An event that does not fit ends the page, unless it is the page's first:
+  then it comes back alone, with `payload.omitted: true` and no `body`, and
+  is acknowledged and released like any other. A `maxBytes` below 1 gets
+  `400`. A page's payloads are now read only for the events it returns
+  with their bodies, not for every row it looks at.
 - Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
   paced at the tier whose `plans` name the plan the catalog selection's
   `throttlingPlans` gives for it, else within every tier at once (each its

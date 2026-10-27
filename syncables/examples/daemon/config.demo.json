@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "owner": "atomic:agent:demo",
+  "issuer": "http://127.0.0.1:11872",
+  "clientId": "syncables-cli-demo",
+  "dataDirectory": "./local-data.git",
+  "collections": [
+    {
+      "platform": "github-issues",
+      "account": "example",
+      "name": "tasks",
+      "connection": "demo-connection",
+      "document": "./github-issues.json",
+      "collection": "issues",
+      "bindings": {
+        "owner": "example",
+        "repo": "tasks"
+      },
+      "query": {
+        "per_page": "100"
+      },
+      "pollSeconds": 300
+    }
+  ]
+}

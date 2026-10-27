@@ -1,5 +1,21 @@
 # Pins and candidates
 
+## Candidate23 proposal (2026-10-27)
+
+The pin-update branch proposes `30994948b5adadd765ecfcdccdf0aad14ef5be1a`,
+`claude/atomic-plugins-pin-candidate23`, based directly on candidate22. It
+backports atomic-server #2361's SYNC_PUSH batching/LAST durability and #2368's
+bounded authenticated HTTP recovery for stalled browser GETs. It also renders
+schema-backed JSON table cells as readable previews, wires the existing table
+loading indicator and preserves nested JSON nulls when editing. Manifest
+fixtures are unchanged. The candidate implementation is reviewed in
+https://github.com/ontola/atomic-server/pull/2372.
+
+Candidate CI and the pin PR must pass before advancing the shared pin or
+merging this update. This is a proposal until those checks complete. The
+SyncD native companion's Cargo pin is aligned to the same candidate in the
+stacked SyncD PR #693; that change is separate from this host/browser pin PR.
+
 ## What is pinned
 
 `.atomic-server-ref` holds one full atomic-server commit SHA. CI, the lanes,

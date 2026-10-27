@@ -43,6 +43,7 @@ import {
 } from 'syncables/browser';
 import {
   BudgetReached,
+  RUN_PAYLOAD_BUDGET,
   lastError,
   readState,
   SandboxInboxJournal,
@@ -84,23 +85,21 @@ export const PLATFORM = 'github-issues';
  * the pending `atomic` effect with every delivery's base64 payload, at most
  * 8 MiB (`sync_session::save`).
  *
- * - The session: the journal stops collecting at `RUN_PAYLOAD_BUDGET`
- *   (6 MiB of base64, 4.5 MiB raw; the first new event is always taken)
- *   and refuses one event over `MAX_EVENT_PAYLOAD` (7.5 MiB of base64,
- *   about 5.6 MiB raw).
- * - The fetch: a page fits when its events together are under about 6 MiB
- *   raw (8 MiB of base64, less the envelopes). GitHub issue and comment
- *   deliveries are usually a few tens of KiB. A page over the cap fails the
- *   fetch, and the run records `lastError`. A run after a failed one asks
- *   for one event only, so a page over the cap only because of its
- *   neighbours gets through one event at a time.
+ * Each fetch asks for at most `RUN_PAYLOAD_BUDGET` (6 MiB) of base64
+ * payload (`maxBytes`, Webhook Subscriptions 0.2.0-draft), so a page stays
+ * under both caps with 2 MiB for the envelopes and the rest of the session.
+ * A delivery whose payload alone is over it comes back without its body,
+ * and is stored as a delivery row without `webhook-payload`; the proxy
+ * retains bodies up to 8 MiB (`delivery.maxBodyBytes`, pilot value), so
+ * this happens from about 4.5 MiB raw. GitHub issue and comment deliveries
+ * are usually a few tens of KiB.
  *
- * Not every delivery fits. The proxy retains bodies up to 8 MiB
- * (`delivery.maxBodyBytes`, pilot value). One event over about 5.6 MiB raw
- * is refused, and one over about 6 MiB raw cannot be fetched at all, so
- * every run fails at it until the proxy drops it (7 days). A `maxBytes`
- * parameter on `events`, returning an oversized event without its body, is
- * the planned fix (#369 step 4b plan, Unit B).
+ * The journal's own budget stays as a guard against a receiver that does
+ * not know `maxBytes` (one before 0.2.0-draft ignores it): it stops
+ * collecting at `RUN_PAYLOAD_BUDGET` and refuses one event over
+ * `MAX_EVENT_PAYLOAD`. Against such a receiver a page over the 8 MiB fetch
+ * cap fails the fetch, the run records `lastError`, and the next run asks
+ * for one event only.
  */
 export const DEFAULT_LIMIT = 4;
 
@@ -458,6 +457,7 @@ export async function run(ctx: Ctx): Promise<Output> {
     limit: lastError(ctx.connection)
       ? 1
       : Math.min(config.limit ?? DEFAULT_LIMIT, DEFAULT_LIMIT),
+    maxBytes: RUN_PAYLOAD_BUDGET,
     now: () => ctx.trigger?.at ?? Date.now(),
   });
   // One consumer step per run: a second would acknowledge this run's events

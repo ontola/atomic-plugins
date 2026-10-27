@@ -1,0 +1,117 @@
+# Reviewed 2026-10-19 against the pinned OAD and official provider documentation; no live calls.
+# Revision 4 of pagination-9d0d73c6...: v3's actions, each kept, plus one scheme on Get Guild
+# Audit Log (GET /guilds/{guild_id}/audit-logs), which v3's comment lists among the lists whose
+# order Discord does not document. Its page does document it
+# (https://docs.discord.com/developers/resources/audit-log, curl'd 2026-10-19): "When using
+# before, the list is ordered by the audit log entry ID descending (newer entries first)." and
+# "Omitting both before and after defaults to before the current timestamp and will show the most
+# recent entries in descending order by ID"; before: "Entries with ID less than a specific audit
+# log entry ID"; an entry's id: "ID of the entry" (a snowflake). That is a strict upper bound on a
+# unique field over items in descending order of it, Pagination Schemes 0.10.0 §4.3.3 (b), so
+# beforeEntryId sends no before first and then the last (lowest) entry's id. Discord documents no
+# has-more field: an empty page ends the read. The page's `after` ("Entries with ID greater than",
+# ascending) would also meet (b), but a first request without it reads descending, so only before
+# is declared. The scheme pages audit_log_entries; the response's other arrays (users, webhooks,
+# threads and the rest) are the entries' related objects, not paged items. Filters (user_id,
+# action_type, and target_id, which the pinned OAD has and the page does not list) stay as the
+# caller sends them. "All audit log entries are stored for 45 days": the read reaches the oldest
+# entry still stored, not the guild's whole history.
+# Every v3 note stands (see that file), except that the guild audit log is no longer among the
+# undeclared lists.
+# Pagination Schemes 0.10.0 says no overlay should declare order until syncables checks it.
+# syncables checks it from 0.25.0 (#630, published 2026-10-19), so a catalog may select this
+# revision with syncables 0.25.0 or later; no dated catalog selects it yet.
+# Needs Pagination Schemes 0.10.0. A 0.9.x consumer that validates rejects order; one that does not
+# ignores it and reads without the check, so do not use this revision with one.
+overlay: 1.0.0
+info:
+  title: Discord API Pagination Schemes (revision 4)
+  version: 4.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9d0d73c6b23cb07ca2d225fb8b3848fede322b21/APIs/discord.com/10/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        afterUserId:
+          type: pageToken
+          autoDetect: false
+          description: >-
+            Send no `after` first, then the `user.id` of the previous page's
+            last item. Discord returns these users "in ascending order" of
+            their id and `after` considers "only users after given user id".
+            An empty page ends the list; a short page does not.
+          request:
+            queryParameters:
+              after:
+                role: cursor
+                fromLastItem: user.id
+                order: ascending
+              limit:
+                role: pageSize
+        beforeEntryId:
+          type: pageToken
+          autoDetect: false
+          description: >-
+            Send no `before` first, then the `id` of the previous page's last
+            (lowest) audit log entry. With `before`, Discord orders the entries
+            "by the audit log entry ID descending", and `before` returns
+            "Entries with ID less than a specific audit log entry ID". An empty
+            page ends the list.
+          request:
+            queryParameters:
+              before:
+                role: cursor
+                fromLastItem: id
+                order: descending
+              limit:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: audit_log_entries
+        beforeThreadId:
+          type: pageToken
+          autoDetect: false
+          description: >-
+            Send no `before` first, then the `id` of the previous page's last
+            (lowest) thread. Discord orders these threads "by their id, in
+            descending order" and `before` "returns threads before this id".
+            has_more false, or an empty page, ends the list.
+          request:
+            queryParameters:
+              before:
+                role: cursor
+                fromLastItem: id
+                order: descending
+              limit:
+                role: pageSize
+          response:
+            envelope:
+              itemsField: threads
+            bodyFields:
+              has_more:
+                role: hasMore
+  - target: $.paths['/channels/{channel_id}/users/@me/threads/archived/private'].get
+    update:
+      x-pagination:
+        - scheme: beforeThreadId
+  - target: $.paths['/guilds/{guild_id}/audit-logs'].get
+    update:
+      x-pagination:
+        - scheme: beforeEntryId
+  - target: $.paths['/guilds/{guild_id}/bans'].get
+    update:
+      x-pagination:
+        - scheme: afterUserId
+  - target: $.paths['/guilds/{guild_id}/scheduled-events/{guild_scheduled_event_id}/users'].get
+    update:
+      x-pagination:
+        - scheme: afterUserId
+  - target: $.paths['/users/@me/guilds'].get
+    update:
+      description: >-
+        The initial read-only integration requests the maximum 200 guilds in
+        one page: Discord says 200 "is the maximum number of guilds a non-bot
+        user can join. Therefore, pagination is not needed". Discord also
+        supports `before` and `after`, but does not document the order of the
+        guilds it returns, so no cursor read from the last item is declared
+        (Pagination Schemes §4.3.3).

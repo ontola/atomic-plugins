@@ -128,6 +128,27 @@ class RecordRejectionTests(unittest.TestCase):
         self.rejects("EventPage", 0, lambda p: p["events"][0].update(headers={"X-Signature": "x"}))
         self.rejects("EventPage", 0, lambda p: p["events"][0].update(deliveryId="has space"))
 
+    def test_an_event_without_its_body(self):
+        page = records()["EventPage"][2]
+        self.assertTrue(page["events"][0]["payload"]["omitted"])
+        self.assertNotIn("body", page["events"][0]["payload"])
+        validate_record("EventPage", page)
+        # Exactly one of body and omitted.
+        self.rejects("EventPage", 2, lambda p: p["events"][0]["payload"].update(body="e30="))
+        self.rejects("EventPage", 0, lambda p: p["events"][0]["payload"].pop("body"))
+        self.rejects("EventPage", 2, lambda p: p["events"][0]["payload"].update(omitted=False))
+        # It still names its size and digest.
+        self.rejects("EventPage", 2, lambda p: p["events"][0]["payload"].pop("sha256"))
+        self.rejects("EventPage", 2, lambda p: p["events"][0]["payload"].pop("bytes"))
+        # Only the first event of a page can be over maxBytes alone, and the
+        # page ends after it.
+        def with_another(p):
+            other = copy.deepcopy(records()["EventPage"][0]["events"][0])
+            other.update(cursor="cur_g1_4")
+            p["events"].append(other)
+            p["next"] = "cur_g1_4"
+        self.rejects("EventPage", 2, with_another)
+
     def test_subscriptions(self):
         self.rejects("Subscription", 1, lambda s: s.pop("reconciliationRequired"))
         self.rejects("Subscription", 2, lambda s: s.update(reconciliationRequired=records()["ReconciliationRequired"][0]))
