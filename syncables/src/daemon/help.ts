@@ -9,7 +9,7 @@ Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export on
   syncables atomic-peer --config FILE [--collections platform/account/name,...]
     --peer-binary /absolute/path/syncables-atomic-peer --peer-directory PRIVATE_DIRECTORY
     --signer-file PRIVATE_EXPORTED_ATOMIC_SECRET_FILE --reader atomic:agent:ID[,ID]
-    [--peer-port 9901] [--at REVISION|tag:NAME]
+    [--peer-port 9901] [--at REVISION|tag:NAME] [--projection-contract FILE]
   syncables checkout --config FILE [--collections platform/account/name,...]
   syncables braid --config FILE --collections platform/account/name,...
     [--braid-port 9888] [--braid-origin https://reader.example]
@@ -43,7 +43,9 @@ with account folders and collection tables, via the separately built companion.
 It follows accepted PostgreSQL revisions, uses the explicitly selected
 owner signer, and rejects incoming writes. --collection selects one collection;
 --collections selects several. --at requires one selected collection.
-Original JSON stays in PostgreSQL; nested data becomes native resource links.
+Original JSON stays in PostgreSQL. Explicit embedded-resource declarations
+produce links; other compound values stay JSON. --projection-contract FILE
+applies a source-hash-bound projection overlay without another provider read.
 Use a new projection directory when upgrading from the JSON-wrapper prototype.
 See docs/atomic-peer.md for representation and native build instructions.
 Webhook relay: loopback POST /webhooks/ENCODED_COLLECTION_ALIAS, Bearer

@@ -57,3 +57,26 @@ The browser pin, native manifest revision and locked core source all match
 
 Only invented data and local PostgreSQL were used; no provider account, owner
 key, deployment, package publication or shared pin advancement was involved.
+
+## Concurrent source update
+
+The source author advanced #693 to
+`b196c5bbcc6419c1bcc6d1a6943e0688cd79c7c0` while this readiness branch was
+being prepared. No source branch was overwritten. Merged that immutable head
+into this consolidation, preserving the experimental Embedded Resources spec,
+explicit linked-resource projection and source-bound projection-contract checks.
+The only conflict was the CLI option list: retain Braid, Atomic peer and the
+new `projection-contract` option together.
+
+The combination passed all 1,920 JavaScript tests in 108 files on Node 24.19.0,
+with local PostgreSQL and the actual native process enabled and no skips. This
+includes linked scalar/array publication, durable restart/checkpoint recovery
+and rejection of invalid contracts before native allocation. All nine native
+Rust tests, locked build, all-target Clippy with warnings denied, Rust
+formatting, JavaScript build/type checks, ESLint and Prettier passed again.
+The ten experimental-spec validator tests and its example passed too. CLI help
+retains both interface modes and the projection-contract option.
+
+These are local results for this combination. The earlier source-head CI does
+not validate this merge or an eventual wider aggregate; new current-head CI is
+still required. The concurrently edited source branch remains untouched.

@@ -1,0 +1,42 @@
+{
+  "overlay": "1.0.0",
+  "info": {
+    "title": "GitHub issue embedded users and labels (experimental)",
+    "version": "0.1.0"
+  },
+  "actions": [
+    {
+      "target": "$.components.crudResources",
+      "update": {
+        "issue": {
+          "x-embeddedResources": {
+            "user": { "resource": "user", "cardinality": "one" },
+            "labels": { "resource": "label", "cardinality": "many" }
+          }
+        },
+        "user": {
+          "description": "A GitHub user, also represented by the user object embedded in an issue.",
+          "schema": { "$ref": "#/components/schemas/nullable-simple-user" },
+          "identity": {
+            "urlTemplate": "/users/{username}",
+            "bindings": { "username": { "field": "login" } }
+          },
+          "collections": {
+            "users": { "urlTemplate": "/users" }
+          }
+        },
+        "label": {
+          "description": "A repository label. The repository context is inherited from the issue request.",
+          "schema": { "$ref": "#/components/schemas/label" },
+          "identity": {
+            "urlTemplate": "/repos/{owner}/{repo}/labels/{name}",
+            "bindings": { "name": { "field": "name" } }
+          },
+          "collections": {
+            "labels": { "urlTemplate": "/repos/{owner}/{repo}/labels" }
+          }
+        }
+      }
+    }
+  ]
+}
