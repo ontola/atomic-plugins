@@ -1,7 +1,7 @@
 //! Durable RFC 8628 grants and rotating token families. Every transition locks
 //! its grant/session row in PostgreSQL; no process-local authentication state.
 use super::{hash, secret, Error, READ_SCOPE};
-use crate::security::Security;
+use crate::security::{migration_lock, Security};
 use serde_json::{json, Value};
 
 pub(crate) const SCHEMA: &str = "
@@ -40,17 +40,6 @@ CREATE INDEX IF NOT EXISTS device_refresh_session_idx ON device_refresh_tokens(s
 
 // Serialize only allocations, preventing unbounded grants and session rows.
 const ALLOCATION_LOCK: i64 = 5_650_862_800;
-
-// Startup DDL takes the exclusive form of this lock. Sharing it prevents
-// rolling-instance initialization from deadlocking with multi-table changes.
-async fn migration_lock(tx: &tokio_postgres::Transaction<'_>) -> Result<(), Error> {
-    tx.query_one(
-        "SELECT pg_advisory_xact_lock_shared($1)",
-        &[&crate::security::SCHEMA_LOCK],
-    )
-    .await?;
-    Ok(())
-}
 
 async fn sweep(tx: &tokio_postgres::Transaction<'_>) -> Result<(), Error> {
     tx.execute(
