@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { totals } from './amounts.js';
 import { createController, type State } from './controller.js';
-import { firstCopy, groupDuplicates, planRemoval } from './duplicates.js';
+import { groupDuplicates, planRemoval } from './duplicates.js';
 import {
   fakeStore,
   OWN_TABLE,
@@ -94,11 +94,6 @@ describe('groupDuplicates', () => {
       expect(duplicates, JSON.stringify(edit)).toEqual([]);
       expect(rows).toHaveLength(2);
     }
-  });
-
-  it('keeps the lowest subject', () => {
-    expect(firstCopy(txn('a'), txn('b'))).toBeLessThan(0);
-    expect(firstCopy(txn('b'), txn('a'))).toBeGreaterThan(0);
   });
 
   it('picks the same kept row whatever order the rows are read in (two tabs)', () => {
@@ -257,54 +252,6 @@ describe('a table with a duplicated row (#587)', () => {
     expect(state.dedupe).toMatchObject({ status: 'done', removed: 0, kept: 1 });
   });
 
-  it('a copy already gone when the button is pressed counts as removed', async () => {
-    const { store, b } = seeded('own');
-    const controller = tab(store);
-    await controller.load();
-    // Another tab removed it first, unseen by this one.
-    store.resources.delete(b);
-    await controller.removeDuplicates();
-    expect(controller.state().dedupe).toMatchObject({
-      status: 'done',
-      removed: 1,
-      failed: 0,
-    });
-    expect(controller.state().duplicates).toEqual([]);
-  });
-
-  it('a destroy that fails while the copy is still listed counts as failed', async () => {
-    const { store, b } = seeded('own');
-    const controller = tab(store);
-    await controller.load();
-    const getResource = store.getResource.bind(store);
-
-    store.getResource = async subject => {
-      const resource = await getResource(subject);
-
-      return subject === b
-        ? {
-            ...resource,
-            get: resource.get,
-            set: resource.set,
-            remove: resource.remove,
-            save: resource.save,
-            destroy: async () => {
-              throw new Error('Host did not answer in time');
-            },
-          }
-        : resource;
-    };
-
-    await controller.removeDuplicates();
-    expect(controller.state().dedupe).toMatchObject({
-      status: 'done',
-      removed: 0,
-      failed: 1,
-      details: 'Host did not answer in time',
-    });
-    expect(controller.state().duplicates.map(d => d.subject)).toEqual([b]);
-  });
-
   it('in a table that is not the app’s own, lists the copy but offers no removal, and the host refuses row destroys', async () => {
     const store = fakeStore({ data: 'shared', access: 'granted' });
     const one = seedRow('-12.50', '2026-09-02', { 'bank-reference': 'R1' });
@@ -322,60 +269,74 @@ describe('a table with a duplicated row (#587)', () => {
     );
   });
 
-  it('P3: the kept row deleted elsewhere after load: its copy is left, not destroyed', async () => {
-    const { store, a } = seeded('own');
+  it.each`
+    change             | outcome                                                              | destroyed | remaining
+    ${'gone-copy'}     | ${{ removed: 1, failed: 0 }}                                         | ${false}  | ${2}
+    ${'destroy-fails'} | ${{ removed: 0, failed: 1, details: 'Host did not answer in time' }} | ${false}  | ${3}
+    ${'gone-kept'}     | ${{ removed: 0, skipped: 1 }}                                        | ${false}  | ${2}
+    ${'note'}          | ${{ removed: 1 }}                                                    | ${true}   | ${2}
+    ${'category'}      | ${{ removed: 0, kept: 1 }}                                           | ${false}  | ${3}
+    ${'amount'}        | ${{ skipped: 1 }}                                                    | ${false}  | ${3}
+  `('on press: $change', async ({ change, outcome, destroyed, remaining }) => {
+    const original = change === 'category' ? { 'money-category': 'Food' } : {};
+    const { store, a, b } = seeded('own', original, original);
     const controller = tab(store);
     await controller.load();
-    store.resources.delete(a);
+
+    switch (change) {
+      case 'gone-copy':
+        store.resources.delete(b);
+        break;
+      case 'gone-kept':
+        store.resources.delete(a);
+        break;
+      case 'note':
+        store.resources.get(b)![sharedProperty('money-note')] = 'paid in cash';
+        break;
+      case 'category':
+        store.resources.get(a)![sharedProperty('money-category')] = 'Travel';
+        break;
+      case 'amount':
+        store.resources.get(b)![sharedProperty('bank-amount')] = '-40';
+        break;
+
+      case 'destroy-fails': {
+        const getResource = store.getResource.bind(store);
+
+        store.getResource = async subject => {
+          const resource = await getResource(subject);
+
+          if (subject === b)
+            resource.destroy = async () => {
+              throw new Error('Host did not answer in time');
+            };
+
+          return resource;
+        };
+
+        break;
+      }
+    }
+
     await controller.removeDuplicates();
-    expect(store.destroyed).toEqual([]);
-    expect(tableRows(store, OWN_TABLE)).toHaveLength(2);
+    expect(store.destroyed).toEqual(destroyed ? [b] : []);
+    expect(tableRows(store, OWN_TABLE)).toHaveLength(remaining);
     expect(controller.state().dedupe).toMatchObject({
       status: 'done',
-      removed: 0,
-      skipped: 1,
+      ...outcome,
     });
-  });
-
-  it('P4: a note added to the copy after load moves onto the kept row before the copy goes', async () => {
-    const { store, a, b } = seeded('own');
-    const controller = tab(store);
-    await controller.load();
-    store.resources.get(b)![sharedProperty('money-note')] = 'paid in cash';
-    await controller.removeDuplicates();
-    expect(store.destroyed).toEqual([b]);
-    expect(store.resources.get(a)![sharedProperty('money-note')]).toBe(
-      'paid in cash',
-    );
-  });
-
-  it('P5: the kept row’s category changed elsewhere after load is not overwritten', async () => {
-    const { store, a, b } = seeded(
-      'own',
-      { 'money-category': 'Food' },
-      { 'money-category': 'Food' },
-    );
-    const controller = tab(store);
-    await controller.load();
-    store.resources.get(a)![sharedProperty('money-category')] = 'Travel';
-    await controller.removeDuplicates();
-    expect(store.resources.get(a)![sharedProperty('money-category')]).toBe(
-      'Travel',
-    );
-    // Read again, the copy's category differs from the kept row's: kept.
-    expect(store.destroyed).toEqual([]);
-    expect(controller.state().dedupe).toMatchObject({ kept: 1, removed: 0 });
-    expect(controller.state().duplicates.map(d => d.subject)).toEqual([b]);
-  });
-
-  it('a copy whose amount was edited after load is left: read again, it is not a duplicate', async () => {
-    const { store, b } = seeded('own');
-    const controller = tab(store);
-    await controller.load();
-    store.resources.get(b)![sharedProperty('bank-amount')] = '-40';
-    await controller.removeDuplicates();
-    expect(store.destroyed).toEqual([]);
-    expect(controller.state().dedupe).toMatchObject({ skipped: 1 });
+    if (change === 'gone-copy')
+      expect(controller.state().duplicates).toEqual([]);
+    if (change === 'category' || change === 'destroy-fails')
+      expect(controller.state().duplicates.map(d => d.subject)).toEqual([b]);
+    if (change === 'category')
+      expect(store.resources.get(a)![sharedProperty('money-category')]).toBe(
+        'Travel',
+      );
+    if (change === 'note')
+      expect(store.resources.get(a)![sharedProperty('money-note')]).toBe(
+        'paid in cash',
+      );
   });
 
   it('a press while an import is writing does nothing and says why', async () => {

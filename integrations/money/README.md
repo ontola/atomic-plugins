@@ -426,7 +426,21 @@ minified, one module). Screenshots, axe and the render budget:
 
 ## Verified
 
-At 0.4.6 (app module `apps/money/0.4.6/ui.js`, 128,819 bytes; `plugin.js`
+Review cleanup for 0.4.6 (2026-10-27): the duplicate and incomplete row lists
+share their rendering, duplicate grouping helpers are private, and the importer,
+app check and fixtures share the identity helpers. The removal outcomes still
+distinguish skipped groups from copies retained for conflicting annotations;
+those counts describe different units. The second bank-field check before
+removal and the first failure's cause are retained.
+
+The updated app module is 128,567 bytes. Money's 346 unit tests pass (two
+existing live checks skipped), along with typecheck, lint and JavaScript-only
+certification. Chromium renders identical duplicate/incomplete region DOM
+before and after this refactor at 1200px and 390px. Usertest-10 is recorded,
+not deployed. The real-host E2E results below cover the earlier candidate;
+they were not rerun for this structural cleanup.
+
+The initial 0.4.6 candidate (app module `apps/money/0.4.6/ui.js`, 128,819 bytes; `plugin.js`
 again 0.3.0's bundle with only the manifest's `version` changed) a
 transaction written twice is found when the table is read (#587, Decision
 Inbox Q-115; app only, no host change): see "Duplicate rows" under

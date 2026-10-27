@@ -42,7 +42,7 @@ export interface Duplicate extends Txn {
  * shows or sums. A row edited after its import (another amount, say) keeps
  * its source id and fingerprint, so those two alone don't make it a copy.
  */
-export const SAME_FIELDS = [
+const SAME_FIELDS = [
   'sourceId',
   'fingerprint',
   'account',
@@ -60,17 +60,17 @@ export const SAME_FIELDS = [
  * without a source id or without a fingerprint (an older or hand-made row,
  * where the source id alone says too little).
  */
-export const keyOf = (row: Txn) =>
+const keyOf = (row: Txn) =>
   row.sourceId && row.fingerprint
     ? JSON.stringify(SAME_FIELDS.map(field => row[field]))
     : undefined;
 
 /** Whether two rows are the same transaction (`SAME_FIELDS`). */
-export const sameTransaction = (a: Txn, b: Txn) =>
+const sameTransaction = (a: Txn, b: Txn) =>
   keyOf(a) !== undefined && keyOf(a) === keyOf(b);
 
 /** The order of copies: the lowest subject first, the one kept. */
-export function firstCopy(a: Txn, b: Txn): number {
+function firstCopy(a: Txn, b: Txn): number {
   return a.subject < b.subject ? -1 : a.subject > b.subject ? 1 : 0;
 }
 

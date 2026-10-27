@@ -535,7 +535,7 @@ export function incompleteRows(
   ctx: Ctx,
   actions: LedgerActions,
 ): HTMLElement | undefined {
-  const { state, locale } = ctx;
+  const { state } = ctx;
   const rows = state.incomplete;
   if (!rows.length) return undefined;
   const n = rows.length;
@@ -553,40 +553,54 @@ export function incompleteRows(
       h('strong', {}, `${n} ${n === 1 ? 'row is' : 'rows are'} incomplete`),
       `: not in any balance or total, and not compared with imports. Fill the ${n === 1 ? 'column' : 'columns'} in the table.`,
     ),
-    h(
-      'ul',
-      {},
-      rows.map(row => {
-        const { title } = titleOf(row);
-        const has = [
-          row.bookingDate ? shortDate(row.bookingDate, locale) : '',
-          row.account ? shortAccount(row.account) : '',
-          row.amount && row.currency
-            ? formatAmount(row.amount, row.currency, locale)
-            : row.amount || row.currency,
-        ].filter(Boolean);
-
-        return h(
-          'li',
-          { 'data-incomplete': row.subject },
-          h('span', { class: 'm-t' }, title),
-          has.length
-            ? h('span', { class: 'pl-muted pl-num' }, has.join(' · '))
-            : undefined,
-          h('strong', {}, row.incomplete),
-          state.canOpenRows
-            ? button('Open row', {
-                key: `open-row:${row.subject}`,
-                ariaLabel: `Open row ${title}`,
-                onClick: () => actions.openRow(row.subject),
-              })
-            : undefined,
-        );
-      }),
+    exceptionalRows(ctx, actions, rows, 'incomplete', row =>
+      h('strong', {}, row.incomplete),
     ),
     state.openFailure
       ? h('p', { class: 'pl-muted m-small' }, state.openFailure)
       : undefined,
+  );
+}
+
+/** The common row summary and navigation for rows outside the ledger. */
+function exceptionalRows<T extends Txn>(
+  { state, locale }: Ctx,
+  actions: LedgerActions,
+  rows: T[],
+  kind: 'incomplete' | 'duplicate',
+  rowDetail: (row: T) => HTMLElement,
+): HTMLElement {
+  return h(
+    'ul',
+    {},
+    rows.map(row => {
+      const { title } = titleOf(row);
+      const has = [
+        row.bookingDate ? shortDate(row.bookingDate, locale) : '',
+        row.account ? shortAccount(row.account) : '',
+        row.amount && row.currency
+          ? formatAmount(row.amount, row.currency, locale)
+          : row.amount || row.currency,
+        ...(kind === 'duplicate' ? [row.category, row.note] : []),
+      ].filter(Boolean);
+
+      return h(
+        'li',
+        { [`data-${kind}`]: row.subject },
+        h('span', { class: 'm-t' }, title),
+        has.length
+          ? h('span', { class: 'pl-muted pl-num' }, has.join(' · '))
+          : undefined,
+        rowDetail(row),
+        state.canOpenRows
+          ? button('Open row', {
+              key: `open-${kind === 'incomplete' ? 'row' : 'duplicate'}:${row.subject}`,
+              ariaLabel: `Open row ${title}`,
+              onClick: () => actions.openRow(row.subject),
+            })
+          : undefined,
+      );
+    }),
   );
 }
 
@@ -637,7 +651,7 @@ export function duplicateRows(
   ctx: Ctx,
   actions: LedgerActions,
 ): HTMLElement | undefined {
-  const { state, locale } = ctx;
+  const { state } = ctx;
   const rows = state.duplicates;
   const outcome = dedupeOutcome(state);
   if (!rows.length && !outcome) return undefined;
@@ -670,44 +684,15 @@ export function duplicateRows(
         )
       : undefined,
     n
-      ? h(
-          'ul',
-          {},
-          rows.map(row => {
-            const { title } = titleOf(row);
-            const of = byKept.get(row.duplicateOf);
-            const has = [
-              row.bookingDate ? shortDate(row.bookingDate, locale) : '',
-              row.account ? shortAccount(row.account) : '',
-              row.amount && row.currency
-                ? formatAmount(row.amount, row.currency, locale)
-                : row.amount,
-              row.category,
-              row.note,
-            ].filter(Boolean);
+      ? exceptionalRows(ctx, actions, rows, 'duplicate', row => {
+          const of = byKept.get(row.duplicateOf);
 
-            return h(
-              'li',
-              { 'data-duplicate': row.subject },
-              h('span', { class: 'm-t' }, title),
-              has.length
-                ? h('span', { class: 'pl-muted pl-num' }, has.join(' · '))
-                : undefined,
-              h(
-                'span',
-                { class: 'pl-muted' },
-                of ? `Copy of ${titleOf(of).title}` : 'Copy of another row',
-              ),
-              state.canOpenRows
-                ? button('Open row', {
-                    key: `open-duplicate:${row.subject}`,
-                    ariaLabel: `Open row ${title}`,
-                    onClick: () => actions.openRow(row.subject),
-                  })
-                : undefined,
-            );
-          }),
-        )
+          return h(
+            'span',
+            { class: 'pl-muted' },
+            of ? `Copy of ${titleOf(of).title}` : 'Copy of another row',
+          );
+        })
       : undefined,
     canRemove
       ? button(

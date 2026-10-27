@@ -11,7 +11,12 @@ import {
   type StatementErrorCode,
   type StatementErrorData,
 } from '../errors.js';
-import { entries, OVERLAP_MESSAGE, type Entry } from '../identity.js';
+import {
+  entries,
+  OVERLAP_MESSAGE,
+  statementIdentityKey,
+  type Entry,
+} from '../identity.js';
 import type { Statement } from '../parser.js';
 import {
   detectStatementFormat,
@@ -253,22 +258,9 @@ export function compare(
  * `['statement', statementKey, index]` with the same statement key.
  */
 export function sameStatement(a: string, b: string): boolean {
-  const key = (identity: string) => {
-    try {
-      const parsed: unknown = JSON.parse(identity);
-      if (!Array.isArray(parsed) || parsed.length !== 4) return undefined;
-      const [format, account, currency, where] = parsed as unknown[];
-      if (!Array.isArray(where) || where[0] !== 'statement') return undefined;
+  const ka = statementIdentityKey(a);
 
-      return JSON.stringify([format, account, currency, where[1]]);
-    } catch {
-      return undefined;
-    }
-  };
-
-  const ka = key(a);
-
-  return ka !== undefined && ka === key(b);
+  return ka !== undefined && ka === statementIdentityKey(b);
 }
 
 function differences(mine: Txn, file: FileRow): Changed['fields'] {

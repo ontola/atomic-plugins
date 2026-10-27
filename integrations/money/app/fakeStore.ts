@@ -21,7 +21,7 @@
  * - `other`: a table of some other class; `none`: no table.
  * Test-only; not bundled.
  */
-import { entries } from '../identity.js';
+import { contentFingerprint, entries } from '../identity.js';
 import { parseBankStatement } from '../statement.js';
 import { STATEMENT_CLASS } from './own.js';
 import {
@@ -99,7 +99,7 @@ export type SeedRow = Partial<Record<Shortname, string>> & {
 
 /**
  * A synthetic row: an invented bunq-style IBAN, the amount as reference,
- * and a content fingerprint shaped like the importer's (`../identity.ts`)
+ * and the importer's content fingerprint (`../identity.ts`)
  * over the row's own values, unless `extra` sets one (`''` for a row
  * without).
  */
@@ -113,18 +113,18 @@ export const seedRow = (
 
   return {
     ...row,
-    'bank-fingerprint':
-      'mt940-content:' +
-      JSON.stringify([
-        row['bank-account'],
-        row['bank-currency'],
-        row['bank-value-date'],
-        row['bank-booking-date'] ?? '',
-        row['bank-amount'],
-        row['bank-transaction-code'] ?? '',
-        row['bank-reference'] ?? '',
-        row['bank-description'] ?? '',
-      ]),
+    'bank-fingerprint': contentFingerprint(
+      'mt940',
+      { account: row['bank-account'], currency: row['bank-currency'] },
+      {
+        date: row['bank-value-date'],
+        bookingDate: row['bank-booking-date'] ?? '',
+        amount: row['bank-amount'],
+        code: row['bank-transaction-code'] ?? '',
+        reference: row['bank-reference'] ?? '',
+        description: row['bank-description'] ?? '',
+      },
+    ),
   };
 };
 

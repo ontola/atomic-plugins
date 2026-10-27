@@ -18,7 +18,7 @@ describe('money drive-app bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 128,819 bytes minified (JS and embedded CSS) on 2026-10-19,
+    // Measured 128,567 bytes minified (JS and embedded CSS) on 2026-10-27,
     // at the 7dab1ce pin, for 0.4.6 (duplicate rows grouped, listed and
     // removed on press from rows read again, #587; a no-reference twin is
     // not an overlap); the limit is that plus about 10%, rounded up.
@@ -39,7 +39,7 @@ describe('money drive-app bundle', async () => {
     // term, not only the bank ones) plus the app's own schema and write
     // path (`own.ts`, `write.ts`, `adopt.ts`). 0.4.0 measured 108,795
     // bytes, 0.3.0 88,741.
-    expect(bytes).toBeLessThan(141_800);
+    expect(bytes).toBeLessThan(141_500);
   });
 
   it('embeds its stylesheets minified', () => {
