@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/lesson-format",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "lesson-format",
+  "https://atomicdata.dev/properties/name": "Format",
+  "https://atomicdata.dev/properties/description": "One of video, text, interactive, exercise, live, tour. A view shows an unknown value as plain text.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
+}

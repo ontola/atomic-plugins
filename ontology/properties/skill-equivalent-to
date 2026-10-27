@@ -1,0 +1,12 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/skill-equivalent-to",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "skill-equivalent-to",
+  "https://atomicdata.dev/properties/name": "Equivalent to",
+  "https://atomicdata.dev/properties/description": "The same skill in another tree or drive. Equivalent skills are merged when trees are combined, so mastering one counts for all.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/resourceArray",
+  "https://atomicdata.dev/properties/classtype": "https://ontola.github.io/atomic-plugins/ontology/classes/skill-v1"
+}

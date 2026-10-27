@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/mastery-level",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "mastery-level",
+  "https://atomicdata.dev/properties/name": "Level",
+  "https://atomicdata.dev/properties/description": "How well the learner masters the skill, 0 to 1.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/float"
+}
