@@ -64,3 +64,8 @@ no new continuously running SyncD peer or provider refresh is claimed.
 Private backups, projection data and verification artifacts remain outside Git.
 No private source content, local resource IDs, credentials or screenshots are
 included in the repository. Exact-head CI remains a separate required check.
+
+CI caught an undeclared `URL` global in the new preparation example, outside
+the initial targeted lint scope. Added its explicit Node import and ran the
+full package lint before pushing the correction. The local data projection
+and runtime sources are unchanged by this correction.

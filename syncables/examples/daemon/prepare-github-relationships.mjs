@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import process from 'node:process';
+import { URL } from 'node:url';
 import { load } from 'js-yaml';
 
 // This changes projection metadata only, never an accepted source snapshot.
