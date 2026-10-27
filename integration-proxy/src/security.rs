@@ -84,6 +84,17 @@ const REFRESH_LEASE_SECONDS: f64 = 30.0;
 /// are left in place rather than dropped, see the README's flag-day notes.
 pub(crate) const SCHEMA_LOCK: i64 = 7_316_186_474_691_124_077;
 
+/// Startup DDL takes this lock exclusively. Multi-table writes take its
+/// shared form before any owner or row lock, so a rolling instance cannot
+/// deadlock with a transaction upgrading its relation locks.
+pub(crate) async fn migration_lock(
+    tx: &tokio_postgres::Transaction<'_>,
+) -> Result<(), tokio_postgres::Error> {
+    tx.query_one("SELECT pg_advisory_xact_lock_shared($1)", &[&SCHEMA_LOCK])
+        .await?;
+    Ok(())
+}
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS used_challenges (nonce TEXT PRIMARY KEY, expires_at TIMESTAMPTZ NOT NULL);
 CREATE INDEX IF NOT EXISTS used_challenges_expires_at_idx ON used_challenges (expires_at);
@@ -277,6 +288,7 @@ pub const OWNER_RETIRED: &str = "owner retired";
 /// transfer and such a write never interleave: the write either commits
 /// before the transfer moves things, or sees the owner retired.
 async fn lock_owners(tx: &tokio_postgres::Transaction<'_>, owners: &[&str]) -> Result<(), String> {
+    migration_lock(tx).await.map_err(db_error)?;
     let mut owners = owners.to_vec();
     owners.sort_unstable();
     owners.dedup();
@@ -1202,6 +1214,63 @@ pub(crate) mod tests {
             left = open().await;
         }
         assert_eq!(left, 0, "connections left open by dropped Security handles");
+    }
+
+    /// A rolling instance must wait for an owner write before running startup
+    /// DDL. Otherwise ALTER TABLE queues behind FOR UPDATE, while UPDATE's
+    /// relation-lock upgrade queues behind the initializer: a deadlock.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn startup_schema_does_not_deadlock_an_owner_write() {
+        let security = Security::connect(&test_database_url(), TEST_KEY)
+            .await
+            .unwrap();
+        let mut writer = admin().await;
+        let tx = writer.transaction().await.unwrap();
+        lock_owners(&tx, &["atomic:agent:startup-schema-fixture"])
+            .await
+            .unwrap();
+        tx.query("SELECT 1 FROM agent_connections FOR UPDATE", &[])
+            .await
+            .unwrap();
+
+        let tag = format!("startup_{:016x}", rand::random::<u64>());
+        let mut url = url::Url::parse(&test_database_url()).unwrap();
+        url.query_pairs_mut().append_pair("application_name", &tag);
+        let startup = tokio::spawn(async move { Security::connect(url.as_str(), TEST_KEY).await });
+        let observer = admin().await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let waiting: bool = observer.query_one(
+                    "SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a USING (pid) WHERE a.application_name = $1 AND NOT l.granted)",
+                    &[&tag],
+                ).await.unwrap().get(0);
+                if waiting {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("initializer should wait for the writer");
+
+        let updated = tx
+            .execute(
+                "UPDATE agent_connections SET owner = owner WHERE false",
+                &[],
+            )
+            .await;
+        let committed = tx.commit().await;
+        let initialized = startup.await.unwrap();
+        assert!(updated.is_ok(), "owner write failed: {updated:?}");
+        assert!(
+            committed.is_ok(),
+            "owner write commit failed: {committed:?}"
+        );
+        assert!(
+            initialized.is_ok(),
+            "startup failed: {}",
+            initialized.err().unwrap_or_default()
+        );
+        drop(security);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
