@@ -8,4 +8,5 @@ an unknown outcome (uncertain without an idempotency key). A match that
 does not name the record's id leaves the create applied but unbound,
 which `matchUnboundCreates` can bind. Documents without
 `committedErrors` read as before. `committedIdentity` ports the
-reference `committed_identity()`.
+reference `committed_identity()`, sharing the path-segment validation used
+by other identity bindings, including rejection of malformed Unicode.

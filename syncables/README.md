@@ -1269,6 +1269,8 @@ When the create operation declares an `x-crud` `create` for the resource
   from a later read. Only a create's answer counts. Entries the spec's
   rules refuse are ignored, and so is `committedErrors` beside
   `followUps` (rule 32).
+  String identities must also be well-formed Unicode, as with ordinary
+  identity bindings.
 - `matchUnboundCreates: { uniqueFields: { pets: ['ref'] } }` (off by
   default) binds an unbound create from the first complete read of its
   collection that starts after the create was answered, as `confirm` with

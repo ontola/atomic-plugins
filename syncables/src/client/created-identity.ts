@@ -287,10 +287,7 @@ function committedValue(value: unknown): string | undefined {
       : undefined;
   if (
     typeof value !== 'string' ||
-    value === '' ||
-    value !== value.trim() ||
-    value === '.' ||
-    value === '..' ||
+    segmentProblem(value) !== undefined ||
     [...value].some((char) => {
       // `/`, `?`, `#`, and Unicode category Cc (C0, DEL, C1).
       const code = char.codePointAt(0)!;

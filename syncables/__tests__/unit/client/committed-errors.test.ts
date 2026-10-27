@@ -2,8 +2,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createApiClient,
+  InMemoryStorageAdapter,
   prepareDocument,
-  type StorageAdapter,
   type OpenApiDocument,
   type Transport,
   type TransportRequest,
@@ -23,36 +23,6 @@ import { petsDocument } from '../../fixtures/pets.js';
 // committed_identity() and runs the client against it. Before, a 503 took
 // the ordinary retry path and the create was sent again: a duplicate.
 // Invented provider and data.
-
-/** An in-memory StorageAdapter two clients can share, as a restart does. */
-class MemoryStorage implements StorageAdapter {
-  private data = new Map<string, Map<string, Record<string, unknown>>>();
-  private ns(resource: string): Map<string, Record<string, unknown>> {
-    let ns = this.data.get(resource);
-    if (!ns) this.data.set(resource, (ns = new Map()));
-    return ns;
-  }
-  async list(resource: string): Promise<Record<string, unknown>[]> {
-    return [...this.ns(resource).values()].map((v) => structuredClone(v));
-  }
-  async get(
-    resource: string,
-    id: string,
-  ): Promise<Record<string, unknown> | undefined> {
-    const value = this.ns(resource).get(id);
-    return value && structuredClone(value);
-  }
-  async put(
-    resource: string,
-    id: string,
-    value: Record<string, unknown>,
-  ): Promise<void> {
-    this.ns(resource).set(id, structuredClone(value));
-  }
-  async delete(resource: string, id: string): Promise<void> {
-    this.ns(resource).delete(id);
-  }
-}
 
 const NOTION_LIKE = [
   {
@@ -133,7 +103,10 @@ describe('committedIdentity (the reference committed_identity)', () => {
     ['a dot segment', 503, committed503('..').body],
     ['a slash', 503, committed503('a/b').body],
     ['a query mark', 503, committed503('a?b').body],
+    ['a fragment mark', 503, committed503('a#b').body],
     ['a control character', 503, committed503('a\u0007b').body],
+    ['a lone high surrogate', 503, committed503('\ud800').body],
+    ['a lone low surrogate', 503, committed503('\udc00').body],
     ['a negative number', 503, committed503(-1).body],
     ['a fraction', 503, committed503(1.5).body],
     ['an object', 503, committed503({ id: 'p-9' }).body],
@@ -273,66 +246,63 @@ describe('a create answered by a committed error', () => {
     expect(await client.get('/pets', String(local['id']))).toBeUndefined();
   });
 
-  it('without a declaration, a 503 is still retried, as before', async () => {
-    let n = 0;
+  it.each([
+    {
+      name: 'without a declaration, a 503 is still retried, as before',
+      declared: false,
+      id: 'p-9',
+      key: false,
+    },
+    {
+      name: 'a listed status naming no usable id stays uncertain without a key',
+      declared: true,
+      id: '',
+      key: false,
+    },
+    {
+      name: 'a listed status naming no usable id is resent under an idempotency key',
+      declared: true,
+      id: '',
+      key: true,
+    },
+  ])('$name', async ({ declared, id, key }) => {
+    let attempts = 0;
     const fake = provider(() =>
-      ++n === 1
-        ? committed503('p-9')
+      ++attempts === 1
+        ? committed503(id)
         : {
             status: 201,
             headers: {},
             body: JSON.stringify({ id: 'p-10', name: 'Rex' }),
           },
     );
-    const client = createApiClient(document({ committedErrors: undefined }), {
-      transport: fake.transport,
-      retry: { baseDelayMs: 1 },
-    });
-    await client.create('/pets', { name: 'Rex' });
-    await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
-    expect(fake.posts).toHaveLength(2);
-  });
-
-  it('a listed status naming no usable id is an unknown outcome: uncertain without a key', async () => {
-    const fake = provider(() => committed503(''));
-    const client = createApiClient(document(), {
-      transport: fake.transport,
-      retry: { baseDelayMs: 1 },
-    });
-    await client.create('/pets', { name: 'Rex' });
-    await vi.waitFor(() =>
-      expect(client.pendingWrites()).toMatchObject([
-        { type: 'create', state: 'uncertain', lastStatus: 503 },
-      ]),
+    const client = createApiClient(
+      document({ committedErrors: declared ? NOTION_LIKE : undefined }),
+      {
+        transport: fake.transport,
+        idempotencyKeyHeader: key ? 'Idempotency-Key' : false,
+        retry: { baseDelayMs: 1 },
+      },
     );
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    // The provider said this status can follow an applied create: not
-    // resent without a key, though a 503 otherwise means not processed.
-    expect(fake.posts).toHaveLength(1);
-  });
-
-  it('a listed status naming no usable id is resent under an idempotency key', async () => {
-    let n = 0;
-    const fake = provider(() =>
-      ++n === 1
-        ? committed503('')
-        : {
-            status: 201,
-            headers: {},
-            body: JSON.stringify({ id: 'p-10', name: 'Rex' }),
-          },
-    );
-    const client = createApiClient(document(), {
-      transport: fake.transport,
-      idempotencyKeyHeader: 'Idempotency-Key',
-      retry: { baseDelayMs: 1 },
-    });
     await client.create('/pets', { name: 'Rex' });
-    await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
-    expect(fake.posts).toHaveLength(2);
-    expect(fake.posts[1]!.headers['Idempotency-Key']).toBe(
-      fake.posts[0]!.headers['Idempotency-Key'],
-    );
+    if (declared && !key) {
+      await vi.waitFor(() =>
+        expect(client.pendingWrites()).toMatchObject([
+          { type: 'create', state: 'uncertain', lastStatus: 503 },
+        ]),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      // A listed status can follow an applied create: never resend
+      // without a key, though a 503 otherwise means not processed.
+      expect(fake.posts).toHaveLength(1);
+    } else {
+      await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
+      expect(fake.posts).toHaveLength(2);
+      if (key)
+        expect(fake.posts[1]!.headers['Idempotency-Key']).toBe(
+          fake.posts[0]!.headers['Idempotency-Key'],
+        );
+    }
   });
 
   it('does not apply to an update with a matching body', async () => {
@@ -385,7 +355,7 @@ describe('a create answered by a committed error', () => {
   });
 
   it('stays applied after a restart: nothing is sent again', async () => {
-    const storage = new MemoryStorage();
+    const storage = new InMemoryStorageAdapter();
     const fake = provider(() => committed503('p-9'));
     const first = createApiClient(document(), {
       transport: fake.transport,

@@ -2773,12 +2773,6 @@ export function createApiClient(
   }
 
   /**
-   * A create a Committed Error Object (CRUD Causality 0.8.0 §4.3.3) says
-   * was applied: bound to the identity the error named, as a 2xx would
-   * bind it, the record being what was sent. Without the id field among
-   * the values, it is applied but unbound: uncertain, never sent again.
-   */
-  /**
    * An unbound create (CRUD Causality §4.3.2) is remembered for
    * `matchUnboundCreates` only when the body it sent carries a declared
    * unique value: matching on the other fields alone could take a record
@@ -2807,6 +2801,12 @@ export function createApiClient(
       });
   }
 
+  /**
+   * A create a Committed Error Object (CRUD Causality 0.8.0 §4.3.3) says
+   * was applied: bound to the identity the error named, as a 2xx would
+   * bind it, the record being what was sent. Without the id field among
+   * the values, it is applied but unbound: uncertain, never sent again.
+   */
   function committedCreate(
     write: QueuedWrite,
     declared: CreateDeclaration,
