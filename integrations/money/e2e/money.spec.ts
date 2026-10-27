@@ -41,9 +41,13 @@ import {
   createFromCatalog,
 } from '../../../browser/e2e/tests/test-utils';
 import { enableIntegrationDiscovery } from '../../../browser/e2e/tests/integration-settings-utils';
+import { appVersion } from '../../tooling/apps.mjs';
 
-/** The catalog's version of the Money app (integrations/catalog.json). */
-const VERSION = '0.4.1';
+/**
+ * The catalog's version of the Money app (integrations/catalog.json), read at
+ * load by `appVersion`, so a version bump needs no edit here.
+ */
+const VERSION = appVersion('money');
 const APP_FRAME = 'iframe[title="App"]';
 const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
 const IS_A = 'https://atomicdata.dev/properties/isA';
@@ -295,6 +299,17 @@ test.describe('money integration', () => {
     await expect(app.getByRole('status').first()).toContainText('Imported 2', {
       timeout: 60_000,
     });
+    // The shared sync-status card (Q-084) dates the import and stays
+    // read-only: there is no provider to send anything to.
+    const syncCard = app.getByRole('region', { name: 'Sync status' });
+    await expect(syncCard).toContainText('Synced just now');
+    await expect(syncCard).toContainText(
+      '2 transactions from 1 statement; 2 imported here at the last sync',
+    );
+    await expect(syncCard).not.toContainText('Last sync:');
+    await expect(syncCard).toContainText(
+      'Read-only: edits here stay in Atomic. There is no bank connection',
+    );
     const lunch = app.getByRole('button', { name: /Fixture lunch/ });
     await expect(lunch).toBeVisible();
     await expect(
@@ -436,6 +451,19 @@ test.describe('money integration', () => {
       app.locator('table.m-ledger').getByText('Typed by hand'),
     ).toHaveCount(0);
     expect(await rowsOf(page, own)).toHaveLength(5);
+    // The sync-status card lists it as an ignored group by what it misses,
+    // names it under Which, and offers Open row (0.4.2).
+    const ignored = syncCard.locator('[data-key=ignored]');
+    await expect(ignored).toHaveCount(1);
+    await expect(ignored).toContainText(
+      '1 transaction is incomplete (missing Amount): shown above the ledger, in no balance, total or import check.',
+    );
+    await ignored.getByText('Which').click();
+    await expect(ignored.locator('.ss-items')).toHaveText('Typed by hand');
+    await expect(
+      ignored.getByRole('button', { name: 'Open row' }),
+    ).toBeVisible();
+    await expect(syncCard).toContainText('4 transactions from 2 statements');
     // "Open row" leaves the app for the row's page in the host.
     await incomplete
       .getByRole('button', { name: 'Open row Typed by hand' })
@@ -445,6 +473,135 @@ test.describe('money integration', () => {
         timeout: 30_000,
       })
       .toBe(stub);
+
+    // A load error (0.4.2's card): the host fails the app's first request,
+    // `getData`, as a lost connection would, by failing its read of the
+    // app's table (not of the app: the page needs that to mount the frame).
+    // Back in the same page, without a reload, so the stand-in stays armed.
+    await page.evaluate(subject => {
+      const store = window.store! as unknown as {
+        getResource: (s: string, ...rest: unknown[]) => Promise<unknown>;
+        __getResource?: (s: string, ...rest: unknown[]) => Promise<unknown>;
+      };
+      // Kept on the store, so the recovery below puts the very same method back.
+      const original = store.getResource;
+      store.__getResource = original;
+      store.getResource = (s, ...rest) =>
+        s === subject
+          ? Promise.reject(new Error('Simulated host failure'))
+          : original.call(store, s, ...rest);
+    }, own);
+    await page.goBack();
+    await expect(app.getByRole('status').first()).toContainText('Sync failed', {
+      timeout: 60_000,
+    });
+    await expect(syncCard.locator('[data-key=headline]')).toHaveText(
+      /^Sync failed /,
+    );
+    await expect(syncCard).toContainText("Couldn't load the transactions.");
+    await expect(syncCard).toContainText('Simulated host failure');
+    await expect(syncCard).toContainText('Try again.');
+    await expect(syncCard).toContainText(
+      'Read-only: edits here stay in Atomic. There is no bank connection',
+    );
+    // The host recovers; Try again loads the rows, and the card says so.
+    await page.evaluate(() => {
+      const store = window.store! as unknown as {
+        getResource: unknown;
+        __getResource?: unknown;
+      };
+      store.getResource = store.__getResource;
+      delete store.__getResource;
+    });
+    await app.getByRole('button', { name: 'Try again' }).click();
+    await expect(
+      app.getByRole('button', { name: 'Fixture lunch', exact: true }),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(syncCard.locator('[data-key=headline]')).not.toHaveText(
+      /^Sync failed /,
+    );
+    await expect(syncCard).not.toContainText('Simulated host failure');
+
+    // An import that stops midway (0.4.2's card): the host refuses the
+    // app's second write (its own writes go through /app-write). The same
+    // statement under another account brings 2 new transactions.
+    const other = mt940.replaceAll('NL00BUNQ0000000000', 'NL00BUNQ0000000001');
+    let writes = 0;
+    await page.route('**/app-write', route =>
+      ++writes === 2
+        ? route.fulfill({ status: 500, body: 'Simulated write failure' })
+        : route.continue(),
+    );
+
+    try {
+      await input.setInputFiles({
+        name: 'other.mt940',
+        mimeType: 'text/plain',
+        buffer: Buffer.from(other),
+      });
+      await expect(sheet.getByRole('tab', { name: 'New 2' })).toBeVisible({
+        timeout: 30_000,
+      });
+      await sheet
+        .getByRole('button', { name: 'Import 2 transactions' })
+        .click();
+      await expect(sheet).toContainText("The import didn't go through", {
+        timeout: 60_000,
+      });
+      await expect(syncCard).toContainText(
+        'The import stopped before every row was written.',
+      );
+      await expect(syncCard).toContainText(
+        'The rows written so far are kept; check the same file again to import the rest.',
+      );
+      expect(writes).toBeGreaterThanOrEqual(2);
+    } finally {
+      await page.unroute('**/app-write');
+    }
+
+    // The host recovers. Since 0.4.5 (#539, #572) the failed sheet checks
+    // the file again against the table and offers only the transaction that
+    // was not written, never its old preview of 2. Closing it and checking
+    // the same file at once, before anything has waited for the app's copy
+    // of the table, reads the table first and proposes the same one.
+    await expect(
+      sheet.getByRole('button', { name: 'Import 1 transaction' }),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(
+      sheet.getByRole('button', { name: 'Import 2 transactions' }),
+    ).toHaveCount(0);
+    await sheet.getByRole('button', { name: 'Close' }).first().click();
+    await input.setInputFiles({
+      name: 'other.mt940',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(other),
+    });
+    await expect(sheet.getByRole('tab', { name: 'New 1' })).toBeVisible({
+      timeout: 30_000,
+    });
+    await sheet.getByRole('button', { name: 'Import 1 transaction' }).click();
+    await expect(sheet).toBeHidden({ timeout: 60_000 });
+    await expect(syncCard).not.toContainText(
+      'The import stopped before every row was written.',
+    );
+    // The server has each transaction once.
+    const otherRows = async () =>
+      (await rowsOf(page, own)).filter(
+        r =>
+          r[terms.properties['bank-account'].subject] === 'NL00BUNQ0000000001',
+      ).length;
+    await expect.poll(otherRows, { timeout: 30_000 }).toBe(2);
+    await input.setInputFiles({
+      name: 'other.mt940',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(other),
+    });
+    await expect(sheet).toContainText(
+      'Nothing new in this file. All 2 transactions were imported before.',
+      { timeout: 30_000 },
+    );
+    await sheet.getByRole('button', { name: 'Close' }).first().click();
+    expect(await otherRows()).toBe(2);
   });
 
   test('Money app: a view of the importer’s Bank transactions table: import, statements, row editing, in-app check', async ({
@@ -518,6 +675,15 @@ test.describe('money integration', () => {
     await expect(
       app.getByRole('heading', { name: 'Bring in your bank transactions' }),
     ).toBeVisible({ timeout: 45_000 });
+    // The sync-status card on the importer's table: read-only, and saving a
+    // category or note asks for editing first (0.4.2).
+    const syncCard = app.getByRole('region', { name: 'Sync status' });
+    await expect(syncCard).toContainText(
+      'Read-only: edits here stay in Atomic. There is no bank connection',
+    );
+    await expect(syncCard).toContainText(
+      'Saving a category or note asks you to allow editing first.',
+    );
 
     // Import from inside the app: check, preview, then the host's own
     // review (#1774). Nothing is written before Apply.
@@ -554,6 +720,9 @@ test.describe('money integration', () => {
     await expect(
       app.getByText('−€12.34', { exact: true }).first(),
     ).toBeVisible();
+    // The card dates the importer's import like the app's own.
+    await expect(syncCard).toContainText('Synced just now');
+    await expect(syncCard).toContainText('2 imported here at the last sync');
 
     // The statement row, with its balances: the strip and the Imports tab.
     await expect(app.getByRole('group', { name: /^Accounts/ })).toContainText(
@@ -577,6 +746,10 @@ test.describe('money integration', () => {
     await allow.getByRole('button', { name: 'Allow editing' }).click();
     await expect(details).toContainText('Saved', { timeout: 30_000 });
     await page.keyboard.press('Escape');
+    // Editing allowed: the card no longer asks for it.
+    await expect(syncCard).not.toContainText(
+      'Saving a category or note asks you to allow editing first.',
+    );
 
     // Stored on the row itself: after a reload the ledger shows it.
     await page.reload();
@@ -604,6 +777,175 @@ test.describe('money integration', () => {
     });
     await expect(sheet).toContainText(
       'This file changes a transaction you already have',
+      { timeout: 30_000 },
+    );
+  });
+
+  test('Money app on a hand-made bank-transaction-v1 table: the card when no import date is recorded', async ({
+    page,
+  }) => {
+    test.setTimeout(300_000);
+    const terms = (await import(
+      '../../../ontology-kit/terms.mjs' as string
+    )) as {
+      classes: Record<string, { subject: string }>;
+      properties: Record<string, { subject: string }>;
+    };
+    const shared = terms.classes['bank-transaction-v1'].subject;
+    const p = terms.properties;
+    const main = page.getByRole('main');
+    const app = page.frameLocator(APP_FRAME);
+
+    // Money installed; its first open lists the shared class in `renders`,
+    // so Add view offers it on any table of that class.
+    await installFromCatalog(page);
+    await expect(
+      app.getByRole('heading', { name: 'Bring in your bank transactions' }),
+    ).toBeVisible({ timeout: 60_000 });
+    const installed = new URL(page.url()).searchParams.get('subject')!;
+    await expect
+      .poll(() => rendersOf(page, installed, shared), { timeout: 30_000 })
+      .toBe(true);
+
+    // A table the person made, of the shared class, with two rows typed by
+    // hand: no statement was ever imported into it.
+    const table = await page.evaluate(
+      async ({ klass, classtype, name, rows }) => {
+        const store = window.store!;
+        const made = await store.newResource({
+          parent: store.getDrive(),
+          isA: ['https://atomicdata.dev/classes/Table'],
+          propVals: { [name]: 'Cash book', [classtype]: klass },
+        });
+        await made.save();
+
+        for (const propVals of rows) {
+          const row = await store.newResource({
+            parent: made.subject,
+            isA: [klass],
+            propVals,
+          });
+          await row.save();
+        }
+
+        return made.subject;
+      },
+      {
+        klass: shared,
+        classtype: CLASSTYPE,
+        name: 'https://atomicdata.dev/properties/name',
+        rows: [
+          ['Cash from the drawer', '10.00', '2026-01-02'],
+          ['Coffee beans', '-7.50', '2026-01-03'],
+        ].map(([description, amount, date]) => ({
+          'https://atomicdata.dev/properties/name': description,
+          [p['bank-description'].subject]: description,
+          [p['bank-amount'].subject]: amount,
+          [p['bank-account'].subject]: 'CASH',
+          [p['bank-currency'].subject]: 'EUR',
+          [p['bank-value-date'].subject]: date,
+          [p['bank-booking-date'].subject]: date,
+        })),
+      },
+    );
+    expect(await rowsOf(page, table)).toHaveLength(2);
+
+    await page.goto(showUrl(page, table));
+    await main.getByRole('button', { name: 'Add view' }).click();
+    // Add view lists drive apps once it has read the drive's plugin schema
+    // and the github.io terms (#177 S1, H1); about 9 s measured.
+    await page
+      .getByRole('menuitem', { name: 'Bank statements' })
+      .first()
+      .click({ timeout: 60_000 });
+    await page
+      .locator('dialog[open]')
+      .getByRole('button', { name: 'Read-only' })
+      .click();
+    await expect(app.getByRole('button', { name: /Coffee beans/ })).toBeVisible(
+      { timeout: 60_000 },
+    );
+    await expect(
+      app.getByRole('button', { name: /Cash from the drawer/ }),
+    ).toBeVisible();
+
+    // The card (0.4.2): rows but no import date, so "Not synced yet" over
+    // them and a rows line that says the dates are not recorded; read-only,
+    // and saving a category or note asks for editing first.
+    const syncCard = app.getByRole('region', { name: 'Sync status' });
+    await expect(syncCard.locator('[data-key=headline]')).toHaveText(
+      /^Not synced yet/,
+    );
+    await expect(syncCard).toContainText(
+      '2 transactions in this table; when they were imported is not recorded',
+    );
+    await expect(syncCard).toContainText(
+      'Read-only: edits here stay in Atomic. There is no bank connection',
+    );
+    await expect(syncCard).toContainText(
+      'Saving a category or note asks you to allow editing first.',
+    );
+
+    // Importing into it: the check proposes the file's 2 transactions, and
+    // Import asks in the host's bar first, since the table is not the
+    // app's own. Nothing is written before the person allows it.
+    const input = app.locator('input[type="file"]');
+    const sheet = app.getByRole('dialog', { name: 'Import statement' });
+    await input.setInputFiles({
+      name: 'statement.mt940',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(mt940),
+    });
+    await expect(sheet.getByRole('tab', { name: 'New 2' })).toBeVisible({
+      timeout: 30_000,
+    });
+    await sheet.getByRole('button', { name: 'Import 2 transactions' }).click();
+    // The table's children are its rows of the shared class and its views.
+    const transactions = async () =>
+      (await rowsOf(page, table)).filter(r =>
+        (r['https://atomicdata.dev/properties/isA'] as string[]).includes(
+          shared,
+        ),
+      );
+    const allow = page.getByRole('group', { name: 'Let this app edit rows' });
+    await expect(allow).toBeVisible({ timeout: 30_000 });
+    expect(await transactions()).toHaveLength(2);
+    await allow.getByRole('button', { name: 'Allow editing' }).click();
+    await expect(sheet).toBeHidden({ timeout: 60_000 });
+    await expect(app.getByRole('status').first()).toContainText('Imported 2', {
+      timeout: 60_000,
+    });
+
+    // On the server: the 2 rows typed by hand and the 2 imported, all of
+    // the shared class, the amounts as the exact strings of the file.
+    const imported = async () =>
+      (await transactions()).filter(
+        r => r[p['bank-account'].subject] === 'NL00BUNQ0000000000',
+      );
+    await expect
+      .poll(async () => (await imported()).length, {
+        timeout: 30_000,
+      })
+      .toBe(2);
+    expect(await transactions()).toHaveLength(4);
+    const rows = await imported();
+    expect(rows.map(r => r[p['bank-amount'].subject]).sort()).toEqual([
+      '-12.34',
+      '20',
+    ]);
+
+    // The ledger and the card: the import is dated, the statement's closing
+    // balance is in the strip, and editing is no longer asked for.
+    await expect(
+      app.getByRole('button', { name: /Fixture lunch/ }),
+    ).toBeVisible();
+    await expect(syncCard).toContainText('Synced just now');
+    await expect(syncCard).toContainText('2 imported here at the last sync');
+    await expect(syncCard).not.toContainText(
+      'Saving a category or note asks you to allow editing first.',
+    );
+    await expect(app.getByRole('group', { name: /^Accounts/ })).toContainText(
+      /€107\.66\s*on /,
       { timeout: 30_000 },
     );
   });

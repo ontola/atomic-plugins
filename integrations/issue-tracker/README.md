@@ -82,13 +82,47 @@ tasks up through the host's proxy client, and calls
 (`synthetic.mjs`, hand-written from Todoist's API documentation) until #46
 records `api/`; its drivers model `completeTask` as "gone from `/tasks`,
 `checked: true` by id", which is this fixture's assumption, not Todoist's
-verified behaviour.
+verified behaviour. The recording settles it: `record.mjs --completed-task
+<id>` records what `GET /tasks/{id}` answers for a task completed by hand in
+the test account (GET only, the token never written), `scenario.mjs` reads
+that answer (`source().completed`) and makes a completed task answer 404 by
+id when Todoist did, and `todoist-fixture.test.ts` fails on a recording that
+left the question open or answered with neither. If the answer is 404, the
+app shows completed tasks as `unavailable` (the row stays open, never a
+false "completed"), and the e2e's step 3 expectation (`completed`, done)
+must change to `unavailable` with the recording. Without a recording, the
+tests prove the mechanism against an invented `api/` only.
+
+### What the live Todoist recording must capture (#46)
+
+Written on 2026-10-15 from Todoist's [API v1 reference](https://developer.todoist.com/api/v1/)
+(quotes checked word for word against the raw page with curl) and
+`fixtures/todoist/record.mjs`, without an account. Each row is a question
+#46 or #99 leaves open, how to set up the dedicated test account before
+recording, and what `record.mjs` captures. `fixtures/todoist/record.test.ts`
+runs the recorder against a local fake Todoist (no network, no token).
+
+| #   | Question                                                                                                                                                                                                                                                                             | Set up before recording                                                                                                                   | `record.mjs`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | A real cursor end: Todoist says "When next_cursor is null, you've reached the end of the results."                                                                                                                                                                                   | Between `limit + 1` and `limit × max-pages` active tasks (4 to 8 with the defaults `--limit 3 --max-pages 3`), and the same for projects. | Captured. A page's `next_cursor` is `page-<n+1>` whenever Todoist sent a cursor and null only when it sent null; when `--max-pages` cuts a list off, `api/meta.json` says `truncated: true` and names it in `truncated_collections`. The raw cursor is not kept: it can carry ids (Todoist's Workspace Users example `eyJpZCI6MTIzfQ` is base64 for `{"id":123}`; the pagination guide's own example, `eyJwYWdlIjoyLCJsaW1pdCI6NTB9.aGFzaA`, carries a page and a limit).                                                                                                                                                                               |
+| 2   | What `GET /tasks/{id}` answers for a completed task: Get Task "Returns a single active (non-completed) task by ID", so a 404 is likely; the fixture assumes `checked: true`.                                                                                                         | Complete one non-recurring task by hand; pass its id as `--completed-task`.                                                               | Captured (`api/GET__api__v1__tasks__completed-<n>.json`); `todoist-fixture.test.ts` fails unless it is a 404 or `checked: true`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 3   | A recurring task does not leave the list: Close Task says "Tasks with recurring due dates will be scheduled to their next occurrence."                                                                                                                                               | Complete one recurring task by hand; do not pass it as `--completed-task` (its 200 without `checked: true` fails that test).              | Captured passively: it stays among the active tasks with a later `due.date`; nothing marks which task it was.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 4   | What `GET /tasks/{id}` answers for a deleted task: Delete Task "Delete a task and all of its subtasks."                                                                                                                                                                              | Delete one task by hand; pass its id as `--deleted-task`.                                                                                 | Captured, whatever the status (`tasks__deleted-<n>.json`, and `deleted_task_statuses` in `meta.json`). No test expects an answer yet.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 5   | What `GET /tasks/{id}` answers for a task the account can no longer read.                                                                                                                                                                                                            | A second account shares a project with a task, then the test account leaves it; pass the task id as `--inaccessible-task`.                | Captured, whatever the status (`tasks__inaccessible-<n>.json`, `inaccessible_task_statuses`). Needs the second account.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 6   | Whether `GET /tasks` lists an archived project's tasks. Get Projects returns "all active user projects"; archived ones come from Get Archived ("Get the user's archived projects"), which the read-only catalog does not allow.                                                      | Archive a project that has active tasks.                                                                                                  | Captured passively: a recorded task whose `project_id` is among no recorded project points at the archived one, unless `meta.json` says the projects list was truncated (row 1).                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 7   | Rate limits: the reference's status table gives 429 as "The user has sent too many requests in a given amount of time.", and an error field `retry_after`: "Seconds to wait before retrying. May be returned on rate-limited requests and other API errors, not just 429 responses." | Nothing; a normal recording does not reach a limit.                                                                                       | Headers are kept on an allowlist only: `content-type`, `retry-after` and `x-ratelimit-*` (never `authorization` or cookies). A page that is not a 200 with results is recorded (status, kept headers, body with every string scrubbed), nothing more is requested, `meta.json` says where (`stopped`), and the script exits non-zero. A lookup (rows 2, 4, 5) that answers anything but a 2xx, 403, 404 or 410 (a 401, 429 or 5xx) is recorded and stops the recording the same way. `scenario.mjs` refuses a stopped recording, so it is never replayed as a complete one. Task ids must match `^[A-Za-z0-9_-]+$`, checked before anything is fetched. |
+
+Rows 2, 4 and 5 settle what the app shows for a task that left the active
+list (`completed`, or `unavailable`); rows 1 and 6 settle whether an import
+that read every page saw every active task. Until rows 4 and 5 are
+recorded, the overlay `overlays/APIs/todoist.com/1/completeness-ac07532b…`
+(#99) declares a 404 `unavailable`, never a deletion.
 
 ## Todoist drive app (`todoist-app/`)
 
 An iframe drive app, the same shape as `../money/moneybird/` (read-only, no
-npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 38,912
-bytes for 0.2.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
+npm dependencies): one ES module (`todoist-app/build.mjs`, minified, 52,134
+bytes for 0.3.0, 38,912 for 0.2.0; `apps.mjs`'s `APP_FOLDERS` maps catalog id `todoist` to this
 folder and publishes it as `apps/todoist/<version>/ui.js`) whose
 `view({ root, store })` runs in the host's null-origin frame. It imports the
 connected account's **active tasks** into its own table, nothing more; the
@@ -110,10 +144,41 @@ their status, presence, due day, priority, project and last-seen.
 **Rows** are of the shared class `issue-v1` (#177), like the GitHub issues
 app's: on first open the app adds the class to its App's `renders`, its
 extras to `row-extras`, and sets its table's `classtype` (`drive.ts`;
-shown on another Issue table it says so and imports nothing). Shared fields
-go through `ontology-kit`'s strict resolver: `name` (the task's `content`),
-task/v1 `status` (`done` only when Todoist returned `checked: true`, else
-`todo`), `body` (the task's `description`) and `due-date` (the due day).
+shown on another Issue table it says so and imports nothing).
+
+**Shared fields come from the catalog lens (0.3.0).** What a task becomes
+in `issue-v1` is the shared lens catalog's `todoist-task-issue-v2`
+([`ontology-kit/LENSES.md`](../../ontology-kit/LENSES.md)), run by
+`ontology-kit/lens.mjs`, not mapping code of this app's own. Both are
+bundled at build time (`todoist-app/lens.ts` imports the published mapping
+from `ontology-kit/lenses.mjs`), as the terms are. A pass writes each row
+from its task with the lens's backward put onto the row's current values:
+`name` is the task's `content`, `body` its `description` (an empty
+description is an empty body), task/v1 `status` is `done` when Todoist
+returned `checked: true` and `todo` when `false`, and `due-date` is the
+day of `due.date`, removed when the task no longer has a due date.
+
+A task the lens refuses is named on the card and in the summary: a deleted
+task, a task without content, and a due date with a fixed time zone (`…Z`
+or an offset, whose day depends on the time zone). An existing row keeps
+its shared values. A **new** refused task still gets a row, with the app's
+bookkeeping (`todoist-task-id`, presence, priority, project, source) but no
+shared values, so the view and the host table show it as "Incomplete:
+missing Name" until a later pass can read it. A row whose `todoist-source`
+is unreadable (not JSON) takes every field the lens reads from the row
+itself (name, body, status and due day, `taskFromRow` in
+`todoist-app/lens.ts`) when Todoist no longer lists the task, so it is not
+refused on every pass and loses no value; the next pass that reads the task
+rewrites the source.
+
+Changes from 0.2.0, which mapped tasks itself:
+
+- `name` is `content` as Todoist sends it, no longer trimmed, and no longer
+  the task id when `content` is empty;
+- an empty description writes an empty `body` instead of none;
+- a due date with a fixed time zone is refused instead of cut at its UTC
+  day.
+
 The provider extras, created once under the app's own ontology:
 `todoist-task-id` (the row's identity), `todoist-presence`,
 `todoist-last-seen`, `todoist-priority`, `todoist-project` and
@@ -212,7 +277,11 @@ node integrations/tooling/run-lane.mjs issue-tracker --tier e2e
 ```
 
 **Not verified:** anything against a live Todoist account or the real
-integration proxy (#46).
+integration proxy (#46). The catalog lens path (0.3.0) is covered by the
+unit tests (`todoist-app/lens.test.ts`, the conformance tests in
+`devonian/todoist/lens/catalog.test.ts`) and this lane's e2e against the
+synthetic fixture; whether live tasks with a fixed-time-zone due date are
+common enough to matter is not known.
 
 **Live check kit (not yet run).** `node integrations/tooling/live-check.mjs
 todoist --i-understand-this-writes-to <project id>` runs this app's
@@ -341,6 +410,56 @@ is declared, not verified, and the message match for a header-less 403 is
 brittle by nature: a wording change at GitHub makes such a 403 a plain
 "Sync failed", retried on the 4-minute ladder.
 
+**Writes GitHub refused (0.4.1, #357, `proxy.mjs` `NOT_APPLIED`).** Before
+0.4.1 the transport stored a receipt only for a 2xx answer, so a write
+GitHub refused outright (a 422 for a title over 256 characters, say) left its
+journal entry without one, and the next pass reported "Uncertain GitHub
+write", asking the person to check GitHub for a change that could not be
+there. Now a write answered 400, 404, 409, 410 or 422 is a refusal: GitHub
+documents each as rejecting the whole request, with no partial effect.
+`proxyTransport` drops the journal entry and rejects with `notSent`,
+`refused: true`, the `status` and GitHub's `detail` (the body's `message` and
+its `errors`, at most 300 characters), so the Bridge drops the saved
+operation exactly as for a rate limit (a half-made create is first bound to
+the issue it made, `Bridge.bindCreated`), and the next pass holds the change
+for review again as a plain pending change, never as uncertain, in the same
+view and after a reload. The controller reports it as `refused`: the pill
+says "GitHub refused a change", the card's failed line says "GitHub refused a
+change and applied nothing (HTTP 422: Validation Failed; title is too long
+(maximum is 256 characters))." with "Edit the change here, then Review and
+send it again; nothing is resent on its own.", the review approval is not
+carried over (resending the same content would only be refused again), and
+`retry.ts` arms no timer. Left as before, on purpose: 401 and 403 that are
+not rate limits mean the connection or its permissions are the problem (the
+pass fails or asks to reconnect, and the saved operation resumes flagged
+`unconfirmed`, so a person looks before it is resent); 429 is the rate-limit
+path; and a 5xx or a lost answer stays uncertain, since GitHub may have
+applied the write before the answer was lost. Widening the set to 401/403 is
+a follow-up question, not done here. Tested with the fake store's `refuse`
+knob (`app/controller.test.ts`, "writes GitHub refused"), the transport's
+tests (`devonian/github-issues/proxy.test.mjs`), the card
+(`app/status.test.ts`) and the retry plan (`app/retry.test.ts`), and end
+to end in `e2e/issue-tracker.spec.ts` (step 6): the mock proxy's
+github-issues fixture refuses the comment's write with a 422
+(`failNext(422, 1, { writes: true, repository })`), the pill, the card's
+failed line and next step show, nothing reaches the fixture, and the comment
+is sent after a second review. No real GitHub refusal has been observed
+through the drive app.
+
+**Pruning the write journal (0.4.2, `app/sync.ts` `pruneJournal`).** Every
+write is journalled before it leaves, and GitHub's answer is kept with it so
+a resumed operation reads the answer instead of sending again. Before 0.4.2
+nothing ever left the journal, so the sync state grew with every send by
+GitHub's full response. Now a pass that completed with no saved operation
+on any record (held ones included) drops every entry that has an answer: no
+operation will be resumed, an update's id derives from its finished
+operation's random id, and a create's from a record that is bound to the
+issue it made by then. Entries without an answer (a write whose response was
+lost) stay: they are what keeps an uncertain write from being sent twice.
+A pass that fails, or leaves anything pending, prunes nothing. Tested in
+`app/sync.test.ts` (a reviewed send leaves an empty journal; a lost create's
+entry survives the passes after it).
+
 **The last sync, across reloads (0.4.0).** Each completed pass stamps the
 sync resource's (or the binding's) `github-last-sync` property (an ISO 8601
 date and time, as Todoist's `todoist-last-sync` does), so after a reload the
@@ -456,8 +575,8 @@ In `app/import.test.ts` (fake host, 65 issues + 141 pull requests + 106
 comments), the import went from 581 proxy calls, 343 state writes and
 280,004,627 bytes of state written to 68 proxy calls, 7 state writes and
 6,186,807 bytes; the 187 table writes (one per imported row or Message,
-plus set-up) are unchanged. How long one `/app-write` takes on the droplet
-is not measured here. Later passes that bring in GitHub changes to issues
+plus set-up) are unchanged. How long one `/app-write` takes on the
+user-testing server is not measured here. Later passes that bring in GitHub changes to issues
 already in the table still read each changed item back and checkpoint
 before writing it; for a few changed items that is fine, for hundreds it is
 slow.
@@ -518,6 +637,11 @@ replace them.
 - GitHub rate-limiting: the card says "GitHub is rate-limiting; retrying at
   HH:MM", the pill "GitHub rate limit"; the pass is retried then, approved
   changes included (see "GitHub rate limits" above).
+- GitHub refusing a write (400, 404, 409, 410, 422; 0.4.1): the pill says
+  "GitHub refused a change", the card's failed line gives GitHub's words and
+  "Edit the change here, then Review and send it again"; the change is held
+  for review again, nothing is retried on a timer (see "Writes GitHub
+  refused" above).
 - Anything else (network, 5xx) shows on the pill, with "Retry now", and in
   the card's "Sync failed" line with the retry time, and is retried on a
   timer while the view is open. While sync is paused or failed the board
@@ -562,7 +686,10 @@ evidence; see [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
   state syncs with the drive and `/app-write` has no compare-and-swap. One
   syncing view per app is assumed. (The design's alternative, a per-browser
   host storage op, needs atomic-server work.)
-- The sync state grows with the write journal; it is not pruned.
+- The sync state's write journal is pruned only after a pass that leaves no
+  saved operation (0.4.2, see "Pruning the write journal" above); a write whose answer was lost stays in it
+  until a person settles it. While writes keep being held for review, the
+  answered ones stay too.
 - Comments made in the data-browser's own comment panel on a row are not
   synced: they live outside the app's subtree, which the app cannot write.
 - The repository picker's `GET /user/repos` is not in the proxy's GitHub
@@ -596,9 +723,11 @@ evidence; see [The live-check kit](../LIVE_TESTING.md#the-live-check-kit).
   serves. A new release needs a version bump in `app/package.json` and the
   catalog, then `node integrations/tooling/apps.mjs write issue-tracker`.
 
-`app/package.json` pins `devonian@0.8.0` from npm (install it with
+`app/package.json` pins `devonian@0.9.0` from npm (install it with
 `pnpm install --frozen-lockfile` in `app/`), bundled as `devonian/atomic` plus
-`reconcileRecord`; `@tomic/lib` is shimmed as in notion. It lives in `app/`
+`reconcileRecord`. 0.9.0 only added `devonian/lenses`, which the app does not
+import, so the bundle is byte-identical to the 0.8.0 one and the app version
+is unchanged; `@tomic/lib` is shimmed as in notion. It lives in `app/`
 rather than here because `certify.mjs` treats a `package.json` in a plugin
 folder as a sandbox package. `syncables` is not used: the Bridge's GitHub
 port already pages GitHub, and bundling the GitHub OpenAPI document for
@@ -678,7 +807,8 @@ Drivers for changes on the GitHub side mid-session, as
 `updateIssue` (rename, close, relabel), `createIssue`, `createComment`,
 `commentAs` (`[repo, number, login, body]`, a comment by someone else) and
 `failNext` (`[status, count]`: the next `count` proxied requests answer 503,
-429/403 as a rate limit, or 401). `reset` (`[repo]`) forgets one repository's
+429/403 as a rate limit, 422 as a validation refusal with GitHub's `errors`,
+or 401). `reset` (`[repo]`) forgets one repository's
 edits, so the next request reseeds it, and drops any pending `failNext`
 failures; a spec calls it first, so a Playwright retry starts from the same
 state as the first attempt.
@@ -746,9 +876,10 @@ extras were declared, Publish to GitHub, reopening, a revoked grant and
 
 These check `adapter.ts`'s pagination, PR exclusion and mapping, the generic
 event-to-JavaScript starter (`automation.test.ts`), the Todoist projection, and
-every test under `devonian/github-issues/`. The latter import the `devonian`
-package from source, so install its dependencies first
-(`cd devonian && pnpm install --frozen-lockfile`).
+every test under `devonian/github-issues/`. The latter import the npm
+`devonian` that `app/package.json` pins, installed in `app/node_modules`
+(`cd integrations/issue-tracker/app && pnpm install --frozen-lockfile`;
+`run-lane.mjs` does it when it is missing).
 
 API reference: https://docs.github.com/en/rest/issues/issues
 Label operations: https://docs.github.com/en/rest/issues/labels

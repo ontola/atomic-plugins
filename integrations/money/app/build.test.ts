@@ -18,20 +18,34 @@ describe('money drive-app bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource: keep an eye on the size.
-    // Measured 111,239 bytes minified (JS and embedded CSS) on 2026-10-02,
-    // at the a12b74a pin, for 0.4.1 (the incomplete-rows list, #177 rule);
-    // the limit is that plus about 10%, rounded up. It includes both
+    // Measured 122,855 bytes minified (JS and embedded CSS) on 2026-10-15,
+    // at the 7dab1ce pin, for 0.4.5 (a failed import rechecks before it
+    // offers Import again; every check of a file reads the whole table
+    // first, trusts only a complete read, and also compares with every row
+    // seen or written, #539, #572); the limit is that plus about
+    // 10%, rounded up. 0.4.4 measured 120,662 bytes on 2026-10-13 (an
+    // import made here told from rows that arrived from elsewhere). 0.4.3
+    // measured 120,397 bytes on 2026-10-12 (0.4.2's card with the
+    // stopped-import punctuation fix).
+    // 0.4.2 measured 120,413 bytes at e922179 (the shared sync-status card,
+    // Q-084, with its minified card.css and the app's status mapping).
+    // 0.4.1 measured 111,239 bytes on 2026-10-02 (the incomplete-rows list, #177 rule). It includes both
     // statement readers (MT940 and camt.053), which the in-app check runs,
     // and since 0.4.0 the shared ontology's subject constants and resolver
     // (`ontology-kit/terms.mjs`, `resolver.mjs`; terms.mjs carries every v1
     // term, not only the bank ones) plus the app's own schema and write
     // path (`own.ts`, `write.ts`, `adopt.ts`). 0.4.0 measured 108,795
     // bytes, 0.3.0 88,741.
-    expect(bytes).toBeLessThan(123_000);
+    expect(bytes).toBeLessThan(135_200);
   });
 
   it('embeds its stylesheets minified', () => {
     expect(text).toContain('.pl-app{');
+    // The shared sync-status card's card.css, minified like the app's own.
+    expect(text).toContain('.ss{');
+    expect(text).toContain('.ss-head{');
+    expect(text).not.toMatch(/\.ss \{|\.ss-head \{/);
+    expect(text).not.toContain('The sync-status card (card.ts)');
     expect(text).not.toMatch(/\\n\s+--pl-/);
     expect(text).not.toMatch(/\n\s+--pl-/);
     expect(text).not.toMatch(/\/\* (Header|Summary strip) \*\//);

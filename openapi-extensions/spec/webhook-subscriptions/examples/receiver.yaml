@@ -29,12 +29,14 @@ x-webhook-subscriptions:
     receipts:
       ttlSeconds: 172800
       maxCount: 200000
+      maxCountPerOwner: 20000
     closed:
       tombstoneTtlSeconds: 2592000
       maxTombstones: 10000
     cleanup:
       deadlineSeconds: 2592000
       maxJobs: 10000
+      maxJobsPerOwner: 20
     sweep:
       maxIntervalSeconds: 60
     delivery:
@@ -132,6 +134,14 @@ paths:
       parameters:
         - { name: generation, in: query, schema: { type: string } }
         - { name: after, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1 } }
+        - name: maxBytes
+          in: query
+          description: >
+            Payload bytes per page: the lengths of the events' base64 bodies,
+            added up. An event whose body alone is over it comes back alone,
+            with payload.omitted true and no body.
+          schema: { type: integer, minimum: 1 }
         - { name: wait, in: query, schema: { type: integer, minimum: 0 } }
       responses:
         '200':
@@ -139,6 +149,8 @@ paths:
           content:
             application/json:
               schema: { $ref: '../schema.json#/$defs/EventPage' }
+        '400':
+          { description: 'A malformed query, such as a maxBytes below 1.' }
         '409': { $ref: '#/components/responses/Error' }
         '410': { $ref: '#/components/responses/ReconciliationRequired' }
   /subscriptions/{subscriptionId}/ack:

@@ -2,9 +2,7 @@
 """Compose a candidate onboarding catalog entry from its pinned OAD and overlays."""
 import json
 import os
-import urllib.request
 from pathlib import Path
-import subprocess
 import sys
 
 import yaml
@@ -12,6 +10,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "overlays" / "scripts"))
 from validate_oad_pins import apply_overlay
+from pinned_oad import read_pinned_oad
 
 
 def main(platform="gitlab"):
@@ -24,16 +23,13 @@ def main(platform="gitlab"):
     prefix, suffix = source.split("/APIs/", 1)
     pin = prefix.rsplit("/", 1)[1]
     source_path = "APIs/" + suffix
-    directory_repo = Path(os.environ.get("OPENAPI_DIRECTORY_REPO", ROOT.parent / "openapi-directory"))
-    if not directory_repo.exists():
-        directory_repo = ROOT.parent / "more-openapi-directory"
-    try:
-        raw = subprocess.check_output(
-            ["git", "-C", str(directory_repo), "show", f"{pin}:{source_path}"],
-            stderr=subprocess.DEVNULL,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        raw = urllib.request.urlopen(source, timeout=30).read()
+    # OPENAPI_DIRECTORY_REPO set: that clone only, a failed read an error.
+    raw = read_pinned_oad(
+        pin,
+        source_path,
+        source,
+        [ROOT.parent / "openapi-directory", ROOT.parent / "more-openapi-directory"],
+    )
     document = yaml.safe_load(raw)
     for url in entry.get("overlays", []):
         relative = url.split("/overlays/", 1)[1]
@@ -42,7 +38,10 @@ def main(platform="gitlab"):
         document, errors = apply_overlay(document, overlay, str(overlay_path))
         if errors:
             raise RuntimeError("\n".join(errors))
-    print(json.dumps(document, separators=(",", ":")))
+    # YAML dates and times (unquoted examples, as in Box's OAD) as ISO 8601
+    # text. Only such values reach `default`, so every document that composed
+    # before composes to the same bytes.
+    print(json.dumps(document, separators=(",", ":"), default=lambda value: value.isoformat()))
 
 
 if __name__ == "__main__":

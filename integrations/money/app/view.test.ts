@@ -88,6 +88,10 @@ describe('Money view: the shared class (#177)', () => {
     expect(store.accessRequests).toBe(0);
     expect(root.querySelectorAll('[data-row]')).toHaveLength(2);
     expect(text(root.querySelector('.pl-pill'))).toContain('Imported 2');
+    // The card says this view imported them (0.4.4).
+    expect(
+      text(root.querySelector('section[aria-label="Sync status"]')),
+    ).toContain('2 imported here at the last sync');
     // The statement the app stored: its closing balance in the strip.
     expect(text(root.querySelector('.m-seg .m-net'))).toMatch(/^€107\.66on/);
     // Its own rows need no "Allow editing".
@@ -275,15 +279,19 @@ describe('Money view: ledger', () => {
     expect(root.querySelectorAll('.m-row')).toHaveLength(400);
   });
 
-  it('shows new rows from an import without a reload, and says so', async () => {
+  it('shows rows another writer added without a reload, and says they arrived', async () => {
     const store = fakeStore({ rows: sampleRows() });
     const root = await open(store);
     store.addRows([seedRow('-9.99', '2026-09-23')]);
     await settle();
     await settle();
+    // Not this view's import (0.4.4): "arrived", like the card's rows line.
     expect(text(root.querySelector('[role="status"]'))).toBe(
-      'Imported 1 · just now',
+      '1 arrived · just now',
     );
+    expect(
+      text(root.querySelector('section[aria-label="Sync status"]')),
+    ).toContain('1 arrived at the last sync');
     expect(root.querySelectorAll('.m-row')).toHaveLength(15);
   });
 });
@@ -439,6 +447,103 @@ describe('Money view: import sheet', () => {
     await settle();
     expect(applied).toEqual(['bunq.sta']);
     expect(root.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('disables Import while the file is compared with the table again', async () => {
+    const root = document.createElement('div');
+    document.body.replaceChildren(root);
+    let release!: () => void;
+    const held = new Promise<void>(resolve => (release = resolve));
+    const store = fakeStore();
+    await mount(root, store, {
+      today: () => '2026-09-24',
+      locale: 'en-GB',
+      width: 1200,
+      importer: {
+        apply: async () => {
+          throw new Error('Refused by the host');
+        },
+      },
+    });
+    await choose(root, 'bunq.sta', mt940Text());
+    // The table read that follows the failure waits until released.
+    const query = store.query.bind(store);
+
+    store.query = async args => {
+      await held;
+
+      return query(args);
+    };
+
+    const buttons = () => [
+      ...root.querySelectorAll<HTMLButtonElement>('.m-dialog button'),
+    ];
+    buttons()
+      .find(b => text(b) === 'Import 2 transactions')!
+      .click();
+    await settle();
+    const checking = buttons().find(
+      b => text(b) === 'Checking what was written…',
+    );
+    expect(checking?.disabled).toBe(true);
+    expect(text(root.querySelector('.m-dialog'))).toContain(
+      "The import didn't go through",
+    );
+    store.query = query;
+    release();
+    await settle();
+    expect(
+      buttons().find(b => text(b) === 'Import 2 transactions')?.disabled,
+    ).toBe(false);
+  });
+});
+
+describe('Money view: the sync-status card (Q-084)', () => {
+  const card = (root: HTMLElement) =>
+    root.querySelector<HTMLElement>('section[aria-label="Sync status"]');
+
+  it('comes first after the tabs on Transactions and Imports, read-only, and not on Sources', async () => {
+    const root = await open(fakeStore({ rows: sampleRows() }));
+    const region = card(root)!;
+    expect(region).not.toBeNull();
+    expect(region.previousElementSibling?.getAttribute('role')).toBe('tablist');
+    expect(text(region)).toContain('Read-only: edits here stay in Atomic.');
+    expect(text(region)).toContain('There is no bank connection');
+    expect(text(region)).toMatch(/\d+ transactions/);
+    // The card is never a live region: the pill stays the one status.
+    expect(region.getAttribute('role')).not.toBe('status');
+    expect(root.querySelectorAll('[role="status"]')).toHaveLength(1);
+    // Its styles ride in the app's one style element.
+    expect(
+      document.querySelector('style#money-app-styles')?.textContent,
+    ).toContain('.ss-head');
+
+    const tabs = [...root.querySelectorAll<HTMLElement>('[role="tab"]')];
+    tabs.find(t => text(t).startsWith('Imports'))!.click();
+    expect(card(root)!.previousElementSibling?.getAttribute('role')).toBe(
+      'tablist',
+    );
+    tabs.find(t => text(t) === 'Sources')!.click();
+    expect(card(root)).toBeNull();
+  });
+
+  it('a failed load: the pill and the card both say the sync failed', async () => {
+    const root = await open(fakeStore({ data: 'none' }));
+    expect(text(root.querySelector('[role="status"]'))).toBe('Sync failed');
+    const region = card(root)!;
+    expect(text(region)).toContain('Sync failed just now');
+    expect(text(region)).toContain("Couldn't load the transactions.");
+  });
+
+  it('on the first run: not synced yet, 0 transactions, above the invitation', async () => {
+    const root = await open(fakeStore());
+    const region = card(root)!;
+    expect(text(region)).toContain('Not synced yet');
+    expect(text(region)).toContain('0 transactions in this table');
+    expect(
+      region.compareDocumentPosition(root.querySelector('.pl-empty')!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });
 

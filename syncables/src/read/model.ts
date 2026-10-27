@@ -1,6 +1,8 @@
 import type { OpenApiDocument, OperationObject } from '../openapi/types.js';
 import type { ListMethod } from './transport.js';
 import { discoverResources } from '../resources/discover.js';
+import { parseListTombstone, type ListTombstone } from './list-tombstones.js';
+import { parseProduces, type ProducedClass } from './produced-classes.js';
 
 /**
  * The collection model the read path walks, built from the OpenAPI CRUD
@@ -20,26 +22,59 @@ export interface ReadCollection {
   idField: string;
   /** Path variables in `url`, in order. */
   contextParams: string[];
-  /** Fixed query parameters, from the collection's `x-list-query`. */
+  /**
+   * Query parameters every read of the collection sends, with these exact
+   * values: the Collection Object's `listQuery` (CRUD Causality 0.4.0
+   * §4.2.1), else the older `x-list-query`.
+   */
   listQuery: Record<string, string>;
-  /** `x-list-method`: `POST` lists (e.g. Notion `/v1/search`) read `paths[url].post`. */
+  /**
+   * The method of a read: the Collection Object's `listMethod` (`GET`, the
+   * default, or `POST`, e.g. Notion `/v1/search`, read from
+   * `paths[url].post`), else the older `x-list-method`.
+   */
   method: ListMethod;
-  /** Fixed JSON body fields for a POST list, from `x-list-body`. */
+  /**
+   * The JSON body every POST read sends: the Collection Object's `listBody`,
+   * else the older `x-list-body`. Pagination fields are merged over it per
+   * page.
+   */
   listBody: Record<string, unknown>;
   /**
    * Dot-path to the items array in each list response body, from the
    * Collection Object's `envelope.itemsField` (CRUD Causality §4.2, the
-   * Envelope Object of Pagination Schemes §4.4.2). Absent when the
-   * declaration is omitted or `null` (the body root is the array), or is not
-   * a non-empty string: the array is then located as before (a top-level
-   * array body, else the schema's array property, else a common envelope
-   * name).
+   * Envelope Object of Pagination Schemes §4.4.2): a string, or `''` when
+   * the declaration is `null` or `""` (the body root is the array). Absent
+   * when the declaration is omitted or not a string: the array is then
+   * located as before (the scheme's own `response.envelope`, else a
+   * top-level array body, else the schema's array property, else a common
+   * envelope name).
    */
   itemsField?: string;
+  /**
+   * The Collection Object's `envelope.emptyWhenAbsent` (Pagination Schemes
+   * 0.7.0 §4.4.2): with a non-empty `itemsField`, a body without that field
+   * is a page with no items.
+   */
+  emptyWhenAbsent?: boolean;
   /** Item URL from the declared identity; absent for a list-only resource. */
   itemUrl?: string;
   /** Path variable bound to this item's own identity. */
   itemParam?: string;
+  /**
+   * Deletion Feeds 0.3.0-draft §4.5: the marker of deleted objects this
+   * collection's reads return among the members (`x-list-tombstone`, on the
+   * Collection Object, else, or when that one does not parse, on its list
+   * operation). Absent when neither is declared or parses.
+   */
+  listTombstone?: ListTombstone;
+  /**
+   * Produced Classes 0.1.0-draft: the shared classes the resource's objects
+   * can be represented as (`x-produces` on its CRUD Resource Object, the
+   * same for every collection of the resource). Absent when not declared,
+   * or when the declaration does not parse (`producedClasses` says why).
+   */
+  produces?: ProducedClass[];
 }
 
 /** Enumerate `collection` and read `field` off each item to fill a path variable. */
@@ -82,14 +117,42 @@ export function crudResourcesOf(
   return raw;
 }
 
+/**
+ * The standard field (CRUD Causality 0.4.0 §4.2.1) when the Collection
+ * Object has it, else the older syncables extension; the spec says a
+ * Collection Object should not carry both, and that the standard field
+ * applies when it does.
+ */
+function listField(
+  collection: Record<string, unknown>,
+  standard: 'listMethod' | 'listQuery' | 'listBody',
+): { name: string; value: unknown } {
+  const legacy = {
+    listMethod: 'x-list-method',
+    listQuery: 'x-list-query',
+    listBody: 'x-list-body',
+  }[standard];
+  return collection[standard] !== undefined
+    ? { name: standard, value: collection[standard] }
+    : { name: legacy, value: collection[legacy] };
+}
+
 function listMethodOf(collection: Record<string, unknown>): ListMethod {
-  const raw = collection['x-list-method'];
+  const { name, value: raw } = listField(collection, 'listMethod');
   if (raw === undefined) {
     return 'GET';
   }
-  const method = typeof raw === 'string' ? raw.toUpperCase() : '';
+  // The standard field is `GET` or `POST` as written (CRUD Causality §8
+  // rule 14); the older `x-list-method` is accepted in any case (`post`),
+  // as the spec's §4.2.1 describes the fallback.
+  const method =
+    typeof raw !== 'string'
+      ? ''
+      : name === 'listMethod'
+        ? raw
+        : raw.toUpperCase();
   if (method !== 'GET' && method !== 'POST') {
-    throw new Error(`Unsupported x-list-method ${asText(raw)}`);
+    throw new Error(`Unsupported ${name} ${asText(raw)}`);
   }
   return method;
 }
@@ -123,6 +186,7 @@ export function discoverReadModel(
     if (!isRecord(def)) {
       continue;
     }
+    const produces = parseProduces(def['x-produces']);
     const identity = isRecord(def['identity']) ? def['identity'] : {};
     const itemUrl =
       typeof identity['urlTemplate'] === 'string'
@@ -163,15 +227,34 @@ export function discoverReadModel(
       if (!firstCollection.has(resource)) {
         firstCollection.set(resource, name);
       }
+      // The fixed request values of a read (CRUD Causality 0.4.0 §4.2.1):
+      // the standard fields, else the older x-list-* extensions, per field.
       const listQuery: Record<string, string> = {};
-      if (isRecord(col['x-list-query'])) {
-        for (const [key, value] of Object.entries(col['x-list-query'])) {
+      const query = listField(col, 'listQuery').value;
+      if (isRecord(query)) {
+        for (const [key, value] of Object.entries(query)) {
           listQuery[key] = asText(value);
         }
       }
+      const body = listField(col, 'listBody').value;
+      const method = listMethodOf(col);
+      // The Collection Object's, else (absent, or not parsing) the list
+      // operation's, as for read tombstones (§4.4, §4.5).
+      const listTombstone =
+        parseListTombstone(col['x-list-tombstone']) ??
+        parseListTombstone(
+          document.paths[col['urlTemplate']]?.[
+            method === 'POST' ? 'post' : 'get'
+          ]?.['x-list-tombstone'],
+        );
       const itemsField = isRecord(col['envelope'])
         ? col['envelope']['itemsField']
         : undefined;
+      const emptyWhenAbsent =
+        isRecord(col['envelope']) &&
+        col['envelope']['emptyWhenAbsent'] === true &&
+        typeof itemsField === 'string' &&
+        itemsField !== '';
       collections.push({
         name,
         resource,
@@ -179,15 +262,19 @@ export function discoverReadModel(
         idField,
         contextParams: pathVariables(col['urlTemplate']),
         listQuery,
-        method: listMethodOf(col),
-        listBody: isRecord(col['x-list-body'])
-          ? structuredClone(col['x-list-body'])
-          : {},
-        ...(typeof itemsField === 'string' && itemsField !== ''
-          ? { itemsField }
+        method,
+        listBody: isRecord(body) ? structuredClone(body) : {},
+        // A string is the dot-path; null or "" is the body root (Pagination
+        // Schemes §4.4.2); omitted or another type leaves the array to be
+        // located as before.
+        ...(typeof itemsField === 'string' || itemsField === null
+          ? { itemsField: itemsField ?? '' }
           : {}),
+        ...(emptyWhenAbsent ? { emptyWhenAbsent } : {}),
         ...(itemUrl ? { itemUrl } : {}),
         ...(itemParam ? { itemParam } : {}),
+        ...(listTombstone ? { listTombstone } : {}),
+        ...(produces ? { produces: structuredClone(produces) } : {}),
       });
     }
   }
@@ -246,10 +333,13 @@ export function listOperation(
 export function declaredQueryParameters(
   operation: OperationObject,
 ): Set<string> {
+  // A malformed `parameters` (not an array) reads as none, as auto-detection does.
+  const parameters: unknown = operation.parameters;
+  if (!Array.isArray(parameters)) return new Set();
   return new Set(
-    (operation.parameters ?? [])
-      .filter((parameter) => isRecord(parameter) && parameter.in === 'query')
-      .map((parameter) => parameter.name),
+    parameters
+      .filter((parameter) => isRecord(parameter) && parameter['in'] === 'query')
+      .map((parameter) => parameter['name'] as string),
   );
 }
 

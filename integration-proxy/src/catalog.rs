@@ -123,7 +123,14 @@ impl Catalog {
                         })?;
                 apply_overlay(&mut document, overlay, &platform.openapi, &overlay_url)?;
             }
+            refuse_ref_path_items(&platform.name, &document)?;
             if let Some(selection) = platform.selection {
+                for problem in crate::pacing::plan_selection_problems(&document, &selection) {
+                    tracing::warn!(
+                        platform = %platform.name,
+                        "throttlingPlans: {problem}; the bucket keeps within every tier"
+                    );
+                }
                 selections.insert(platform.name.clone(), Value::Object(selection));
             }
             insert_document(
@@ -166,6 +173,41 @@ impl Catalog {
         }
         Some(server_url)
     }
+    /// The path of the platform's first server URL, without a trailing
+    /// `/`: the prefix of every allowlisted request path.
+    pub(crate) fn server_base_path(&self, platform: &str) -> Option<String> {
+        let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+        let server = document
+            .get("servers")?
+            .as_array()?
+            .first()?
+            .get("url")?
+            .as_str()?;
+        Some(
+            url::Url::parse(server)
+                .ok()?
+                .path()
+                .trim_end_matches('/')
+                .to_owned(),
+        )
+    }
+
+    /// The platform's composed document, when it declares
+    /// `x-webhook-deliveries` (Webhook Deliveries 0.1.0-draft). Read by the
+    /// generic webhook code for any platform alike.
+    pub(crate) fn webhook_document(&self, platform: &str) -> Option<Value> {
+        let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+        document.get("x-webhook-deliveries")?;
+        Some(document)
+    }
+
+    /// The header values the catalog fixes for an operation: a header
+    /// parameter with a `schema.default`, or a `schema.enum` of exactly one
+    /// value, whether it is `required` or not (a required one with neither
+    /// refuses the operation: `None`). They are always sent, and since the
+    /// header allowlists of pieces.md P1-P3 a fixed value also replaces a
+    /// caller's header of the same name (`proxy::upstream_request`), so an
+    /// optional header with a default can no longer be chosen by the caller.
     pub fn required_headers(
         &self,
         platform: &str,
@@ -230,6 +272,87 @@ impl Catalog {
             out.push((name.to_owned(), value.to_owned()));
         }
         Some(out)
+    }
+    /// Whether the operation that `method` and `path` resolve to declares a
+    /// header parameter called `name` (compared case-insensitively), on the
+    /// operation or its path item, with `$ref`s resolved. It decides only
+    /// whether the caller's header of that name may go upstream; the value
+    /// itself is not validated. Anything unresolvable is `false`.
+    pub fn declares_header_parameter(
+        &self,
+        platform: &str,
+        method: &str,
+        path: &str,
+        name: &str,
+    ) -> bool {
+        let declared = || -> Option<bool> {
+            let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+            let server = document
+                .get("servers")?
+                .as_array()?
+                .first()?
+                .get("url")?
+                .as_str()?;
+            let server_url = url::Url::parse(server).ok()?;
+            let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
+            let paths = document.get("paths")?.as_object()?;
+            let template = paths.keys().find(|t| path_matches(t, relative))?;
+            // `$ref` path items are refused at load (`refuse_ref_path_items`).
+            let path_item = paths.get(template)?.as_object()?;
+            let operation = path_item.get(&method.to_ascii_lowercase())?.as_object()?;
+            Some(
+                operation
+                    .get("parameters")
+                    .into_iter()
+                    .chain(path_item.get("parameters"))
+                    .flat_map(Value::as_array)
+                    .flatten()
+                    .filter_map(|parameter| match parameter.get("$ref") {
+                        Some(reference) => document.pointer(reference.as_str()?.strip_prefix('#')?),
+                        None => Some(parameter),
+                    })
+                    .any(|parameter| {
+                        parameter.get("in").and_then(Value::as_str) == Some("header")
+                            && parameter
+                                .get("name")
+                                .and_then(Value::as_str)
+                                .is_some_and(|declared| declared.eq_ignore_ascii_case(name))
+                    }),
+            )
+        };
+        declared().unwrap_or(false)
+    }
+    /// The `x-throttling` buckets the proxy paces for the operation that
+    /// `method` and `path` resolve to ([`crate::pacing::selected_buckets`]).
+    /// Nothing when the operation or the declaration cannot be resolved.
+    pub fn paced_buckets(
+        &self,
+        platform: &str,
+        method: &str,
+        path: &str,
+    ) -> Vec<crate::pacing::PacedBucket> {
+        let resolve = || -> Option<Vec<crate::pacing::PacedBucket>> {
+            let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+            document.get("x-throttling")?;
+            let server = document
+                .get("servers")?
+                .as_array()?
+                .first()?
+                .get("url")?
+                .as_str()?;
+            let server_url = url::Url::parse(server).ok()?;
+            let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
+            let paths = document.get("paths")?.as_object()?;
+            let template = paths.keys().find(|t| path_matches(t, relative))?;
+            let operation = paths.get(template)?.get(method.to_ascii_lowercase())?;
+            let plans = self
+                .selections
+                .get(platform)
+                .and_then(|selection| selection.get("throttlingPlans"))
+                .and_then(Value::as_object);
+            Some(crate::pacing::selected_buckets(&document, operation, plans))
+        };
+        resolve().unwrap_or_default()
     }
     /// A bounded, explicit request validation against the composed OAD:
     /// every declared *required* query parameter must be present, a
@@ -451,6 +574,26 @@ fn parse_catalog_config(source: &str, path: &str) -> Result<CatalogConfig, Strin
     serde_yaml::from_str(source).map_err(|err| format!("cannot parse {path}: {err}"))
 }
 
+/// Refuses a composed document whose `paths` holds a path item that is a
+/// `$ref` (OpenAPI 3.1) or not an object. No catalog uses one (checked
+/// against every dated catalog on 2026-10-09), and the allowlist, the fixed
+/// headers, request validation, pacing and the scope and profile walk in
+/// `providers.rs` all read path items in place. Refusing such a document at
+/// load keeps all of them consistent and cannot widen what is allowed.
+fn refuse_ref_path_items(platform: &str, document: &Value) -> Result<(), String> {
+    let Some(paths) = document.get("paths").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    for (path, item) in paths {
+        if !item.is_object() || item.get("$ref").is_some() {
+            return Err(format!(
+                "platform {platform:?}: path item {path:?} is a $ref or not an object; this proxy does not resolve $ref path items"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn insert_document(
     documents: &mut BTreeMap<String, String>,
     name: &str,
@@ -651,6 +794,41 @@ pub async fn document(Path(file): Path<String>, State(state): State<AppState>) -
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_header_parameter_is_declared_only_where_the_operation_or_its_path_says_so() {
+        use serde_json::json;
+        let catalog = super::Catalog::from_test_document(
+            "test",
+            json!({"servers":[{"url":"https://example.com/v1"}],
+            "components":{"parameters":{"key":{"in":"header","name":"Idempotency-Key"}}},
+            "paths":{
+                "/items":{"post":{"parameters":[{"$ref":"#/components/parameters/key"}]},
+                    "put":{"parameters":[{"in":"query","name":"Idempotency-Key"}]}},
+                "/items/{id}":{"parameters":[{"in":"header","name":"idempotency-key"}],
+                    "patch":{}},
+                "/other":{"post":{}}
+            }}),
+            json!({}),
+        );
+        let declared = |method, path| {
+            catalog.declares_header_parameter("test", method, path, "idempotency-key")
+        };
+        assert!(declared("POST", "/v1/items"));
+        assert!(declared("PATCH", "/v1/items/7"));
+        // A query parameter of that name, another operation, another path,
+        // a path outside the server URL or an unknown platform: not declared.
+        assert!(!declared("PUT", "/v1/items"));
+        assert!(!declared("GET", "/v1/items"));
+        assert!(!declared("POST", "/v1/other"));
+        assert!(!declared("POST", "/items"));
+        assert!(!catalog.declares_header_parameter(
+            "other",
+            "POST",
+            "/v1/items",
+            "idempotency-key"
+        ));
+    }
+
     #[test]
     fn fixed_header_defaults_are_explicit_and_operation_overrides_path() {
         use serde_json::json;
@@ -1606,6 +1784,101 @@ mod tests {
         }
     }
 
+    /// pieces.md D4: a Produced Classes declaration (`x-produces`,
+    /// openapi-extensions/spec/produced-classes) set by an overlay on a CRUD
+    /// Resource Object comes back unchanged from `/catalog/<name>.yaml`. The
+    /// proxy composes and serves it like any other member and never reads it.
+    #[tokio::test]
+    async fn a_produced_class_declaration_passes_through_unchanged() {
+        use crate::config::OVERLAYS_PAGES_BASE;
+        let produces = serde_json::json!([
+            {
+                "class": "https://ontology.example/classes/time-entry-v1",
+                "lens": "https://ontology.example/lenses/example-time-entry-v1",
+                "description": "Een lopende timer heeft geen einde: \"end\" ontbreekt.",
+                "x-note": {"since": "2026-10-08", "weights": [1, 2.5, null, true]}
+            },
+            {"class": "urn:example:classes:cost-centre"}
+        ]);
+        let mirror = tempfile_path("mirror");
+        let source = mirror.join("example");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(
+            source.join("openapi.yaml"),
+            "openapi: 3.0.3\ninfo: {title: Example, version: '1'}\nservers: [{url: 'https://api.example'}]\npaths: {}\ncomponents: {}\n",
+        )
+        .unwrap();
+        let resources = serde_json::json!({
+            "overlay": "1.0.0",
+            "info": {"title": "CRUD", "version": "1"},
+            "actions": [{"target": "$.components", "update": {"crudResources": {
+                "timeEntry": {"identity": {"urlTemplate": "/time-entries/{id}"}},
+                "project": {"identity": {"urlTemplate": "/projects/{id}"}}
+            }}}]
+        });
+        let classes = serde_json::json!({
+            "overlay": "1.0.0",
+            "info": {"title": "Produced classes", "version": "1"},
+            "actions": [{"target": "$.components.crudResources.timeEntry",
+                "update": {"x-produces": produces}}]
+        });
+        fs::write(
+            source.join("crud-overlay.yaml"),
+            serde_yaml::to_string(&resources).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            source.join("produces-overlay.yaml"),
+            serde_yaml::to_string(&classes).unwrap(),
+        )
+        .unwrap();
+        let catalog_file = mirror.join("catalog.json");
+        fs::write(
+            &catalog_file,
+            serde_json::json!({"platforms": [{
+                "name": "example",
+                "openapi": format!("{OVERLAYS_PAGES_BASE}example/openapi.yaml"),
+                "overlays": [
+                    format!("{OVERLAYS_PAGES_BASE}example/crud-overlay.yaml"),
+                    format!("{OVERLAYS_PAGES_BASE}example/produces-overlay.yaml"),
+                ],
+            }]})
+            .to_string(),
+        )
+        .unwrap();
+        let catalog = Catalog::load_with_mirror(
+            &catalog_file.to_string_lossy(),
+            &crate::build_http_client(),
+            Some(&mirror),
+        )
+        .await
+        .unwrap();
+        let mut state = crate::test_support::state(None);
+        state.catalog = catalog;
+        let app = crate::router(state);
+        let get = |uri: &'static str| {
+            let app = app.clone();
+            async move {
+                let response = app
+                    .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK, "{uri}");
+                to_bytes(response.into_body(), usize::MAX).await.unwrap()
+            }
+        };
+        let document: Value = serde_yaml::from_slice(&get("/catalog/example.yaml").await).unwrap();
+        assert_eq!(
+            document["components"]["crudResources"]["timeEntry"]["x-produces"],
+            produces
+        );
+        assert!(document["components"]["crudResources"]["project"]
+            .get("x-produces")
+            .is_none());
+        assert!(document.get("x-produces").is_none());
+        fs::remove_dir_all(mirror.parent().unwrap()).unwrap();
+    }
+
     #[tokio::test]
     async fn consumer_selection_is_separate_from_api_metadata() {
         let app = test_router();
@@ -2044,6 +2317,68 @@ mod tests {
         .unwrap();
         assert_eq!(config.platforms[0].name, "example");
         assert!(valid_platform_name("bad_name").is_err());
+    }
+
+    /// No catalog uses a `$ref` path item, and no lookup resolves one: a
+    /// composed document with one (from the OAD or an overlay) is refused
+    /// at load, naming the platform and path, so the allowlist cannot
+    /// change silently.
+    #[tokio::test]
+    async fn a_ref_path_item_is_refused_at_load() {
+        use crate::config::OVERLAYS_PAGES_BASE;
+        let mirror = tempfile_path("mirror");
+        let source = mirror.join("example");
+        fs::create_dir_all(&source).unwrap();
+        let load = |paths: Value| {
+            let (mirror, source) = (mirror.clone(), source.clone());
+            async move {
+                fs::write(
+                    source.join("openapi.yaml"),
+                    serde_yaml::to_string(&serde_json::json!({
+                        "openapi": "3.1.0",
+                        "info": {"title": "Example", "version": "1"},
+                        "servers": [{"url": "https://api.example"}],
+                        "paths": paths,
+                        "components": {"pathItems": {"shared": {"get": {}}}}
+                    }))
+                    .unwrap(),
+                )
+                .unwrap();
+                let catalog_file = mirror.join("catalog.json");
+                fs::write(
+                    &catalog_file,
+                    serde_json::json!({"platforms": [{
+                        "name": "example",
+                        "openapi": format!("{OVERLAYS_PAGES_BASE}example/openapi.yaml"),
+                    }]})
+                    .to_string(),
+                )
+                .unwrap();
+                Catalog::load_with_mirror(
+                    &catalog_file.to_string_lossy(),
+                    &crate::build_http_client(),
+                    Some(&mirror),
+                )
+                .await
+            }
+        };
+        let catalog = load(serde_json::json!({"/items": {"get": {}}}))
+            .await
+            .unwrap();
+        assert!(catalog.allows("example", "GET", "/items").is_some());
+        for paths in [
+            serde_json::json!({"/items": {"get": {}}, "/shared": {"$ref": "#/components/pathItems/shared"}}),
+            serde_json::json!({"/shared": "not an object"}),
+        ] {
+            let error = load(paths).await.err().expect("refused");
+            assert!(
+                error.contains(
+                    "platform \"example\": path item \"/shared\" is a $ref or not an object"
+                ),
+                "{error}"
+            );
+        }
+        fs::remove_dir_all(mirror.parent().unwrap()).unwrap();
     }
 
     #[test]

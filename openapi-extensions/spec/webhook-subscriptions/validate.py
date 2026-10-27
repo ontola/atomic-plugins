@@ -56,6 +56,10 @@ def check_policy(policy):
             "policy: delivery.maxBodyBytes <= delivery.maxVerifiedBytes")
     require(policy["access"]["maxCheckAgeSeconds"] <= min(MAX_CHECK_AGE, lease["durationSeconds"]),
             "policy.access.maxCheckAgeSeconds: at most 86400 and at most lease.durationSeconds")
+    require(policy["receipts"]["maxCountPerOwner"] <= policy["receipts"]["maxCount"],
+            "policy.receipts: maxCountPerOwner <= maxCount")
+    require(policy["cleanup"]["maxJobsPerOwner"] <= policy["cleanup"]["maxJobs"],
+            "policy.cleanup: maxJobsPerOwner <= maxJobs")
     require(policy["receipts"]["ttlSeconds"] >= MIN_RECEIPT_TTL,
             "policy.receipts.ttlSeconds: at least 1800, twice the largest timestamp tolerance Webhook Deliveries allows")
     require(policy["sweep"]["maxIntervalSeconds"] <= 60, "policy.sweep.maxIntervalSeconds: at most 60")
@@ -85,6 +89,9 @@ def check_reconciliation(result, label):
 
 def check_event(event, label):
     payload = event["payload"]
+    if payload.get("omitted"):
+        # Left out by maxBytes: nothing to check bytes and sha256 against.
+        return
     try:
         body = base64.b64decode(payload["body"], validate=True)
     except binascii.Error:
@@ -122,6 +129,9 @@ def check_page(page, label):
     for index, event in enumerate(page["events"]):
         require(event["generation"] == page["generation"], f"{label}.events[{index}]: another generation")
         check_event(event, f"{label}.events[{index}]")
+        if event["payload"].get("omitted"):
+            require(len(page["events"]) == 1,
+                    f"{label}.events[{index}]: an event without its body is the only event of its page")
     if page["more"]:
         require(page["next"] is not None, f"{label}: more without next")
     if page["events"]:

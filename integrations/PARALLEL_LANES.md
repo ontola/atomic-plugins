@@ -271,7 +271,9 @@ node integrations/tooling/run-lane.mjs timesheets            # all its tiers
 
 It reads `lanes.json`, computes the ports, and for a server-dependent tier
 calls `serve.mjs` to start atomic-server (from `ATOMIC_SERVER_CHECKOUT`,
-defaulting to the AGENTS.md `/tmp/atomic-server` layout), the mock proxy and
+defaulting to this pin's `~/.cache/atomic-plugins/atomic-server/<sha>` when
+that directory exists, else `/tmp/atomic-server`, as AGENTS.md says), the
+mock proxy and
 the dev-server, waits on all three, runs the tier, and tears down on exit.
 Tiers run cheapest-first, so a lane fails before paying for a server it will
 not reach.
@@ -414,9 +416,12 @@ Rules that keep parallel worktrees from fighting:
 - **Never bump `.atomic-server-ref` from a plugin worktree.** It is a `shared`
   path: it forces every lane to run and invalidates `build-server` for all of
   them. Bump it in its own PR, merge it, rebase the rest.
-- **Share one atomic-server checkout** across worktrees (`ATOMIC_SERVER_CHECKOUT`
-  pointing at a single `/tmp/atomic-server`) so the cargo cache is shared. Only
-  the e2e tier needs exclusive access to it (§3).
+- **Share one atomic-server checkout per pinned SHA** across worktrees
+  (`~/.cache/atomic-plugins/atomic-server/<sha>`, which the tools pick by
+  default when it exists; `ATOMIC_SERVER_CHECKOUT` overrides it) so the cargo
+  cache is shared. Never point a branch with another pin at it
+  (docs/agents/build-vps.md). Only the e2e tier needs exclusive access to it
+  (§3).
 - Per AGENTS.md's worktree note: never bare `git stash`/`git stash pop` — the
   stack is shared across all of these.
 

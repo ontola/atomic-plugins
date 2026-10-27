@@ -16,10 +16,12 @@ METHODS = {"get", "put", "post", "delete", "options", "head", "patch", "trace"}
 ROLES = {"limit", "remaining", "used", "reset", "retryAfter"}
 TIMED_ROLES = {"reset", "retryAfter"}
 UNITS = {"epochSeconds", "deltaSeconds", "httpDate", "deltaSecondsOrHttpDate"}
-MEANINGS = {"throttled", "quotaExhausted"}
+MEANINGS = {"throttled", "quotaExhausted", "blocked"}
 HEADER_OPERATORS = {"equals", "in", "present"}
 BODY_OPERATORS = {"equals", "in", "contains", "present", "item"}
 DIGITS = re.compile(r"[0-9]+")
+MAX_INTEGER = 2 ** 53 - 1  # the largest integer every JSON parser holds exactly (RFC 8259 §6)
+WHITESPACE = " \t\r\n"  # SP, HTAB, CR, LF: JSON's whitespace, which includes a header's OWS
 POINTER = re.compile(r"(/([^~/]|~[01])*)*")
 
 
@@ -43,8 +45,8 @@ def validate(document):
     limits = {}
     if root is not None:
         require(isinstance(root, dict), "root: expected object")
-        require(set(root) <= {"limits", "applies", "headers", "signals"}, "root: unknown field")
-        require(set(root) & {"limits", "headers", "signals"}, "root: expected limits, headers or signals")
+        require(set(root) <= {"limits", "applies", "headers", "bodyFields", "signals"}, "root: unknown field")
+        require(set(root) & {"limits", "headers", "bodyFields", "signals"}, "root: expected limits, headers, bodyFields or signals")
         require(("limits" in root) == ("applies" in root), "root: limits and applies go together")
         if "limits" in root:
             limits = root["limits"]
@@ -54,6 +56,10 @@ def validate(document):
             selection(root["applies"], limits, "root.applies")
         if "headers" in root:
             validate_headers(root["headers"])
+        if "bodyFields" in root:
+            validate_roles(root["bodyFields"], "bodyFields", case_insensitive=False)
+            for path in root["bodyFields"]:
+                require(all(path.split(".")), f"bodyFields.{path}: invalid dot-path (empty name)")
         if "signals" in root:
             signals = root["signals"]
             require(isinstance(signals, list) and signals, "signals: expected nonempty array")
@@ -67,13 +73,63 @@ def validate(document):
 
 def validate_limit(name, limit):
     require(isinstance(name, str) and name, "empty bucket identifier")
-    require(isinstance(limit, dict) and "window" in limit, f"{name}: window required")
-    require(set(limit) <= {"requests", "window", "partitionBy", "description"}, f"{name}: unknown field")
-    if "requests" in limit:
-        positive(limit["requests"], f"{name}.requests")
+    require(isinstance(limit, dict), f"{name}: expected object")
+    require(set(limit) <= {"requests", "window", "partitionBy", "description", "tiers"}, f"{name}: unknown field")
     if "description" in limit:
         require(isinstance(limit["description"], str), f"{name}.description: expected string")
-    window = limit["window"]
+    if "tiers" in limit:  # 0.5.0
+        require("window" not in limit and "requests" not in limit, f"{name}: tiers replace requests and window")
+        tiers = limit["tiers"]
+        require(isinstance(tiers, list) and tiers, f"{name}.tiers: expected nonempty array")
+        plans = []
+        for index, tier in enumerate(tiers):
+            label = f"{name}.tiers[{index}]"
+            require(isinstance(tier, dict) and {"plans", "requests", "window"} <= set(tier)
+                    <= {"plans", "requests", "window", "description"}, f"{label}: plans, requests and window required")
+            require(isinstance(tier["plans"], list) and tier["plans"]
+                    and all(isinstance(p, str) and p for p in tier["plans"]), f"{label}.plans: expected nonempty strings")
+            plans.extend(tier["plans"])
+            positive(tier["requests"], f"{label}.requests")
+            if "description" in tier:
+                require(isinstance(tier["description"], str), f"{label}.description: expected string")
+            validate_window(label, tier["window"])
+        require(len(set(plans)) == len(plans), f"{name}.tiers: a plan in two tiers")
+    else:
+        require("window" in limit, f"{name}: window required")
+        validate_window(name, limit["window"])
+    if "requests" in limit:
+        positive(limit["requests"], f"{name}.requests")
+    if "partitionBy" in limit:
+        strings(limit["partitionBy"], f"{name}.partitionBy")
+        for dimension in limit["partitionBy"]:
+            uri = urlparse(dimension)
+            require(dimension in DIMENSIONS or (uri.scheme and (uri.path or uri.netloc)), f"{name}: unknown non-URI dimension")
+
+
+def limits_in_force(limit, plan=None):
+    """0.5.0: the [{requests, window}] a consumer keeps within, all at once.
+
+    Without tiers, the limit itself (no entry when it states no requests).
+    With tiers, the tier whose plans name `plan`; without a plan, or one no
+    tier names, every tier.
+    """
+    tiers = limit.get("tiers")
+    if not tiers:
+        return [{"requests": limit["requests"], "window": limit["window"]}] if "requests" in limit else []
+    for tier in tiers:
+        if plan in tier["plans"]:
+            return [{"requests": tier["requests"], "window": tier["window"]}]
+    return [{"requests": tier["requests"], "window": tier["window"]} for tier in tiers]
+
+
+def fallback_window(limit, plan=None):
+    """0.5.0: the window seconds a time-less quotaExhausted falls back to: the plan's tier's, else the longest."""
+    if not limit.get("tiers"):
+        return limit["window"]["seconds"]
+    return max(entry["window"]["seconds"] for entry in limits_in_force(limit, plan))
+
+
+def validate_window(name, window):
     require(isinstance(window, dict) and {"seconds", "kind"} <= set(window) <= {"seconds", "kind", "anchor"}, f"{name}.window: invalid fields")
     positive(window["seconds"], f"{name}.window.seconds")
     require(window["kind"] in ("fixed", "sliding", "unspecified"), f"{name}: invalid window kind")
@@ -82,20 +138,20 @@ def validate_limit(name, limit):
         require(window["kind"] == "fixed", f"{name}: anchor only valid for fixed windows")
         require(isinstance(anchor, str) and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)", anchor), f"{name}: anchor must be RFC3339 timestamp")
         datetime.datetime.fromisoformat(anchor.replace("Z", "+00:00"))
-    if "partitionBy" in limit:
-        strings(limit["partitionBy"], f"{name}.partitionBy")
-        for dimension in limit["partitionBy"]:
-            uri = urlparse(dimension)
-            require(dimension in DIMENSIONS or (uri.scheme and (uri.path or uri.netloc)), f"{name}: unknown non-URI dimension")
 
 def validate_headers(headers):
-    require(isinstance(headers, dict) and headers, "headers: expected nonempty object")
-    lowered = [name.lower() for name in headers if isinstance(name, str)]
-    require(len(lowered) == len(headers) and all(lowered), "headers: expected nonempty header names")
-    require(len(set(lowered)) == len(lowered), "headers: names must be unique case-insensitively")
+    validate_roles(headers, "headers", case_insensitive=True)
+
+
+def validate_roles(headers, where, case_insensitive):
+    """A map of header name (or body dot-path) to Header Role Object."""
+    require(isinstance(headers, dict) and headers, f"{where}: expected nonempty object")
+    names = [name.lower() if case_insensitive else name for name in headers if isinstance(name, str)]
+    require(len(names) == len(headers) and all(names), f"{where}: expected nonempty names")
+    require(len(set(names)) == len(names), f"{where}: names must be unique" + (" case-insensitively" if case_insensitive else ""))
     roles = []
     for name, header in headers.items():
-        label = f"headers.{name}"
+        label = f"{where}.{name}"
         require(isinstance(header, dict) and set(header) <= {"role", "unit", "description"}, f"{label}: unknown field")
         require(header.get("role") in ROLES, f"{label}: unknown role")
         roles.append(header["role"])
@@ -105,7 +161,7 @@ def validate_headers(headers):
             require("unit" not in header, f"{label}: unit only for reset and retryAfter")
         if "description" in header:
             require(isinstance(header["description"], str), f"{label}.description: expected string")
-    require(len(set(roles)) == len(roles), "headers: each role at most once")
+    require(len(set(roles)) == len(roles), f"{where}: each role at most once")
 
 def validate_signal(signal, limits, label):
     require(isinstance(signal, dict), f"{label}: expected object")
@@ -113,7 +169,10 @@ def validate_signal(signal, limits, label):
     status = signal.get("status")
     require(isinstance(status, list) and status and all(type(s) is int and 100 <= s <= 599 for s in status), f"{label}.status: expected integer statuses 100-599")
     require(len(set(status)) == len(status), f"{label}.status: duplicate entries")
-    require(signal.get("meaning") in MEANINGS, f"{label}.meaning: expected throttled or quotaExhausted")
+    require(signal.get("meaning") in MEANINGS, f"{label}.meaning: expected throttled, quotaExhausted or blocked")
+    if signal.get("meaning") == "blocked":  # 0.4.0: not counted, so no bucket and no delay
+        require("bucket" not in signal and "minDelaySeconds" not in signal,
+                f"{label}: bucket and minDelaySeconds are not allowed with blocked")
     if "bucket" in signal:
         require(signal["bucket"] in limits, f"{label}.bucket: undefined bucket")
     if "minDelaySeconds" in signal:
@@ -208,7 +267,7 @@ def single_header(headers, name):
         if len(value) != 1:
             return _REPEATED if value else None
         value = value[0]
-    return value.strip()
+    return value.strip(WHITESPACE)
 
 _REPEATED = object()
 
@@ -225,13 +284,14 @@ def header_matches(predicate, headers):
     return value in predicate["in"]
 
 def _integer(value):
-    """A non-negative decimal integer, or None (also for one too long for int())."""
+    """A decimal integer from 0 to MAX_INTEGER, or None."""
     if not DIGITS.fullmatch(value):
         return None
     try:
-        return int(value)
-    except ValueError:
+        number = int(value)
+    except ValueError:  # too many digits for int()
         return None
+    return number if number <= MAX_INTEGER else None
 
 def _http_date(value):
     try:
@@ -273,7 +333,23 @@ def _absolute(absolute, received_at, date_header):
         times.append(received_at + (absolute - server_now))
     return max(times)
 
-def classify(document, status, headers, body, received_at):
+def _body_text(body, path):
+    """A body field's value as text (§ Response body fields): a string, or an integer's decimal form."""
+    value = body
+    for key in path.split("."):
+        if not isinstance(value, dict) or key not in value:
+            return None
+        value = value[key]
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() and 0 <= value <= MAX_INTEGER else None
+    return value.strip(WHITESPACE) if isinstance(value, str) else None
+
+
+def classify(document, status, headers, body, received_at, plan=None, from_cache=False):
     """Classify one response under the document's x-throttling.
 
     `headers` maps names (any case) to a value, or to a list of values when the
@@ -282,7 +358,16 @@ def classify(document, status, headers, body, received_at):
     when the response is not throttling, else a dict with `meaning`, `bucket`
     (or None) and `retryAt` (epoch seconds, or None when the consumer's own
     backoff applies). A 429 is throttling with or without declared signals.
+    Since 0.4.0 the meaning can be `blocked` (also for a signal whose meaning
+    is not recognised, with any bucket or delay it carries ignored): then
+    `retryAt` None means never retry automatically, not the consumer's backoff.
+
+    Since 0.5.1, `from_cache=True` (a response a cache answered, which the API
+    did not send for this request) returns None: such a response is not
+    classified at all (Cached responses).
     """
+    if from_cache:
+        return None
     root = document.get("x-throttling") or {}
     headers = {name.lower(): value for name, value in headers.items()}
     matched = None
@@ -299,21 +384,34 @@ def classify(document, status, headers, body, received_at):
         if status != 429:
             return None
         matched = {"meaning": "throttled"}
+    if matched.get("meaning") not in ("throttled", "quotaExhausted"):
+        # 0.4.0: blocked, and any meaning this consumer does not recognise, is never resent automatically.
+        return {"meaning": "blocked", "bucket": None, "retryAt": None}
+    # role -> [(value, unit, source), ...]: headers first, then body fields (0.3.0).
     roles = {}
     for name, header in root.get("headers", {}).items():
         value = single_header(headers, name)
         if value is not None and value is not _REPEATED:
-            roles[header["role"]] = (value, header.get("unit"))
+            roles.setdefault(header["role"], []).append((value, header.get("unit"), "header"))
+    for path, field in root.get("bodyFields", {}).items():
+        value = _body_text(body, path)
+        if value is not None:
+            roles.setdefault(field["role"], []).append((value, field.get("unit"), "body"))
     date_header = single_header(headers, "date")
     date_header = date_header if isinstance(date_header, str) else None
-    times = []
-    if "retryAfter" in roles:
-        value, unit = roles["retryAfter"]
-        times.append(parse_time(value, unit, received_at, date_header))
-    exhausted = matched["meaning"] == "quotaExhausted" or ("remaining" in roles and _integer(roles["remaining"][0]) == 0)
-    if "reset" in roles and exhausted:
-        value, unit = roles["reset"]
-        times.append(parse_time(value, unit, received_at, date_header))
+    def timed(role):
+        for value, unit, source in roles.get(role, []):
+            time = parse_time(value, unit, received_at, date_header)
+            # A body field that gives no wait counts as absent, so the fallbacks still apply.
+            # The source decides, not the value: a header with the same value still counts.
+            if time is not None and source == "body" and time <= received_at:
+                continue
+            yield time
+
+    times = list(timed("retryAfter"))
+    exhausted = matched["meaning"] == "quotaExhausted" or any(_integer(v) == 0 for v, _, _ in roles.get("remaining", []))
+    if exhausted:
+        times.extend(timed("reset"))
     times = [t for t in times if t is not None]
     bucket = matched.get("bucket")
     if times:
@@ -321,7 +419,7 @@ def classify(document, status, headers, body, received_at):
     elif "minDelaySeconds" in matched:
         retry_at = received_at + matched["minDelaySeconds"]
     elif matched["meaning"] == "quotaExhausted" and bucket in root.get("limits", {}):
-        retry_at = received_at + root["limits"][bucket]["window"]["seconds"]
+        retry_at = received_at + fallback_window(root["limits"][bucket], plan)
     else:
         retry_at = None
     return {"meaning": matched["meaning"], "bucket": bucket, "retryAt": retry_at}
@@ -334,6 +432,12 @@ def _load(path):
             return json.load(source)
         import yaml
         return yaml.safe_load(source)
+
+
+def cacheable(document, status, headers, body, received_at=0, plan=None):
+    """0.5.1: whether a cache may store this response: not when it is throttling or blocked."""
+    return classify(document, status, headers, body, received_at, plan) is None
+
 
 if __name__ == "__main__":
     for name in sys.argv[1:]:

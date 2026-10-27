@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   apiKeyAuth,
   bearerAuth,
@@ -111,6 +111,14 @@ describe('shared transport and collection reads', () => {
   });
 
   it('uses the reader rate-limit policy and captures each attempt', async () => {
+    // The wait is measured from the clock when the client sleeps, so a
+    // millisecond between receiving the 429 and sleeping makes it 1999
+    // (the retry is still not early). A frozen clock makes it exact.
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     const saved: RawReadResponse[] = [];
     const sleep = vi.fn(async () => {});
     let attempt = 0;
@@ -662,6 +670,37 @@ describe('direct authentication configuration', () => {
     });
     vi.stubEnv('SECOND_API_KEY', 'second-key');
     expect(credentialsFromEnv({}, 'SECOND_')).toEqual({ apiKey: 'second-key' });
+  });
+
+  it('reads no environment credentials without an authenticate adapter', async () => {
+    // A key set for some other tool, and a transport that authenticates
+    // itself: before, the client refused to start.
+    vi.stubEnv('SYNCABLES_API_KEY', 'set-for-something-else');
+    vi.stubEnv('SYNCABLES_ACCESS_TOKEN', 'also-unrelated');
+    const transport = vi.fn<Transport>(async () => response([]));
+    const client = createNodeClient(document(), { transport });
+    await client.sync();
+    const sent = transport.mock.calls[0]?.[0].headers;
+    expect(sent).not.toHaveProperty('authorization');
+    expect(sent).not.toHaveProperty('x-api-key');
+    // Explicit credentials without an adapter are still a mistake.
+    expect(() =>
+      createNodeClient(document(), {
+        transport,
+        credentials: { apiKey: 'explicit' },
+      }),
+    ).toThrow('require an authenticate adapter');
+  });
+
+  it('loads environment credentials for an adapter, under a custom prefix too', async () => {
+    vi.stubEnv('OTHER_API_KEY', 'other-key');
+    const authenticate = vi.fn<Authenticate>((request) => request);
+    await createNodeClient(document(), {
+      transport: async () => response([]),
+      credentialPrefix: 'OTHER_',
+      authenticate,
+    }).sync();
+    expect(authenticate.mock.calls[0]?.[1]).toEqual({ apiKey: 'other-key' });
   });
 
   it('supports direct fetch authentication and lets a Node caller disable environment loading', async () => {

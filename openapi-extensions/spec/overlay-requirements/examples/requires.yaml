@@ -1,0 +1,23 @@
+overlay: 1.0.0
+info:
+  title: Illustrative completeness, declared on revision 2 of the collections
+  version: 1.0.0
+  description: >-
+    Synthetic. The completeness claim holds for the notes collection as
+    revision 2 reads it (archived notes included); revision 1 leaves them out,
+    so an archived note would look removed. A later revision, base-v3.yaml,
+    is accepted too.
+  x-requires:
+    - anyOf: [base.yaml, base-v3.yaml]
+  x-conflicts:
+    - base-v1.yaml
+extends: https://api.example.com/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        note:
+          collections:
+            notes:
+              x-completeness:
+                absent: removed

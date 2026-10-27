@@ -1,0 +1,522 @@
+# Reviewed 2026-10-08 against the pinned OAD and official provider documentation.
+# Source: https://www.twilio.com/docs/usage/api/applications (list example: next_page_uri is
+# "/2010-04-01/Accounts/.../Applications.json?...&PageToken=PA...", an absolute path on https://api.twilio.com)
+# Source: https://www.twilio.com/docs/usage/twilios-response (paging fields; the pinned OAD declares next_page_uri nullable,
+# and a null value ends paging per Pagination Schemes 0.4.0 §4.4.3)
+# Needs Pagination Schemes 0.4.0 (openapi-extensions/spec/pagination-schemes, linkResolution).
+# Supersedes pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml, which stays published.
+overlay: 1.0.0
+info:
+  title: Twilio API (2010-04-01) collection links
+  version: 2.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/fdc294bd8f2520f4cef3491726d86b603b5cf946/APIs/twilio.com/api/1.55.0/openapi.yaml
+actions:
+- target: $.components
+  update:
+    paginationSchemes:
+      linkedCollections:
+        type: nextLink
+        autoDetect: false
+        description: Follow the returned next_page_uri, which keeps the resource scope, filters, PageSize
+          and the PageToken. It is an absolute-path reference relative to https://api.twilio.com (Pagination
+          Schemes 0.4.0 linkResolution, base server). Stop when it is null, empty or absent; never increment
+          Page or construct a PageToken. Do not follow uri, first_page_uri or previous_page_uri as the
+          forward continuation.
+        request:
+          queryParameters:
+            PageSize:
+              role: pageSize
+        response:
+          bodyFields:
+            next_page_uri:
+              role: nextLink
+              linkResolution:
+                base: server
+- target: $.paths['/2010-04-01/Accounts.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: accounts
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Addresses.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: addresses
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Addresses/{AddressSid}/DependentPhoneNumbers.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: dependent_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Applications.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: applications
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/AuthorizedConnectApps.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: authorized_connect_apps
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/AvailablePhoneNumbers.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: countries
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/AvailablePhoneNumbers/{CountryCode}/Local.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: available_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/AvailablePhoneNumbers/{CountryCode}/MachineToMachine.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: available_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/AvailablePhoneNumbers/{CountryCode}/Mobile.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: available_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/AvailablePhoneNumbers/{CountryCode}/National.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: available_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/AvailablePhoneNumbers/{CountryCode}/SharedCost.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: available_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/AvailablePhoneNumbers/{CountryCode}/TollFree.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: available_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/AvailablePhoneNumbers/{CountryCode}/Voip.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: available_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Calls.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: calls
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Calls/{CallSid}/Events.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: events
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Calls/{CallSid}/Notifications.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: notifications
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Calls/{CallSid}/Recordings.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: recordings
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Conferences.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: conferences
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Conferences/{ConferenceSid}/Participants.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: participants
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Conferences/{ConferenceSid}/Recordings.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: recordings
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/ConnectApps.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: connect_apps
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: incoming_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers/Local.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: incoming_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers/Mobile.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: incoming_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers/TollFree.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: incoming_phone_numbers
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers/{ResourceSid}/AssignedAddOns.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: assigned_add_ons
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/IncomingPhoneNumbers/{ResourceSid}/AssignedAddOns/{AssignedAddOnSid}/Extensions.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: extensions
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Keys.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: keys
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Messages.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: messages
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Messages/{MessageSid}/Media.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: media_list
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Notifications.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: notifications
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/OutgoingCallerIds.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: outgoing_caller_ids
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Queues.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: queues
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Queues/{QueueSid}/Members.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: queue_members
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Recordings.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: recordings
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Recordings/{RecordingSid}/Transcriptions.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: transcriptions
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Recordings/{ReferenceSid}/AddOnResults.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: add_on_results
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Recordings/{ReferenceSid}/AddOnResults/{AddOnResultSid}/Payloads.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: payloads
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SIP/CredentialLists.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: credential_lists
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SIP/CredentialLists/{CredentialListSid}/Credentials.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: credentials
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SIP/Domains.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: domains
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SIP/Domains/{DomainSid}/Auth/Calls/CredentialListMappings.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: contents
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SIP/Domains/{DomainSid}/Auth/Calls/IpAccessControlListMappings.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: contents
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SIP/Domains/{DomainSid}/Auth/Registrations/CredentialListMappings.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: contents
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SIP/Domains/{DomainSid}/CredentialListMappings.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: credential_list_mappings
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SIP/Domains/{DomainSid}/IpAccessControlListMappings.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: ip_access_control_list_mappings
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SIP/IpAccessControlLists.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: ip_access_control_lists
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SIP/IpAccessControlLists/{IpAccessControlListSid}/IpAddresses.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: ip_addresses
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SMS/ShortCodes.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: short_codes
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/SigningKeys.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: signing_keys
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Transcriptions.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: transcriptions
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Usage/Records.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: usage_records
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Usage/Records/AllTime.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: usage_records
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Usage/Records/Daily.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: usage_records
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Usage/Records/LastMonth.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: usage_records
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Usage/Records/Monthly.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: usage_records
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Usage/Records/ThisMonth.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: usage_records
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Usage/Records/Today.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: usage_records
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Usage/Records/Yearly.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: usage_records
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Usage/Records/Yesterday.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: usage_records
+- target: $.paths['/2010-04-01/Accounts/{AccountSid}/Usage/Triggers.json'].get
+  update:
+    x-pagination:
+    - scheme: linkedCollections
+      overrides:
+        response:
+          envelope:
+            itemsField: usage_triggers

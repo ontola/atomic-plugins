@@ -1,10 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
+import { createServer } from 'node:http';
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -12,8 +15,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   APP_FOLDERS,
+  appDependencyDirs,
   appEntries,
   appFolder,
+  appVersion,
   blobId,
   check,
   integrityOf,
@@ -25,6 +30,19 @@ import {
   terms,
   write,
 } from './apps.mjs';
+import {
+  APP_IDS,
+  appBase,
+  buildCatalog,
+  dependencyDirs,
+  clearOut,
+  explained,
+  logProblem,
+  markOut,
+  readBuilds,
+  recordedFor,
+  versionProblems,
+} from '../../usertest/catalog.mjs';
 
 const TEXT = 'export async function view() {}';
 
@@ -129,6 +147,59 @@ test('a matching app entry passes check', () =>
   using({}, async base => {
     assert.equal(appEntries(readCatalog(base)).length, 1);
     assert.deepEqual(await check({ base }), []);
+  }));
+
+test('an app depends on the lockfiles of its plugin folder and its own folder', () => {
+  assert.deepEqual(appDependencyDirs('gamma'), [
+    'integrations/gamma',
+    'integrations/gamma/app',
+  ]);
+  assert.deepEqual(appDependencyDirs('moneybird'), [
+    'integrations/money',
+    'integrations/money/moneybird',
+  ]);
+  assert.deepEqual(appDependencyDirs('todoist'), [
+    'integrations/issue-tracker',
+    'integrations/issue-tracker/todoist-app',
+  ]);
+});
+
+test('check installs a lockfile without node_modules before building, once, unless told not to', () =>
+  using({}, async base => {
+    writeFileSync(join(base, 'integrations/gamma/pnpm-lock.yaml'), '');
+    writeFileSync(join(base, 'integrations/gamma/app/pnpm-lock.yaml'), '');
+    mkdirSync(join(base, 'integrations/gamma/app/node_modules'));
+    const installed = [];
+
+    const install = cwd => {
+      installed.push(cwd);
+      mkdirSync(join(cwd, 'node_modules'));
+
+      return { status: 0 };
+    };
+
+    assert.deepEqual(await check({ base, install: false }), []);
+    assert.deepEqual(installed, []);
+
+    assert.deepEqual(await check({ base, install }), []);
+    // Only the folder that had no node_modules; app/ already had one.
+    assert.deepEqual(installed, [join(base, 'integrations/gamma')]);
+
+    // Installed now, so a second check leaves it alone.
+    assert.deepEqual(await check({ base, install }), []);
+    assert.deepEqual(installed, [join(base, 'integrations/gamma')]);
+  }));
+
+test('a failed install fails check with pnpm output, before any build', () =>
+  using({}, async base => {
+    writeFileSync(join(base, 'integrations/gamma/pnpm-lock.yaml'), '');
+    await assert.rejects(
+      check({
+        base,
+        install: () => ({ status: 1, stderr: 'ERR_PNPM_OUTDATED_LOCKFILE' }),
+      }),
+      /pnpm install --frozen-lockfile failed in integrations\/gamma:\nERR_PNPM_OUTDATED_LOCKFILE/,
+    );
   }));
 
 test('a fresh build that differs from the committed module fails check', () =>
@@ -329,6 +400,80 @@ test('a published version file may not change or disappear', () =>
     );
   }));
 
+test('a branch behind main is told to merge, not to restore what main published since', () =>
+  using({}, async base => {
+    const git = (...args) =>
+      execFileSync('git', ['-C', base, ...args], { stdio: 'pipe' });
+    const main = commitAsMain(base);
+    // A topic branch parts here; main then publishes four more versions.
+    git('checkout', '-q', '-b', 'topic');
+    git('checkout', '-q', main);
+
+    for (const version of ['1.3.0', '1.4.0', '2.0.0', '2.1.0']) {
+      mkdirSync(join(base, `apps/gamma/${version}`), { recursive: true });
+      writeFileSync(join(base, modulePath('gamma', version)), `v${version}`);
+    }
+
+    git('add', '-A');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.com',
+      'commit',
+      '-q',
+      '-m',
+      'later',
+    );
+    git('checkout', '-q', 'topic');
+
+    const problems = await check({ base, published: main });
+    assert.deepEqual(problems, [
+      `4 file(s) published at ${main} are not on this branch, which is behind it (apps/gamma/1.3.0/ui.js, apps/gamma/1.4.0/ui.js, apps/gamma/2.0.0/ui.js, and 1 more): merge ${main} (never restore them by hand)`,
+    ]);
+
+    // A file the branch did have, and lost, is still "deleted".
+    rmSync(join(base, 'apps/gamma/1.2.3'), { recursive: true });
+    assert.ok(
+      (await check({ base, published: main })).includes(
+        `apps/gamma/1.2.3/ui.js is published at ${main} and was deleted. Published versions stay available: restore it.`,
+      ),
+    );
+
+    // Merged, the branch is told nothing.
+    git('checkout', '-q', '--', 'apps');
+    git('merge', '-q', main);
+    assert.deepEqual(await check({ base, published: main }), []);
+  }));
+
+test('without a merge-base, a missing published file is "deleted" and may mean the branch is behind', () =>
+  using({}, async base => {
+    const git = (...args) =>
+      execFileSync('git', ['-C', base, ...args], { stdio: 'pipe' });
+    const main = commitAsMain(base);
+    // An unrelated history: no merge-base with main, as in CI's shallow
+    // clone where `git merge-base` fails.
+    git('checkout', '-q', '--orphan', 'lone');
+    rmSync(join(base, 'apps/gamma/1.2.3'), { recursive: true });
+    git('add', '-A');
+    git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.com',
+      'commit',
+      '-q',
+      '-m',
+      'lone',
+    );
+
+    assert.ok(
+      (await check({ base, published: main })).includes(
+        `apps/gamma/1.2.3/ui.js is published at ${main} and was deleted. Published versions stay available: restore it. (This checkout cannot tell whether the branch is behind ${main}: if it is, merge ${main} first instead.)`,
+      ),
+    );
+  }));
+
 test('write refuses to rebuild a published version with different bytes', () =>
   using({}, async base => {
     const main = commitAsMain(base);
@@ -376,4 +521,349 @@ test('a new version beside a published one passes', () =>
 test("this repository's app entries are well-formed", () => {
   for (const entry of appEntries(readCatalog(root)))
     assert.deepEqual(staticProblems(entry, root), []);
+});
+
+test("appVersion reads an app entry's version from the catalog", () =>
+  using({ version: '2.0.1' }, async base => {
+    assert.equal(appVersion('gamma', base), '2.0.1');
+    // Not a drive app (no app-module), and not in the catalog at all.
+    assert.throws(() => appVersion('not-an-app', base), /no drive app entry/);
+    assert.throws(() => appVersion('delta', base), /"delta"/);
+
+    const catalog = readCatalog(base);
+    delete catalog[1][terms.version];
+    writeFileSync(
+      join(base, 'integrations/catalog.json'),
+      JSON.stringify(catalog),
+    );
+    assert.throws(() => appVersion('gamma', base), /has no version/);
+  }));
+
+test('the lane e2e specs read their app version from the catalog, not a literal', () => {
+  const ids = new Set(
+    appEntries(readCatalog()).map(entry => entry[terms.shortname]),
+  );
+  const seen = new Set();
+
+  for (const plugin of readdirSync(join(root, 'integrations'), {
+    withFileTypes: true,
+  })) {
+    if (!plugin.isDirectory()) continue;
+    let files;
+
+    try {
+      files = readdirSync(join(root, 'integrations', plugin.name, 'e2e'));
+    } catch {
+      continue;
+    }
+
+    for (const file of files.filter(f => f.endsWith('.spec.ts'))) {
+      const path = `integrations/${plugin.name}/e2e/${file}`;
+      const text = readFileSync(join(root, path), 'utf8');
+      assert.doesNotMatch(
+        text,
+        /const VERSION = ['"`]/,
+        `${path} hard-codes its app version; use appVersion(id)`,
+      );
+
+      for (const [, id] of text.matchAll(/appVersion\('([^']+)'\)/g)) {
+        assert.ok(ids.has(id), `${path}: "${id}" is not a drive app entry`);
+        assert.equal(typeof appVersion(id), 'string');
+        seen.add(id);
+      }
+    }
+  }
+
+  // Every drive app in the catalog has a spec that checks its version.
+  assert.deepEqual([...seen].sort(), [...ids].sort());
+});
+
+// The user-testing catalog's builds (usertest/catalog.mjs) live here, in
+// CI's tooling unit tests, so that a changed app without a usertest version
+// bump fails CI: the droplet would otherwise serve new bytes under an old
+// version, which the host's integrity check refuses for new installs.
+test('usertest versions: a build that changed under a recorded version is a forgotten bump', () => {
+  const recorded = recordedFor([
+    { key: 'notion/usertest-9', sha256: 'sha256-old' },
+    { key: 'notion-sample/usertest-9-sample-2', sha256: 'sha256-sample' },
+    { key: 'calendar/usertest-12', sha256: 'sha256-cal' },
+  ]);
+  assert.deepEqual(Object.keys(recorded), [
+    'calendar/usertest-12',
+    'notion-sample/usertest-9-sample-2',
+    'notion/usertest-9',
+  ]);
+
+  // Unchanged: nothing to report.
+  assert.deepEqual(
+    versionProblems(
+      [
+        { key: 'notion/usertest-9', sha256: 'sha256-old' },
+        { key: 'calendar/usertest-12', sha256: 'sha256-cal' },
+      ],
+      recorded,
+    ),
+    { changed: [], unrecorded: [] },
+  );
+
+  // Notion's source changed, its version did not (#417): both its module
+  // and its sample's differ from what usertest-9 was recorded with.
+  assert.deepEqual(
+    versionProblems(
+      [
+        { key: 'notion/usertest-9', sha256: 'sha256-new' },
+        { key: 'notion-sample/usertest-9-sample-2', sha256: 'sha256-new2' },
+      ],
+      recorded,
+    ),
+    {
+      changed: [
+        "notion: the build differs from what usertest-9 was recorded with (usertest/builds.json): bump VERSIONS['notion'] in usertest/catalog.mjs, then run node usertest/catalog.mjs --record",
+        "notion-sample: the build differs from what usertest-9-sample-2 was recorded with (usertest/builds.json): bump VERSIONS['notion'] if that app changed, else SAMPLE_VERSION, in usertest/catalog.mjs, then run node usertest/catalog.mjs --record",
+      ],
+      unrecorded: [],
+    },
+  );
+
+  // Bumped but not recorded yet.
+  assert.deepEqual(
+    versionProblems(
+      [{ key: 'notion/usertest-10', sha256: 'sha256-new' }],
+      recorded,
+    ),
+    {
+      changed: [],
+      unrecorded: [
+        'notion/usertest-10 is not in usertest/builds.json: run node usertest/catalog.mjs --record',
+      ],
+    },
+  );
+});
+
+test("this repository's usertest builds match what their versions were recorded with", async () => {
+  const out = mkdtempSync(join(tmpdir(), 'usertest-catalog-'));
+
+  try {
+    const { modules } = await buildCatalog(out);
+    assert.ok(modules.length > 0);
+    assert.deepEqual(versionProblems(modules, readBuilds()), {
+      changed: [],
+      unrecorded: [],
+    });
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('usertest: a build that misses a package says to install the plugin dependencies', async () => {
+  await assert.rejects(
+    explained('notion', async () => {
+      throw new Error('Build failed: Could not resolve "syncables/browser"');
+    }),
+    error =>
+      /^usertest: building notion failed on a missing package/.test(
+        error.message,
+      ) &&
+      error.message.includes('pnpm install --frozen-lockfile') &&
+      error.message.includes('Could not resolve "syncables/browser"'),
+  );
+  // Any other failure is passed on as it is.
+  await assert.rejects(
+    explained('notion', async () => {
+      throw new Error('boom');
+    }),
+    /^Error: boom$/,
+  );
+  assert.equal(await explained('notion', async () => 7), 7);
+});
+
+test("usertest: catalog.mjs installs each app's plugin folders and its lane's shared packages", () => {
+  const bases = APP_IDS.map(appBase);
+  const invented = dependencyDirs(
+    bases.map(id => ({
+      id,
+      paths: id === bases[0] ? ['devonian/src/**', 'ontology/**'] : [],
+    })),
+  );
+  for (const base of bases)
+    for (const dir of [`integrations/${base}`, `integrations/${base}/app`])
+      assert.ok(invented.includes(dir), dir);
+  // A lane's shared packages, once each.
+  assert.equal(invented.filter(d => d === 'devonian').length, 1);
+
+  // This repository's real lanes: every app's folders, nothing outside it.
+  const real = dependencyDirs();
+  for (const base of bases) assert.ok(real.includes(`integrations/${base}`));
+  for (const dir of real)
+    assert.ok(
+      !dir.startsWith('/') && !dir.split('/').includes('..') && dir !== '',
+      dir,
+    );
+});
+
+test('usertest: catalog.mjs refuses an unlogged build unless --no-log or --record says so', () => {
+  const problem = logProblem({}, []);
+  assert.match(
+    problem,
+    /USERTEST_LOG_URL is not set, so calendar would be built/,
+  );
+  assert.match(problem, /--no-log/);
+  assert.equal(logProblem({}, ['--no-log']), undefined);
+  assert.equal(logProblem({}, ['--record']), undefined);
+  assert.equal(
+    logProblem({ USERTEST_LOG_URL: 'https://logs.example/log' }, []),
+    undefined,
+  );
+  // A set but malformed URL is refused before anything is built.
+  for (const bad of [
+    'logs.example/log',
+    'http://logs.example/log',
+    'https://logs.example/',
+  ])
+    assert.match(
+      logProblem({ USERTEST_LOG_URL: bad }, ['--no-log']),
+      /must look like https:\/\/<host>\/log/,
+      bad,
+    );
+});
+
+test('usertest: catalog.mjs clears out/ first and marks an unlogged build before it builds', () => {
+  const out = mkdtempSync(join(tmpdir(), 'usertest-out-'));
+
+  try {
+    writeFileSync(join(out, 'catalog.json'), '[]');
+    writeFileSync(join(out, 'UNLOGGED'), 'old');
+    // What main() does before installing or building: nothing from an
+    // earlier build is left, whatever fails next.
+    clearOut(out);
+    assert.equal(existsSync(join(out, 'catalog.json')), false);
+    assert.equal(existsSync(join(out, 'UNLOGGED')), false);
+    // Unlogged: marked before any catalog.json is written. Logged: not.
+    markOut(out, {});
+    assert.equal(existsSync(join(out, 'UNLOGGED')), true);
+    clearOut(out);
+    markOut(out, { USERTEST_LOG_URL: 'https://logs.example/log' });
+    assert.equal(existsSync(join(out, 'UNLOGGED')), false);
+  } finally {
+    rmSync(out, { recursive: true, force: true });
+  }
+});
+
+test('usertest: check-live.mjs: a changed module fails, absent passes, unreachable fails', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'usertest-check-live-'));
+  const I = 'https://atomicdata.dev/integrations/properties/';
+  const A = 'https://atomicdata.dev/properties/';
+  const PATH = 'apps/calendar/usertest-12/ui.js';
+  const entry = integrity => ({
+    [A + 'shortname']: 'calendar',
+    [I + 'app-module']: PATH,
+    [I + 'app-module-integrity']: integrity,
+  });
+  const script = join(root, 'usertest/check-live.mjs');
+  const out = join(dir, 'out');
+  // Async: the HTTP cases below answer from this process.
+  const run = (args, input = '') =>
+    new Promise(done => {
+      const child = spawn(process.execPath, [script, ...args]);
+      let stderr = '';
+      child.stderr.on('data', chunk => (stderr += chunk));
+      child.on('close', status => done({ status, stderr }));
+      child.stdin.end(input);
+    });
+  const live = json => run(['-', out], json);
+  const server = createServer((req, res) => {
+    const [status, body] = {
+      '/missing': [404, 'Not Found'],
+      '/moved': [302, ''],
+      '/down': [502, '<html>Bad Gateway</html>'],
+      '/html': [200, '<html>maintenance</html>'],
+      '/same': [200, JSON.stringify([entry('sha384-unlogged')])],
+    }[req.url] ?? [500, ''];
+    res.writeHead(status).end(body);
+  });
+
+  try {
+    mkdirSync(out);
+    writeFileSync(
+      join(out, 'catalog.json'),
+      JSON.stringify([entry('sha384-unlogged')]),
+    );
+    writeFileSync(
+      join(dir, 'same.json'),
+      JSON.stringify([entry('sha384-unlogged')]),
+    );
+    writeFileSync(
+      join(dir, 'live.json'),
+      JSON.stringify([entry('sha384-logged')]),
+    );
+
+    // A module changed under a version the live catalog lists.
+    const changed = await run([join(dir, 'live.json'), out]);
+    assert.equal(changed.status, 1);
+    assert.match(
+      changed.stderr,
+      /calendar: apps\/calendar\/usertest-12\/ui\.js differs/,
+    );
+    assert.equal(
+      (await live(JSON.stringify([entry('sha384-logged')]))).status,
+      1,
+    );
+    assert.equal((await run([join(dir, 'same.json'), out])).status, 0);
+
+    // Absent passes: deploy.sh's NONE, no file in an existing folder; and
+    // `[]` is a real, empty catalog.
+    assert.equal((await live('NONE\n')).status, 0);
+    assert.equal((await live('[]')).status, 0);
+    // Empty input is not absence: deploy.sh says NONE for that, so it is an
+    // empty catalog.json on the droplet, or a read gone wrong.
+    assert.equal((await live('')).status, 1);
+    writeFileSync(join(dir, 'empty.json'), '');
+    assert.equal((await run([join(dir, 'empty.json'), out])).status, 1);
+    assert.equal(
+      (await run([join(dir, 'no-catalog-yet.json'), out])).status,
+      0,
+    );
+    // Unreachable or not a catalog fails: a missing folder (a mistyped path),
+    // truncated JSON, an object, an HTML page.
+    assert.equal((await run([join(dir, 'typo/catalog.json'), out])).status, 1);
+    assert.equal((await live('[{"truncated')).status, 1);
+    assert.equal((await live('{}')).status, 1);
+    assert.equal((await live('<html>Bad Gateway</html>')).status, 1);
+
+    // Over HTTP: 404 is absent; a 502 or an HTML 200 fails; so does no server.
+    await new Promise(ready => server.listen(0, '127.0.0.1', ready));
+    const base = `http://127.0.0.1:${server.address().port}`;
+    assert.equal((await run([`${base}/missing`, out])).status, 0);
+    // A redirect is not followed: it fails rather than land on another 404.
+    assert.equal((await run([`${base}/moved`, out])).status, 1);
+    assert.equal((await run([`${base}/down`, out])).status, 1);
+    assert.equal((await run([`${base}/html`, out])).status, 1);
+    assert.equal((await run([`${base}/same`, out])).status, 0);
+    server.close();
+    assert.equal((await run([`${base}/same`, out])).status, 1);
+
+    // --served: a ui.js already on disk that the live catalog no longer lists.
+    const served = join(dir, 'srv');
+    mkdirSync(join(served, 'apps/calendar/usertest-12'), { recursive: true });
+    writeFileSync(join(served, PATH), 'the logged module');
+    const onDisk = await run(['-', out, '--served', served], 'NONE');
+    assert.equal(onDisk.status, 1);
+    assert.match(onDisk.stderr, /differs from the file already served/);
+    // A --served folder that does not exist (a typo) fails.
+    const typo = await run(
+      ['-', out, '--served', join(dir, 'srv-typo')],
+      'NONE',
+    );
+    assert.equal(typo.status, 1);
+    assert.match(typo.stderr, /does not exist/);
+
+    // A build made with --no-log is never deployed.
+    writeFileSync(join(out, 'UNLOGGED'), 'x');
+    const unlogged = await live('NONE');
+    assert.equal(unlogged.status, 1);
+    assert.match(unlogged.stderr, /--no-log/);
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

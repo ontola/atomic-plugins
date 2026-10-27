@@ -9,7 +9,9 @@ import type { OpenApiDocument } from '../../src/browser.js';
 import type { OverlayDocument } from '../../src/browser.js';
 import type { ResponseObject } from '../../src/openapi/types.js';
 
-const json = (schema: Record<string, unknown>): Record<string, ResponseObject> => ({
+const json = (
+  schema: Record<string, unknown>,
+): Record<string, ResponseObject> => ({
   '200': {
     description: 'OK',
     content: { 'application/json': { schema } },

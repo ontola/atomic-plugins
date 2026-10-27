@@ -16,10 +16,21 @@ describe('pets drive-plugin bundle', async () => {
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
     // Stored as a string property on a resource, so the size is capped at
-    // the measured size plus about 10%: 52 630 bytes on 2026-10-05 for 0.1.3
-    // (syncables 0.19.0's read path; 48 273 for 0.1.2 with syncables 0.18.0).
-    // A change that needs more should say why and re-measure.
-    expect(bytes).toBeLessThan(57_900);
+    // the measured size plus about 10%: 77 761 bytes on 2026-10-14 for 0.1.6,
+    // minified, with syncables 0.23.0 (+4 345 over 0.1.5: 0.23.0's read path,
+    // its invalid-auto-detected check, incomplete markers and list
+    // tombstones; the app's own code is unchanged). 73 416 bytes on
+    // 2026-10-13 for 0.1.5 with syncables 0.22.0. That read path grew by 29 434 bytes over
+    // 0.21.0 (the app's own code is unchanged), mainly: read/time-zone (8 250,
+    // new), read/runtime-schemas (7 489, new), read/pages (+5 626),
+    // throttling (+1 867), pagination/validate (+1 665), read/collections
+    // (+1 513), read/produced-classes (1 599, new). readCollections calls
+    // them on every read, so they do not shake out; making them opt-in is a
+    // 0.23.0 design question. 43 982 for 0.1.4 with syncables 0.21.0;
+    // 52 630 for 0.1.3 unminified with syncables 0.19.0, 48 273 for 0.1.2
+    // with syncables 0.18.0. A change that needs more should say why and
+    // re-measure.
+    expect(bytes).toBeLessThan(85_600);
   });
 
   it('carries no credential handling or network access of its own', () => {

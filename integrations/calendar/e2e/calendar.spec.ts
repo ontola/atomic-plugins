@@ -39,10 +39,14 @@ import { test, expect, type FrameLocator, type Page } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
 import { classes, properties } from '../../../ontology-kit/terms.mjs';
 import { OPERATIONS, operationFor, type RelayRequest } from '../app/operations';
+import { appVersion } from '../../tooling/apps.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
-/** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.3.2';
+/**
+ * The catalog's version of this app (integrations/catalog.json), read at
+ * load by `appVersion`, so a version bump needs no edit here.
+ */
+const VERSION = appVersion('calendar');
 const NAME = 'https://atomicdata.dev/properties/name';
 /** The host's shared calendar field names (`@tomic/lib` `calendarFields`). */
 const DAY = 'atomic-calendar-day';

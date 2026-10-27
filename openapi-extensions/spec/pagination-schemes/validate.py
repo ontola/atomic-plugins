@@ -1,12 +1,24 @@
-"""Validate Pagination Schemes 0.4.0 in an OpenAPI document, and resolve links.
+"""Validate Pagination Schemes 0.11.0 in an OpenAPI document, resolve links, read short-page lists and range windows.
 
 `validate(document)` checks every scheme in `components.paginationSchemes`
 (or the provisional Swagger 2.0 root `x-paginationSchemes`) and every
-operation's `x-pagination` against schema.json (rules 1-4 and 8-10), that each
-application names a defined scheme (rule 5), and that a `declared` link base
-has the origin of one of each explicitly applying operation's servers (rule
-11). Rules 6 and 7 need the response schemas and are not checked. Ordinary
-OpenAPI validation is separate.
+operation's `x-pagination` against schema.json (rules 1-4, 8-10, 12-16, 19 and 20),
+that each application names a defined scheme (rule 5), that a `declared` link
+base has the origin of one of each explicitly applying operation's servers
+(rule 11), that a `rangeWindow` scheme has exactly one way of carrying its
+window (rule 14), is applied alone (rule 17) and names parameters the
+operation has (rule 18), and that a Short Page Object has the request fields
+it needs (rules 21 and 22). Rules 6 and 7 need the response schemas and are
+not checked. Rules 31-35 validate the independent 0.11.0 guarantee objects
+and their effective request carriers. Ordinary OpenAPI validation is separate.
+The per-response evidence implementation is in observe.py.
+
+`read_pages(...)` is a reference implementation of a page-number read with
+`start` and a Short Page Object (§4.4.5).
+
+`read_range(...)` is a reference implementation of §4.6.3 and §4.6.4: it reads
+one range through a caller-supplied request function, halving full windows,
+and returns the items of a complete read or raises WindowReadError.
 
 `resolve_link(...)` is a reference implementation of §4.4.3 and §4.4.4: it
 returns the absolute URL to request next, None when there is no next page, or
@@ -15,7 +27,9 @@ own implementation of RFC 3986 §5.2 (not urllib's urljoin, which differs on
 some inputs), and the string it returns is the one to request.
 """
 import copy
+import datetime
 import json
+import math
 import pathlib
 import re
 import sys
@@ -32,6 +46,14 @@ SCHEME_PREFIX = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:")
 # RFC 3986 Appendix B.
 URI_PARTS = re.compile(r"^(?:([^:/?#]+):)?(?://([^/?#]*))?([^?#]*)(?:\?([^#]*))?(?:#(.*))?$")
 AUTHORITY = re.compile(r"^(?:(?P<userinfo>[^@]*)@)?(?P<host>\[[^\]]*\]|[^:]*)(?::(?P<port>[0-9]*))?$")
+
+
+WINDOW_ROLES = ("windowStart", "windowEnd", "windowRange")
+FIELD_LOCATIONS = {"queryParameters": "query", "bodyFields": None, "headerFields": "header"}
+
+
+class WindowReadError(RuntimeError):
+    """A windowed read that is not complete (§4.6.4 rule 4)."""
 
 
 class LinkRefused(ValueError):
@@ -136,6 +158,56 @@ def _declared_url_problem(url):
     return None
 
 
+def window_fields(scheme):
+    """[(location, name, role)] of a scheme's request fields with a window role."""
+    found = []
+    for location in FIELD_LOCATIONS:
+        for name, field in scheme.get("request", {}).get(location, {}).items():
+            if isinstance(field, dict) and field.get("role") in WINDOW_ROLES:
+                found.append((location, name, field["role"]))
+    return found
+
+
+def _window_carrier_problem(scheme):
+    """Rule 14: one windowRange field, or one windowStart and one windowEnd field."""
+    roles = sorted(role for _, _, role in window_fields(scheme))
+    if roles in (["windowRange"], ["windowEnd", "windowStart"]):
+        return None
+    return (
+        "a rangeWindow request needs one windowRange field, or one windowStart and one windowEnd field;"
+        f" found {roles}"
+    )
+
+
+def _deref(document, value):
+    """Follow local $refs (#/a/b); None when one does not resolve."""
+    seen = set()
+    while isinstance(value, dict) and "$ref" in value:
+        ref = value["$ref"]
+        if not isinstance(ref, str) or not ref.startswith("#/") or ref in seen:
+            return None
+        seen.add(ref)
+        value = document
+        for part in ref[2:].split("/"):
+            part = part.replace("~1", "/").replace("~0", "~")
+            if not isinstance(value, dict) or part not in value:
+                return None
+            value = value[part]
+    return value
+
+
+def operation_parameters(document, item, operation):
+    """{(in, name)} of an operation's own and its path item's parameters; header names lower-cased."""
+    found = set()
+    for source in (item, operation):
+        for parameter in source.get("parameters", []) or []:
+            parameter = _deref(document, parameter)
+            if isinstance(parameter, dict) and isinstance(parameter.get("name"), str) and "in" in parameter:
+                name = parameter["name"].lower() if parameter["in"] == "header" else parameter["name"]
+                found.add((parameter["in"], name))
+    return found
+
+
 def validate(document):
     """Raise ValueError listing every violation found; return None when valid."""
     errors = []
@@ -147,6 +219,13 @@ def validate(document):
         location = f"{root}.{name}"
         found = _errors(SCHEME_VALIDATOR, scheme, location)
         errors += found
+        if not found:
+            errors += [f"{location}.{problem}" for problem in _item_cursor_problems(scheme)]
+            errors += [f"{location}.{problem}" for problem in _guarantee_problems(scheme)]
+        if not found and scheme.get("type") == "rangeWindow":
+            problem = _window_carrier_problem(scheme)
+            if problem:
+                errors.append(f"{location}.request: {problem}")
         if not found:
             for field, resolution in _link_fields(scheme):
                 if resolution.get("base") == "declared":
@@ -162,6 +241,20 @@ def validate(document):
         if not isinstance(applications, list):
             errors.append(f"{location}: expected an array")
             continue
+        def merged_type(application):
+            """The type after overrides (§5), so an override cannot hide a rangeWindow."""
+            if not isinstance(application, dict):
+                return None
+            overrides = application.get("overrides")
+            if isinstance(overrides, dict) and "type" in overrides:
+                return overrides["type"]
+            scheme = schemes.get(application.get("scheme"))
+            return scheme.get("type") if isinstance(scheme, dict) else None
+
+        windowed = [a for a in applications if merged_type(a) == "rangeWindow"]
+        if windowed and len(applications) != 1:
+            # Rule 17.
+            errors.append(f"{location}: an operation that applies a rangeWindow scheme applies no other scheme")
         for index, application in enumerate(applications):
             where = f"{location}[{index}]"
             found = _errors(APPLICATION_VALIDATOR, application, where)
@@ -176,6 +269,29 @@ def validate(document):
             errors += found
             if found:
                 continue
+            errors += [f"{where}(merged).{problem}" for problem in _short_page_problems(merged, applied=True)]
+            errors += [f"{where}(merged).{problem}" for problem in _advance_problems(merged)]
+            errors += [f"{where}(merged).{problem}" for problem in _item_cursor_problems(merged)]
+            errors += [f"{where}(merged).{problem}" for problem in _guarantee_problems(merged)]
+            for locator in _guarantee_requests(merged):
+                kind = FIELD_LOCATIONS[locator["location"]]
+                name = locator["name"]
+                key = name.lower() if kind == "header" else name
+                if kind and (kind, key) not in operation_parameters(document, item, operation):
+                    errors.append(f"{where}.guarantees: operation has no {kind} parameter {name!r} (rule 35)")
+            if merged.get("type") == "rangeWindow":
+                problem = _window_carrier_problem(merged)
+                if problem:
+                    errors.append(f"{where}(merged).request: {problem}")
+                known = operation_parameters(document, item, operation)
+                for field_location, name, _ in window_fields(merged):
+                    kind = FIELD_LOCATIONS[field_location]
+                    key = name.lower() if kind == "header" else name
+                    # Rule 18.
+                    if kind and (kind, key) not in known:
+                        errors.append(
+                            f"{where}.request.{field_location}.{name}: the operation has no {kind} parameter {name!r}"
+                        )
             for field, resolution in _link_fields(merged):
                 if resolution.get("base") != "declared":
                     continue
@@ -192,6 +308,53 @@ def validate(document):
                     )
     if errors:
         raise ValueError("\n".join(errors))
+
+
+def _guarantee_requests(scheme):
+    """Request parameters whose meaning is used by an explicit guarantee."""
+    if scheme.get("coverage", {}).get("basis") == "orderedCursor":
+        for location, name, _ in _item_cursor_fields(scheme):
+            yield {"location": location, "name": name}
+    snapshot = scheme.get("consistency", {}).get("snapshot")
+    if snapshot:
+        yield snapshot["request"]
+
+
+def _guarantee_problems(scheme):
+    """0.11.0 semantic rules 31-35, also applied after overrides."""
+    problems = []
+    if not any(k in scheme for k in ("coverage", "freshness", "consistency", "closedPrefix")):
+        return problems
+    if scheme.get("autoDetect") is not False:
+        problems.append("autoDetect: guarantees require false and explicit application (rule 31)")
+    lag = scheme.get("freshness", {}).get("maxLagSeconds")
+    if isinstance(lag, float) and not math.isfinite(lag):
+        problems.append("freshness.maxLagSeconds: must be finite (rule 34)")
+    coverage = scheme.get("coverage", {})
+    if coverage.get("basis") == "orderedCursor":
+        fields = _item_cursor_fields(scheme)
+        if scheme.get("type") != "pageToken" or len(fields) != 1:
+            problems.append("coverage: orderedCursor needs one fromLastItem field in a pageToken scheme (rule 32)")
+        elif scheme["request"][fields[0][0]][fields[0][1]].get("order") not in ("ascending", "descending"):
+            problems.append("coverage: orderedCursor needs a checked order on its unique strict-bound field (rule 32)")
+    if coverage.get("basis") == "rangeWindow":
+        if scheme.get("type") != "rangeWindow" or not scheme.get("window", {}).get("field"):
+            problems.append("coverage: rangeWindow needs a rangeWindow scheme with a nonempty window.field (rule 32)")
+    if "closedPrefix" in scheme and coverage.get("basis") != "orderedCursor":
+        problems.append("closedPrefix: only with orderedCursor coverage in this version (rule 33)")
+    consistency = scheme.get("consistency", {})
+    if scheme.get("freshness", {}).get("scope") == "snapshotStart" and consistency.get("mode") != "readSnapshot":
+        problems.append("freshness.scope: snapshotStart requires readSnapshot consistency (rule 34)")
+    if consistency.get("mode") == "readSnapshot":
+        locator = consistency["snapshot"]["request"]
+        for location in FIELD_LOCATIONS:
+            for name in scheme.get("request", {}).get(location, {}):
+                same_name = name.lower() == locator["name"].lower() if location == "headerFields" else name == locator["name"]
+                if location == "bodyFields":
+                    same_name = same_name or name.startswith(locator["name"] + ".") or locator["name"].startswith(name + ".")
+                if location == locator["location"] and same_name:
+                    problems.append("consistency.snapshot.request: must not reuse a pagination field (rule 35)")
+    return problems
 
 
 def resolve_link(value, *, request_url, server_url, resolution=None):
@@ -237,6 +400,530 @@ def resolve_link(value, *, request_url, server_url, resolution=None):
         raise LinkRefused(f"link {resolved!r} leaves the server origin {allowed}")
     # §4.4.4 rule 4: this exact string is what a consumer requests.
     return resolved
+
+
+def _to_number(bound, window):
+    """A bound in the window's format as an integer number of units (§4.6.2)."""
+    if not isinstance(bound, str):
+        raise ValueError(f"bound {bound!r} is not a string")
+    form = window["format"]
+    if form == "date" and re.fullmatch(r"\d{4}-\d{2}-\d{2}", bound):
+        return datetime.date.fromisoformat(bound).toordinal()
+    if form == "basicDate" and re.fullmatch(r"\d{8}", bound):
+        return datetime.date(int(bound[:4]), int(bound[4:6]), int(bound[6:])).toordinal()
+    if form == "dateTime" and re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", bound):
+        moment = datetime.datetime.strptime(bound, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+        return int(moment.timestamp())
+    if form in ("unixSeconds", "integer") and re.fullmatch(r"-?(0|[1-9]\d*)", bound) and bound != "-0":
+        return int(bound)
+    raise ValueError(f"bound {bound!r} is not in the format {form!r}")
+
+
+def _to_bound(number, window):
+    """The inverse of _to_number."""
+    form = window["format"]
+    if form == "date":
+        return datetime.date.fromordinal(number).isoformat()
+    if form == "basicDate":
+        return datetime.date.fromordinal(number).strftime("%Y%m%d")
+    if form == "dateTime":
+        return datetime.datetime.fromtimestamp(number, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return str(number)
+
+
+def _width(first, last, window):
+    return last - first + 1 if window["bounds"] == "closed" else last - first
+
+
+def window_request(scheme, start, end):
+    """{(location, name): value} for one window; start and end in the window's format."""
+    values = {}
+    for location, name, role in window_fields(scheme):
+        if role == "windowStart":
+            values[(location, name)] = start
+        elif role == "windowEnd":
+            values[(location, name)] = end
+        else:
+            template = scheme["request"][location][name]["template"]
+            values[(location, name)] = template.replace("{start}", start).replace("{end}", end)
+    return values
+
+
+def halves(start, end, window):
+    """The default split of §4.6.3 step 3 as two (start, end) pairs; None when the window is too narrow."""
+    first, last = _to_number(start, window), _to_number(end, window)
+    width = _width(first, last, window)
+    if width < 2 * window.get("minimumWidth", 1):
+        return None
+    middle = first + (width + 1) // 2  # the first unit of the second window
+    head_end = middle - 1 if window["bounds"] == "closed" else middle
+    return (start, _to_bound(head_end, window)), (_to_bound(middle, window), end)
+
+
+def _role_fields(scheme, role):
+    """[(location, name)] of a scheme's request fields with this role."""
+    return [
+        (location, name)
+        for location in FIELD_LOCATIONS
+        for name, field in scheme.get("request", {}).get(location, {}).items()
+        if isinstance(field, dict) and field.get("role") == role
+    ]
+
+
+def _short_page_problems(scheme, applied):
+    """Rules 21 and 22 (22 only for a scheme applied to an operation)."""
+    short = scheme.get("response", {}).get("shortPage")
+    if not isinstance(short, dict):
+        return []
+    problems = []
+    if short.get("size") == "request" and not _role_fields(scheme, "pageSize"):
+        problems.append("response.shortPage.size: 'request' needs a request field with role pageSize (rule 21)")
+    if applied and len(_role_fields(scheme, "page")) != 1:
+        problems.append("response.shortPage: needs exactly one request field with role page (rule 22)")
+    return problems
+
+
+def _advance_problems(scheme):
+    """Rule 25, for a scheme applied to an operation."""
+    advances = [
+        scheme["request"][location][name].get("advance", "itemCount")
+        for location, name in _role_fields(scheme, "offset")
+    ]
+    if "pageSize" not in advances:
+        return []
+    responds = any(
+        isinstance(field, dict) and field.get("role") == "pageSize"
+        for field in scheme.get("response", {}).get("bodyFields", {}).values()
+    )
+    if _role_fields(scheme, "pageSize") or responds:
+        return []
+    return ["request: advance 'pageSize' needs a request or response field with role pageSize (rule 25)"]
+
+
+def _item_cursor_fields(scheme):
+    return [
+        (location, name, field["fromLastItem"])
+        for location in FIELD_LOCATIONS
+        for name, field in scheme.get("request", {}).get(location, {}).items()
+        if isinstance(field, dict) and "fromLastItem" in field
+    ]
+
+
+DIGITS = re.compile(r"[0-9]+")
+
+
+def _order_key(value):
+    """0.10.0: (kind, key) to compare fromLastItem values; None when the value is neither kind.
+
+    Non-negative integers and ASCII digit strings are numbers, compared exactly
+    (Python integers have arbitrary precision; "010" equals "10"). Other
+    strings are text, compared by code point.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return ("number", value) if value >= 0 else None
+    if isinstance(value, str):
+        if DIGITS.fullmatch(value):
+            return ("number", int(value))
+        return ("text", value)
+    return None
+
+
+def _in_order(previous, current, order):
+    """Whether two order keys are strictly in `order`; None when they cannot be compared."""
+    if previous is None or current is None:
+        return None
+    if previous[0] != current[0]:
+        return None
+    return previous[1] < current[1] if order == "ascending" else previous[1] > current[1]
+
+
+def _response_roles(scheme):
+    response = scheme.get("response", {})
+    return [field.get("role") for kind in ("bodyFields", "headers")
+            for field in response.get(kind, {}).values() if isinstance(field, dict)]
+
+
+def _item_cursor_problems(scheme):
+    """Rules 28 and 29 (0.9.0)."""
+    problems = []
+    fields = _item_cursor_fields(scheme)
+    roles = _response_roles(scheme)
+    if fields:
+        if scheme.get("type") != "pageToken":
+            problems.append("request: fromLastItem only in a pageToken scheme (rule 28)")
+        if len(fields) != 1:
+            problems.append("request: exactly one fromLastItem field (rule 28)")
+        if {"nextPageToken", "nextCursor", "nextLink"} & set(roles):
+            problems.append("response: no nextPageToken, nextCursor or nextLink beside a fromLastItem field (rule 28)")
+    headers = scheme.get("response", {}).get("headers", {})
+    if any(isinstance(field, dict) and field.get("role") == "hasMore" for field in headers.values()):
+        problems.append("response.headers: role hasMore only in bodyFields (rule 29)")
+    if "hasMore" in roles and not fields:
+        problems.append("response: role hasMore only in a scheme with a fromLastItem field (rule 29)")
+    return problems
+
+
+class PageReadError(RuntimeError):
+    """A page-number read that ended with an error (§4.4.5 step 3)."""
+
+
+def page_items(body, scheme):
+    """The items of one response body, located by the scheme's Envelope Object (§4.4.2).
+
+    Under `emptyWhenAbsent: true` a body in which the `itemsField` field is
+    absent (an object along the path lacks the next segment) has no items. A
+    present value that is not an array, a present `null` included, and a
+    path through a value that is not an object are errors either way.
+    """
+    envelope = scheme.get("response", {}).get("envelope", {})
+    path = envelope.get("itemsField")
+    value = body
+    if path:
+        for segment in path.split("."):
+            if not isinstance(value, dict):
+                raise PageReadError("the response holds no item array")
+            if segment not in value:
+                if envelope.get("emptyWhenAbsent") is True:
+                    return []
+                raise PageReadError("the response holds no item array")
+            value = value[segment]
+    if not isinstance(value, list):
+        raise PageReadError("the response holds no item array")
+    return value
+
+
+_items = page_items
+
+
+def _role_value(body, scheme, role):
+    """The value of the response body field with this role, or None (top-level and dot-paths)."""
+    for name, field in scheme.get("response", {}).get("bodyFields", {}).items():
+        if isinstance(field, dict) and field.get("role") == role:
+            value = body
+            for segment in name.split("."):
+                value = value.get(segment) if isinstance(value, dict) else None
+            return value
+    return None
+
+
+def _json_equal(a, b):
+    """JSON equality of two scalars: numbers by value (1 equals 1.0), everything else by type and value."""
+    number = lambda v: isinstance(v, (int, float)) and not isinstance(v, bool)
+    if number(a) and number(b):
+        return a == b
+    return type(a) is type(b) and a == b
+
+
+def response_incomplete(scheme, body):
+    """Whether a response body is marked incomplete by the scheme's Incomplete Object (§4.4.6)."""
+    marker = scheme.get("response", {}).get("incomplete")
+    if not isinstance(marker, dict):
+        return False
+    value = body
+    for segment in marker["field"].split("."):
+        if not isinstance(value, dict) or segment not in value:
+            return False
+        value = value[segment]
+    if "equals" in marker:
+        return _json_equal(value, marker["equals"])
+    return any(_json_equal(value, v) for v in marker.get("in", []))
+
+
+_ABSENT = object()
+
+
+def _present_role_value(body, scheme, role):
+    """The value of the body field with this role, _ABSENT when the field is not in the body (None when it is null)."""
+    for name, field in scheme.get("response", {}).get("bodyFields", {}).items():
+        if isinstance(field, dict) and field.get("role") == role:
+            value = body
+            for segment in name.split("."):
+                if not isinstance(value, dict) or segment not in value:
+                    return _ABSENT
+                value = value[segment]
+            return value
+    return _ABSENT
+
+
+def _count(value):
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+
+def read_pages(scheme, request, *, page_size=None, maximum=None, identity=lambda item: item["id"], max_pages=None):
+    """A page-number read with `start` and a Short Page Object (§4.3.1, §4.4.5).
+
+    `request(values)` sends one page, with `values` mapping (location, name)
+    of the `page` field (and the `pageSize` field, when `page_size` is given)
+    to their values, and returns the response body. `maximum` is the
+    documented maximum of the pageSize parameter; a `page_size` above it is
+    refused. A body field with the `totalPages` role (a count: the last page
+    is `start + totalPages - 1`) or the `totalCount` role ends the read on a
+    full page, and a `pageSize` role field reports the size applied.
+
+    Returns {"items", "pages", "complete"}. "complete" is True for a read
+    ended by `totalPages` or `totalCount`, and for one ended by a short page
+    only when the assurance is `documented`. Raises PageReadError for a page
+    with more than the full size, a page holding an item an earlier page
+    returned, a short page that `totalPages` or `totalCount` contradicts
+    under `documented`, or `max_pages` pages requested without reaching the
+    end; such a read is not complete.
+    """
+    short = scheme["response"]["shortPage"]
+    page_fields = _role_fields(scheme, "page")
+    if len(page_fields) != 1:
+        raise ValueError("a shortPage scheme has exactly one page field (rule 22)")
+    [page_field] = page_fields
+    location, name = page_field
+    first = scheme["request"][location][name].get("start", 1)
+    if short["size"] == "request" and page_size is None:
+        raise ValueError("size 'request' needs the page size the client sends")
+    if page_size is not None and maximum is not None and page_size > maximum:
+        raise ValueError(f"page size {page_size} is above the documented maximum {maximum}")
+    size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
+    # The full size: size, or the page size sent when it is smaller. A page
+    # size is only sent through a pageSize field; without one it changes nothing.
+    size = page_size if short["size"] == "request" else (
+        min(short["size"], page_size) if size_fields else short["size"])
+    items, seen, pages = [], set(), 0
+    marked = False  # §4.4.6: any marked response makes the read not complete
+    number = first
+    while True:
+        if max_pages is not None and pages >= max_pages:
+            raise PageReadError(f"requested {max_pages} pages without reaching the end; the read is not complete")
+        values = {page_field: number}
+        values.update({field: page_size for field in size_fields})
+        body = request(values)
+        page = page_items(body, scheme)
+        pages += 1
+        marked = marked or response_incomplete(scheme, body)
+        reported = _count(_role_value(body, scheme, "pageSize"))
+        full = reported if reported else size
+        if len(page) > full:
+            raise PageReadError(f"page {number} holds {len(page)} items, more than the declared {full}")
+        ids = [identity(item) for item in page]
+        if any(i in seen for i in ids):
+            raise PageReadError(f"page {number} holds an item an earlier page returned")
+        seen.update(ids)
+        items.extend(page)
+        total_pages = _count(_role_value(body, scheme, "totalPages"))
+        total_count = _count(_role_value(body, scheme, "totalCount"))
+        last = first + total_pages - 1 if total_pages is not None else None
+        ended = (last is not None and number >= last) or (total_count is not None and len(items) >= total_count)
+        more = (last is not None and number < last) or (total_count is not None and len(items) < total_count)
+        if len(page) < full:
+            if more:
+                if short["assurance"] == "documented":
+                    raise PageReadError(f"page {number} is short, but the response says more pages follow")
+                return {"items": items, "pages": pages, "complete": False}
+            return {"items": items, "pages": pages,
+                    "complete": (ended or short["assurance"] == "documented") and not marked}
+        if ended:
+            return {"items": items, "pages": pages, "complete": not marked}
+        number += 1
+
+
+def read_offsets(scheme, request, *, page_size=None, identity=lambda item: item["id"], max_pages=None, follow=None):
+    """An offset read with the offset field's `advance` (§4.3.2).
+
+    `request(values)` sends one page, with `values` mapping (location, name)
+    of the `offset` field (and the `pageSize` field, when `page_size` is
+    given) to their values, and returns the response body. Under
+    `itemCount` the next offset adds the items the page held, and the read
+    ends at an empty page or once the next offset reaches a `totalCount`
+    field. Under `pageSize` it adds a reported `pageSize` field (at least 1),
+    else `page_size`, and ends once the next offset reaches `totalCount`, or
+    at an empty page when the response has no `totalCount` field.
+
+    When the scheme declares a `nextLink` body field (0.7.1), the link
+    leads under either rule: `follow(link)` requests the page a link names
+    and returns its body, and a response whose link is absent, None or ""
+    ends the read; the offset is not used after the first request. Such a
+    read is not complete (`complete` False) when that last response's
+    `totalCount` exceeds the items read. Only a `nextLink` in the response
+    body is detected here: a `nextLink` declared as a response header (a
+    `Link` header) is not, since `request` and `follow` return bodies only.
+
+    Returns {"items", "pages", "offsets", "links", "complete"}. Raises PageReadError when, under
+    `pageSize`, neither page size is known, for a page holding an item an
+    earlier page returned, or after `max_pages` pages without reaching the
+    end.
+    """
+    offset_fields = _role_fields(scheme, "offset")
+    if len(offset_fields) != 1:
+        raise ValueError("an offset read has exactly one offset field")
+    [offset_field] = offset_fields
+    location, name = offset_field
+    advance = scheme["request"][location][name].get("advance", "itemCount")
+    size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
+    links_lead = any(isinstance(field, dict) and field.get("role") == "nextLink"
+                     for field in scheme.get("response", {}).get("bodyFields", {}).values())
+    if links_lead and follow is None:
+        raise ValueError("a scheme that declares a nextLink needs follow")
+    items, seen, offsets, links = [], set(), [], []
+    marked = False  # §4.4.6: any marked response makes the read not complete
+    offset = 0
+    link = None
+    while True:
+        if max_pages is not None and len(offsets) + len(links) >= max_pages:
+            raise PageReadError(f"requested {max_pages} pages without reaching the end; the read is not complete")
+        if link is not None:
+            body = follow(link)
+            links.append(link)
+            where = f"the page at {link}"
+        else:
+            values = {offset_field: offset}
+            values.update({field: page_size for field in size_fields})
+            body = request(values)
+            offsets.append(offset)
+            where = f"the page at offset {offset}"
+        page = page_items(body, scheme)
+        marked = marked or response_incomplete(scheme, body)
+        ids = [identity(item) for item in page]
+        if any(i in seen for i in ids):
+            raise PageReadError(f"{where} holds an item an earlier page returned")
+        seen.update(ids)
+        items.extend(page)
+        if links_lead:
+            # 0.7.1: the link leads under either rule; none ends the read.
+            link = _role_value(body, scheme, "nextLink")
+            if link is None or link == "":
+                total_count = _count(_role_value(body, scheme, "totalCount"))
+                return {"items": items, "pages": len(offsets) + len(links), "offsets": offsets, "links": links,
+                        "complete": (total_count is None or total_count <= len(items)) and not marked}
+            continue
+        total_count = _count(_role_value(body, scheme, "totalCount"))
+        if advance == "pageSize":
+            # A reported page size counts only as an integer of at least 1 (§4.3.2).
+            reported = _count(_role_value(body, scheme, "pageSize"))
+            step = reported if reported and reported >= 1 else (page_size if size_fields else None)
+            if not step:
+                raise PageReadError(f"the page at offset {offset} gives no page size to advance by")
+            following = offset + step
+            if total_count is not None:
+                if following >= total_count:
+                    return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links,
+                            "complete": not marked}
+            elif not page:
+                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links,
+                        "complete": not marked}
+        else:
+            following = offset + len(page)
+            if not page or (total_count is not None and following >= total_count):
+                return {"items": items, "pages": len(offsets), "offsets": offsets, "links": links,
+                        "complete": not marked}
+        offset = following
+
+
+def _default_identity(item):
+    """An item's identity for the repeat check: its `id` when it has one, else the whole item."""
+    if isinstance(item, dict) and "id" in item:
+        return ("id", repr(item["id"]))
+    return ("item", json.dumps(item, sort_keys=True, default=repr))
+
+
+def read_item_cursor(scheme, request, *, page_size=None, identity=_default_identity, max_pages=None):
+    """A read whose cursor is a field of the previous page's last item (§4.3.3, 0.9.0).
+
+    `request(values)` sends one page, with `values` mapping (location, name)
+    of the cursor field (absent on the first request) and of the `pageSize`
+    field (when `page_size` is given) to their values, and returns the
+    response body. Returns {"items", "pages", "cursors", "complete"}; a read
+    in which any response was marked (§4.4.6) is not complete. Raises
+    PageReadError when the last item gives no usable cursor, the cursor does
+    not move, a page repeats an item, an empty page says hasMore true, or
+    `max_pages` pages were requested without reaching the end; such a read is
+    not complete.
+    """
+    fields = _item_cursor_fields(scheme)
+    if len(fields) != 1:
+        raise ValueError("an item-cursor read has exactly one fromLastItem field (rule 28)")
+    [(location, name, path)] = fields
+    order = scheme["request"][location][name].get("order")
+    last_key = None
+    size_fields = _role_fields(scheme, "pageSize") if page_size is not None else []
+    items, seen, cursors = [], set(), []
+    marked = False
+    cursor = None
+    while True:
+        if max_pages is not None and len(cursors) >= max_pages:
+            raise PageReadError(f"requested {max_pages} pages without reaching the end; the read is not complete")
+        values = {field: page_size for field in size_fields}
+        if cursor is not None:
+            values[(location, name)] = cursor
+        body = request(values)
+        cursors.append(cursor)
+        page = page_items(body, scheme)
+        ids = [identity(item) for item in page]
+        if any(i in seen for i in ids):
+            raise PageReadError(f"the page after {cursor!r} holds an item an earlier page returned")
+        seen.update(ids)
+        if order:  # 0.10.0: strictly in the declared order across the whole read
+            for item in page:
+                value = item
+                for segment in path.split("."):
+                    value = value.get(segment) if isinstance(value, dict) else None
+                key = _order_key(value)
+                if key is None:
+                    raise PageReadError(f"an item's {path} cannot be ordered: {value!r}")
+                if last_key is not None and not _in_order(last_key, key, order):
+                    raise PageReadError(f"{path} {value!r} is out of {order} order; the read is not complete")
+                last_key = key
+        items.extend(page)
+        marked = marked or response_incomplete(scheme, body)
+        has_more = _present_role_value(body, scheme, "hasMore")
+        if has_more is not _ABSENT and not isinstance(has_more, bool):
+            raise PageReadError(f"the page after {cursor!r} has a hasMore that is not a boolean: {has_more!r}")
+        if not page and has_more is True:
+            raise PageReadError(f"the page after {cursor!r} is empty but says hasMore true; the read is not complete")
+        if not page or has_more is False:
+            return {"items": items, "pages": len(cursors), "cursors": cursors, "complete": not marked}
+        value = page[-1]
+        for segment in path.split("."):
+            value = value.get(segment) if isinstance(value, dict) else None
+        if isinstance(value, bool) or not isinstance(value, (str, int)) or value == "":
+            raise PageReadError(f"the last item has no usable {path} to continue from")
+        following = str(value) if isinstance(value, int) else value
+        if following == cursor:
+            raise PageReadError(f"the cursor {following!r} did not move; the read is not complete")
+        cursor = following
+
+
+def read_range(scheme, start, end, request, *, identity=lambda item: item["id"], max_requests=None):
+    """Read the range from start to end of a rangeWindow scheme under §4.6.3 and §4.6.4.
+
+    `request(values)` makes one window request, with `values` as
+    window_request returns them, and returns the located item array; it
+    raises for a non-2xx answer, which ends the read. Returns a dict with
+    "items" (one per identity, the later answer winning), "windows" (the
+    windows whose answers were complete for them, in range order) and
+    "requests". Raises WindowReadError when the read is not complete.
+    """
+    window = scheme["window"]
+    if _width(_to_number(start, window), _to_number(end, window), window) < 1:
+        raise ValueError("the range is empty")
+    items, windows, count = {}, [], 0
+    pending = [(start, end)]
+    while pending:
+        low, high = pending.pop(0)
+        if max_requests is not None and count >= max_requests:
+            raise WindowReadError(f"stopped after {max_requests} requests; the read is not complete")
+        count += 1
+        answer = request(window_request(scheme, low, high))
+        if len(answer) < window["cap"]:
+            for item in answer:
+                items[identity(item)] = item
+            windows.append((low, high))
+            continue
+        split = halves(low, high, window)
+        if split is None:
+            raise WindowReadError(
+                f"the window {low}..{high} answered {len(answer)} items, at least the cap,"
+                " and cannot be split; the read is not complete"
+            )
+        pending[:0] = list(split)
+    return {"items": list(items.values()), "windows": windows, "requests": count}
 
 
 def _split(uri):

@@ -1,0 +1,106 @@
+# Reviewed 2026-10-12 against the pinned OAD and official provider documentation.
+# Source: https://developer.box.com/guides/api-calls/permissions-and-errors/rate-limits
+#   "1000 API requests per minute, per user"; "240 file upload requests per minute, per user";
+#   "6 searches per second, per user", "60 searches per minute, per user",
+#   "12 searches per second, per enterprise"; Box Sign "Create and resend sign request: 100
+#   requests per minute, per user", "Get sign request: 1000 requests per minute, per user";
+#   a limit is answered with "429 Too Many Requests" and a retry-after header giving "the
+#   number of seconds to wait before the next API call can be retried".
+# The same page also describes quality-of-service limits and licensing-based (monthly,
+# per-enterprise) limits without numbers; they are not declared. It does not say whether an
+# upload, search or Box Sign request also counts against the general per-user limit; every
+# operation here keeps the general bucket: the conservative choice, not a documented one,
+# which a client stays within either way. signReadsPerUser therefore duplicates perUser (both
+# 1000 per minute per user) and is also applied to the list call, which Box may not count as a get.
+# Needs Throttling 0.2.0-draft or later (openapi-extensions/spec/throttling: headers).
+overlay: 1.0.0
+info:
+  title: Box Platform API 2.0 throttling
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/dec74da7a6785d5d5b83bc6a4cebc07336d67ec9/APIs/box.com/2.0.0/openapi.yaml
+actions:
+  - target: $
+    update:
+      x-throttling:
+        limits:
+          perUser:
+            requests: 1000
+            window: { seconds: 60, kind: unspecified }
+            partitionBy: [user]
+            description: >-
+              "1000 API requests per minute, per user" for API calls in general.
+              The same page describes user-based limits as applying at about
+              "1000 API calls/minute", with other numbers for some endpoints
+              (the buckets below), and quality-of-service limits that can
+              throttle earlier under contention. The counting algorithm is not
+              documented.
+          uploadsPerUser:
+            requests: 240
+            window: { seconds: 60, kind: unspecified }
+            partitionBy: [user]
+            description: >-
+              "240 file upload requests per minute, per user". Box does not say
+              which requests are file upload requests; this document assigns
+              the bucket to the two direct uploads (a new file, a new version)
+              only. Chunked upload session calls are not assigned to it.
+          searchesPerUserSecond:
+            requests: 6
+            window: { seconds: 1, kind: unspecified }
+            partitionBy: [user]
+            description: '"6 searches per second, per user".'
+          searchesPerUserMinute:
+            requests: 60
+            window: { seconds: 60, kind: unspecified }
+            partitionBy: [user]
+            description: '"60 searches per minute, per user".'
+          searchesPerEnterprise:
+            requests: 12
+            window: { seconds: 1, kind: unspecified }
+            partitionBy: [account]
+            description: >-
+              "12 searches per second, per enterprise": the account is the Box
+              enterprise the user belongs to, shared by every user and
+              application in it.
+          signWritesPerUser:
+            requests: 100
+            window: { seconds: 60, kind: unspecified }
+            partitionBy: [user]
+            description: '"Create and resend sign request: 100 requests per minute, per user".'
+          signReadsPerUser:
+            requests: 1000
+            window: { seconds: 60, kind: unspecified }
+            partitionBy: [user]
+            description: >-
+              "Get sign request: 1000 requests per minute, per user". Assigned
+              to reading one sign request and to listing them; Box does not
+              say whether the list counts as a get.
+        applies: [perUser]
+        headers:
+          retry-after:
+            role: retryAfter
+            unit: deltaSeconds
+            description: >-
+              Sent with a 429: "the number of seconds to wait before the next
+              API call can be retried". Box documents no rate-limit headers on
+              other responses.
+  - target: $.paths['/files/content'].post
+    update:
+      x-throttling: [perUser, uploadsPerUser]
+  - target: $.paths['/files/{file_id}/content'].post
+    update:
+      x-throttling: [perUser, uploadsPerUser]
+  - target: $.paths['/search'].get
+    update:
+      x-throttling: [perUser, searchesPerUserSecond, searchesPerUserMinute, searchesPerEnterprise]
+  - target: $.paths['/sign_requests'].post
+    update:
+      x-throttling: [perUser, signWritesPerUser]
+  - target: $.paths['/sign_requests/{sign_request_id}/resend'].post
+    update:
+      x-throttling: [perUser, signWritesPerUser]
+  - target: $.paths['/sign_requests'].get
+    update:
+      x-throttling: [perUser, signReadsPerUser]
+  - target: $.paths['/sign_requests/{sign_request_id}'].get
+    update:
+      x-throttling: [perUser, signReadsPerUser]

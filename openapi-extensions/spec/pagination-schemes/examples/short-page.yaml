@@ -1,0 +1,88 @@
+openapi: 3.0.3
+info:
+  title: Illustrative zero-based pages ended by a short page
+  version: 1.0.0
+  description: >
+    Synthetic, shaped like ClickUp's filtered Workspace task list. The page
+    parameter starts at 0, a response holds at most 100 tasks under `tasks`,
+    and nothing else in the response says whether more pages follow. The
+    documentation gives only the maximum, so the short-page end is assumed.
+    /projects pages through a page size the client sends, and its provider
+    documents that a short page is the last.
+servers:
+  - url: https://api.example.com/v2
+components:
+  paginationSchemes:
+    zeroBasedPages:
+      type: pageNumber
+      autoDetect: false
+      request:
+        queryParameters:
+          page:
+            role: page
+            start: 0
+      response:
+        envelope:
+          itemsField: tasks
+        shortPage:
+          size: 100
+          assurance: assumed
+          description: The documentation gives only "limited to 100 tasks per page".
+    sizedPages:
+      type: pageNumber
+      autoDetect: false
+      request:
+        queryParameters:
+          page:
+            role: page
+          per_page:
+            role: pageSize
+      response:
+        shortPage:
+          size: request
+          assurance: documented
+          description: The provider documents that a page with fewer than per_page items is the last.
+paths:
+  /team/{teamId}/task:
+    get:
+      parameters:
+        - { name: teamId, in: path, required: true, schema: { type: string } }
+        - name: page
+          in: query
+          description: Page to fetch (starts at 0).
+          schema: { type: integer, minimum: 0 }
+      x-pagination:
+        - scheme: zeroBasedPages
+      responses:
+        '200':
+          description: At most 100 tasks.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tasks:
+                    type: array
+                    maxItems: 100
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string }
+  /projects:
+    get:
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: per_page, in: query, schema: { type: integer, minimum: 1, maximum: 50 } }
+      x-pagination:
+        - scheme: sizedPages
+      responses:
+        '200':
+          description: One page of projects; the body is the array.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id: { type: string }

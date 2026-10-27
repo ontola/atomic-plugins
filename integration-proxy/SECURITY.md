@@ -8,8 +8,9 @@ both base64 alphabets, and are canonicalized (`atomic:agent:` + unpadded
 base64url) before any comparison or storage. Weak (small-order) keys are
 refused and signatures are checked with `verify_strict`.
 
-Every request that reads or changes a connection is signed with Atomic's v2
-headers. The message covers the method, the full URL (the configured
+Connection administration uses Atomic v2 signatures. Reads additionally
+accept opt-in, owner-approved device bearer sessions restricted to selected
+connections and read scopes (DEVICE_AUTH.md). The signed message covers the method, the full URL (the configured
 `BASE_URL` plus the path and query as received, never the `Host` header),
 the timestamp and a SHA-256 of the body, under a fixed `atomic-request-v2`
 prefix, so a captured request cannot be replayed with another body, method,
@@ -28,7 +29,8 @@ A connection row holds one provider credential sealed with
 XChaCha20-Poly1305 under `ENCRYPTION_KEY`, with associated data binding the
 envelope to its row id, so an envelope copied into another row does not
 open. The row records its platform and owner. Only the owner (the agent that
-signed `/connect/redeem`) may delete it, delegate it, or list it. A delegation
+signed `/connect/redeem`) may delete it or delegate it. Device sessions may
+list only the connections the owner explicitly approved. A delegation
 names an app agent; a runtime registered by the owner names a node's agent
 that acts for a delegated app. Both are read on every proxied request, so
 revocation is immediate. A connection unused for 90 days is deleted with its
@@ -323,15 +325,24 @@ and apply request size, timeout, redirect, and response-size limits.
 Refresh tokens only at the provider token endpoint configured for that
 platform. Store rotated tokens atomically before returning a replacement
 credential. Do not forward the upstream's cookies or authorization headers.
-Rate-limit per owner, audit token use without logging secrets, and return
+Rate-limit per owner (not implemented: no limit on proxied requests per
+owner exists yet), audit token use without logging secrets, and return
 generic authentication errors.
+
+A composed document with a `$ref` path item (or a path item that is not an
+object) is refused when the catalog loads, so every check that reads a path
+item in place (the allowlist, fixed headers, request validation, pacing, and
+the scope and profile walk) sees the same operations, and a `$ref` cannot
+add operations to the allowlist unnoticed.
 
 Implemented today: the requested path is rejected if it contains a `.` or
 `..` segment before catalog validation, so it cannot normalize to a
 different path than the one authorized (see `proxy::contains_traversal_segment`).
 Upstream requests use a bounded connect/read timeout and disable automatic
-redirects, so a redirect cannot send a request to a destination the catalog
-never validated. The upstream response body is read incrementally and capped
+redirects, so a redirect cannot send a request, or the connection's
+credential, to a destination the catalog never validated; the redirect's
+`Location` is not forwarded to the caller either
+(`proxy::upstream_redirects_are_not_followed_and_their_location_is_dropped`). The upstream response body is read incrementally and capped
 at 10 MiB instead of being buffered in full before the limit is checked.
 Request validation against the OAD (`Catalog::validate_request`) is a bounded
 subset: it checks that declared *required* query parameters are present,
@@ -339,6 +350,170 @@ that an enum-constrained query parameter's value is one of the declared
 values, and that a request body's presence and content type match the
 operation's declared `requestBody`. It does not validate full JSON Schema
 for bodies or non-enum query parameter values.
+
+Headers cross the proxy only by exact name (`proxy::upstream_request`,
+`proxy::upstream_response_headers`); no prefix or pattern is matched, so a
+provider's `Set-Cookie`, `WWW-Authenticate`, `X-OAuth-Scopes` or an
+`x-ratelimit-*`-looking name outside the list never reaches the caller, and
+the caller's `Cookie`, `Authorization`, `Host` and forwarding headers never
+reach the provider. Both lists are single constants: the response list is
+also exactly what CORS exposes (`proxy::forwarded_response_headers`), the
+request list exactly what CORS allows besides `Authorization`,
+`Idempotency-Key` and the signature headers (`proxy::CALLER_HEADERS`). Where
+the catalog fixes a value for one of the caller's headers, the catalog's
+value is sent and the caller's is dropped, so no header is sent twice.
+
+Every response from `/proxy/…`, forwarded or refused, carries
+`Cache-Control: no-store`, whatever the provider sent: a forwarded
+`Last-Modified` would otherwise let a browser cache a proxied `GET`
+heuristically.
+
+- **Rate-limit response headers** (`X-RateLimit-Limit`, `-Remaining`,
+  `-Used`, `-Reset`, `-Resource`, `RateLimit`, `RateLimit-Policy`,
+  `RateLimit-Limit`, `-Remaining`, `-Reset`). They are numbers, times and
+  bucket names describing the quota that the forwarded request itself was
+  counted against. With a user credential that is the caller's own
+  connection's quota, which the person could read by calling the provider
+  with the same credential. They carry no credential, no account id and no
+  other tenant's data. One exception is worth knowing: where the provider
+  counts by source address (a no-credential connection, or a quota
+  partitioned by `sourceIp` in Throttling), the address is the proxy's,
+  shared by every tenant, and `remaining`/`used` then show how much all
+  tenants together used in the window. That is an aggregate count with no
+  identity attached, and a caller could already infer exhaustion from a
+  forwarded `429` with `Retry-After`. Forwarding it lets a client pace
+  itself instead of hammering the shared bucket (pieces.md P4 would pace it
+  at the proxy).
+- **`Last-Modified`** is representation metadata, like `ETag`.
+- **`If-None-Match` and `If-Modified-Since`** only make the provider answer
+  `304` with no body. The proxy keeps no response cache, so a conditional
+  request cannot make one tenant's response serve another's.
+- **`Idempotency-Key`** goes only to an operation whose composed document
+  declares a header parameter of that name (on the operation or its path
+  item, `$ref`s resolved), and never next to a fixed value the catalog sets.
+  A fixed value is any header parameter with a `schema.default` or a
+  one-value `schema.enum`, required or optional (`Catalog::required_headers`),
+  and it replaces a caller's header of the same name.
+  A provider scopes keys to the account that sends them. With a credential,
+  that is the connection's own account, and the key goes unchanged. A
+  no-credential connection sends no account, so every tenant would share one
+  key space and tenant B, sending tenant A's key, could be answered with A's
+  stored response. There the proxy sends
+  `base64url(HMAC-SHA256(subkey, connection_id ‖ 0x00 ‖ key))` instead, under
+  a subkey derived from `ENCRYPTION_KEY`
+  (`HMAC-SHA256(ENCRYPTION_KEY, "integration-proxy-idempotency-key-v1")`):
+  stable for one connection and key, so a retry still matches; different for
+  every other connection; and not reversible to the caller's key. Rotating
+  `ENCRYPTION_KEY` changes every namespaced key: a create retried across
+  the rotation reaches the provider with a new key and may be applied twice.
+- **Outside the signature.** The v2 request signature covers the method,
+  the full URL, the timestamp and a hash of the body, not these request
+  headers (nor `Content-Type` and `If-Match` before them). That is acceptable
+  because (1) TLS keeps anyone on the path from changing them; (2) a signed
+  request is accepted once, so a captured request cannot be resent with
+  other headers; (3) only the signer's own environment could set different
+  ones, and it can sign whatever it likes anyway; and (4) the most a changed
+  value can do is turn a read into a `304`, a write into a `412`, or make a
+  create match one of the same connection's earlier keys (on a no-credential
+  connection the key is namespaced per connection, above). None of them
+  widens what the catalog allows or which credential is sent.
+
+## Pacing under provider quotas (P4, unreleased)
+
+The proxy paces its own requests under `x-throttling` buckets partitioned by
+`sourceIp` or by nothing (README, "Pacing under provider quotas"). Without
+it, one tenant could spend a quota the provider counts on the proxy's
+address and every other tenant of that platform would be refused by the
+provider. What it changes for safety:
+
+- **Only authenticated requests count.** The log is taken after
+  authentication, delegation, the access policy and the catalog checks, so
+  nobody without a connection can fill a bucket. A tenant with a connection
+  still can, by sending up to the bucket's limit itself: the pacing keeps
+  the proxy's traffic under the provider's limit; it is not fair between
+  tenants, and nothing on this release bounds one tenant's share. (A
+  per-owner limit on proxied requests is proposed separately, and would not
+  bound this either: an owner is any agent key, and anyone can make more.)
+- **No-credential platforms.** A platform whose document needs no
+  credential (`security: []`) lets almost anyone create a connection: the
+  consent page asks for nothing and the owner is whichever agent signs. So
+  on such a platform anyone can spend its `sourceIp` bucket and keep other
+  tenants' requests refused with `429 provider_quota` for as long as they
+  keep sending. The only bound is the access policy: `ALLOWED_AGENTS` (an
+  allowlist of owners) or a deployment's own `AccessPolicy`;
+  `REVOKED_SUBJECTS` refuses known keys only, and anyone can make a new one.
+- **Bounded memory.** One log per declared bucket, keyed by platform and
+  bucket id from the server-owned catalog, never by anything a caller
+  sends; each log holds at most `requests` timestamps, and buckets above
+  10,000 are not paced.
+- **Nothing is learned about other tenants** beyond what a provider's `429`
+  already shows: a `provider_quota` refusal says the shared bucket is full
+  and when it frees, not who filled it.
+- **Fails open.** A malformed or unknown declaration paces nothing; the
+  provider's own limit still applies.
+
+## Key rotation (#410, unreleased)
+
+`POST /agents/transfer` moves an owner's connections and runtimes to a new
+agent id and retires the old one (README, routes).
+
+- **Scope: planned rotation only.** The user holds both keys: the old one
+  signs the request, the new one signs the proof. **A lost or compromised
+  key is out of scope.** If the old key is lost, nothing can sign a
+  transfer; if it is compromised, its holder can already use, delegate and
+  delete its connections, and could transfer them first. In both cases:
+  delete the connections (while the key still works) and connect again with
+  the new key. Recovery without the old key is to go through the SaaS
+  account (atomic-saas#138), not through this route.
+- **Both keys agree.** The proof binds the old id, the new id, this proxy's
+  origin and the outer request's timestamp. The outer request is v2 signed,
+  accepted once and within five minutes, so a proof cannot be replayed,
+  used at another proxy, or attached to another request.
+- **Admission.** The old agent passes the access policy as any signer
+  does, and so must the new one before anything moves.
+- **All or nothing, and serialized.** One transaction retires the old id
+  and moves its connections and runtimes; a collision (the new agent already
+  has a runtime with the same agent) undoes all of it, the retirement
+  included. The transaction holds a transaction-scoped advisory lock per
+  owner (`hashtextextended(id, 0)`, both ids, in sorted order) and checks
+  retirement under them. Every write that adds to what an owner holds
+  (a connection at redeem, a runtime, a delegation, which is also bound to
+  the connection's owner) takes the same lock and the same check. So two
+  transfers sharing an id (A→B and B→C on two instances) run one after the
+  other, and a write by the old key either lands before the move, and moves
+  with it, or is refused as retired.
+- **Afterwards.** The old id is refused as an owner everywhere: the access
+  check every signed route makes about the connection owner (or the signer
+  about to become one) refuses a retired id first (`403 agent_retired`).
+  That covers management calls, `/connect/redeem`, transfers (from or to
+  it), `/proxy` requests by any caller of a connection that still names it,
+  and the webhook routes. Capabilities it signed fail at once for moved
+  connections, because the owner key changed. Delegated app agents keep
+  working: delegations name the connection and the app, not the owner.
+- **Webhooks.** While the old agent has a webhook subscription that is not
+  yet closed (live or in cleanup; subscriptions, receipts and usage are
+  keyed by owner), the transfer is refused with `409 transfer_blocked`. The
+  check runs inside the transfer's transaction, after it has taken the old
+  owner's connection rows `FOR UPDATE`; a subscription takes its connection
+  row `FOR SHARE` first, so it either committed before the check or finds
+  the connection moved. The table is checked whenever it exists, so a
+  deployment that turned `WEBHOOKS_ENABLED` off keeps its old subscriptions
+  in mind.
+- **Device sessions** (RFC 8628 CLI logins, DEVICE_AUTH.md) belong to the
+  owner that approved them and do not move with a transfer. Every use of
+  one asks the access check about that owner, so after the transfer they
+  answer `403 agent_retired`; the user approves the CLI again with the new
+  key. Neither key can revoke the old sessions (the owner-signed session
+  routes refuse the retired id, and the new id does not own them), so they
+  stay inert until they expire, at most 30 days after approval; the CLI that
+  holds one can still end it with `/oauth/device/revoke`.
+- **Stranded rows.** With the locks above, no connection should end up
+  owned by a retired id. One that does anyway (written by an older binary
+  during a rolling deploy, which knows nothing of `retired_agents`) is
+  inert: every use is refused, so nothing refreshes its `last_used_at`, and
+  it is deleted after 90 idle days like any other.
+- **Audit.** The `retired_agents` row (old id, successor, time) and a log
+  line with the counts moved, not the ids.
 
 ## Release gate
 
@@ -350,3 +525,234 @@ body validation, further SSRF hardening (e.g. blocking requests to internal
 network ranges), rate limiting of proxied requests (key checks are limited
 per client network, above), and an external review of the token envelope
 format before live credentials are handled.
+
+## Webhook inbox (#369, unreleased)
+
+Off by default. With `WEBHOOKS_ENABLED` unset there are no inbox tables, no
+sweeper and no webhook route. Enabled, the tables, the sweeper and the
+routes exist (README, "Routes"); the receiver is described below. The inbox
+follows `openapi-extensions/spec/webhook-subscriptions` and the storage rules
+of `webhook-deliveries`, with the plan's pilot limits
+(`src/webhooks/policy.rs`, checked against the spec's schema by a test).
+
+What the store guarantees (`src/webhooks/store.rs`, PostgreSQL tests in
+`src/webhooks/tests.rs`):
+
+- **Bounded retention.** A subscription keeps at most 10,000 events,
+  64 MiB, and 7 days of pending events. One owner keeps at most 256 MiB,
+  50,000 references and 20 live subscriptions. The deployment keeps at most
+  `WEBHOOK_INBOX_MAX_BYTES`, counted as payload bytes plus 512 bytes per
+  payload row and 128 per reference. These row overheads are estimates
+  until measured (plan, step 7). Every limit records a gap before history
+  is lost: eviction drops the receiving subscription's own oldest events,
+  never another owner's. A delivery routed to several subscriptions of one
+  owner is counted against that owner once per subscription, each time
+  before the next subscription is checked, so the owner's budget holds
+  however many of its subscriptions one delivery reaches.
+- **Abandonment ends retention.** A lease lasts 7 days from the last
+  renewal. With events pending and no acknowledgement for 7 days, the
+  subscription expires even while it is renewed. Both deadlines are
+  enforced in the same transaction as any delivery, fetch,
+  acknowledgement or renewal, and by the minute sweeper. So retention stops
+  at the deadline even if the sweeper is down. A subscription past a
+  deadline is expired by the first request or sweep that touches it
+  (within a minute while the sweeper runs): that transaction releases its
+  payloads and closes it. Its tombstone lasts at most 30 days, and at most
+  10,000 tombstones exist.
+- **Access.** A subscription is created only by the caller after a
+  passing access check. Its connection must belong to the hook's platform
+  and to the subscriber. No events are served while the last passing check
+  is older than 12 hours. A failed check closes the subscription.
+  Deliveries are routed only to subscriptions whose connection still
+  exists. Deleting the connection stops reads at once; the sweeper releases
+  the rest.
+- **Receipts.** Receipts are kept per owner, and only for deliveries routed
+  to that owner. Caps: 20,000 per owner, 200,000 in all. A receipt younger
+  than 1,800 seconds is never evicted. At a cap with nothing evictable, the
+  delivery is stored for no subscription of that owner, a `receipt-limit`
+  gap is recorded, and the delivery still counts as accepted, so other
+  owners are unaffected.
+- **Durable before acknowledged.** Ingest is one transaction. Only its
+  `Ok` may become a 2xx. A failure, including a lost database connection,
+  rolls everything back, receipt included, so the provider's retry is
+  accepted as new.
+- **Cursors** carry an HMAC under a subkey of `ENCRYPTION_KEY`
+  (`integration-proxy-webhook-cursor-v1`). A cursor that was edited, came
+  from another subscription, was never returned, or belongs to an obsolete
+  generation is refused.
+- **Dedicated hooks.** The record (endpoint, sealed secret, bound key,
+  access parameters) is stored before the provider is asked, and a
+  subscription must be for the hook's own source. Management stays with
+  its connection while that connection has a live subscription on the
+  hook, and otherwise moves to the connection of another live
+  subscription, never to a deleted connection. A hook nothing uses any
+  more gets a cleanup job, also while still provisioning (the provider may
+  have created it; the job lists, then deletes), and so does one with no
+  live subscription an hour after it was created. A provider answer that
+  arrives after cleanup started is recorded for it, and one that arrives
+  after cleanup gave up (while the closed record still exists) starts a
+  new cleanup. Not covered: an answer that arrives after the closed record
+  was purged by the sweeper (30 days after closing at the earliest) finds
+  no record and is refused; that hook is left at the provider for the
+  person or operator to remove. Cleanup: backoff up to a day, a 30-day
+  deadline, then a visible failure. New dedicated hooks are refused while
+  the owner holds 20, or the deployment 10,000, that are not closed. Each
+  such hook has at most one cleanup job, so these bound the jobs too,
+  except in two cases: when management of a hook moves to another owner,
+  that owner can hold more than 20; and a late provider answer reopens a
+  cleanup job for a hook that no longer counted. Both are rare, and each
+  adds one job per such hook. One owner's failing cleanups never block
+  another's new hooks. Shared application hooks are never changed.
+
+Concurrency: every write takes row locks in one order: subscription rows
+by id, owner rows by owner, the deployment row, then (as needed) receipt
+rows, one hook row and payload rows. A write that takes no subscription or
+owner lock starts at the deployment row. All writes pass the deployment
+row, so they are serialized after their subscription locks; that is the
+pilot's throughput bound. The sweeper deletes owner rows one at a time.
+The inbox uses up to four connections of its own, because the shared
+client cannot run transactions; each has a 10-second `lock_timeout` and a
+30-second `statement_timeout`, so nothing waits without bound. A sweep
+runs every step even when one fails (receipts first), and records its time
+only when all succeeded; until a first sweep, the store's start time
+stands in, so a sweeper that never runs also stops new subscriptions.
+
+Not yet verified: physical bytes per row, sweep lag under load, and
+behaviour with several proxy instances beyond what row locks guarantee
+(tested with concurrent tasks against one database).
+
+### Receiver and consumer routes (#369 step 3)
+
+`src/webhooks/{ingress,verify,metadata,provider,routes}.rs`; tests in
+`src/webhooks/route_tests.rs` against PostgreSQL and a stand-in provider,
+including the spec's synthetic GitHub fixtures replayed through the same
+generic code.
+
+- **Generic.** A platform takes part only through its composed document's
+  `x-webhook-deliveries`; nothing names a provider. What a document cannot
+  express in Webhook Deliveries 0.1.0-draft (other algorithms, handshakes,
+  non-JSON bodies) is refused.
+- **Bounded before authentication.** Before any body byte is read, the
+  endpoint id must have its 43-character shape, a declared
+  `Content-Length` over the verification cap (25 MiB) is refused (`413`),
+  and the endpoint's hook is looked up, at most one lookup at a time, apart
+  from the deliveries' own database slots, so a flood of unknown ids cannot
+  starve verified deliveries. Then the body is read, at most the cap,
+  within 10 seconds (`408`; a broken upload is `400`), by at most 8
+  requests at once and 4 per endpoint (so at most 8 x 25 MiB is held, and
+  one endpoint cannot hold every slot); at most 2 deliveries use the
+  database at once, so consumer routes and the sweeper always find one of
+  the inbox's four connections. Every wait is bounded: a slot or pooled
+  connection not free within a few seconds is a `503`.
+- **Verification before parsing.** The endpoint's profile and secret are
+  looked up, the HMAC-SHA256 over the exact bytes is compared in constant
+  time (`Mac::verify_slice`), and only then is anything in the body or the
+  delivery headers read. Refused deliveries are logged at most once per
+  ten seconds, with a count. A missing, repeated or malformed signature, a
+  timestamp outside its tolerance, and a missing secret are all `401`, and
+  write nothing. A body nested deeper than 64 levels is not parsed.
+- **Routing.** A delivery reaches a subscription only through a binding
+  that an access check with that subscriber's own connection established:
+  the key comes from the provider's answer, never from the subscriber or
+  the delivery. Access parameters are percent-encoded as one path segment
+  each, and `.`, `..` and missing parameters are refused. The check is sent
+  like a proxied request (catalog allowlist, credential binding, no
+  redirects, no caller headers), and a 401 forces one token refresh before
+  it counts. After a refresh that succeeded, the next minute's 401s on that
+  connection refresh nothing: they use the stored token if another call
+  replaced it meanwhile, and are otherwise unknown (never a failed check),
+  so concurrent checks on one connection spend one refresh token. A failed
+  refresh does not start that minute. A refresh the token endpoint refuses
+  with `invalid_grant` (in a `400` or `401`), on a 401 or because the token
+  expired, is a failed check, and so is a credential with no refresh token.
+  Anything else is unknown, never a failed check: another token error such
+  as `invalid_client` (the proxy's own configuration), a refresh that cannot
+  complete, a connection that cannot be loaded from the database, or a 2xx
+  answer that is not JSON. A revocation delivery suspends the bindings it names until
+  the next check: a failure closes them, a pass resumes with an
+  `access-suspended` gap.
+- **Consumers.** Every route is signed by the subscription's consumer, and
+  that consumer's standing on the connection is checked on every request,
+  also for a closed subscription, so a former consumer reads nothing. A
+  removed delegation closes the subscription on its next request. Deleting
+  a connection locks its row first, then ends its subscriptions and starts
+  hook cleanup in the same transaction; creating a subscription takes the
+  same row (shared) first, so one created during a deletion never outlives
+  it. Long polls are woken only by their own subscription's deliveries,
+  and at most 4 per consumer and 256 in all wait at once; past that a poll
+  is answered `429` with `Retry-After`. A poll whose client goes away
+  leaves nothing registered. No events are served on an access check older than
+  12 hours: the receiver runs the check itself first.
+- **No provider writes.** Subscriptions use the platform's shared
+  application hook only. Dedicated hooks are not created by this release,
+  so their deletion (a provider write) can only concern hooks a later
+  release creates. That deletion re-runs the managing connection's access
+  check with the hook's recorded parameters and requires the bound key
+  before any `list` or `delete`. Not handled yet: when the managing
+  connection is deleted and no other subscription's connection takes
+  over, the cleanup fails visibly (no credential is kept for it); a later
+  release creating dedicated hooks has to decide whether to keep narrow
+  cleanup material.
+
+- **Rate limits.** On `POST /webhooks/…` the limits count refusals only.
+  Anyone can point a provider's hooks at junk URLs, or send junk to a real
+  endpoint, so the provider's own delivery addresses collect refusals too;
+  a limit that refused them would drop real deliveries, which GitHub does
+  not retry. A client network (120 a minute) counts the refusals it caused
+  (unknown or malformed ids, failed verification, oversized bodies; not
+  `400` or `408`, which a provider's own broken or slow upload causes).
+  Once over, its requests for ids that are malformed or name no endpoint
+  get `429` after the lookup, and it is held to a short queue for the
+  lookup itself (below). An endpoint (600 a minute) counts its failed verifications,
+  and once over answers further ones `429` instead of `401`; random ids
+  never take an endpoint's key. Neither saves the verification work: the
+  ingress gate's lookup, read and database slots bound that. Subscription
+  requests are limited per owner (20 an hour) before their access check
+  reaches the provider; every request counts, a client's retry of the same
+  subscription included. Over a limit: `429` with `Retry-After`, nothing
+  written. The windows are fixed, in memory and per instance; at most
+  10,000 keys are held per limit, and while all of them are live a new key
+  passes uncounted (a shared overflow window would let whoever fills the
+  map block every other key). Values come from
+  `WEBHOOK_INGRESS_LIMIT_PER_NETWORK`, `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`
+  and `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`, read only with the inbox on.
+  Behind a proxy such as Heroku's router, `TRUST_FORWARDED_FOR` must be
+  set (`heroku`), or every sender is one network: the router's.
+  There is one endpoint-lookup slot. Requests from networks over their
+  limit may wait for or hold it, but at most 2 of them at a time across all
+  such networks; while 2 do, any further request from a network over its
+  limit gets `429` at once. The slot's semaphore is fair, so a released
+  slot goes to the requests already waiting in order, and those 2 cannot
+  jump ahead of other networks' requests. What holds: a flood from
+  networks over their limit cannot hold up deliveries from other networks,
+  and a real delivery from a network over its limit still gets through
+  whenever fewer than 2 of its kind are waiting for or holding the slot. What remains:
+  - A provider whose delivery addresses also carry junk (anyone can point
+    the provider's hooks at junk ids, so its network goes over the limit)
+    has its real deliveries compete for those 2 places with the junk. Under
+    a sustained flood through the provider's own addresses, a real delivery
+    can find both taken and get `429`, which GitHub does not retry; the
+    periodic full reads are the fallback.
+  - Many networks that each stay under the limit (120 refusals a minute
+    each, for example a client rotating IPv6 /64s) can still keep the slot
+    busy, and a delivery that waits 3 s for it gets `503`, which GitHub
+    does not retry either.
+
+Not yet verified: any real provider's deliveries (only the synthetic
+fixtures), and how the limits behave across several instances (each counts
+its own).
+
+## Local Thought device client sessions
+
+See [DEVICE_AUTH.md](DEVICE_AUTH.md) for the complete #565 contract and limits.
+The opt-in RFC 8628 path authenticates the approving Atomic owner with signed,
+replay-protected challenge and approval requests; a user code or submitted owner
+ID is not authentication. CLI bearer tokens resolve to that same canonical
+owner with an explicit connection/read scope. They never confer owner
+administration. Connections, AccessPolicy and catalog permissions are checked
+live on each request. Device/approval/token secrets are stored as hashes in
+PostgreSQL; grants are single-use and refresh families rotate under row locks.
+Refresh-token reuse revokes the family across instances. The local owner bridge
+is a dogfooding example, not a production login. Device routes omit query strings
+from tracing, and consume bearer headers before the provider request is built.
+No provider credential is returned by device/token/connection-discovery routes.

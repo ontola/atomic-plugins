@@ -1,0 +1,507 @@
+import { describe, expect, it } from 'vitest';
+
+import { InboxClient, parseRetryAfter } from '../../../src/inbox/client.js';
+import {
+  InboxConsumer,
+  InMemoryInboxJournal,
+} from '../../../src/inbox/consumer.js';
+import type { InboxEvent } from '../../../src/inbox/client.js';
+import { FakeInbox, json } from './fake-inbox.js';
+
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
+
+function setup(
+  inbox = new FakeInbox(),
+  journal = new InMemoryInboxJournal(),
+): {
+  inbox: FakeInbox;
+  journal: InMemoryInboxJournal;
+  consumer: InboxConsumer;
+  reconciles: string[];
+} {
+  const reconciles: string[] = [];
+  const consumer = new InboxConsumer({
+    client: new InboxClient('https://proxy.example', inbox.transport),
+    journal,
+    subscription: {
+      connection: 'c-1',
+      source: 'project',
+      parameters: { projectId: 'p-1' },
+      events: ['task'],
+    },
+    reconcile: async (reason): Promise<void> => {
+      reconciles.push(reason);
+    },
+    now: (): number => inbox.now,
+  });
+  return { inbox, journal, consumer, reconciles };
+}
+
+const ids = (events: InboxEvent[]): string[] => events.map((e) => e.deliveryId);
+
+describe('InboxConsumer', () => {
+  it('subscribes, reconciles once, then journals and acknowledges events', async () => {
+    const { inbox, journal, consumer, reconciles } = setup();
+    expect(await consumer.step()).toEqual({
+      kind: 'subscribed',
+      subscription: 'sub-1',
+    });
+    expect(reconciles).toEqual(['initial']);
+    expect(journal.gaps.map((g) => g.gap.reason)).toEqual(['initial']);
+    inbox.deliver('d-1');
+    inbox.deliver('d-2');
+    expect(await consumer.step()).toEqual({
+      kind: 'events',
+      stored: 2,
+      duplicates: 0,
+    });
+    expect(ids(journal.events)).toEqual(['d-1', 'd-2']);
+    expect(inbox.subs.get('sub-1')!.refs).toHaveLength(0);
+    expect(await consumer.step()).toEqual({ kind: 'idle' });
+  });
+
+  it('never acknowledges what it did not journal, and a crash before the ack loses nothing', async () => {
+    const { inbox, journal, consumer } = setup();
+    await consumer.step();
+    inbox.deliver('d-1');
+    // The journal write succeeds, then the connection drops before the ack.
+    inbox.failOnce.add('POST /ack');
+    await expect(consumer.step()).rejects.toThrow('connection lost');
+    expect(ids(journal.events)).toEqual(['d-1']);
+    expect(inbox.subs.get('sub-1')!.refs).toHaveLength(1);
+    // A new process on the same journal: the redelivery is a duplicate.
+    const again = setup(inbox, journal);
+    expect(await again.consumer.step()).toEqual({
+      kind: 'events',
+      stored: 0,
+      duplicates: 1,
+    });
+    expect(ids(journal.events)).toEqual(['d-1']);
+    expect(inbox.subs.get('sub-1')!.refs).toHaveLength(0);
+
+    // A journal that fails: nothing is acknowledged.
+    const failing = new InMemoryInboxJournal();
+    const broken = setup(inbox, failing);
+    await broken.consumer.step();
+    inbox.deliver('d-2');
+    failing.append = async (): Promise<boolean> => {
+      throw new Error('disk full');
+    };
+    await expect(broken.consumer.step()).rejects.toThrow('disk full');
+    expect(inbox.requests.filter((r) => r.endsWith('/ack'))).toHaveLength(2);
+  });
+
+  it('after sleeping past the lease, records the gap, subscribes again and reconciles', async () => {
+    const { inbox, journal, consumer, reconciles } = setup();
+    await consumer.step();
+    inbox.deliver('d-1');
+    inbox.now += 8 * DAY;
+    inbox.deliver('d-lost');
+    expect(await consumer.step()).toEqual({
+      kind: 'ended',
+      reason: 'lease-expired',
+    });
+    expect(journal.stored).toBeUndefined();
+    expect(await consumer.step()).toEqual({
+      kind: 'subscribed',
+      subscription: 'sub-2',
+    });
+    expect(reconciles).toEqual(['initial', 'initial']);
+    expect(journal.gaps.map((g) => g.gap.reason)).toEqual([
+      'initial',
+      'lease-expired',
+      'initial',
+    ]);
+    // History inside the gap is not replayed: only a full read restores state.
+    expect(ids(journal.events)).toEqual([]);
+  });
+
+  it('reconciles against the barrier after a gap, keeping the recent events it still gets', async () => {
+    const inbox = new FakeInbox();
+    inbox.maxPending = 3;
+    const { journal, consumer, reconciles } = setup(inbox);
+    await consumer.step();
+    for (const id of ['d-1', 'd-2', 'd-3', 'd-4', 'd-5']) inbox.deliver(id);
+    // The page holds what is left of generation 1, with the gap.
+    expect(await consumer.step()).toEqual({
+      kind: 'reconciled',
+      reason: 'subscription-events-limit',
+    });
+    expect(reconciles).toEqual(['initial', 'subscription-events-limit']);
+    expect(inbox.subs.get('sub-1')!.needsReconciliation).toBe(false);
+    // d-1 and d-2 were evicted; d-3, the last of generation 1, came with the
+    // gap and was journaled before the reconciliation.
+    expect(ids(journal.events)).toEqual(['d-3']);
+    // d-4 and d-5, captured after the barrier, arrive on the next step.
+    expect(await consumer.step()).toEqual({
+      kind: 'events',
+      stored: 2,
+      duplicates: 0,
+    });
+    expect(ids(journal.events)).toEqual(['d-3', 'd-4', 'd-5']);
+    expect(journal.events.map((e) => e.generation)).toEqual(['g1', 'g2', 'g2']);
+  });
+
+  it('journals events captured during the reconciliation scan on the next steps', async () => {
+    const inbox = new FakeInbox();
+    const journal = new InMemoryInboxJournal();
+    const reconciles: string[] = [];
+    const consumer = new InboxConsumer({
+      client: new InboxClient('https://proxy.example', inbox.transport),
+      journal,
+      subscription: {
+        connection: 'c-1',
+        source: 'project',
+        parameters: {},
+        events: ['task'],
+      },
+      // A provider change lands while the full read runs.
+      reconcile: async (reason): Promise<void> => {
+        reconciles.push(reason);
+        inbox.deliver('during-scan');
+      },
+      now: (): number => inbox.now,
+    });
+    await consumer.step();
+    expect(inbox.subs.get('sub-1')!.needsReconciliation).toBe(false);
+    expect(await consumer.step()).toEqual({
+      kind: 'events',
+      stored: 1,
+      duplicates: 0,
+    });
+    expect(ids(journal.events)).toEqual(['during-scan']);
+  });
+
+  it('renews the lease once renewAfter has passed, and not before', async () => {
+    const { inbox, consumer } = setup();
+    await consumer.step();
+    await consumer.step();
+    expect(inbox.requests.filter((r) => r.endsWith('/renew'))).toHaveLength(0);
+    inbox.now += 13 * HOUR;
+    await consumer.step();
+    expect(inbox.requests.filter((r) => r.endsWith('/renew'))).toHaveLength(1);
+    await consumer.step();
+    expect(inbox.requests.filter((r) => r.endsWith('/renew'))).toHaveLength(1);
+  });
+
+  it('forgets a subscription the receiver does not know', async () => {
+    const { inbox, journal, consumer } = setup();
+    await journal.setSubscription({ id: 'sub-unknown' });
+    expect(await consumer.step()).toEqual({
+      kind: 'ended',
+      reason: 'unknown-subscription',
+    });
+    expect(journal.stored).toBeUndefined();
+    expect(await consumer.step()).toMatchObject({ kind: 'subscribed' });
+    expect(inbox.subs.size).toBe(1);
+  });
+
+  it('keeps the subscription on a 404 that is not the receiver saying unknown-subscription', async () => {
+    const { inbox, journal, consumer } = setup();
+    await consumer.step();
+    inbox.answerOnce.set('GET /events', {
+      status: 404,
+      headers: { 'content-type': 'text/html' },
+      body: '<h1>Not Found</h1>',
+    });
+    await expect(consumer.step()).rejects.toThrow('webhook inbox: 404');
+    expect(journal.stored).toEqual(expect.objectContaining({ id: 'sub-1' }));
+    expect(await consumer.step()).toEqual({ kind: 'idle' });
+  });
+
+  it('long-polls with wait=25 by default, so an idle loop is paced by the receiver', async () => {
+    const { inbox, consumer } = setup();
+    await consumer.step();
+    expect(await consumer.step()).toEqual({ kind: 'idle' });
+    const events = inbox.requests
+      .map((request, i) => [request, inbox.queries[i]])
+      .filter(([request]) => request.endsWith('/events'));
+    expect(events).toEqual([['GET /subscriptions/sub-1/events', '?wait=25']]);
+  });
+
+  it('turns a real-shaped 429 into a backoff, using Retry-After', async () => {
+    const { inbox, journal, consumer } = setup();
+    await consumer.step();
+    // What integration-proxy answers when a consumer has too many polls
+    // waiting.
+    inbox.answerOnce.set(
+      'GET /events',
+      json(
+        429,
+        { status: 'error', code: 'capacity-unavailable' },
+        { 'Retry-After': '5', 'cache-control': 'no-store' },
+      ),
+    );
+    expect(await consumer.step()).toEqual({
+      kind: 'backoff',
+      seconds: 5,
+      reason: 'capacity-unavailable',
+    });
+    // A rate limit without Retry-After still backs off.
+    inbox.answerOnce.set(
+      'GET /events',
+      json(429, { status: 'error', code: 'rate-limited' }),
+    );
+    expect(await consumer.step()).toEqual({
+      kind: 'backoff',
+      seconds: 5,
+      reason: 'rate-limited',
+    });
+    expect(journal.stored).toEqual(expect.objectContaining({ id: 'sub-1' }));
+    inbox.deliver('d-1');
+    expect(await consumer.step()).toMatchObject({ kind: 'events', stored: 1 });
+  });
+
+  it('backs off on a real-shaped 409 from reconciled, then reconciles again, recording the gap once', async () => {
+    const { inbox, journal, consumer, reconciles } = setup();
+    // The barrier moved while the full read ran.
+    inbox.answerOnce.set(
+      'POST /reconciled',
+      json(409, { status: 'error', code: 'barrier-mismatch' }),
+    );
+    expect(await consumer.step()).toEqual({
+      kind: 'backoff',
+      seconds: 1,
+      reason: 'barrier-mismatch',
+    });
+    expect(journal.stored).toEqual(expect.objectContaining({ id: 'sub-1' }));
+    expect(await consumer.step()).toEqual({
+      kind: 'reconciled',
+      reason: 'initial',
+    });
+    expect(reconciles).toEqual(['initial', 'initial']);
+    expect(journal.gaps.map((g) => g.gap.reason)).toEqual(['initial']);
+    expect(inbox.subs.get('sub-1')!.needsReconciliation).toBe(false);
+  });
+
+  it('ends on a 410 during renew, and subscribes again', async () => {
+    const { inbox, journal, consumer } = setup();
+    await consumer.step();
+    // Past renewAfter and past the lease: the renew itself is refused.
+    inbox.now += 8 * DAY;
+    expect(await consumer.step()).toEqual({
+      kind: 'ended',
+      reason: 'lease-expired',
+    });
+    expect(inbox.requests.at(-1)).toBe('POST /subscriptions/sub-1/renew');
+    expect(journal.gaps.map((g) => g.gap.reason)).toEqual([
+      'initial',
+      'lease-expired',
+    ]);
+    expect(await consumer.step()).toMatchObject({
+      kind: 'subscribed',
+      subscription: 'sub-2',
+    });
+  });
+
+  it('ends on a 410 during reconciled, even right after subscribing', async () => {
+    const inbox = new FakeInbox();
+    const journal = new InMemoryInboxJournal();
+    let sleep = true;
+    const consumer = new InboxConsumer({
+      client: new InboxClient('https://proxy.example', inbox.transport),
+      journal,
+      subscription: {
+        connection: 'c-1',
+        source: 'project',
+        parameters: {},
+        events: ['task'],
+      },
+      // The first full read outlasts the lease (a laptop asleep mid-scan).
+      reconcile: async (): Promise<void> => {
+        if (sleep) inbox.now += 8 * DAY;
+        sleep = false;
+      },
+      now: (): number => inbox.now,
+    });
+    expect(await consumer.step()).toEqual({
+      kind: 'ended',
+      reason: 'lease-expired',
+    });
+    expect(inbox.requests.at(-1)).toBe('POST /subscriptions/sub-1/reconciled');
+    expect(journal.stored).toBeUndefined();
+    expect(journal.gaps.map((g) => [g.subscription, g.gap.reason])).toEqual([
+      ['sub-1', 'initial'],
+      ['sub-1', 'lease-expired'],
+    ]);
+    expect(await consumer.step()).toMatchObject({
+      kind: 'subscribed',
+      subscription: 'sub-2',
+    });
+  });
+
+  it('backs off on a real-shaped 503, a 409 while provisioning and a 409 for an ended generation', async () => {
+    const { inbox, journal, consumer } = setup();
+    await consumer.step();
+    // The inbox's database is busy.
+    inbox.answerOnce.set(
+      'GET /events',
+      json(503, { status: 'error', code: 'capacity-unavailable' }),
+    );
+    expect(await consumer.step()).toEqual({
+      kind: 'backoff',
+      seconds: 5,
+      reason: 'capacity-unavailable',
+    });
+    // The subscription is still provisioning its hook.
+    inbox.answerOnce.set(
+      'GET /events',
+      json(409, { status: 'error', code: 'barrier-mismatch' }),
+    );
+    expect(await consumer.step()).toEqual({
+      kind: 'backoff',
+      seconds: 1,
+      reason: 'barrier-mismatch',
+    });
+    // A gap ended the generation between the fetch and the ack: the events
+    // are journaled, and the next fetch reports the gap.
+    inbox.deliver('d-1');
+    inbox.answerOnce.set(
+      'POST /ack',
+      json(409, { status: 'error', code: 'obsolete-generation' }),
+    );
+    expect(await consumer.step()).toEqual({
+      kind: 'backoff',
+      seconds: 1,
+      reason: 'obsolete-generation',
+    });
+    expect(journal.events.map((e) => e.deliveryId)).toEqual(['d-1']);
+    expect(journal.stored).toEqual(expect.objectContaining({ id: 'sub-1' }));
+    expect(await consumer.step()).toEqual({
+      kind: 'events',
+      stored: 0,
+      duplicates: 1,
+    });
+  });
+
+  it('does not back off on refusals a retry would not fix', async () => {
+    const { inbox, consumer } = setup();
+    await consumer.step();
+    inbox.answerOnce.set(
+      'GET /events',
+      json(403, { status: 'error', code: 'access-denied' }),
+    );
+    await expect(consumer.step()).rejects.toThrow(
+      'webhook inbox: 403 access-denied',
+    );
+  });
+});
+
+describe('parseRetryAfter', () => {
+  it('reads delta seconds and HTTP dates, and ignores anything else', () => {
+    const now = Date.parse('2026-10-09T12:00:00Z');
+    expect(parseRetryAfter('5', now)).toBe(5);
+    expect(parseRetryAfter(' 120 ', now)).toBe(120);
+    expect(parseRetryAfter('Fri, 09 Oct 2026 12:00:30 GMT', now)).toBe(30);
+    expect(parseRetryAfter('Fri, 09 Oct 2026 11:00:00 GMT', now)).toBe(0);
+    expect(parseRetryAfter('soon', now)).toBeUndefined();
+    expect(parseRetryAfter('-1', now)).toBeUndefined();
+    expect(parseRetryAfter(undefined, now)).toBeUndefined();
+  });
+
+  it('strips only space, tab, CR and LF, and bounds delay-seconds at 2^53 − 1', () => {
+    const now = Date.parse('2026-10-09T12:00:00Z');
+    expect(parseRetryAfter('\t 7\r\n', now)).toBe(7);
+    expect(parseRetryAfter(' 7', now)).toBeUndefined();
+    expect(parseRetryAfter('﻿7', now)).toBeUndefined();
+    expect(parseRetryAfter('', now)).toBeUndefined();
+    expect(parseRetryAfter(' \t', now)).toBeUndefined();
+    expect(parseRetryAfter('1.5', now)).toBeUndefined();
+    expect(parseRetryAfter(String(Number.MAX_SAFE_INTEGER), now)).toBe(
+      Number.MAX_SAFE_INTEGER,
+    );
+    expect(parseRetryAfter('9007199254740992', now)).toBeUndefined();
+    expect(parseRetryAfter('9'.repeat(400), now)).toBeUndefined();
+  });
+
+  it('takes HTTP-dates in their exact forms only, never a lenient Date.parse reading', () => {
+    const now = Date.parse('2026-10-09T12:00:00Z');
+    // IMF-fixdate, the obsolete RFC 850 form, and asctime.
+    expect(parseRetryAfter('Fri, 09 Oct 2026 12:01:00 GMT', now)).toBe(60);
+    expect(parseRetryAfter('Friday, 09-Oct-26 12:01:00 GMT', now)).toBe(60);
+    expect(parseRetryAfter('Fri Oct  9 12:01:00 2026', now)).toBe(60);
+    for (const loose of [
+      '2026-10-09T12:01:00Z',
+      'Fri, 9 Oct 2026 12:01:00 GMT',
+      'Fri, 09 Oct 2026 12:01:00 +0000',
+      'Fri, 09 Oct 2026 12:01:00 GMT',
+      'Fri, 31 Feb 2026 12:01:00 GMT',
+      'October 9, 2026',
+    ]) {
+      expect({ loose, seconds: parseRetryAfter(loose, now) }).toEqual({
+        loose,
+        seconds: undefined,
+      });
+    }
+  });
+});
+
+describe('InboxError.backoff', () => {
+  it('backs off on 503, 429 and the passing 409s, and not on other refusals', async () => {
+    const { InboxError } = await import('../../../src/inbox/client.js');
+    expect(new InboxError(503, 'capacity-unavailable').backoff()).toBe(5);
+    expect(new InboxError(503, undefined, undefined, 12).backoff()).toBe(12);
+    expect(new InboxError(409, 'obsolete-generation').backoff()).toBe(1);
+    expect(new InboxError(409, 'barrier-mismatch').backoff()).toBe(1);
+    expect(new InboxError(409, 'cursor-ahead').backoff()).toBeUndefined();
+    expect(
+      new InboxError(404, 'unknown-subscription').backoff(),
+    ).toBeUndefined();
+  });
+});
+
+describe('maxBytes', () => {
+  it('is sent with every fetch; an event over it alone reaches the journal without its body, and is acknowledged', async () => {
+    const inbox = new FakeInbox();
+    const urls: string[] = [];
+    const journal = new InMemoryInboxJournal();
+    const consumer = new InboxConsumer({
+      client: new InboxClient('https://proxy.example', async (request) => {
+        urls.push(request.url.href);
+        return inbox.transport(request);
+      }),
+      journal,
+      subscription: {
+        connection: 'c-1',
+        source: 'project',
+        parameters: { projectId: 'p-1' },
+        events: ['task'],
+      },
+      reconcile: async (): Promise<void> => {},
+      now: (): number => inbox.now,
+      maxBytes: 64,
+    });
+    await consumer.step();
+    // About 140 bytes in base64: over 64 alone.
+    inbox.deliver('d-big', { text: 'x'.repeat(90) });
+    inbox.deliver('d-small');
+    await consumer.step();
+    expect(urls.at(-2)).toMatch(/\/events\?.*maxBytes=64(&|$)/);
+    expect(ids(journal.events)).toEqual(['d-big']);
+    const [big] = journal.events;
+    expect(big!.payload.omitted).toBe(true);
+    expect(big!.payload.body).toBeUndefined();
+    expect(big!.payload.bytes).toBe(
+      JSON.stringify({ text: 'x'.repeat(90) }).length,
+    );
+    expect(big!.payload.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(
+      inbox.subs.get('sub-1')!.refs.map((r) => r.event.deliveryId),
+    ).toEqual(['d-small']);
+    await consumer.step();
+    expect(ids(journal.events)).toEqual(['d-big', 'd-small']);
+    expect(journal.events[1]!.payload.body).toBeDefined();
+    expect(inbox.subs.get('sub-1')!.refs).toHaveLength(0);
+  });
+
+  it('is refused unless it is an integer of at least 1', () => {
+    const client = new InboxClient(
+      'https://proxy.example',
+      new FakeInbox().transport,
+    );
+    for (const maxBytes of [0, -1, 1.5, Number.NaN]) {
+      expect(() => client.events('sub-1', { maxBytes })).toThrow(RangeError);
+    }
+  });
+});

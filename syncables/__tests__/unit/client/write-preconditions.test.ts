@@ -1,0 +1,1062 @@
+// @wc-ignore-file
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createApiClient,
+  InMemoryStorageAdapter,
+  mergePatch,
+  prepareDocument,
+  type ApiClient,
+  type MissingRecord,
+  type OpenApiDocument,
+  type ParameterObject,
+  type Transport,
+  type TransportRequest,
+  type TransportResponse,
+  type WriteConflict,
+} from '../../../src/browser.js';
+import { petsDocument } from '../../fixtures/pets.js';
+
+// Write Preconditions 0.1.0-draft (`x-write-precondition`) in the client:
+// the reads and headers before a send (§4.2-§4.4), the write's own 404/410
+// and conflict answers, and a send whose outcome is unknown, resolved by a
+// read before anything is sent again (§4.5). The pure functions are
+// covered by preconditions.test.ts. Transports and data are invented.
+
+const response = (
+  value: unknown,
+  status = 200,
+  headers: Record<string, string> = {},
+): TransportResponse => ({
+  status,
+  headers,
+  body: value === undefined ? '' : JSON.stringify(value),
+});
+
+type Pet = Record<string, unknown>;
+
+/** The `notBefore` of the first stored write in an outbox. */
+function storedNotBefore(outbox: unknown): number | undefined {
+  const records = (outbox as { records?: Record<string, unknown>[] })?.records;
+  const record = records?.[0] as
+    | { queue?: { notBefore?: number }[]; failed?: { notBefore?: number }[] }
+    | undefined;
+  return (record?.queue?.[0] ?? record?.failed?.[0])?.notBefore;
+}
+
+function headerOf(r: TransportRequest, name: string): string | undefined {
+  for (const [key, value] of Object.entries(r.headers ?? {}))
+    if (key.toLowerCase() === name.toLowerCase()) return value;
+  return undefined;
+}
+
+/**
+ * The pets fixture as a CRUD Causality document, with `put`, `delete` and
+ * `post` declaring the given `x-write-precondition`s, and the pets
+ * collection the given `x-completeness`.
+ */
+function document(
+  declared: {
+    put?: unknown;
+    patch?: unknown;
+    delete?: unknown;
+    post?: unknown;
+  } = {},
+  completeness?: Record<string, string>,
+): OpenApiDocument {
+  const doc = prepareDocument({
+    ...petsDocument,
+    servers: [{ url: 'https://provider.example/api' }],
+    components: {
+      ...petsDocument.components,
+      crudResources: {
+        pet: {
+          identity: {
+            urlTemplate: '/pets/{petId}',
+            bindings: { petId: { field: 'id' } },
+          },
+          collections: {
+            pets: {
+              urlTemplate: '/pets',
+              ...(completeness ? { 'x-completeness': completeness } : {}),
+            },
+          },
+        },
+      },
+    },
+  });
+  const item = doc.paths['/pets/{petId}']!;
+  if (declared.patch !== undefined) {
+    // A JSON Merge Patch update in place of the PUT.
+    item.patch = {
+      ...structuredClone(item.put!),
+      requestBody: {
+        content: { 'application/merge-patch+json': { schema: {} } },
+      },
+      'x-crud': {
+        action: 'update',
+        mode: 'patch',
+        patchFormat: 'jsonMergePatch',
+        resource: 'pet',
+      },
+      'x-write-precondition': declared.patch,
+    };
+    delete item.put;
+  }
+  if (declared.put !== undefined)
+    item.put!['x-write-precondition'] = declared.put;
+  if (declared.delete !== undefined)
+    item.delete!['x-write-precondition'] = declared.delete;
+  if (declared.post !== undefined)
+    doc.paths['/pets']!.post!['x-write-precondition'] = declared.post;
+  return doc;
+}
+
+/**
+ * A fake provider. Each pet carries `version`, which a PUT bumps. `etags`
+ * sends it as an `ETag` header on item GETs. A write with `If-Match`
+ * answers 412 unless it names the current version. `script` gives the
+ * status of the next writes (sent before anything is applied);
+ * `applyThenFail` applies the next write and answers it 502.
+ */
+function provider(initial: Pet[]): {
+  pets: Map<string, Pet>;
+  etags: boolean;
+  script: number[];
+  applyThenFail: boolean;
+  itemStatus: number | undefined;
+  afterWrite: (() => void) | undefined;
+  headers: Record<string, string>[];
+  log: string[];
+  bodies: unknown[];
+  transport: Transport;
+} {
+  const fake = {
+    pets: new Map(initial.map((p) => [String(p['id']), structuredClone(p)])),
+    etags: false,
+    script: [] as number[],
+    applyThenFail: false,
+    itemStatus: undefined as number | undefined,
+    afterWrite: undefined as (() => void) | undefined,
+    headers: [] as Record<string, string>[],
+    log: [] as string[],
+    bodies: [] as unknown[],
+    transport: (async (r: TransportRequest) => {
+      const id = decodeURIComponent(r.url.pathname.split('/')[3] ?? '');
+      const ifMatch = headerOf(r, 'if-match');
+      fake.log.push(
+        `${r.method} ${id || '/pets'}${ifMatch ? ` if-match ${ifMatch}` : ''}`,
+      );
+      if (r.method === 'GET' && !id) return response([...fake.pets.values()]);
+      if (r.method === 'GET') {
+        if (fake.itemStatus)
+          return response(
+            { error: 'x' },
+            fake.itemStatus,
+            fake.itemStatus === 429 ? { 'retry-after': '120' } : {},
+          );
+        const pet = fake.pets.get(id);
+        if (!pet) return response({ error: 'not found' }, 404);
+        return response(
+          pet,
+          200,
+          fake.etags ? { etag: String(pet['version']) } : {},
+        );
+      }
+      const body: unknown = r.body ? JSON.parse(r.body) : undefined;
+      fake.bodies.push(body);
+      fake.headers.push({ ...r.headers });
+      const scripted = fake.script.shift();
+      if (scripted !== undefined) {
+        fake.afterWrite?.();
+        return response({ error: 'x' }, scripted);
+      }
+      if (r.method === 'POST') {
+        const created = { ...(body as Pet), id: 'new', version: 'v1' };
+        fake.pets.set('new', created);
+        return response(created, 201);
+      }
+      const current = fake.pets.get(id);
+      if (!current) return response({ error: 'not found' }, 404);
+      if (ifMatch !== undefined && ifMatch !== String(current['version']))
+        return response({ error: 'precondition failed' }, 412);
+      let answer: TransportResponse;
+      if (r.method === 'DELETE') {
+        fake.pets.delete(id);
+        answer = response(undefined, 204);
+      } else {
+        // A numeric version counts up as a number, `vN` as text.
+        const old = current['version'];
+        const version =
+          typeof old === 'number'
+            ? old + 1
+            : `v${Number(String(old).slice(1)) + 1}`;
+        const updated =
+          r.method === 'PATCH'
+            ? { ...(mergePatch(current, body) as Pet), id, version }
+            : { ...(body as Pet), id, version };
+        fake.pets.set(id, updated);
+        answer = response(updated);
+      }
+      if (fake.applyThenFail) {
+        fake.applyThenFail = false;
+        return response({ error: 'bad gateway' }, 502);
+      }
+      return answer;
+    }) as Transport,
+  };
+  return fake;
+}
+
+const rex: Pet = { id: '1', name: 'Rex', tag: 'dog', version: 'v1' };
+
+/** A synced client over a fake provider holding Rex. */
+async function synced(
+  doc: OpenApiDocument,
+  extra: {
+    onMissingRecord?: (r: MissingRecord) => void;
+    onConflict?: (c: WriteConflict) => void;
+    retryMs?: number;
+    pets?: Pet[];
+  } = {},
+): Promise<{ client: ApiClient; fake: ReturnType<typeof provider> }> {
+  const fake = provider(extra.pets ?? [rex]);
+  const client = createApiClient(doc, {
+    storage: new InMemoryStorageAdapter(),
+    transport: fake.transport,
+    retry: { baseDelayMs: extra.retryMs ?? 60_000 },
+    ...(extra.onMissingRecord
+      ? { onMissingRecord: extra.onMissingRecord }
+      : {}),
+    ...(extra.onConflict ? { onConflict: extra.onConflict } : {}),
+  });
+  await client.sync();
+  fake.log.length = 0;
+  return { client, fake };
+}
+
+const settle = (ms = 20): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+async function idle(client: ApiClient): Promise<void> {
+  await vi.waitFor(() => expect(client.pendingWrites()).toEqual([]));
+  await settle(5);
+}
+
+/** Waits until the only pending write has stopped (failed). */
+async function stopped(client: ApiClient): Promise<void> {
+  await vi.waitFor(() =>
+    expect(client.pendingWrites()).toMatchObject([{ state: 'failed' }]),
+  );
+}
+
+const IF_MATCH_BODY = {
+  kind: 'ifMatch',
+  version: { in: 'body', name: 'version' },
+};
+
+describe('write preconditions: ifMatch (§4.3)', () => {
+  it('sends the version last read as If-Match, without a read first', async () => {
+    const { client, fake } = await synced(document({ put: IF_MATCH_BODY }));
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(fake.log).toEqual(['PUT 1 if-match v1']);
+    expect(fake.pets.get('1')).toMatchObject({ name: 'Rex II', version: 'v2' });
+  });
+
+  it('stops the write on a conflict status, and does not send it again', async () => {
+    const { client, fake } = await synced(document({ put: IF_MATCH_BODY }), {
+      retryMs: 1,
+    });
+    fake.pets.set('1', { ...rex, name: 'Rex (theirs)', version: 'v7' });
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await stopped(client);
+    await settle();
+    expect(fake.log).toEqual(['PUT 1 if-match v1']);
+    expect(client.pendingWrites()).toMatchObject([
+      { type: 'update', state: 'failed', precondition: 'conflict' },
+    ]);
+    expect(client.pendingWrites()[0]?.lastError).toContain('412');
+    expect(fake.pets.get('1')?.['name']).toBe('Rex (theirs)');
+  });
+
+  it('honours a declared conflictStatus and header', async () => {
+    const doc = document({
+      put: { ...IF_MATCH_BODY, header: 'X-If-Version', conflictStatus: [409] },
+    });
+    const { client, fake } = await synced(doc, { retryMs: 1 });
+    fake.script.push(409);
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await stopped(client);
+    expect(fake.headers).toEqual([
+      expect.objectContaining({ 'X-If-Version': 'v1' }),
+    ]);
+    expect(client.pendingWrites()).toMatchObject([
+      { precondition: 'conflict' },
+    ]);
+    expect(fake.bodies).toHaveLength(1);
+  });
+
+  it('reads the object first when the version is a response header', async () => {
+    const { client, fake } = await synced(
+      document({
+        put: { kind: 'ifMatch', version: { in: 'header', name: 'ETag' } },
+      }),
+    );
+    fake.etags = true;
+    fake.pets.set('1', { ...rex, version: 'v3' });
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(fake.log).toEqual(['GET 1', 'PUT 1 if-match v3']);
+  });
+});
+
+describe('write preconditions: refuseWhen (§4.4)', () => {
+  it('does not send a write the object as last read refuses', async () => {
+    const doc = document({
+      put: {
+        kind: 'none',
+        refuseWhen: [
+          { field: 'archived', values: [true], description: 'Archived' },
+        ],
+      },
+    });
+    const { client, fake } = await synced(doc, {
+      pets: [{ ...rex, archived: true }],
+    });
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await stopped(client);
+    expect(fake.log).toEqual([]);
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'failed', precondition: 'refused' },
+    ]);
+    expect(client.pendingWrites()[0]?.lastError).toContain('Archived');
+  });
+
+  it('sends one the object does not refuse', async () => {
+    const doc = document({
+      put: {
+        kind: 'none',
+        refuseWhen: [{ field: 'archived', values: [true] }],
+      },
+    });
+    const { client, fake } = await synced(doc);
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(fake.log).toEqual(['PUT 1']);
+  });
+});
+
+describe('write preconditions: readVerify (§4.2)', () => {
+  it('reads first, and stops an update whose written field changed', async () => {
+    const conflicts: WriteConflict[] = [];
+    const { client, fake } = await synced(
+      document({ put: { kind: 'readVerify' } }),
+      { onConflict: (c) => conflicts.push(c) },
+    );
+    fake.pets.set('1', { ...rex, name: 'Rex (theirs)' });
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await stopped(client);
+    expect(fake.log).toEqual(['GET 1']);
+    expect(client.pendingWrites()).toMatchObject([
+      {
+        precondition: 'conflict',
+        conflicts: [
+          {
+            field: 'name',
+            base: 'Rex',
+            remote: 'Rex (theirs)',
+            local: 'Rex II',
+          },
+        ],
+      },
+    ]);
+    expect(conflicts).toHaveLength(1);
+  });
+
+  it('sends the full record built on the read, keeping a field changed elsewhere', async () => {
+    const { client, fake } = await synced(
+      document({ put: { kind: 'readVerify' } }),
+    );
+    fake.pets.set('1', { ...rex, tag: 'wolf' });
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(fake.log).toEqual(['GET 1', 'PUT 1']);
+    expect(fake.bodies).toEqual([
+      expect.objectContaining({ name: 'Rex II', tag: 'wolf' }),
+    ]);
+  });
+
+  it('compares every field held before a delete', async () => {
+    const { client, fake } = await synced(
+      document({ delete: { kind: 'readVerify' } }),
+    );
+    fake.pets.set('1', { ...rex, tag: 'wolf' });
+    await client.remove('/pets', '1');
+    await stopped(client);
+    expect(fake.log).toEqual(['GET 1']);
+    expect(client.pendingWrites()).toMatchObject([
+      { type: 'delete', precondition: 'conflict' },
+    ]);
+    expect(fake.pets.has('1')).toBe(true);
+  });
+});
+
+describe('write preconditions: unknown outcomes (§4.5)', () => {
+  const NOT_IDEMPOTENT = { ...IF_MATCH_BODY, idempotent: false };
+
+  it('reads before sending again, and settles a write that was applied', async () => {
+    const { client, fake } = await synced(document({ put: NOT_IDEMPOTENT }), {
+      retryMs: 1,
+    });
+    fake.applyThenFail = true;
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(fake.log).toEqual(['PUT 1 if-match v1', 'GET 1']);
+    expect(await client.get('/pets', '1')).toMatchObject({
+      name: 'Rex II',
+      version: 'v2',
+    });
+  });
+
+  it('sends again after a read shows the write was not applied', async () => {
+    const { client, fake } = await synced(document({ put: NOT_IDEMPOTENT }), {
+      retryMs: 1,
+    });
+    fake.script.push(502);
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(fake.log).toEqual([
+      'PUT 1 if-match v1',
+      'GET 1',
+      'PUT 1 if-match v1',
+    ]);
+    expect(fake.pets.get('1')?.['name']).toBe('Rex II');
+  });
+
+  it('stops when the read shows another change', async () => {
+    const { client, fake } = await synced(document({ put: NOT_IDEMPOTENT }), {
+      retryMs: 1,
+    });
+    fake.script.push(502);
+    // Someone else's edit lands between the failed PUT and the read.
+    fake.afterWrite = (): void => {
+      fake.pets.set('1', { ...rex, name: 'Rex (theirs)', version: 'v5' });
+    };
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await stopped(client);
+    expect(fake.log).toEqual(['PUT 1 if-match v1', 'GET 1']);
+    expect(client.pendingWrites()).toMatchObject([
+      { precondition: 'conflict' },
+    ]);
+  });
+
+  it('resends an idempotent PUT without a read', async () => {
+    const { client, fake } = await synced(document({ put: IF_MATCH_BODY }), {
+      retryMs: 1,
+    });
+    fake.script.push(502);
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(fake.log).toEqual(['PUT 1 if-match v1', 'PUT 1 if-match v1']);
+  });
+
+  it('resolves a write in flight at a restart by a read', async () => {
+    const storage = new InMemoryStorageAdapter();
+    const doc = document({ put: NOT_IDEMPOTENT });
+    const fake = provider([rex]);
+    let hang = true;
+    const client = createApiClient(doc, {
+      storage,
+      transport: (async (r: TransportRequest) => {
+        if (hang && r.method === 'PUT') {
+          await fake.transport(r); // applied, but the answer never arrives
+          return new Promise<TransportResponse>(() => undefined);
+        }
+        return fake.transport(r);
+      }) as Transport,
+      retry: { baseDelayMs: 1 },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() => expect(fake.bodies).toHaveLength(1));
+    hang = false;
+    fake.log.length = 0;
+    const again = createApiClient(doc, {
+      storage,
+      transport: fake.transport,
+      retry: { baseDelayMs: 1 },
+    });
+    await again.ready();
+    expect(again.pendingWrites()).toMatchObject([
+      { type: 'update', precondition: 'resolving' },
+    ]);
+    await again.sync();
+    await idle(again);
+    expect(fake.log).not.toContain('PUT 1 if-match v1');
+    expect(fake.bodies).toHaveLength(1);
+    expect(await again.get('/pets', '1')).toMatchObject({ name: 'Rex II' });
+  });
+});
+
+describe("write preconditions: the write's own 404 or 410 (§4.5)", () => {
+  const NONE = { kind: 'none' };
+
+  it('keeps a deleted record unavailable when nothing confirms the deletion', async () => {
+    const reports: MissingRecord[] = [];
+    const { client, fake } = await synced(document({ delete: NONE }), {
+      onMissingRecord: (r) => reports.push(r),
+    });
+    fake.pets.delete('1');
+    await client.remove('/pets', '1');
+    await idle(client);
+    expect(reports).toMatchObject([
+      { id: '1', evidence: 'unavailable', source: 'write', status: 404 },
+    ]);
+  });
+
+  it.each([
+    ['notFound: deleted, a 404', { notFound: 'deleted' }, 404],
+    ['absent: deleted, a 404', { absent: 'deleted' }, 404],
+    ['gone: deleted, a 410', { gone: 'deleted' }, 410],
+  ])('ends a delete as applied under %s', async (_label, declared, status) => {
+    const reports: MissingRecord[] = [];
+    const { client, fake } = await synced(
+      document({ delete: NONE }, declared),
+      {
+        onMissingRecord: (r) => reports.push(r),
+      },
+    );
+    fake.script.push(status);
+    await client.remove('/pets', '1');
+    await idle(client);
+    expect(fake.log).toEqual(['DELETE 1']);
+    expect(reports.filter((r) => r.source === 'write')).toEqual([]);
+    expect(await client.get('/pets', '1')).toBeUndefined();
+  });
+
+  it('lets gone, not notFound, decide a 410', async () => {
+    const reports: MissingRecord[] = [];
+    const { client, fake } = await synced(
+      document({ delete: NONE }, { notFound: 'deleted', gone: 'unavailable' }),
+      { onMissingRecord: (r) => reports.push(r) },
+    );
+    fake.script.push(410);
+    await client.remove('/pets', '1');
+    await idle(client);
+    expect(reports).toMatchObject([
+      { id: '1', evidence: 'unavailable', source: 'write', status: 410 },
+    ]);
+  });
+
+  it('stops an update whose object is gone, and does not send it again', async () => {
+    const { client, fake } = await synced(document({ put: NONE }), {
+      retryMs: 1,
+    });
+    fake.pets.delete('1');
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await stopped(client);
+    await settle();
+    expect(fake.log).toEqual(['PUT 1']);
+    expect(client.pendingWrites()).toMatchObject([{ precondition: 'gone' }]);
+  });
+});
+
+describe('write preconditions: source objects (§4.4.1)', () => {
+  /** Clockify-like: a time entry cannot be created in a locked workspace. */
+  function workspaceDocument(): OpenApiDocument {
+    const param = (name: string): ParameterObject => ({
+      name,
+      in: 'path',
+      required: true,
+      schema: { type: 'string' },
+    });
+    const ok = { '200': { description: 'OK' } };
+    return prepareDocument({
+      openapi: '3.0.3',
+      info: { title: 'Time entries', version: '1.0.0' },
+      servers: [{ url: 'https://time.example' }],
+      paths: {
+        '/workspaces': { get: { responses: ok } },
+        '/workspaces/{workspaceId}': {
+          get: { parameters: [param('workspaceId')], responses: ok },
+        },
+        '/workspaces/{workspaceId}/entries': {
+          get: { parameters: [param('workspaceId')], responses: ok },
+          post: {
+            parameters: [param('workspaceId')],
+            requestBody: { content: { 'application/json': { schema: {} } } },
+            responses: { '201': { description: 'Created' } },
+            'x-write-precondition': {
+              kind: 'none',
+              refuseWhen: [
+                {
+                  field: 'locked',
+                  values: [true],
+                  source: { resource: 'workspace' },
+                  description: 'The workspace is locked',
+                },
+              ],
+            },
+          },
+        },
+        '/workspaces/{workspaceId}/entries/{entryId}': {
+          get: {
+            parameters: [param('workspaceId'), param('entryId')],
+            responses: ok,
+          },
+        },
+      },
+      components: {
+        crudResources: {
+          workspace: {
+            identity: {
+              urlTemplate: '/workspaces/{workspaceId}',
+              bindings: { workspaceId: { field: 'id' } },
+            },
+            collections: { workspaces: { urlTemplate: '/workspaces' } },
+          },
+          entry: {
+            identity: {
+              urlTemplate: '/workspaces/{workspaceId}/entries/{entryId}',
+              bindings: { entryId: { field: 'id' } },
+            },
+            collections: {
+              entries: { urlTemplate: '/workspaces/{workspaceId}/entries' },
+            },
+          },
+        },
+      },
+    } as OpenApiDocument);
+  }
+
+  function workspaceProvider(): {
+    workspace: { status: number; locked: boolean };
+    posts: unknown[];
+    transport: Transport;
+  } {
+    const fake = {
+      workspace: { status: 200, locked: false },
+      posts: [] as unknown[],
+      transport: (async (r: TransportRequest) => {
+        const path = r.url.pathname;
+        if (path === '/workspaces') return response([{ id: 'W1' }]);
+        if (path === '/workspaces/W1')
+          return fake.workspace.status === 200
+            ? response({ id: 'W1', locked: fake.workspace.locked })
+            : response(
+                { error: 'x' },
+                fake.workspace.status,
+                fake.workspace.status === 429 ? { 'retry-after': '120' } : {},
+              );
+        if (path === '/workspaces/W1/entries' && r.method === 'GET')
+          return response([]);
+        if (path === '/workspaces/W1/entries' && r.method === 'POST') {
+          const body = JSON.parse(r.body ?? '{}') as Pet;
+          fake.posts.push(body);
+          return response({ ...body, id: 'E1' }, 201);
+        }
+        return response({ error: 'not found' }, 404);
+      }) as Transport,
+    };
+    return fake;
+  }
+
+  it('does not send a create the source object refuses', async () => {
+    const fake = workspaceProvider();
+    fake.workspace.locked = true;
+    const client = createApiClient(workspaceDocument(), {
+      transport: fake.transport,
+      retry: { baseDelayMs: 60_000 },
+    });
+    await client.create('entries', { hours: '1.5' }, { workspaceId: 'W1' });
+    await stopped(client);
+    expect(fake.posts).toEqual([]);
+    expect(client.pendingWrites()).toMatchObject([
+      { type: 'create', precondition: 'refused' },
+    ]);
+    expect(client.pendingWrites()[0]?.lastError).toContain(
+      'The workspace is locked',
+    );
+  });
+
+  it('holds a create while the source object cannot be read, and sends it once it can', async () => {
+    const fake = workspaceProvider();
+    fake.workspace.status = 503;
+    const client = createApiClient(workspaceDocument(), {
+      transport: fake.transport,
+      retry: { baseDelayMs: 5 },
+    });
+    await client.create('entries', { hours: '1.5' }, { workspaceId: 'W1' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { state: 'pending', precondition: 'source-unknown' },
+      ]),
+    );
+    expect(fake.posts).toEqual([]);
+    fake.workspace.status = 200;
+    await client.sync();
+    await idle(client);
+    expect(fake.posts).toEqual([expect.objectContaining({ hours: '1.5' })]);
+  });
+
+  it('holds a create whose source read is throttled until its time, and blocks on refused credentials (readRefused)', async () => {
+    const fake = workspaceProvider();
+    fake.workspace.status = 429;
+    const storage = new InMemoryStorageAdapter();
+    const client = createApiClient(workspaceDocument(), {
+      storage,
+      transport: fake.transport,
+      retry: { baseDelayMs: 60_000 },
+    });
+    const before = Date.now();
+    await client.create('entries', { hours: '1.5' }, { workspaceId: 'W1' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { state: 'pending', precondition: 'source-unknown', lastStatus: 429 },
+      ]),
+    );
+    await settle();
+    expect(
+      storedNotBefore(await storage.get('syncables:outbox', 'outbox')),
+    ).toBeGreaterThanOrEqual(before + 119_000);
+    expect(fake.posts).toEqual([]);
+
+    const refused = workspaceProvider();
+    refused.workspace.status = 401;
+    const blocked = createApiClient(workspaceDocument(), {
+      transport: refused.transport,
+      retry: { baseDelayMs: 60_000 },
+    });
+    await blocked.create('entries', { hours: '1.5' }, { workspaceId: 'W1' });
+    await vi.waitFor(() =>
+      expect(blocked.pendingWrites()).toMatchObject([{ state: 'blocked' }]),
+    );
+    expect(blocked.authBlocked()).toMatchObject({ status: 401 });
+    expect(refused.posts).toEqual([]);
+  });
+
+  it('ends a create whose source read is answered blocked (Throttling 0.4.0): not retried, not held (readRefused)', async () => {
+    const fake = workspaceProvider();
+    fake.workspace.status = 429;
+    // The 429 carries retry-after: 120, which a blocked answer does not wait out.
+    const doc = workspaceDocument() as OpenApiDocument &
+      Record<string, unknown>;
+    doc['x-throttling'] = {
+      signals: [
+        {
+          status: [429],
+          body: { pointer: '/error', equals: 'x' },
+          meaning: 'blocked',
+        },
+      ],
+    };
+    let sourceReads = 0;
+    const transport: Transport = async (r) => {
+      if (r.url.pathname === '/workspaces/W1') sourceReads += 1;
+      return fake.transport(r);
+    };
+    const storage = new InMemoryStorageAdapter();
+    const client = createApiClient(doc, {
+      storage,
+      transport,
+      retry: { baseDelayMs: 10 },
+    });
+    await client.create('entries', { hours: '1.5' }, { workspaceId: 'W1' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        {
+          state: 'failed',
+          lastStatus: 429,
+          lastError: expect.stringMatching(/retrying won't help/),
+        },
+      ]),
+    );
+    const reads = sourceReads;
+    await settle();
+    expect(sourceReads).toBe(reads);
+    expect(fake.posts).toEqual([]);
+    // No earliest retry time is stored from the blocked answer's retry-after.
+    expect(
+      storedNotBefore(await storage.get('syncables:outbox', 'outbox')),
+    ).toBeUndefined();
+  });
+});
+
+describe('write preconditions: declarations', () => {
+  it('leaves a write under kind none without refusals unchanged', async () => {
+    const { client, fake } = await synced(document({ put: { kind: 'none' } }));
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    expect(fake.log).toEqual(['PUT 1']);
+  });
+
+  it('refuses to queue a write whose declaration this client cannot use', async () => {
+    const { client, fake } = await synced(
+      document({
+        put: { kind: 'compareAndSwap' },
+        delete: { kind: 'ifMatch' },
+      }),
+    );
+    await expect(
+      client.update('/pets', '1', { name: 'Rex II' }),
+    ).rejects.toThrow(/compareAndSwap.*not sent unconditionally/);
+    await expect(client.remove('/pets', '1')).rejects.toThrow(
+      /no usable version/,
+    );
+    expect(client.pendingWrites()).toEqual([]);
+    expect(fake.log).toEqual([]);
+  });
+
+  it('reads an unknown stored precondition state as resolving: the object is read first', async () => {
+    const storage = new InMemoryStorageAdapter();
+    const doc = document({ put: { ...IF_MATCH_BODY, idempotent: false } });
+    const fake = provider([rex]);
+    // The PUT's outcome is unknown: the write is resolving, stored so.
+    fake.script.push(502);
+    const client = createApiClient(doc, {
+      storage,
+      transport: fake.transport,
+      retry: { baseDelayMs: 60_000 },
+    });
+    await client.sync();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { precondition: 'resolving' },
+      ]),
+    );
+    await settle();
+    // A later client stored a state this one does not know.
+    const outbox = (await storage.get('syncables:outbox', 'outbox')) as {
+      records: { queue: Record<string, unknown>[] }[];
+    };
+    expect(outbox.records[0]!.queue[0]!['precondition']).toBe('resolving');
+    outbox.records[0]!.queue[0]!['precondition'] = 'pondering';
+    await storage.put('syncables:outbox', 'outbox', outbox);
+    fake.log.length = 0;
+    const again = createApiClient(doc, {
+      storage,
+      transport: fake.transport,
+      retry: { baseDelayMs: 1 },
+    });
+    await again.ready();
+    expect(again.pendingWrites()).toMatchObject([
+      { precondition: 'resolving' },
+    ]);
+    await again.sync();
+    await idle(again);
+    expect(fake.log.filter((l) => l !== 'GET /pets')).toEqual([
+      'GET 1',
+      'PUT 1 if-match v1',
+    ]);
+  });
+});
+
+describe('write preconditions: review cases', () => {
+  it('fails a write whose object version cannot be sent as a header', async () => {
+    const { client, fake } = await synced(document({ put: IF_MATCH_BODY }), {
+      pets: [{ ...rex, version: { major: 1 } }],
+    });
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await stopped(client);
+    expect(fake.log).toEqual([]);
+    expect(client.pendingWrites()[0]?.lastError).toContain(
+      'neither a string nor a number',
+    );
+    expect(client.pendingWrites()[0]).not.toHaveProperty('precondition');
+  });
+
+  it('fails a bodiless DELETE closed on a when it cannot evaluate', async () => {
+    const doc = document({
+      delete: {
+        kind: 'none',
+        refuseWhen: [
+          {
+            field: 'locked',
+            values: [true],
+            when: { field: 'force', values: [false, null] },
+          },
+        ],
+      },
+    });
+    const { client, fake } = await synced(doc, {
+      pets: [{ ...rex, locked: true }],
+    });
+    await client.remove('/pets', '1');
+    await stopped(client);
+    expect(fake.log).toEqual([]);
+    expect(client.pendingWrites()).toMatchObject([
+      { type: 'delete', precondition: 'refused' },
+    ]);
+  });
+
+  it('settles an unknown merge-patch update by the values after the patch', async () => {
+    const { client, fake } = await synced(
+      document({ patch: { ...IF_MATCH_BODY, idempotent: false } }),
+      { retryMs: 1, pets: [{ ...rex, meta: { a: '1', b: '2' } }] },
+    );
+    fake.applyThenFail = true;
+    await client.update('/pets', '1', { meta: { a: null } });
+    await idle(client);
+    // The read shows meta as the patch leaves it ({ b: '2' }): applied.
+    expect(fake.log).toEqual(['PATCH 1 if-match v1', 'GET 1']);
+    expect(fake.bodies).toEqual([{ meta: { a: null } }]);
+  });
+
+  it("refuses a declaration whose source is not one of the document's resources", async () => {
+    const { client } = await synced(
+      document({
+        post: {
+          kind: 'none',
+          refuseWhen: [
+            { source: { resource: 'owner' }, field: 'locked', values: [true] },
+          ],
+        },
+      }),
+    );
+    await expect(client.create('/pets', { name: 'Kit' })).rejects.toThrow(
+      /not a crudResources key/,
+    );
+  });
+});
+
+describe('write preconditions: #490 review', () => {
+  it('keeps resolving across a resolveWrite retry: the object is read before anything is sent', async () => {
+    const doc = document({
+      patch: {
+        kind: 'none',
+        refuseWhen: [{ field: 'archived', values: [true] }],
+      },
+    });
+    const fake = provider([rex]);
+    const client = createApiClient(doc, {
+      storage: new InMemoryStorageAdapter(),
+      transport: fake.transport,
+      retry: { baseDelayMs: 1, maxAttempts: 1 },
+    });
+    await client.sync();
+    fake.log.length = 0;
+    fake.applyThenFail = true;
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await stopped(client);
+    expect(client.pendingWrites()).toMatchObject([
+      { state: 'failed', precondition: 'resolving' },
+    ]);
+    await client.resolveWrite('/pets', '1', { action: 'retry' });
+    await idle(client);
+    // Applied the first time: the read settles it, no second PATCH.
+    expect(fake.log).toEqual(['PATCH 1', 'GET 1']);
+  });
+
+  it('compares a numeric version as sent with the version read', async () => {
+    const { client, fake } = await synced(
+      document({ put: { ...IF_MATCH_BODY, idempotent: false } }),
+      { retryMs: 1, pets: [{ ...rex, version: 5 }] },
+    );
+    fake.script.push(502);
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await idle(client);
+    // The read shows version 5 still: not applied, sent again.
+    expect(fake.log).toEqual(['PUT 1 if-match 5', 'GET 1', 'PUT 1 if-match 5']);
+    expect(fake.pets.get('1')).toMatchObject({ name: 'Rex II', version: 6 });
+  });
+
+  it('holds a write whose precondition read is throttled until its time, without failing it', async () => {
+    const storage = new InMemoryStorageAdapter();
+    const fake = provider([rex]);
+    const client = createApiClient(document({ put: { kind: 'readVerify' } }), {
+      storage,
+      transport: fake.transport,
+      retry: { baseDelayMs: 60_000 },
+    });
+    await client.sync();
+    fake.log.length = 0;
+    fake.itemStatus = 429;
+    const before = Date.now();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { state: 'pending', lastStatus: 429 },
+      ]),
+    );
+    await settle();
+    // Retry-After: 120 holds it at least that long.
+    expect(
+      storedNotBefore(await storage.get('syncables:outbox', 'outbox')),
+    ).toBeGreaterThanOrEqual(before + 119_000);
+    expect(fake.log).toEqual(['GET 1']);
+  });
+
+  it('handles a throttled or refused read that resolves an unknown outcome the same way, still resolving', async () => {
+    const storage = new InMemoryStorageAdapter();
+    const fake = provider([rex]);
+    const client = createApiClient(
+      document({ put: { ...IF_MATCH_BODY, idempotent: false } }),
+      { storage, transport: fake.transport, retry: { baseDelayMs: 1 } },
+    );
+    await client.sync();
+    fake.log.length = 0;
+    fake.script.push(502);
+    fake.itemStatus = 429;
+    const before = Date.now();
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([
+        { state: 'pending', precondition: 'resolving', lastStatus: 429 },
+      ]),
+    );
+    await settle();
+    expect(
+      storedNotBefore(await storage.get('syncables:outbox', 'outbox')),
+    ).toBeGreaterThanOrEqual(before + 119_000);
+    expect(fake.log).toEqual(['PUT 1 if-match v1', 'GET 1']);
+
+    const refused = provider([rex]);
+    const blocked = createApiClient(
+      document({ put: { ...IF_MATCH_BODY, idempotent: false } }),
+      { transport: refused.transport, retry: { baseDelayMs: 1 } },
+    );
+    await blocked.sync();
+    refused.script.push(502);
+    refused.itemStatus = 401;
+    await blocked.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(blocked.pendingWrites()).toMatchObject([
+        { state: 'blocked', precondition: 'resolving' },
+      ]),
+    );
+    expect(blocked.authBlocked()).toMatchObject({ status: 401 });
+  });
+
+  it("keeps a mark's source 'write' across a restart", async () => {
+    const storage = new InMemoryStorageAdapter();
+    const doc = document({ delete: { kind: 'none' } });
+    const fake = provider([rex]);
+    const client = createApiClient(doc, {
+      storage,
+      transport: fake.transport,
+      retry: { baseDelayMs: 60_000 },
+    });
+    await client.sync();
+    fake.pets.delete('1');
+    await client.remove('/pets', '1');
+    await idle(client);
+    expect(client.presence()).toMatchObject([{ id: '1', source: 'write' }]);
+    const again = createApiClient(doc, { storage, transport: fake.transport });
+    await again.ready();
+    expect(again.presence()).toMatchObject([{ id: '1', source: 'write' }]);
+  });
+
+  it('blocks the client when the precondition read is refused for the credentials', async () => {
+    const { client, fake } = await synced(
+      document({ put: { kind: 'readVerify' } }),
+    );
+    fake.itemStatus = 401;
+    await client.update('/pets', '1', { name: 'Rex II' });
+    await vi.waitFor(() =>
+      expect(client.pendingWrites()).toMatchObject([{ state: 'blocked' }]),
+    );
+    expect(client.authBlocked()).toMatchObject({ status: 401 });
+    expect(fake.log).toEqual(['GET 1']);
+  });
+});

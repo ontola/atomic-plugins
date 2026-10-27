@@ -31,7 +31,6 @@
  */
 import {
   entryValues,
-  NO_DESCRIPTION,
   type ClockifyTimeEntry,
   type EntryValues,
   type WriteContext,
@@ -291,8 +290,12 @@ export function planRange(
     }
 
     const [first, ...rest] = left;
+    // The name is the entry's description exactly (the app's catalog lens,
+    // 0.8.0), not `entryValues`'s trimmed one or its NO_DESCRIPTION: a copy
+    // carries it over, and an update leaves it as it is.
     const desired: EntryValues = {
       ...t.values,
+      name: typeof t.entry.description === 'string' ? t.entry.description : '',
       start: first.from,
       end: first.to,
       projectId,
@@ -333,7 +336,7 @@ export function planRange(
       steps.push({
         op: 'create',
         values: {
-          name: NO_DESCRIPTION,
+          name: '',
           start: gap.from,
           end: gap.to,
           billable: context.billableDefault?.(projectId) ?? false,

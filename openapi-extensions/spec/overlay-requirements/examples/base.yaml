@@ -1,0 +1,18 @@
+overlay: 1.0.0
+info:
+  title: Illustrative collections (revision 2)
+  version: 2.0.0
+extends: https://api.example.com/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        note:
+          identity:
+            urlTemplate: /notes/{id}
+            bindings:
+              id: { field: id }
+          collections:
+            notes:
+              urlTemplate: /notes
+              listQuery: { include_archived: 'true' }

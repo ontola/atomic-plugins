@@ -3,6 +3,97 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
+## Unreleased
+
+- Webhook inbox (`WEBHOOKS_ENABLED`, off by default): `GET
+  /subscriptions/{id}/events` takes `maxBytes` (Webhook Subscriptions
+  0.2.0-draft). A page carries at most that many bytes of base64 payload.
+  An event that does not fit ends the page, unless it is the page's first:
+  then it comes back alone, with `payload.omitted: true` and no `body`, and
+  is acknowledged and released like any other. A `maxBytes` below 1 gets
+  `400`. A page's payloads are now read only for the events it returns
+  with their bodies, not for every row it looks at.
+- Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
+  paced at the tier whose `plans` name the plan the catalog selection's
+  `throttlingPlans` gives for it, else within every tier at once (each its
+  own count). Unknown entries are logged at load and ignored.
+- Key rotation (#410): `POST /agents/transfer`, signed by the old agent with
+  a proof by the new one, moves the old agent's connections and runtimes to
+  the new id in one transaction and retires the old id (new `retired_agents`
+  table). Planned rotation only; a lost or compromised key is out of scope
+  (SECURITY.md, "Key rotation"). New errors `invalid_transfer_proof`,
+  `agent_retired`, `transfer_blocked`, `transfer_conflict`. The transfer, and
+  every write that adds a connection, runtime or delegation, run in a
+  transaction under per-owner advisory locks; the access check refuses a
+  retired owner on every route. Device sessions (0.4.0) are not moved: they
+  answer `agent_retired` until they expire, and the user approves the CLI
+  again with the new key. **Rolling deploys and downgrades:** a binary
+  older than this one ignores `retired_agents` and takes no owner lock, so
+  while one runs it serves a retired owner and can race a transfer. Finish a
+  rolling deploy before relying on transfers, and expect a downgrade to
+  re-admit retired ids (the table is left in place and is honoured again on
+  upgrade).
+
+## 0.4.0 (2026-10-13)
+
+- Opt-in OAuth device authorization for public CLI clients (#565), with Atomic
+  owner-signed browser approval, explicitly selected connections and read scopes,
+  PostgreSQL single-use grants, short-lived opaque access tokens, rotating refresh
+  families with reuse revocation, and signed per-session owner revocation. See
+  DEVICE_AUTH.md for the contract and examples. Device clients and an owner
+  approval hub must be configured to enable it.
+
+`Config` gains public fields (`webhooks`, `device`), a breaking change under Cargo's
+0.x semver rules, so this release is 0.4.0.
+
+- Pacing under provider quotas (docs/design/pieces.md P4): for `x-throttling`
+  buckets partitioned by `sourceIp` or by nothing, with at most 10,000
+  requests per window, the proxy keeps a sliding log per platform and bucket
+  and refuses a request that would exceed one with `429 provider_quota` and
+  `Retry-After`, without calling the provider. In memory, per instance. See
+  README, "Pacing under provider quotas".
+
+- Webhook inbox, step 2 of ontola/atomic-plugins#369: the bounded inbox of
+  `openapi-extensions/spec/webhook-subscriptions` in PostgreSQL, off unless
+  `WEBHOOKS_ENABLED=true` (new `Config::webhooks`, `WebhookConfig`,
+  `WEBHOOK_INBOX_MAX_BYTES`). Enabled, it creates its tables and runs a
+  sweeper every minute; it mounts no route, receives no delivery and
+  registers no hook. Subscriptions, leases and the progress deadline,
+  generations, cursors and gaps, per-owner receipts, subscription, owner and
+  deployment budgets, shared payloads, tombstones and dedicated-hook cleanup
+  jobs, with the limits the plan gives as pilot values. See SECURITY.md,
+  "Webhook inbox".
+- Webhook receiver and consumer routes, step 3 of #369, mounted only with
+  `WEBHOOKS_ENABLED=true`: `POST /webhooks/{endpointId}` verifies a
+  delivery's HMAC over its raw bytes before reading it, routes it through
+  access-checked bindings and stores it in one transaction; signed
+  subscribe, get, delete, renew, events (long poll), ack and reconciled
+  routes. Shared-hook secrets come from `WEBHOOK_SECRET_<PLATFORM>`.
+  Deleting a connection ends its subscriptions in the same transaction.
+  Subscriptions use shared application hooks only; no provider hook is
+  created.
+- Webhook rate limits: refusals per client network (over it: `429` for ids
+  that name no endpoint, and at most 2 of its requests waiting for the
+  endpoint lookup, beyond which even a real delivery gets `429`) and failed
+  verifications per endpoint, and subscription requests per owner,
+  checked before the access check (`WEBHOOK_INGRESS_LIMIT_PER_NETWORK`,
+  `WEBHOOK_INGRESS_LIMIT_PER_ENDPOINT`, `WEBHOOK_SUBSCRIBE_LIMIT_PER_OWNER`;
+  new `WebhookConfig` fields).
+- Rate-limit and conditional headers (docs/design/pieces.md P1-P3): the
+  provider's `X-RateLimit-Limit`, `-Remaining`, `-Used`, `-Reset`,
+  `-Resource`, `RateLimit`, `RateLimit-Policy`, `RateLimit-Limit`,
+  `-Remaining`, `-Reset` and `Last-Modified` now come back to the caller and
+  are CORS-exposed; the caller's `If-None-Match` and `If-Modified-Since` go
+  upstream, and `Idempotency-Key` where the operation declares that header
+  parameter, namespaced per connection on a no-credential connection. Every
+  list is exact names only, and every `/proxy/…` response is now
+  `Cache-Control: no-store`. A catalog-fixed value for a caller header now
+  replaces the caller's instead of being sent next to it. See SECURITY.md,
+  "Validating proxy".
+- A composed catalog document with a `$ref` path item, or a path item that is
+  not an object, is refused at load (naming the platform and path) instead of
+  being read inconsistently; no catalog uses one.
+
 ## 0.3.0 (2026-10-06)
 
 0.3.0 rather than 0.2.6 because `Config` gains public fields (below), a

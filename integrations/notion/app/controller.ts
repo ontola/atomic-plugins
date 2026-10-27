@@ -7,7 +7,11 @@ import {
   type Conflicts,
   type RowChange,
 } from './changes.js';
-import { classifyFailure, type ProviderFailure } from './errors.js';
+import {
+  classifyFailure,
+  isBlockedByNotion,
+  type ProviderFailure,
+} from './errors.js';
 import {
   loadRecord,
   loadSchema,
@@ -377,13 +381,16 @@ export function createController(
         proxy,
         connectionId,
         upstream(NOTION_DOCUMENT),
-        ({ method, path, status, headers, code }) => {
+        ({ method, path, status, headers, code, body }) => {
           if (status >= 200 && status < 300 && !code) return;
           failures.push({
             status,
             method,
             path,
             ...(code ? { code } : {}),
+            ...(status === 429 && isBlockedByNotion(body)
+              ? { blocked: true as const }
+              : {}),
             ...(headers['retry-after']
               ? { retryAfter: headers['retry-after'] }
               : {}),

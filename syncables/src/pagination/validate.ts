@@ -1,29 +1,734 @@
 import type {
   PaginationSchemeObject,
   RequestRole,
+  ResponseFieldObject,
   ResponseRole,
 } from './types.js';
 
-const SCHEME_TYPES = new Set(['pageNumber', 'pageToken', 'nextLink']);
+const SCHEME_TYPES = new Set([
+  'pageNumber',
+  'pageToken',
+  'nextLink',
+  'rangeWindow',
+]);
+const WINDOW_UNITS = new Set(['day', 'second', 'integer']);
+/** Spec §4.6.2: which formats fit which unit (rule 13). */
+const WINDOW_FORMATS: Record<string, string> = {
+  date: 'day',
+  basicDate: 'day',
+  dateTime: 'second',
+  unixSeconds: 'second',
+  integer: 'integer',
+};
+const WINDOW_BOUNDS = new Set(['closed', 'halfOpen']);
+const WINDOW_ROLES = new Set(['windowStart', 'windowEnd', 'windowRange']);
 const REQUEST_ROLES: Set<RequestRole> = new Set([
   'page',
   'pageSize',
   'offset',
   'pageToken',
   'cursor',
+  'previousPageToken',
+  'syncToken',
+  'windowStart',
+  'windowEnd',
+  'windowRange',
 ]);
 const RESPONSE_ROLES: Set<ResponseRole> = new Set([
   'nextPageToken',
   'nextCursor',
   'nextLink',
+  'previousPageToken',
+  'previousLink',
+  'nextSyncToken',
   'totalCount',
   'totalPages',
   'pageSize',
   'currentPage',
+  'offset',
+  'hasMore',
 ]);
+const LINK_BASES = new Set(['request', 'server', 'declared']);
 
 function isExtensionKey(key: string): boolean {
   return key.startsWith('x-');
+}
+
+const WINDOW_KEYS = new Set([
+  'unit',
+  'format',
+  'bounds',
+  'cap',
+  'minimumWidth',
+  'field',
+  'timeZone',
+  'description',
+]);
+/** `{start}` and `{end}` once each, in either order, and no other brace. */
+const TEMPLATE =
+  /^(?:[^{}]*\{start\}[^{}]*\{end\}[^{}]*|[^{}]*\{end\}[^{}]*\{start\}[^{}]*)$/;
+const JSON_POINTER = /^(\/([^~]|~[01])*)*$/;
+const REQUEST_LOCATIONS = [
+  'queryParameters',
+  'bodyFields',
+  'headerFields',
+] as const;
+
+const isPositiveInteger = (value: unknown): boolean =>
+  typeof value === 'number' && Number.isInteger(value) && value >= 1;
+
+const SHORT_PAGE_KEYS = new Set(['size', 'assurance', 'description']);
+const ASSURANCES = new Set(['documented', 'observed', 'assumed']);
+
+/**
+ * Spec 0.6.0 §9 rules 19–21: `start` only on a `page` field, an integer of
+ * at least 0; `shortPage` only on a `pageNumber` scheme, with a `size`
+ * (a positive integer, or `request`, which needs a `pageSize` field) and
+ * an `assurance`. Rule 22 (a `page` field where the scheme is applied) is
+ * checked by `resolveEffectiveScheme`.
+ */
+function checkShortPage(
+  path: string,
+  scheme: PaginationSchemeObject,
+  errors: string[],
+): void {
+  const fields = REQUEST_LOCATIONS.flatMap((location) =>
+    Object.entries(scheme.request?.[location] ?? {}).map(([name, field]) => ({
+      at: `${path}.request.${location}.${name}`,
+      field,
+    })),
+  );
+  // Spec 0.7.0 §9 rule 24: `advance` only on an offset field.
+  for (const { at, field } of fields) {
+    const advance = (field as { advance?: unknown }).advance;
+    if (advance === undefined) continue;
+    if (field.role !== 'offset') {
+      errors.push(`${at}.advance is allowed only on an offset field`);
+    } else if (advance !== 'itemCount' && advance !== 'pageSize') {
+      errors.push(`${at}.advance must be itemCount or pageSize`);
+    }
+  }
+  for (const { at, field } of fields) {
+    if (field.start === undefined) continue;
+    if (field.role !== 'page') {
+      errors.push(`${at}.start is allowed only on a page field`);
+    } else if (
+      typeof field.start !== 'number' ||
+      !Number.isInteger(field.start) ||
+      field.start < 0
+    ) {
+      errors.push(`${at}.start must be an integer of at least 0`);
+    }
+  }
+  const short = scheme.response?.shortPage as unknown;
+  if (short === undefined) return;
+  const at = `${path}.response.shortPage`;
+  if (scheme.type !== 'pageNumber') {
+    errors.push(`${at} is allowed only on a pageNumber scheme`);
+  }
+  if (typeof short !== 'object' || short === null || Array.isArray(short)) {
+    errors.push(`${at} must be an object`);
+    return;
+  }
+  const s = short as Record<string, unknown>;
+  for (const key of Object.keys(s)) {
+    if (!SHORT_PAGE_KEYS.has(key) && !isExtensionKey(key)) {
+      errors.push(`${at}.${key} is not a Short Page Object field`);
+    }
+  }
+  if (s['size'] !== 'request' && !isPositiveInteger(s['size'])) {
+    errors.push(`${at}.size must be an integer of at least 1, or request`);
+  }
+  if (
+    s['size'] === 'request' &&
+    !fields.some(({ field }) => field.role === 'pageSize')
+  ) {
+    errors.push(`${at}.size request needs a request field with role pageSize`);
+  }
+  if (typeof s['assurance'] !== 'string' || !ASSURANCES.has(s['assurance'])) {
+    errors.push(
+      `${at}.assurance must be one of documented, observed, or assumed`,
+    );
+  }
+}
+
+/**
+ * Spec 0.5.0 §9 rules 12–16, which `schema.json` covers in the spec folder:
+ * a `rangeWindow` scheme has a valid `window` (unit, a format that fits it,
+ * bounds, a positive integer cap and minimum width, a JSON Pointer field, a
+ * time zone only for days) and a `request`; other schemes have no window
+ * and no window role; the window travels in one `windowRange` field with a
+ * template, or one `windowStart` and one `windowEnd` field; a template sits
+ * on a `windowRange` field only; and `autoDetect`, when given, is `false`.
+ */
+function checkWindow(
+  path: string,
+  scheme: PaginationSchemeObject,
+  errors: string[],
+): void {
+  const fields = REQUEST_LOCATIONS.flatMap((location) =>
+    Object.entries(scheme.request?.[location] ?? {}).map(([name, field]) => ({
+      at: `${path}.request.${location}.${name}`,
+      field,
+    })),
+  );
+  for (const { at, field } of fields) {
+    const role = String(field.role);
+    if (field.template !== undefined) {
+      if (role !== 'windowRange') {
+        errors.push(`${at}.template is allowed only on a windowRange field`);
+      } else if (
+        typeof field.template !== 'string' ||
+        !TEMPLATE.test(field.template)
+      ) {
+        errors.push(
+          `${at}.template must hold {start} and {end} once each and no other brace`,
+        );
+      }
+    } else if (role === 'windowRange') {
+      errors.push(`${at} has role windowRange and needs a template`);
+    }
+  }
+  if (scheme.type !== 'rangeWindow') {
+    if (scheme.window !== undefined) {
+      errors.push(`${path}.window is allowed only on a rangeWindow scheme`);
+    }
+    for (const { at, field } of fields) {
+      if (WINDOW_ROLES.has(String(field.role))) {
+        errors.push(
+          `${at}.role ${String(field.role)} is allowed only in a rangeWindow scheme`,
+        );
+      }
+    }
+    return;
+  }
+  if (scheme.autoDetect !== undefined && scheme.autoDetect !== false) {
+    errors.push(
+      `${path}.autoDetect must be false: a rangeWindow scheme is never auto-detected`,
+    );
+  }
+  if (!scheme.request) {
+    errors.push(`${path} is a rangeWindow scheme and needs a request`);
+  }
+  const roles = fields
+    .map(({ field }) => String(field.role))
+    .filter((role) => WINDOW_ROLES.has(role))
+    .sort();
+  const carried =
+    (roles.length === 1 && roles[0] === 'windowRange') ||
+    (roles.length === 2 &&
+      roles[0] === 'windowEnd' &&
+      roles[1] === 'windowStart');
+  if (!carried) {
+    errors.push(
+      `${path}.request needs one windowRange field, or one windowStart and one windowEnd field (found ${roles.join(', ') || 'none'})`,
+    );
+  }
+  const window = scheme.window as unknown;
+  if (typeof window !== 'object' || window === null || Array.isArray(window)) {
+    errors.push(`${path}.window is required for a rangeWindow scheme`);
+    return;
+  }
+  const w = window as Record<string, unknown>;
+  for (const key of Object.keys(w)) {
+    if (!WINDOW_KEYS.has(key) && !isExtensionKey(key)) {
+      errors.push(`${path}.window.${key} is not a Range Window Object field`);
+    }
+  }
+  if (typeof w['unit'] !== 'string' || !WINDOW_UNITS.has(w['unit'])) {
+    errors.push(`${path}.window.unit must be one of day, second, or integer`);
+  }
+  const fits = WINDOW_FORMATS[String(w['format'])];
+  if (fits === undefined) {
+    errors.push(
+      `${path}.window.format must be one of date, basicDate, dateTime, unixSeconds, or integer`,
+    );
+  } else if (fits !== w['unit']) {
+    errors.push(
+      `${path}.window.format ${String(w['format'])} does not fit unit ${String(w['unit'])}`,
+    );
+  }
+  if (typeof w['bounds'] !== 'string' || !WINDOW_BOUNDS.has(w['bounds'])) {
+    errors.push(`${path}.window.bounds must be closed or halfOpen`);
+  }
+  if (!isPositiveInteger(w['cap'])) {
+    errors.push(`${path}.window.cap must be an integer of at least 1`);
+  }
+  if (
+    w['minimumWidth'] !== undefined &&
+    !isPositiveInteger(w['minimumWidth'])
+  ) {
+    errors.push(`${path}.window.minimumWidth must be an integer of at least 1`);
+  }
+  if (
+    w['field'] !== undefined &&
+    (typeof w['field'] !== 'string' || !JSON_POINTER.test(w['field']))
+  ) {
+    errors.push(`${path}.window.field must be a JSON Pointer`);
+  }
+  if (w['timeZone'] !== undefined) {
+    if (w['unit'] !== 'day') {
+      errors.push(`${path}.window.timeZone is allowed only with unit day`);
+    } else if (typeof w['timeZone'] !== 'string' || w['timeZone'] === '') {
+      errors.push(`${path}.window.timeZone must be a nonempty string`);
+    }
+  }
+}
+
+/**
+ * Spec 0.4.0 §9 rules 8–10: `linkResolution` only on a `nextLink` or
+ * `previousLink` field; `base` one of `request`, `server`, `declared`;
+ * `url` present exactly when `base` is `declared`, then an absolute http(s)
+ * URL without userinfo or fragment. (Rule 11, its origin against the
+ * operation's server, needs the document and is checked at run time by
+ * `resolveLink`, which refuses a link that leaves the server's origin.)
+ */
+function checkLinkResolution(
+  path: string,
+  field: ResponseFieldObject,
+  errors: string[],
+): void {
+  const resolution: unknown = field.linkResolution;
+  if (resolution === undefined) return;
+  if (field.role !== 'nextLink' && field.role !== 'previousLink') {
+    errors.push(
+      `${path}.linkResolution is allowed only on a nextLink or previousLink field`,
+    );
+  }
+  if (typeof resolution !== 'object' || resolution === null) {
+    errors.push(`${path}.linkResolution must be an object`);
+    return;
+  }
+  const { base, url } = resolution as Record<string, unknown>;
+  if (typeof base !== 'string' || !LINK_BASES.has(base)) {
+    errors.push(
+      `${path}.linkResolution.base must be one of request, server, or declared (got "${String(base)}")`,
+    );
+  }
+  if (base === 'declared') {
+    if (typeof url !== 'string' || !isAbsoluteHttpUrl(url)) {
+      errors.push(
+        `${path}.linkResolution.url must be an absolute http or https URL without userinfo or a fragment when base is declared`,
+      );
+    }
+  } else if (url !== undefined) {
+    errors.push(
+      `${path}.linkResolution.url is allowed only when base is declared`,
+    );
+  }
+}
+
+/**
+ * The spec schema's pattern for `linkResolution.url`: `http(s)://`, a host
+ * without `/`, `?`, `#`, `@`, whitespace or a backslash, then an optional
+ * path or query without `#`, whitespace or a backslash. Stricter than the
+ * WHATWG parser, which accepts `https:api…`, `https:/…`, backslashes and
+ * spaces (#384).
+ */
+const DECLARED_URL = /^https?:\/\/[^/?#@\s\\]+(?:[/?][^#\s\\]*)?$/;
+
+function isAbsoluteHttpUrl(value: string): boolean {
+  return DECLARED_URL.test(value);
+}
+
+/**
+ * Spec §4.4.2 and §9 rule 6: a scheme-level `response.envelope`, when
+ * present, is an object whose `itemsField` is a string or `null`.
+ */
+function checkEnvelope(
+  path: string,
+  envelope: unknown,
+  errors: string[],
+): void {
+  if (envelope === undefined) return;
+  if (!isObject(envelope)) {
+    errors.push(`${path}.envelope must be an object`);
+    return;
+  }
+  const field = (envelope as Record<string, unknown>)['itemsField'];
+  if (field !== undefined && field !== null && typeof field !== 'string')
+    errors.push(`${path}.envelope.itemsField must be a string or null`);
+  // Rule 23 (0.7.0).
+  const empty = (envelope as Record<string, unknown>)['emptyWhenAbsent'];
+  if (empty !== undefined && typeof empty !== 'boolean')
+    errors.push(`${path}.envelope.emptyWhenAbsent must be a boolean`);
+  if (empty !== undefined && (typeof field !== 'string' || field === ''))
+    errors.push(
+      `${path}.envelope.emptyWhenAbsent needs an itemsField that is a non-empty string (rule 23)`,
+    );
+}
+
+const INCOMPLETE_KEYS = new Set(['field', 'equals', 'in', 'description']);
+const INCOMPLETE_TYPES = new Set(['pageNumber', 'pageToken', 'nextLink']);
+
+const isJsonScalar = (value: unknown): boolean =>
+  value === null ||
+  typeof value === 'string' ||
+  typeof value === 'boolean' ||
+  (typeof value === 'number' && Number.isFinite(value));
+
+/**
+ * Spec 0.8.0 §9 rule 26: `response.incomplete` is an object with a `field`
+ * (a dot-path whose segments are non-empty) and exactly one of `equals` (a
+ * JSON scalar) and `in` (a nonempty array of them), on a pageNumber,
+ * pageToken or nextLink scheme. A scheme that breaks it is invalid: an
+ * explicit application then fails the read rather than reading a capped
+ * result as complete.
+ */
+function checkIncomplete(
+  path: string,
+  scheme: PaginationSchemeObject,
+  errors: string[],
+): void {
+  const marker = scheme.response?.incomplete as unknown;
+  if (marker === undefined) return;
+  const at = `${path}.response.incomplete`;
+  if (!INCOMPLETE_TYPES.has(scheme.type))
+    errors.push(
+      `${at} is allowed only on a pageNumber, pageToken or nextLink scheme (rule 26)`,
+    );
+  if (typeof marker !== 'object' || marker === null || Array.isArray(marker)) {
+    errors.push(`${at} must be an object (rule 26)`);
+    return;
+  }
+  const m = marker as Record<string, unknown>;
+  for (const key of Object.keys(m))
+    if (!INCOMPLETE_KEYS.has(key) && !isExtensionKey(key))
+      errors.push(`${at}.${key} is not an Incomplete Object field`);
+  // A dot-path of names matched literally: no bracket escapes in 0.8.0.
+  const field = m['field'];
+  if (typeof field !== 'string' || field.split('.').some((s) => s === ''))
+    errors.push(
+      `${at}.field must be a dot-path whose segments are non-empty (rule 26)`,
+    );
+  const hasEquals = Object.hasOwn(m, 'equals');
+  const hasIn = Object.hasOwn(m, 'in');
+  if (hasEquals === hasIn)
+    errors.push(`${at} needs exactly one of equals and in (rule 26)`);
+  if (hasEquals && !isJsonScalar(m['equals']))
+    errors.push(`${at}.equals must be a JSON scalar (rule 26)`);
+  if (
+    hasIn &&
+    (!Array.isArray(m['in']) ||
+      m['in'].length === 0 ||
+      !m['in'].every(isJsonScalar))
+  )
+    errors.push(`${at}.in must be a nonempty array of JSON scalars (rule 26)`);
+  if ('description' in m && typeof m['description'] !== 'string')
+    errors.push(`${at}.description must be a string`);
+}
+
+const SCHEME_KEYS = new Set([
+  'type',
+  'description',
+  'autoDetect',
+  'window',
+  'request',
+  'response',
+]);
+const AUTO_DETECT_KEYS = new Set([
+  'matchQueryParams',
+  'matchBodyFields',
+  'matchResponseFields',
+  'matchHeaders',
+  'requireAll',
+]);
+const REQUEST_KEYS = new Set(REQUEST_LOCATIONS);
+const REQUEST_FIELD_KEYS = new Set([
+  'description',
+  'schema',
+  'role',
+  'required',
+  'start',
+  'advance',
+  'template',
+  'fromLastItem',
+  'order',
+]);
+const RESPONSE_KEYS = new Set([
+  'envelope',
+  'bodyFields',
+  'headers',
+  'shortPage',
+  'incomplete',
+]);
+const RESPONSE_FIELD_KEYS = new Set([
+  'description',
+  'schema',
+  'role',
+  'linkResolution',
+]);
+const ENVELOPE_KEYS = new Set(['itemsField', 'emptyWhenAbsent']);
+const LINK_RESOLUTION_KEYS = new Set(['base', 'url', 'description']);
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/** Keys outside `allowed` that are not `x-` extensions. */
+function unknownKeys(
+  at: string,
+  value: Record<string, unknown>,
+  allowed: Set<string>,
+  kind: string,
+  errors: string[],
+): void {
+  for (const key of Object.keys(value))
+    if (!allowed.has(key) && !isExtensionKey(key))
+      errors.push(`${at}.${key} is not a ${kind} field`);
+}
+
+/** `description` a string and `schema` an object, where present. */
+function commonTypes(
+  at: string,
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  if (
+    value['description'] !== undefined &&
+    typeof value['description'] !== 'string'
+  )
+    errors.push(`${at}.description must be a string`);
+  if (value['schema'] !== undefined && !isObject(value['schema']))
+    errors.push(`${at}.schema must be an object`);
+}
+
+/**
+ * The structure the spec's `schema.json` gives a scheme, beyond the
+ * numbered rules: no fields but the spec's (and `x-` extensions) on the
+ * scheme and the objects in it, and the types it states. A typo such as
+ * `respnse:` would otherwise pass beside a valid `request`, and the read
+ * would page without a next cursor. Returns false when a value the rule
+ * checks below read is not an object, so they are skipped rather than
+ * thrown on.
+ */
+function checkStructure(
+  path: string,
+  scheme: unknown,
+  errors: string[],
+): boolean {
+  if (!isObject(scheme)) {
+    errors.push(`${path} must be an object`);
+    return false;
+  }
+  let usable = true;
+  unknownKeys(path, scheme, SCHEME_KEYS, 'Pagination Scheme Object', errors);
+  commonTypes(path, scheme, errors);
+  const autoDetect = scheme['autoDetect'];
+  if (isObject(autoDetect)) {
+    unknownKeys(
+      `${path}.autoDetect`,
+      autoDetect,
+      AUTO_DETECT_KEYS,
+      'Auto-Detect Object',
+      errors,
+    );
+    for (const [key, value] of Object.entries(autoDetect))
+      if (AUTO_DETECT_KEYS.has(key) && typeof value !== 'boolean')
+        errors.push(`${path}.autoDetect.${key} must be a boolean`);
+  }
+  const fieldMaps = (
+    at: string,
+    container: Record<string, unknown>,
+    locations: readonly string[],
+    keys: Set<string>,
+    kind: string,
+  ): void => {
+    for (const location of locations) {
+      const map = container[location];
+      if (map === undefined) continue;
+      if (!isObject(map)) {
+        errors.push(`${at}.${location} must be an object`);
+        usable = false;
+        continue;
+      }
+      for (const [name, field] of Object.entries(map)) {
+        const fieldAt = `${at}.${location}.${name}`;
+        if (!isObject(field)) {
+          errors.push(`${fieldAt} must be an object`);
+          usable = false;
+          continue;
+        }
+        unknownKeys(fieldAt, field, keys, kind, errors);
+        commonTypes(fieldAt, field, errors);
+        if (field['role'] !== undefined && typeof field['role'] !== 'string') {
+          errors.push(`${fieldAt}.role must be a string`);
+          usable = false;
+        }
+        if (
+          field['required'] !== undefined &&
+          typeof field['required'] !== 'boolean'
+        )
+          errors.push(`${fieldAt}.required must be a boolean`);
+        if (field['linkResolution'] !== undefined) {
+          const resolution = field['linkResolution'];
+          if (isObject(resolution)) {
+            unknownKeys(
+              `${fieldAt}.linkResolution`,
+              resolution,
+              LINK_RESOLUTION_KEYS,
+              'Link Resolution Object',
+              errors,
+            );
+            commonTypes(`${fieldAt}.linkResolution`, resolution, errors);
+          }
+        }
+      }
+    }
+  };
+  const request = scheme['request'];
+  if (request !== undefined) {
+    if (!isObject(request)) {
+      errors.push(`${path}.request must be an object`);
+      usable = false;
+    } else {
+      unknownKeys(
+        `${path}.request`,
+        request,
+        REQUEST_KEYS as Set<string>,
+        'Request Pagination Fields Object',
+        errors,
+      );
+      fieldMaps(
+        `${path}.request`,
+        request,
+        REQUEST_LOCATIONS,
+        REQUEST_FIELD_KEYS,
+        'Request Field Object',
+      );
+    }
+  }
+  const response = scheme['response'];
+  if (response !== undefined) {
+    if (!isObject(response)) {
+      errors.push(`${path}.response must be an object`);
+      usable = false;
+    } else {
+      unknownKeys(
+        `${path}.response`,
+        response,
+        RESPONSE_KEYS,
+        'Response Pagination Fields Object',
+        errors,
+      );
+      fieldMaps(
+        `${path}.response`,
+        response,
+        ['bodyFields', 'headers'],
+        RESPONSE_FIELD_KEYS,
+        'Response Field Object',
+      );
+      const envelope = response['envelope'];
+      if (isObject(envelope))
+        unknownKeys(
+          `${path}.response.envelope`,
+          envelope,
+          ENVELOPE_KEYS,
+          'Envelope Object',
+          errors,
+        );
+      const short = response['shortPage'];
+      if (
+        isObject(short) &&
+        short['description'] !== undefined &&
+        typeof short['description'] !== 'string'
+      )
+        errors.push(`${path}.response.shortPage.description must be a string`);
+    }
+  }
+  const window = scheme['window'];
+  if (
+    isObject(window) &&
+    window['description'] !== undefined &&
+    typeof window['description'] !== 'string'
+  )
+    errors.push(`${path}.window.description must be a string`);
+  return usable;
+}
+
+/**
+ * Spec 0.9.0 §9 rules 27–29 and 0.10.0's rule 30 (`order`) (`_item_cursor_problems` in the spec's
+ * validate.py): `fromLastItem` only on a `pageToken` or `cursor` field, a
+ * dot-path of non-empty names; a scheme with one is a `pageToken` scheme
+ * with exactly one such field and no `nextPageToken`, `nextCursor` or
+ * `nextLink` response field; a `hasMore` response field only in
+ * `bodyFields`, and only in a scheme with a `fromLastItem` field.
+ */
+function checkItemCursor(
+  path: string,
+  scheme: PaginationSchemeObject,
+  errors: string[],
+): void {
+  // Spec 0.10.0 rule 30: `order` only beside `fromLastItem`, ascending or
+  // descending.
+  for (const location of REQUEST_LOCATIONS)
+    for (const [name, field] of Object.entries(
+      scheme.request?.[location] ?? {},
+    )) {
+      const order: unknown = field.order;
+      if (order === undefined) continue;
+      const at = `${path}.request.${location}.${name}`;
+      if (field.fromLastItem === undefined)
+        errors.push(
+          `${at}.order is allowed only beside fromLastItem (rule 30)`,
+        );
+      if (order !== 'ascending' && order !== 'descending')
+        errors.push(`${at}.order must be ascending or descending (rule 30)`);
+    }
+  const fields = REQUEST_LOCATIONS.flatMap((location) =>
+    Object.entries(scheme.request?.[location] ?? {})
+      .filter(([, field]) => field.fromLastItem !== undefined)
+      .map(([name, field]) => ({
+        at: `${path}.request.${location}.${name}`,
+        field,
+      })),
+  );
+  for (const { at, field } of fields) {
+    if (field.role !== 'pageToken' && field.role !== 'cursor')
+      errors.push(
+        `${at}.fromLastItem is allowed only on a pageToken or cursor field (rule 27)`,
+      );
+    if (
+      typeof field.fromLastItem !== 'string' ||
+      field.fromLastItem.split('.').some((name) => name === '')
+    )
+      errors.push(
+        `${at}.fromLastItem must be a dot-path of non-empty names (rule 27)`,
+      );
+  }
+  const roles = (['bodyFields', 'headers'] as const).flatMap((kind) =>
+    Object.values(scheme.response?.[kind] ?? {}).map((field) => field.role),
+  );
+  if (fields.length) {
+    if (scheme.type !== 'pageToken')
+      errors.push(
+        `${path}.request: fromLastItem only in a pageToken scheme (rule 28)`,
+      );
+    if (fields.length !== 1)
+      errors.push(`${path}.request: exactly one fromLastItem field (rule 28)`);
+    if (
+      roles.some(
+        (role) =>
+          role === 'nextPageToken' ||
+          role === 'nextCursor' ||
+          role === 'nextLink',
+      )
+    )
+      errors.push(
+        `${path}.response: no nextPageToken, nextCursor or nextLink beside a fromLastItem field (rule 28)`,
+      );
+  }
+  if (
+    Object.values(scheme.response?.headers ?? {}).some(
+      (field) => field.role === 'hasMore',
+    )
+  )
+    errors.push(
+      `${path}.response.headers: role hasMore only in bodyFields (rule 29)`,
+    );
+  if (roles.includes('hasMore') && !fields.length)
+    errors.push(
+      `${path}.response: role hasMore only in a scheme with a fromLastItem field (rule 29)`,
+    );
 }
 
 /**
@@ -39,12 +744,31 @@ export function validatePaginationScheme(
 ): string[] {
   const errors: string[] = [];
   const path = `paginationSchemes.${name}`;
+  if (!checkStructure(path, scheme, errors)) return errors;
 
   if (!SCHEME_TYPES.has(scheme.type)) {
     errors.push(
-      `${path}.type must be one of pageNumber, pageToken, or nextLink (got "${String(scheme.type)}")`,
+      `${path}.type must be one of pageNumber, pageToken, nextLink, or rangeWindow (got "${String(scheme.type)}")`,
     );
   }
+  // The spec's schema.json: a boolean or an Auto-Detect Object. Anything
+  // else (`null`, a string) would break auto-detection of every operation.
+  const autoDetect: unknown = scheme.autoDetect;
+  if (
+    autoDetect !== undefined &&
+    typeof autoDetect !== 'boolean' &&
+    (typeof autoDetect !== 'object' ||
+      autoDetect === null ||
+      Array.isArray(autoDetect))
+  ) {
+    errors.push(
+      `${path}.autoDetect must be a boolean or an Auto-Detect Object (got ${JSON.stringify(autoDetect)})`,
+    );
+  }
+  checkWindow(path, scheme, errors);
+  checkShortPage(path, scheme, errors);
+  checkIncomplete(path, scheme, errors);
+  checkItemCursor(path, scheme, errors);
 
   if (!scheme.request && !scheme.response) {
     errors.push(`${path} must define at least one of "request" or "response"`);
@@ -78,6 +802,21 @@ export function validatePaginationScheme(
   }
 
   for (const [fieldName, field] of Object.entries(
+    scheme.request?.headerFields ?? {},
+  )) {
+    if (
+      field.role &&
+      !isExtensionKey(field.role) &&
+      !REQUEST_ROLES.has(field.role)
+    ) {
+      errors.push(
+        `${path}.request.headerFields.${fieldName}.role is not a valid request role (got "${field.role}")`,
+      );
+    }
+  }
+
+  checkEnvelope(`${path}.response`, scheme.response?.envelope, errors);
+  for (const [fieldName, field] of Object.entries(
     scheme.response?.bodyFields ?? {},
   )) {
     if (
@@ -89,6 +828,11 @@ export function validatePaginationScheme(
         `${path}.response.bodyFields.${fieldName}.role is not a valid response role (got "${field.role}")`,
       );
     }
+    checkLinkResolution(
+      `${path}.response.bodyFields.${fieldName}`,
+      field,
+      errors,
+    );
   }
   for (const [fieldName, field] of Object.entries(
     scheme.response?.headers ?? {},
@@ -102,6 +846,7 @@ export function validatePaginationScheme(
         `${path}.response.headers.${fieldName}.role is not a valid response role (got "${field.role}")`,
       );
     }
+    checkLinkResolution(`${path}.response.headers.${fieldName}`, field, errors);
   }
 
   return errors;

@@ -20,6 +20,7 @@ import { view } from '../main.js';
 import { ensureSchema } from '../schema.js';
 import type { ColorScheme, PluginStore } from '../store.js';
 import { FRAMES, renderFrame, type FrameId } from './preview.js';
+import { NEXT_STEP } from './status.js';
 import type { Shell } from './shell.js';
 import { css } from './theme.js';
 import { renderUnknown, unknownIn } from './coverage.js';
@@ -99,6 +100,16 @@ describe('frames', () => {
       'Thursday 24 Sep, today',
     );
     expect(text(root.querySelector('.note'))).toContain('1 timer is running');
+    // Each day's billable time, in a labelled row under the day totals
+    // (usertest-findings#13), the week's in its Total cell.
+    const bill = table.querySelector('tfoot tr.bill')!;
+    expect(text(bill.querySelector('th[scope="row"]'))).toBe('Billable');
+    expect(
+      [...bill.querySelectorAll('td')].map(td =>
+        text(td.querySelector('[aria-hidden]')),
+      ),
+    ).toEqual(['5:00', '5:30', '6:00', '4:45', '–', '–', '–', '21:15']);
+    expect(text(bill.querySelector('td.tot .sr'))).toBe('21 hours 15 minutes');
     expect(
       [...root.querySelectorAll('.foot > span')].map(n => text(n)),
     ).toEqual([
@@ -202,6 +213,32 @@ describe('frames', () => {
 
     (tabs[0] as HTMLElement).click();
     expect(text(root.querySelector('#day-panel h3'))).toBe('Monday 21 Sep');
+  });
+
+  it('F2: a connect refused for a replaced key shows that copy, with no Connect button (0.8.4)', () => {
+    const { root } = frame('f2');
+    expect(text(root.querySelector('.pill'))).toBe('Connect failed');
+    const alert = root.querySelector('[role="alert"]')!;
+    expect(text(alert.querySelector('strong'))).toBe(
+      "This Atomic agent's key was replaced.",
+    );
+    expect(alert.textContent).toContain(NEXT_STEP['agent-retired']);
+    expect(alert.querySelectorAll('button')).toHaveLength(0);
+    expect(buttons(root, 'Connect Clockify')).toHaveLength(0);
+  });
+
+  it('F3: a connect refused by the proxy access check offers Try again, which connects again (0.8.4)', () => {
+    const { root } = frame('f3');
+    const alert = root.querySelector('[role="alert"]')!;
+    expect(text(alert.querySelector('strong'))).toBe(
+      'The integration proxy does not let you use it.',
+    );
+    expect(alert.textContent).toContain(NEXT_STEP['proxy-access']);
+    expect(buttons(root, 'Connect Clockify')).toHaveLength(0);
+    buttons(alert, 'Try again')[0].click();
+    expect(text(root.querySelector('.panel h2'))).toBe(
+      'Finish connecting in the bar above this app',
+    );
   });
 
   it('F and G: connect, wait, then choose a workspace and window', () => {
@@ -375,6 +412,12 @@ describe('frames', () => {
       'Import 7 days instead',
       'Sync failed',
     ],
+    [
+      'j7',
+      'The integration proxy does not let you use it.',
+      'Try again',
+      'Sync failed',
+    ],
   ] as const)(
     'J (%s): the banner, its recovery and the pill; data stays',
     (id, lead, action, pillText) => {
@@ -387,6 +430,23 @@ describe('frames', () => {
       expect(root.querySelector('table.week')).not.toBeNull();
     },
   );
+
+  it('J (j8): a replaced agent key says what to do, with no retry or reconnect, and the card says the same', () => {
+    const { root } = frame('j8');
+    const alert = root.querySelector('[role="alert"]')!;
+    expect(text(alert.querySelector('strong'))).toBe(
+      "This Atomic agent's key was replaced.",
+    );
+    expect(alert.textContent).toContain(NEXT_STEP['agent-retired']);
+    expect(alert.querySelectorAll('button')).toHaveLength(0);
+    expect(text(root.querySelector('.pill'))).toBe('Sync failed');
+    expect(root.querySelector('table.week')).not.toBeNull();
+  });
+
+  it('J (j7): the proxy-access banner says the card next step word for word', () => {
+    const alert = frame('j7').root.querySelector('[role="alert"]')!;
+    expect(alert.textContent).toContain(NEXT_STEP['proxy-access']);
+  });
 
   it('J: a 429 disables both retries until retry-after has passed', () => {
     const { root } = frame('j2');

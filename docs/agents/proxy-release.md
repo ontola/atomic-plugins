@@ -17,15 +17,18 @@ Before that, 0.2.5 ran as v86 (wrapper #82, `625948c`) with the
 auth-profiles catalog selected in v87, and 0.2.4 ran as v84 with the dated
 catalog selected in v85.
 
-**Publishing a crate version and deploying to Heroku each need Michiel's OK,
-per release** (#227 rule 10). The PRs leading up to them don't.
+**Publishing a crate version and deploying to Heroku have Michiel's standing
+OK since 2026-10-08** (Decision Inbox Q-105, [working-model.md](working-model.md);
+before that each needed his OK per release, #227 rule 10). Conditions: publish
+only from merged, Opus-reviewed, CI-green `main`, follow these steps, and name
+the release and the Heroku release in the next status report.
 
 ## Steps
 
 1. **Release PR in this repo.** Set `version` in
    `integration-proxy/Cargo.toml` and give the release its heading in
    `integration-proxy/CHANGELOG.md`. Merge under rule 12.
-2. **Publish** (Michiel's OK). Tag the merge commit on `main`:
+2. **Publish** (standing OK, Q-105). Tag the merge commit on `main`:
 
    ```sh
    git tag integration-proxy-vX.Y.Z <sha> && git push origin integration-proxy-vX.Y.Z
@@ -44,7 +47,8 @@ per release** (#227 rule 10). The PRs leading up to them don't.
    key checks per platform per hour; the proxy logs a warning at startup
    when Heroku's `DYNO` is set without it. Check for that line in
    `heroku logs` after the deploy.
-4. **Deploy** (Michiel's OK). Merging the wrapper PR auto-deploys it: for
+4. **Deploy** (standing OK, Q-105; through the coordinator's worker, which has
+   the Heroku access). Merging the wrapper PR auto-deploys it: for
    0.2.5 the merge of #82 produced release v86 with no manual push. Check
    that a release exists for the merged commit (`heroku releases -a
    integration-proxy`). Only if none appears, push that commit to the Heroku
@@ -58,7 +62,7 @@ per release** (#227 rule 10). The PRs leading up to them don't.
 Cloud sessions had no Heroku access on 2026-09-30; hand steps 2 and 4 to
 Michiel on [#227](https://github.com/ontola/atomic-plugins/issues/227). On
 claude-build the Heroku CLI is installed at `~/.local/bin/heroku`; a session
-uses it only with Michiel's per-release OK, and never reads config values.
+uses it only under the standing OK above (Q-105), and never reads config values.
 
 ## The proxy's catalog
 

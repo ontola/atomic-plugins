@@ -10,8 +10,10 @@
  *   document      catalog document served as JSON at /catalog/<id>.yaml
  *   documentFile  or: a file served verbatim as application/yaml there
  *   jsonBody      true to read and JSON-parse request bodies (max 1 MiB)
- *   create()      returns { request(method, url, body, headers) -> { status, body, headers? } }
- *                 where `headers` holds only `if-match`, when the caller sent it
+ *   create()      returns { request(method, url, body, headers, context) -> { status, body, headers? } }
+ *                 where `headers` holds only `if-match`, when the caller sent it,
+ *                 and `context` is `{ connection }`: the id of the connection
+ *                 the request came through (absent when a test calls directly)
  *   drivers       names of instance methods an e2e spec may call over HTTP,
  *                 as POST /fixture/<id>/<name> with a JSON array of arguments
  *
@@ -21,6 +23,8 @@
 import googleCalendar from '../../calendar/fixtures/google-calendar/scenario.mjs';
 // Synthetic, not recorded: see google-tasks/fixtures/google-tasks/synthetic.mjs.
 import googleTasks from '../../google-tasks/fixtures/google-tasks/scenario.mjs';
+// Synthetic, not recorded: see google-keep/fixtures/google-keep/synthetic.mjs.
+import googleKeep from '../../google-keep/fixtures/google-keep/scenario.mjs';
 import githubIssues from '../../issue-tracker/fixtures/github-issues/scenario.mjs';
 // Synthetic until #46 records api/: see issue-tracker/fixtures/todoist/synthetic.mjs.
 import todoist from '../../issue-tracker/fixtures/todoist/scenario.mjs';
@@ -34,6 +38,7 @@ export const fixtures = {
   clockify,
   'github-issues': githubIssues,
   'google-calendar': googleCalendar,
+  'google-keep': googleKeep,
   'google-tasks': googleTasks,
   moneybird,
   notion,

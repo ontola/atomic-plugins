@@ -3,7 +3,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadOpenApiDocument } from '../../../src/openapi/load.js';
 import { applyOverlay, loadOverlay } from '../../../src/openapi/overlay.js';
 import { validatePaginationScheme } from '../../../src/pagination/validate.js';
-import { createMockServer, type MockServer } from '../../../src/mock-server/server.js';
+import {
+  createMockServer,
+  type MockServer,
+} from '../../../src/mock-server/server.js';
 import { createApiClient, type ApiClient } from '../../../src/client/client.js';
 import type { OpenApiDocument } from '../../../src/openapi/types.js';
 
@@ -52,7 +55,10 @@ describe('acceptance: pagination extension on giphy.com', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    document = await loadWithOverlay('giphy.yaml', 'giphy-pagination-overlay.yaml');
+    document = await loadWithOverlay(
+      'giphy.yaml',
+      'giphy-pagination-overlay.yaml',
+    );
     server = createMockServer(document);
     const info = await server.listen();
     baseUrl = info.url;
@@ -85,13 +91,17 @@ describe('acceptance: pagination extension on giphy.com', () => {
     // "pagination" object (dotted bodyFields paths), and no currentPage
     // role at all — hasNextPage for this scheme is derived purely from
     // totalCount vs. items fetched so far, not page counting.
-    const firstResponse = await fetch(`${baseUrl}/gifs/trending?limit=3&offset=0`);
+    const firstResponse = await fetch(
+      `${baseUrl}/gifs/trending?limit=3&offset=0`,
+    );
     const firstPage = (await firstResponse.json()) as Record<string, unknown>;
     const firstPagination = firstPage['pagination'] as Record<string, unknown>;
     expect(firstPagination['total_count']).toBe(7);
     expect(firstPagination['count']).toBe(3);
 
-    const lastResponse = await fetch(`${baseUrl}/gifs/trending?limit=3&offset=6`);
+    const lastResponse = await fetch(
+      `${baseUrl}/gifs/trending?limit=3&offset=6`,
+    );
     const lastPage = (await lastResponse.json()) as Record<string, unknown>;
     const lastPagination = lastPage['pagination'] as Record<string, unknown>;
     expect(lastPagination['total_count']).toBe(7);
@@ -107,7 +117,10 @@ describe('acceptance: pagination extension on spotify.com', () => {
   let baseUrl: string;
 
   beforeAll(async () => {
-    document = await loadWithOverlay('spotify.yaml', 'spotify-pagination-overlay.yaml');
+    document = await loadWithOverlay(
+      'spotify.yaml',
+      'spotify-pagination-overlay.yaml',
+    );
     server = createMockServer(document);
     const info = await server.listen();
     baseUrl = info.url;
@@ -130,9 +143,12 @@ describe('acceptance: pagination extension on spotify.com', () => {
     // list operation matched purely by its pagination scheme. With
     // pageSize 3 and the mock server's fixed 7-item dataset, this
     // requires three requests (3 + 3 + 1) to fully traverse.
-    const items = await client.paginate('/artists/4Z8W4fKeB5YxbusRsdQVPb/albums', {
-      pageSize: 3,
-    });
+    const items = await client.paginate(
+      '/artists/4Z8W4fKeB5YxbusRsdQVPb/albums',
+      {
+        pageSize: 3,
+      },
+    );
 
     expect(items).toHaveLength(7);
     const ids = items.map((item) => item['id']);

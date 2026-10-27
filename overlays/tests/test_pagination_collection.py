@@ -23,6 +23,10 @@ from generate_identity_catalog_fixtures import ROOT, apply, fetch, merge
 sys.path.insert(0, str(ROOT / "scripts"))
 from validate_oad_pins import overlay_pin
 
+# The Pagination Schemes reference validator and link resolver (0.4.0).
+sys.path.insert(0, str(ROOT.parent / "openapi-extensions" / "spec" / "pagination-schemes"))
+from validate import LinkRefused, resolve_link, server_urls, validate as validate_pagination_schemes
+
 DIRECTORY = None
 VARIANTS = {
     "hubspot_pages": "APIs/hubspot.com/pages/2026-03/pagination-b5dcaabe7e10736356fd0dc73d45bd6fecd26370-overlay.yaml",
@@ -56,6 +60,7 @@ VARIANTS = {
     "twilio_messaging": "APIs/twilio.com/twilio_messaging_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
     "clockify": "APIs/clockify.me/1.0.0-readonly/pagination-v2-dd34a70a45c5109479068b4b5d91337baf8822cd-overlay.yaml",
     "twilio_accounts": "APIs/twilio.com/twilio_accounts_v1/1.55.0/pagination-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
+    "twilio_api": "APIs/twilio.com/api/1.55.0/pagination-v2-fdc294bd8f2520f4cef3491726d86b603b5cf946-overlay.yaml",
     "google_drive": "APIs/googleapis.com/drive/v3/pagination-v2-a7dd2d8b4f5f50794e51afd84c539c2e61a182fc-overlay.yaml",
     "google_gmail": "APIs/googleapis.com/gmail/v1/pagination-f34c235dd04bee41b091108dd52c07d1415a54b9-overlay.yaml",
     "google_people": "APIs/googleapis.com/people/v1/pagination-091431739208d017c11b0b0589ab33293f8b3690-overlay.yaml",
@@ -843,6 +848,49 @@ class PaginationCollectionTests(unittest.TestCase):
         document = self.documents["twilio_accounts"][1]
         for resource in ("AWS", "PublicKeys"):
             self.assertNotIn("x-pagination", document["paths"]["/v1/Credentials/" + resource + "/{Sid}"]["get"])
+
+    def test_twilio_classic_relative_links_resolve_on_the_server_origin(self):
+        original, document = self.documents["twilio_api"]
+        selected = list(applications(document))
+        # Every GET whose pinned 200 response declares next_page_uri, and nothing else.
+        candidates = {path for path, item in original["paths"].items() if "get" in item and "next_page_uri" in
+                      properties(original, json_response_schema(resolve(original, item["get"]["responses"]["200"])))}
+        self.assertEqual(len(candidates), 61)
+        self.assertEqual({path for path, *_ in selected}, candidates)
+        scheme = document["components"]["paginationSchemes"]["linkedCollections"]
+        self.assertEqual(list(document["components"]["paginationSchemes"]), ["linkedCollections"])
+        self.assertEqual(scheme["request"], {"queryParameters": {"PageSize": {"role": "pageSize"}}})
+        self.assertEqual(scheme["response"], {"bodyFields": {"next_page_uri": {
+            "role": "nextLink", "linkResolution": {"base": "server"}}}})
+        envelopes = {path: application["overrides"]["response"]["envelope"]["itemsField"]
+                     for path, _, _, _, application in selected}
+        for path, field in (("/2010-04-01/Accounts.json", "accounts"),
+                            ("/2010-04-01/Accounts/{AccountSid}/Calls.json", "calls"),
+                            ("/2010-04-01/Accounts/{AccountSid}/Messages/{MessageSid}/Media.json", "media_list"),
+                            ("/2010-04-01/Accounts/{AccountSid}/AvailablePhoneNumbers.json", "countries"),
+                            ("/2010-04-01/Accounts/{AccountSid}/Usage/Records/Daily.json", "usage_records")):
+            self.assertEqual(envelopes[path], field)
+        for path, method, item, operation, _ in selected:
+            self.assertEqual(method, "get")
+            self.assertEqual(server_urls(document, item, operation), ["https://api.twilio.com"])
+            response = resolve(document, operation["responses"]["200"])
+            self.assertTrue(field_schema(document, json_response_schema(response), "next_page_uri")["nullable"])
+        for item in document["paths"].values():
+            for method in ("post", "put", "patch", "delete"):
+                self.assertNotIn("x-pagination", item.get(method, {}))
+        validate_pagination_schemes(document)
+        # The documented list example's link, resolved as Pagination Schemes 0.4.0 §4.4.3 says.
+        value = ("/2010-04-01/Accounts/ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/Applications.json"
+                 "?FriendlyName=friendly_name&PageSize=1&Page=1&PageToken=PAAPaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        resolution = scheme["response"]["bodyFields"]["next_page_uri"]["linkResolution"]
+        request = "https://api.twilio.com/2010-04-01/Accounts/ACaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/Applications.json?PageSize=1"
+        self.assertEqual(resolve_link(value, request_url=request, server_url="https://api.twilio.com", resolution=resolution),
+                         "https://api.twilio.com" + value)
+        self.assertEqual(resolve_link(value, request_url=request, server_url="https://api.twilio.com", resolution=None),
+                         "https://api.twilio.com" + value)
+        for hostile in ("https://attacker.example/2010-04-01/Accounts.json", "//attacker.example/x"):
+            with self.assertRaises(LinkRefused):
+                resolve_link(hostile, request_url=request, server_url="https://api.twilio.com", resolution=resolution)
 
     def test_clockify_paging_targets_only_the_declared_root_array(self):
         original, document = self.documents["clockify"]

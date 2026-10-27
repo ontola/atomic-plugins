@@ -9,13 +9,19 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "devonian/lenses": ["../../devonian/src/lenses/index.ts"],
-      "devonian/atomic": ["../../devonian/src/atomic/index.ts"],
-      "@tomic/lib": ["../../browser/lib/src/index.ts"]
+      "devonian/lenses": [
+        "app/node_modules/devonian/build/src/lenses/index.d.ts"
+      ],
+      "devonian/atomic": [
+        "app/node_modules/devonian/build/src/atomic/index.d.ts"
+      ],
+      "@tomic/lib": ["../../browser/lib/src/index.ts"],
+      "syncables/browser": ["../../syncables/src/browser.ts"]
     }
   },
   "include": [
     "adapter.ts",
+    "inbox/plugin.ts",
     "devonian/github-issues/lens/algebra.ts",
     "devonian/todoist/lens/index.ts"
   ]

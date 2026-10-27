@@ -63,9 +63,102 @@ Live account data must never be checked into fixtures.
 
 ## Drive-plugin app (`app/`)
 
+### The catalog lens (0.8.0)
+
+From 0.8.0 an entry's name, start, end and billable flag go both ways
+through the shared lens catalog's `clockify-time-entry-v2`
+([`ontology-kit/LENSES.md`](../../ontology-kit/LENSES.md)), run by
+`ontology-kit/lens.mjs` and bundled at build time like the terms
+(`app/catalogLens.ts`, imported by the sync, the write-back and the
+import). Reading is the lens's `get`; its guards refuse a running timer and
+a non-REGULAR entry, which have no row, as before. Writing is its forward
+`put` of the changed fields onto the fresh full record, so unchanged values
+keep Clockify's exact strings. The review gate, the three-way check where
+Clockify wins a field changed on both sides, the outbox, the verification
+read, minute snapping and the range planner are unchanged.
+
+- **The Name is the description exactly**: not trimmed, and an empty one is
+  an empty Name. "Time entry" and "(no description)" are display only, in
+  the views. A row whose Name nobody edited never sends a description
+  change; the drawer sends typed text as typed. A range edit keeps each
+  row's Name, and a filled gap is created with no description.
+  Until 0.7.2 the app trimmed descriptions and stored "Time entry" for
+  none; a row from then is brought to the description at its next sync, as
+  a change taken over from Clockify, and nothing is sent for it. A filled
+  gap staged then and not yet sent holds "Time entry" too: from 0.8.1 a
+  create without the `exactName` mark in `clockify-create` (staged before
+  0.8.1) whose Name is "Time entry" or blank is created with no
+  description. The rule cannot tell those apart from a Name meant
+  literally, so an unmarked create is also sent with no description when
+  someone typed "Time entry" into its Name, or when it is a 0.8.0 copy of
+  an entry whose description is exactly "Time entry" or only spaces (not
+  tested against a 0.8.0 drive). Creates staged from 0.8.1 send their Name
+  as it is.
+- **Times are sent in whole seconds** (0.8.1). The lens's `iso-seconds-to-ms`
+  refuses a time with milliseconds rather than lose them; `putBody` rounds
+  down to the second first, as the code lens did. Row times are snapped to
+  minutes, so only a time typed into the table can carry milliseconds.
+- **The proxy's own refusals get the right next step** (0.8.2, and 0.8.3
+  for `agent_retired`). Codes from `integration-proxy/src/api_error.rs`:
+  - `access_denied` ("this agent may not use the proxy", its access check)
+    is a problem of its own (0.8.2). The banner leads with "The integration proxy
+    does not let you use it." and, like the card's next step, says "Ask
+    whoever runs the integration proxy to let you use it; reconnecting
+    won't help." It keeps Try again. Before, it read as Clockify's own 403
+    and said "Choose another workspace in Settings".
+  - `agent_retired` (a key transfer, #410, moved this agent's connections
+    to a new key and retired this id) is a problem of its own too (0.8.3).
+    Reconnecting cannot fix it: the proxy refuses the retired id at
+    `/connect/redeem` as well, so "Reconnect" would loop. The banner leads
+    with "This Atomic agent's key was replaced." and, like the card, says
+    "This Atomic agent's key was replaced; open Atomic with your new key,
+    where your connections already are." It has no button. 0.8.2 read it
+    as "Connect again", which looped; before 0.8.2 it was not recognised as
+    the proxy's at all.
+  - `not_owner` (someone else's connection) now says "Connect again", like
+    a lost connection (0.8.2).
+  - A connect that the proxy refuses for a replaced key or its access
+    check shows the same copy (0.8.4): before any data, as the problem
+    banner in place of the Connect card (frames F2 and F3; Try again
+    connects again, a replaced key has no button); after a Reconnect, over
+    the data. In the app this is the delegation of an existing connection
+    (picking one in the host's connect bar, `POST /connections/<id>/agents`)
+    or the listing of connections (`GET /connections`), which the host
+    relays to the frame as a message only ("The integration proxy refused POST
+    /connections/<id>/agents: …", `AppFrame.tsx` posts `e.message`),
+    without the code, so `problem.ts` matches the proxy's own wording for
+    these two. A refusal at `/connect/redeem`, after connecting a new
+    account, never reaches the app: the host's return page shows it
+    (`ProxyConnectReturn.tsx`, at the 7dab1ce49a91 pin). Any other connect
+    failure still shows "This app cannot run." with the raw message.
+    `app/proxyMessages.test.ts` fails when `integration-proxy/src/api_error.rs`
+    stops containing either phrase; it runs with this lane, not on a proxy
+    change alone (lanes cannot list `integration-proxy/` in `paths`). Passing
+    the code to the frame is ontola/atomic-server#2321.
+  - After a key change (a transfer, #410), capabilities the old key signed
+    no longer verify. A sync in a page that was open across the change can
+    then fail with `invalid_capability` ("the capability is malformed or
+    not signed by the connection's owner"), which shows "Try again".
+    Opening Atomic again with the new key fixes it; the app does not tell
+    that cause apart from a malformed capability.
+  - Unit-tested (`problem.ts`, `transport.ts` `proxyRefusal`, the card,
+    frames J7 and J8; connect refusals: `controller.ts` `connectProblem`, frames F2 and F3).
+- **A refusal names its reason** (0.8.1). An entry Clockify returns that the lens
+  refuses outside a running timer, a break or another listed blocker (a
+  start or end that is not an ISO instant, say) is refused with the
+  lens's reason (`entryRefusal`).
+- **Still code in `app/catalogLens.ts`**, waiting on catalog features
+  (LENSES.md, "What the format cannot express yet"): an entry that ends
+  before it starts has no row (gap 1, a relation between two places); the
+  project id and name are read from the entry (gap 3, a link to another
+  row); a changed project drops the entry's task (gap 4, coupled writes).
+  `blockers` (locked entries, custom fields, project rules) and minute
+  snapping stay in the code lens, which also remains the conformance
+  reference for the catalog entry (`devonian/clockify/lens/catalog.test.ts`).
+
 `app/` is the replacement for the LocalThought extension path above:
 Clockify as an Atomic **App** ("drive plugin"). `app/build.mjs` bundles it
-into one minified ES module (`app/dist/ui.js`, about 178 KB, no imports) that
+into one minified ES module (`app/dist/ui.js`, about 194 KB for 0.8.4, no imports) that
 exports only `view({ root, store })`; the host stores it as the App's
 entry-point source and runs it in a null-origin, `allow-scripts`-only iframe
 (`plugin_ui.rs`). Plain DOM, no framework; one `<style>` element injected
@@ -77,8 +170,13 @@ into the view root.
   mirror (`app/model/source.ts`), never from the table's rows: Week grid
   (project × day), Entries (by day), Projects (the whole window), a
   read-only entry drawer, the settings sheet, and the set-up, empty and
-  error states. Below 560px of frame width the week becomes a strip of day
-  tabs. `app/ui/theme.ts` maps every `--pl-*` token from the host's
+  error states. From 0.7.2 the week grid has a "Billable" row under its
+  day totals, each day's billable time and the week's
+  (ontola/usertest-findings#13: a tester asked for yesterday's billable
+  hours did not find the week's totals under the grid); the narrow day
+  strip is unchanged and still marks billable entries one by one. Below
+  560px of frame width the week becomes a strip of day tabs.
+  `app/ui/theme.ts` maps every `--pl-*` token from the host's
   `--t-*` theme variables, so dark mode is the host's. `app/ui/theme.ts`,
   `components.ts` and `dom.ts` know nothing of Clockify: shared-kit
   candidates. View, week and open entry live in memory only.
@@ -311,9 +409,10 @@ into the view root.
     re-read (changed since the list: not sent); a fresh `GET` by id, the
     only concurrency check Clockify allows (no ETag or If-Match); the
     three-way check against it (a conflict sends nothing); the outbox
-    marker; one full-replacement `PUT` that the lens
-    (`devonian/clockify/lens/writeBack.ts` `putBody`) builds from the fresh
-    full record, replacing only changed fields and always sending `start`,
+    marker; one full-replacement `PUT` that `app/catalogLens.ts` `putBody`
+    builds from the fresh full record with the catalog lens (0.8.0; until
+    0.7.2 the code lens's `putBody` in `devonian/clockify/lens/writeBack.ts`),
+    replacing only changed fields and always sending `start`,
     `end`, `billable`, `description`, `tagIds` and `type` (a project change
     drops `taskId`), or a `DELETE`; a verification `GET`. The baseline and
     row advance only after that read, to what Clockify then holds
@@ -448,9 +547,19 @@ into the view root.
     entries 58 ms, 1.11 MB and 907 KB. #97 §7 estimated under 10 ms and
     at most 300 KB / 1 MB, so both are somewhat over. atomic-server's
     JSON extractor limit, read from the pinned source (actix's default
-    `JsonConfig`, 2 MiB; not exercised), would take a 2,000-entry
-    snapshot as one `/app-write` with little room to spare once the JSON
-    text is escaped; snapshots are not split per week yet.
+    `JsonConfig`, 2 MiB; not exercised), takes a 2,000-entry
+    mock-shaped snapshot as one `/app-write`: escaped, it measured
+    1,168,596 bytes, about 56% of the limit (the size budget below). Live
+    entries carry more fields, and snapshots are not split per week yet.
+  - _Size budget_ (`app/snapshotBudget.test.ts`, committed): a first sync
+    of 2,000 mock-shaped entries (40-character descriptions, one tag)
+    over 30 days must keep every log resource, escaped as an `/app-write`
+    body, under 1,835,008 bytes (2 MiB less 256 KiB for the rest of the
+    body). Measured 1,168,596 bytes for the snapshot, the largest, on
+    2026-10-15. A live entry carries more fields (rates, custom field
+    values), so real snapshots are larger; when this fails, the next step
+    is the per-week snapshot split of #123 M5. Timing is printed, not
+    asserted.
 - **Timeline lens** (#123 M2, read-only). Two stages over the mirror, full
   recompute on every build (not measured; #97 §3.2 estimates single-digit
   ms at 2,000 entries):

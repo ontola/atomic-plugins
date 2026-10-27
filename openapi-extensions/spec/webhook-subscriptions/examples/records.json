@@ -1,5 +1,5 @@
 {
-  "_note": "Invented records for the Example Tracker of the Webhook Deliveries examples. Every id, cursor and agent key is fake.",
+  "_note": "Invented records for the Example Tracker of the Webhook Deliveries examples. Every id, cursor and agent key is fake. EventPage[2] is the answer to maxBytes=1048576 when the next event is 6 MiB: that event alone, without its body.",
   "records": {
     "Subscription": [
       {
@@ -171,6 +171,32 @@
             "earliestAvailableCursor": "cur_g1_501"
           }
         }
+      },
+      {
+        "subscription": "sub_Q2xhdWRlRml4dHVyZTAwMDE",
+        "generation": "gen_fixture_1",
+        "events": [
+          {
+            "cursor": "cur_g1_3",
+            "generation": "gen_fixture_1",
+            "deliveryId": "d-0004",
+            "eventType": "task",
+            "action": "updated",
+            "receivedAt": "2026-10-08T12:00:02Z",
+            "source": {
+              "kind": "project",
+              "key": "p-100"
+            },
+            "payload": {
+              "mediaType": "application/json",
+              "bytes": 6291456,
+              "sha256": "5f1c3b8e2d7a4c6b9e0f1a2d3c4b5a69788796a5b4c3d2e1f0a9b8c7d6e5f4a3",
+              "omitted": true
+            }
+          }
+        ],
+        "next": "cur_g1_3",
+        "more": true
       }
     ],
     "ReconciliationRequired": [

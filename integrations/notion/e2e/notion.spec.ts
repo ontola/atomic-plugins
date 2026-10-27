@@ -30,10 +30,14 @@
  */
 import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
+import { appVersion } from '../../tooling/apps.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
-/** The catalog's version of this app (integrations/catalog.json). */
-const VERSION = '0.5.0';
+/**
+ * The catalog's version of this app (integrations/catalog.json), read at
+ * load by `appVersion`, so a version bump needs no edit here.
+ */
+const VERSION = appVersion('notion');
 
 test.describe('notion drive plugin', () => {
   test.beforeEach(before);
@@ -99,9 +103,12 @@ test.describe('notion drive plugin', () => {
       .locator('.pl-connbar')
       .getByRole('button', { name: 'Sync details' })
       .click();
+    // Formatted Notes are copied as plain text (0.5.3, usertest-findings#19).
     await expect(
       app.getByRole('dialog', { name: 'Sync details' }),
-    ).toContainText('1 page has formatting in Notes');
+    ).toContainText(
+      "1 page has formatting in Notes: Notes was copied as plain text, without the formatting, and an edit to it here is not sent to Notion; while such an edit is kept, Send refuses that row's other edits too.",
+    );
     await page.keyboard.press('Escape');
 
     // The rows are ordinary rows of the app's table, named by the catalog
@@ -126,6 +133,10 @@ test.describe('notion drive plugin', () => {
       await expect(
         main.getByText(title, { exact: true }).first(),
       ).toBeVisible();
+    // Retrospective's bold Notes, as their words (usertest-findings#19).
+    await expect(
+      main.getByText('Keep this bold', { exact: true }).first(),
+    ).toBeVisible();
 
     // Status and Tags cells show the option names (the Tags' chips), not
     // Notion's option ids (0.4.0, app/options.ts).
