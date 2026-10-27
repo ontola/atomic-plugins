@@ -18,7 +18,7 @@
 //! can move it. The provider-facing and consumer-facing routes are step 3;
 //! this module is what they will call.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::time::SystemTime;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
@@ -463,7 +463,17 @@ pub struct PayloadView {
     pub media_type: &'static str,
     pub bytes: i64,
     pub sha256: String,
-    pub body: String,
+    /// The raw body, base64; absent exactly when `omitted`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// The body alone is over the request's `maxBytes`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub omitted: bool,
+}
+
+/// The length of `bytes` raw bytes in padded base64.
+fn base64_len(bytes: i64) -> u64 {
+    (bytes.max(0) as u64).div_ceil(3) * 4
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -2063,12 +2073,32 @@ impl Store {
     /// Up to `limit` events after `after` (or after the last
     /// acknowledgement), all of one generation (`webhook-subscriptions`
     /// §7). Refused while the last passing access check is too old.
+    #[cfg(test)]
     pub async fn fetch(
         &self,
         id: &str,
         consumer: &str,
         after: Option<&str>,
         limit: i64,
+        now: SystemTime,
+    ) -> Result<EventPage> {
+        self.fetch_within(id, consumer, after, limit, None, now)
+            .await
+    }
+
+    /// [`Self::fetch`], with at most `max_bytes` of base64 payload in the
+    /// page (`webhook-subscriptions` 0.2.0-draft §7). An event that does not
+    /// fit ends the page before it, unless it is the page's first: that one
+    /// comes back alone, without its body (`omitted`). So the page holds at
+    /// least one event whenever one is available. Bodies are read only for
+    /// the events returned with them.
+    pub async fn fetch_within(
+        &self,
+        id: &str,
+        consumer: &str,
+        after: Option<&str>,
+        limit: i64,
+        max_bytes: Option<u64>,
         now: SystemTime,
     ) -> Result<EventPage> {
         let mut client = self.pool.get().await.map_err(InboxError::Database)?;
@@ -2098,7 +2128,7 @@ impl Store {
         let rows = tx
             .query(
                 "SELECT r.seq, r.generation, r.received_at, p.delivery_id, p.event_type, p.action,
-                        p.source_kind, p.source_key, p.sha256, p.bytes, p.body
+                        p.source_kind, p.source_key, p.sha256, p.bytes, p.payload_id
                  FROM webhook_event_refs r JOIN webhook_payloads p ON p.payload_id = r.payload_id
                  WHERE r.subscription_id = $1 AND r.seq > $2 ORDER BY r.seq LIMIT $3",
                 &[&row.id, &start, &(limit + 1)],
@@ -2109,14 +2139,34 @@ impl Store {
             .map(|event| event.get::<_, i64>(1))
             .unwrap_or(row.generation);
         let mut events = Vec::new();
+        // The payloads to read, by their event's index in `events`.
+        let mut bodies: Vec<(usize, i64)> = Vec::new();
+        let mut room = max_bytes;
         let mut more = false;
-        for event in &rows {
+        for (index, event) in rows.iter().enumerate() {
             if event.get::<_, i64>(1) != generation || events.len() as i64 == limit {
                 more = true;
                 break;
             }
+            let encoded = base64_len(event.get(9));
+            let omitted = match room {
+                Some(left) if encoded > left => {
+                    if !events.is_empty() {
+                        more = true;
+                        break;
+                    }
+                    true
+                }
+                Some(left) => {
+                    room = Some(left - encoded);
+                    false
+                }
+                None => false,
+            };
+            if !omitted {
+                bodies.push((events.len(), event.get(10)));
+            }
             let seq: i64 = event.get(0);
-            let body: Vec<u8> = event.get(10);
             events.push(EventView {
                 cursor: self.cursor(&row, generation, seq),
                 generation: generation_token(generation),
@@ -2132,10 +2182,36 @@ impl Store {
                     media_type: "application/json",
                     bytes: event.get(9),
                     sha256: event.get(8),
-                    body: STANDARD.encode(body),
+                    body: None,
+                    omitted,
                 },
             });
             row.last_returned_seq = row.last_returned_seq.max(seq);
+            // An event over `max_bytes` alone is its page's only event.
+            if omitted {
+                more = index + 1 < rows.len();
+                break;
+            }
+        }
+        if !bodies.is_empty() {
+            let ids: Vec<i64> = bodies.iter().map(|(_, id)| *id).collect();
+            let found: HashMap<i64, Vec<u8>> = tx
+                .query(
+                    "SELECT payload_id, body FROM webhook_payloads WHERE payload_id = ANY($1)",
+                    &[&ids],
+                )
+                .await?
+                .into_iter()
+                .map(|r| (r.get(0), r.get(1)))
+                .collect();
+            for (index, id) in bodies {
+                // The page's references hold their payloads in this
+                // transaction; a missing one is a broken store.
+                let body = found.get(&id).ok_or_else(|| {
+                    InboxError::Database(format!("payload {id} of a returned event is missing"))
+                })?;
+                events[index].payload.body = Some(STANDARD.encode(body));
+            }
         }
         Self::save_subscription(&tx, &row).await?;
         let page = EventPage {

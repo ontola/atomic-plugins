@@ -35,3 +35,9 @@ ESLint, and the full Prettier check passed. The two surrogate regressions
 failed against the previous parser before the shared validation was applied.
 
 No PR was merged, and no package was published by this worker.
+
+## Current-main integration
+
+Merged main b65af73b without rewriting the source branch. The only conflict was the README extension table: retain main’s Pagination Schemes 0.10.2 row and this PR’s CRUD Causality 0.8.0 committedErrors row. All other main changes merged automatically.
+
+On the combined tree, Node 22.23.4 passed 1,864 tests across 105 files with an isolated PostgreSQL database; TypeScript, ESLint and the package formatting check passed. No runtime bypass, release or deployment was used.

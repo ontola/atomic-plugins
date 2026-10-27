@@ -134,6 +134,24 @@ class AsanaTasksCompletenessTests(unittest.TestCase):
         self.assertEqual(classify(200, {id_field: "1204", "completed": True}), "present")  # moved to another project
         self.assertEqual(classify(403), "unknown")
 
+    def test_every_list_declares_exactly_its_outcomes(self):
+        # Without notFound a 404 from the read would mean deleted (§4.3), so each of
+        # the four lists, not only the tasks, must state it; parentAbsent only on
+        # the two nested lists.
+        expected = {("workspace", "workspaces"): {"absent": "removed", "notFound": "unavailable"},
+                    ("project", "workspaceProjects"): {"absent": "removed", "notFound": "unavailable",
+                                                       "parentAbsent": "unavailable"},
+                    ("user", "users"): {"absent": "removed", "notFound": "unavailable"},
+                    ("task", "projectTasks"): {"absent": "removed", "notFound": "unavailable",
+                                               "parentAbsent": "unavailable"}}
+        resources = self.composed["components"]["crudResources"]
+        for (resource, collection), declaration in expected.items():
+            with self.subTest(collection=collection):
+                stated = dict(resources[resource]["collections"][collection]["x-completeness"])
+                self.assertTrue(stated.pop("description"))
+                self.assertEqual(stated, declaration)
+                self.assertEqual(completeness.resource_not_found(self.composed, resource), "unavailable")
+
     def test_members_of_a_gone_parent_are_unavailable(self):
         # §4.4: projects of a workspace, and tasks of a project, concluded gone.
         resources = self.composed["components"]["crudResources"]

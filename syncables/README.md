@@ -15,6 +15,10 @@ restart; the default storage is in memory.
 
 ## From an API description to a local copy
 
+Read the illustrated [whole-stack explainer](docs/how-it-works.md) for the path
+from OpenAPI documents and overlays to local records, PostgreSQL history and
+optional Git export, with worked GitHub/Keep examples and page-coverage claims.
+
 Syncables builds on three complementary projects:
 
 | Project | What it contributes |
@@ -28,7 +32,7 @@ The extension versions this source reads, against the specifications in
 
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
-| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.1 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Auto-detection by query parameters, body fields, and (§6.3, when the scheme turns them on) response headers and response fields as the operation's description declares them. Not `incrementalSync`. |
+| [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.2 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Auto-detection by query parameters, body fields, and (§6.3, when the scheme turns them on) response headers and response fields as the operation's description declares them. Not `incrementalSync`. |
 | [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.8.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), Reference Objects resolved to a path (`resolveReference`, §4.1.3), 0.7.0's `replace` and `unkeyedLists` through exported helpers (§4.8, §4.9; `createApiClient` does not use them yet), and 0.8.0's `committedErrors` (§4.3.3). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.1-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.4.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
@@ -38,7 +42,7 @@ The extension versions this source reads, against the specifications in
 | [Write Preconditions](../openapi-extensions/spec/write-preconditions/README.md) | 0.1.0-draft | `x-write-precondition` on create, update and delete operations: `ifMatch`, `readVerify` and `refuseWhen` ([below](#write-preconditions-x-write-precondition)). Not on a compound create's follow-up operations. |
 | [Produced Classes](../openapi-extensions/spec/produced-classes/README.md) | 0.1.1-draft | `x-produces` on a CRUD resource, as read-only metadata ([below](#produced-classes-x-produces)). Nothing is fetched or mapped. |
 | [Webhook Deliveries](../openapi-extensions/spec/webhook-deliveries/README.md) | 0.1.0-draft | The `events` of `x-webhook-deliveries`, read by `scopedReads` only (the webhook inbox consumer). Not signature checks or hook registration, which are the receiver's. |
-| [Webhook Subscriptions](../openapi-extensions/spec/webhook-subscriptions/README.md) | 0.1.0-draft | The consumer routes, through `InboxClient` and `InboxConsumer`. The root `x-webhook-subscriptions` field is not read. |
+| [Webhook Subscriptions](../openapi-extensions/spec/webhook-subscriptions/README.md) | 0.2.0-draft | The consumer routes, through `InboxClient` and `InboxConsumer`, `maxBytes` included. The root `x-webhook-subscriptions` field is not read. |
 
 The other specifications there (the authentication extensions) are not read
 by Syncables.
@@ -79,8 +83,32 @@ changelog; the guide explains how to run that source before an npm release.
 
 ## Usage
 
+The source includes an experimental **standalone CLI and foreground daemon**
+in the same npm package. **SyncD** is Michiel's shorthand for the standalone
+**Syncables Daemon**. The library/package and executable remain `syncables`;
+SyncD names the daemon, not a separate package or a new command. It reads
+configured collections, archives nested JSON by content hash in PostgreSQL,
+together with JSON-AD resources, bundled schemas
+and snapshot revision history. Local browse/history commands pin a revision or tag.
+Git is an optional subtree export with messages, branches and ancestry; existing
+Git histories can be migrated without changing their original repositories. See the
+[daemon guide](docs/daemon.md) for setup, supported incremental reads, queued
+webhook hints and limits, and [Versioned Atomic Data](../docs/design/versioned-atomic-data.md)
+for snapshot resolution. The [CLI guide](docs/cli.md) covers device login and
+read-only API probes. Replication definitions remain configuration only.
+Root/browser library imports do not start the daemon or load its storage.
+Successful syncs expose normal working folders for each collection;
+`syncables checkout` exposes existing snapshots without fetching again.
+Items and bundled schemas have document-scoped API resource classes.
+
+The [SyncD interface plan](docs/daemon-design.md#syncd-interfaces-git-braid-and-atomicsync)
+puts **Git, Braid and AtomicSync** over the same PostgreSQL-backed data/history.
+Git import/export and [read-only Braid serving](docs/braid.md) exist in current
+source; an AtomicSync peer is planned separately. Native AtomicSync is distinct
+from importing records into an existing Atomic drive.
+
 For published releases, install with `npm install syncables`. To build the
-current source, run these commands from `syncables/` with Node 22:
+current source, run these commands from `syncables/` with Node 22.11 or newer:
 
 ```sh
 npm ci
@@ -1769,13 +1797,19 @@ and `in`: `header` (the default), `query` or `cookie`, which adds
 name and keeping the others. A cookie name must be an RFC 6265 token, and a
 key sent as a cookie must be RFC 6265 cookie-octets (no control character,
 whitespace, `"`, `,`, `;` or `\`), so a key such as `k;admin=1` cannot add a
-cookie of its own; either is refused. `bearerAuth` and a header key replace
-a header of the same name in any case, so a request never carries both
-`Authorization` and `authorization`.
+cookie of its own; either is refused. A header name must be an RFC 7230
+token too. `bearerAuth` and a header key replace a header of the same name
+in any case, so a request never carries both `Authorization` and
+`authorization`.
 
-The Node constructor falls back to `SYNCABLES_API_KEY`,
-`SYNCABLES_OAUTH_CLIENT_ID`, `SYNCABLES_OAUTH_CLIENT_SECRET` and
-`SYNCABLES_ACCESS_TOKEN`. Explicit fields win over environment values.
+With an `authenticate` adapter, the Node constructor falls back to
+`SYNCABLES_API_KEY`, `SYNCABLES_OAUTH_CLIENT_ID`,
+`SYNCABLES_OAUTH_CLIENT_SECRET` and `SYNCABLES_ACCESS_TOKEN`. Explicit
+fields win over environment values. Without an adapter it reads none of
+them and says nothing, so such a variable set for another tool does not
+stop a client whose transport authenticates itself. Explicit credentials
+without an adapter are still refused ("Credentials require an
+authenticate adapter").
 `credentialPrefix: 'SECOND_'` selects a different prefix;
 `credentialPrefix: false` disables fallback. `credentialsFromEnv(explicit,
 prefix)` is also exported by the Node entry. The browser entry never reads
@@ -1786,8 +1820,8 @@ environment variables.
 `clientId` and `clientSecret` and returns an authenticated request, possibly
 after obtaining/refreshing a user token. OAuth consent, grant selection and
 token persistence are the adapter's responsibility; loading application
-credentials alone does not log a user in. Credentials without an authentication
-adapter are rejected. Keep confidential client credentials in server-side
+credentials alone does not log a user in. Explicit credentials without an
+authentication adapter are rejected. Keep confidential client credentials in server-side
 configuration. Authentication happens after the data-read capture boundary.
 
 Every request syncables makes says why, in `TransportRequest.purpose`
@@ -2205,6 +2239,17 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **Unreleased**: the webhook inbox consumer speaks Webhook Subscriptions
+  0.2.0-draft's `maxBytes` (ontola/atomic-plugins#369, step 4b plan Unit
+  B). `InboxClient.events()` takes `maxBytes` and refuses one that is not
+  an integer of at least 1 (`RangeError`), and `InboxConsumerOptions`
+  passes `maxBytes` to every fetch. An event whose body alone is over it
+  reaches the journal with `payload.omitted: true` and no `body`, and is
+  acknowledged like any other; `scopedReads` names no reads for it.
+  **Breaking for TypeScript:** `InboxEvent.payload.body` is now optional
+  (`body?: string`), so code that reads it must handle its absence; a
+  receiver sends no omitted event unless the consumer asked for
+  `maxBytes`.
 - **0.25.0**: behaviour changes to know before upgrading come first:
   explicit `x-pagination` entries must have the spec's shape; Throttling
   `blocked`; auto-detection by response headers and fields; `applyOverlay`

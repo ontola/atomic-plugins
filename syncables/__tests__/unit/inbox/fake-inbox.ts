@@ -41,6 +41,8 @@ export class FakeInbox {
   now = Date.parse('2026-10-09T12:00:00Z');
   /** Pending events a subscription keeps; more evict the oldest (a gap). */
   maxPending = 100;
+  /** Ignore `maxBytes`, as a receiver before Webhook Subscriptions 0.2.0-draft does. */
+  ignoreMaxBytes = false;
   /** Requests to fail once, by `METHOD path-suffix`, e.g. `POST /ack`. */
   failOnce = new Set<string>();
   /** Canned answers, once each, by `METHOD path-suffix`. */
@@ -228,7 +230,7 @@ export class FakeInbox {
         const limit = Number(
           /[?&]limit=([0-9]+)/.exec(request.url.search)?.[1] ?? Infinity,
         );
-        const events = pending
+        let events: InboxEvent[] = pending
           .filter((ref) => ref.generation === generation)
           .slice(0, limit)
           .map((ref) => ({
@@ -236,13 +238,38 @@ export class FakeInbox {
             cursor: `${ref.generation}:${ref.seq}`,
             generation: `g${ref.generation}`,
           }));
+        // `maxBytes`, as integration-proxy's `fetch_within`: an event that
+        // does not fit ends the page, unless it is the first, which then
+        // comes back alone without its body.
+        const maxBytes = /[?&]maxBytes=(\d+)/.exec(request.url.search)?.[1];
+        let cut = false;
+        if (maxBytes !== undefined && !this.ignoreMaxBytes) {
+          let room = Number(maxBytes);
+          const kept: InboxEvent[] = [];
+          for (const event of events) {
+            const size = event.payload.body?.length ?? 0;
+            if (size <= room) {
+              room -= size;
+              kept.push(event);
+              continue;
+            }
+            if (kept.length === 0) {
+              const payload = { ...event.payload, omitted: true as const };
+              delete payload.body;
+              kept.push({ ...event, payload });
+            }
+            break;
+          }
+          cut = kept.length < events.length;
+          events = kept;
+        }
         const required = this.required(sub);
         const page: InboxEventPage = {
           subscription: sub.id,
           generation: `g${generation}`,
           events,
           next: events.at(-1)?.cursor ?? null,
-          more: false,
+          more: cut,
           ...(required ? { reconciliationRequired: required } : {}),
         };
         return json(200, page);

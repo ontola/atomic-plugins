@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="940" viewBox="0 0 1200 940" role="img" aria-labelledby="title desc">
+<title id="title">From API knowledge to a local copy</title><desc id="desc">Documents and overlays produce a composed profile for the shared Syncables engine. Requests go directly or through the proxy to the provider. Library applications and the standalone daemon have different storage and write capabilities. Atomic synchronization is planned.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#536b80"/></marker></defs>
+<rect width="1200" height="940" rx="18" fill="#fafbf9"/>
+<g font-family="system-ui, sans-serif" fill="#17324d">
+<text x="40" y="53" font-size="29" font-weight="700">From API knowledge to a local copy</text>
+<rect x="40" y="90" width="450" height="115" rx="13" fill="#edf1f5" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="59" y="123" font-size="22" font-weight="650">OpenAPI document</text>
+<text x="59" y="155" font-size="20" font-weight="400">Provider, directory or local profile</text>
+<text x="59" y="184" font-size="20" font-weight="400">HTTP operations, parameters, schemas</text>
+<rect x="710" y="90" width="450" height="115" rx="13" fill="#ece5fa" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="729" y="123" font-size="22" font-weight="650">Overlays + extension vocabulary</text>
+<text x="729" y="155" font-size="20" font-weight="400">Identity, pagination, behavior</text>
+<text x="729" y="184" font-size="20" font-weight="400">Catalog pins matching revisions</text>
+<path d="M265 205 V230 H480 V250" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M935 205 V230 H720 V250" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="370" y="250" width="460" height="90" rx="13" fill="#ece5fa" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="389" y="283" font-size="22" font-weight="650">Composed profile</text>
+<text x="389" y="315" font-size="20" font-weight="400">Prepared locally; no per-call catalog lookup</text>
+<path d="M600 340 V360 H300 V380" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="40" y="380" width="520" height="125" rx="13" fill="#d9f2e9" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="59" y="413" font-size="22" font-weight="650">Shared Syncables engine</text>
+<text x="59" y="445" font-size="20" font-weight="400">Discover collections and stable identities</text>
+<text x="59" y="474" font-size="20" font-weight="400">Follow pages; interpret operation behavior</text>
+<path d="M560 420 H650" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="650" y="380" width="240" height="125" rx="13" fill="#edf1f5" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="669" y="413" font-size="22" font-weight="650">Transport</text>
+<text x="669" y="445" font-size="20" font-weight="400">Direct HTTP</text>
+<text x="669" y="474" font-size="20" font-weight="400">or integration-proxy</text>
+<path d="M890 441 H940" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="940" y="380" width="220" height="125" rx="13" fill="#edf1f5" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="959" y="413" font-size="22" font-weight="650">Provider API</text>
+<text x="959" y="445" font-size="20" font-weight="400">Remote records</text>
+<text x="959" y="474" font-size="20" font-weight="400">and permissions</text>
+<path d="M180 505 V560" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M420 505 V535 H860 V560" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="40" y="560" width="520" height="145" rx="13" fill="#d9f2e9" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="59" y="593" font-size="22" font-weight="650">Library application</text>
+<text x="59" y="625" font-size="20" font-weight="400">Local records + optional durable outbox</text>
+<text x="59" y="654" font-size="20" font-weight="400">Optimistic edits and background writes</text>
+<text x="59" y="683" font-size="20" font-weight="400">Default storage: memory</text>
+<rect x="640" y="560" width="520" height="145" rx="13" fill="#d9f2e9" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="659" y="593" font-size="22" font-weight="650">Standalone CLI / daemon</text>
+<text x="659" y="625" font-size="20" font-weight="400">Read-only provider snapshots</text>
+<text x="659" y="654" font-size="20" font-weight="400">Local PostgreSQL: evidence + history</text>
+<text x="659" y="683" font-size="20" font-weight="400">Ordinary working folders</text>
+<path d="M800 705 V760" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M1030 705 V760" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)" stroke-dasharray="7 6"/>
+<rect x="640" y="760" width="290" height="105" rx="13" fill="#edf1f5" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="659" y="793" font-size="22" font-weight="650">Optional Git export</text>
+<text x="659" y="825" font-size="20" font-weight="400">Messages, ancestry, refs</text>
+<text x="659" y="854" font-size="20" font-weight="400">Explicit command</text>
+<rect x="960" y="760" width="200" height="105" rx="13" fill="#fff0d8" stroke="#91a2b1" stroke-width="1.5" stroke-dasharray="7 6"/>
+<text x="979" y="793" font-size="22" font-weight="650">Atomic peer</text>
+<text x="979" y="825" font-size="20" font-weight="400">Planned</text>
+<text x="979" y="854" font-size="20" font-weight="400">Not running yet</text>
+<text x="40" y="785" font-size="21" font-weight="400">Auth is a transport boundary.</text>
+<text x="40" y="814" font-size="21" font-weight="400">Proxy grants stay at the proxy;</text>
+<text x="40" y="843" font-size="21" font-weight="400">owner signing stays local.</text>
+<text x="40" y="910" font-size="19" font-weight="400">Current source includes unreleased features. Library and daemon support different subsets.</text>
+</g></svg>

@@ -885,6 +885,69 @@ test.describe('money integration', () => {
     await expect(syncCard).toContainText(
       'Saving a category or note asks you to allow editing first.',
     );
+
+    // Importing into it: the check proposes the file's 2 transactions, and
+    // Import asks in the host's bar first, since the table is not the
+    // app's own. Nothing is written before the person allows it.
+    const input = app.locator('input[type="file"]');
+    const sheet = app.getByRole('dialog', { name: 'Import statement' });
+    await input.setInputFiles({
+      name: 'statement.mt940',
+      mimeType: 'text/plain',
+      buffer: Buffer.from(mt940),
+    });
+    await expect(sheet.getByRole('tab', { name: 'New 2' })).toBeVisible({
+      timeout: 30_000,
+    });
+    await sheet.getByRole('button', { name: 'Import 2 transactions' }).click();
+    // The table's children are its rows of the shared class and its views.
+    const transactions = async () =>
+      (await rowsOf(page, table)).filter(r =>
+        (r['https://atomicdata.dev/properties/isA'] as string[]).includes(
+          shared,
+        ),
+      );
+    const allow = page.getByRole('group', { name: 'Let this app edit rows' });
+    await expect(allow).toBeVisible({ timeout: 30_000 });
+    expect(await transactions()).toHaveLength(2);
+    await allow.getByRole('button', { name: 'Allow editing' }).click();
+    await expect(sheet).toBeHidden({ timeout: 60_000 });
+    await expect(app.getByRole('status').first()).toContainText('Imported 2', {
+      timeout: 60_000,
+    });
+
+    // On the server: the 2 rows typed by hand and the 2 imported, all of
+    // the shared class, the amounts as the exact strings of the file.
+    const imported = async () =>
+      (await transactions()).filter(
+        r => r[p['bank-account'].subject] === 'NL00BUNQ0000000000',
+      );
+    await expect
+      .poll(async () => (await imported()).length, {
+        timeout: 30_000,
+      })
+      .toBe(2);
+    expect(await transactions()).toHaveLength(4);
+    const rows = await imported();
+    expect(rows.map(r => r[p['bank-amount'].subject]).sort()).toEqual([
+      '-12.34',
+      '20',
+    ]);
+
+    // The ledger and the card: the import is dated, the statement's closing
+    // balance is in the strip, and editing is no longer asked for.
+    await expect(
+      app.getByRole('button', { name: /Fixture lunch/ }),
+    ).toBeVisible();
+    await expect(syncCard).toContainText('Synced just now');
+    await expect(syncCard).toContainText('2 imported here at the last sync');
+    await expect(syncCard).not.toContainText(
+      'Saving a category or note asks you to allow editing first.',
+    );
+    await expect(app.getByRole('group', { name: /^Accounts/ })).toContainText(
+      /€107\.66\s*on /,
+      { timeout: 30_000 },
+    );
   });
 });
 
