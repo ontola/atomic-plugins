@@ -82,6 +82,7 @@ async function main(): Promise<void> {
         'signer-file',
         'reader',
         'peer-port',
+        'projection-contract',
       ].map((key) => [key, { type: 'string' as const }]),
     );
   options.help = { type: 'boolean' };

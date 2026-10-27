@@ -5,7 +5,11 @@ import { isAbsolute } from 'node:path';
 import { indexJson, nodeHash } from '../postgres/json-graph.js';
 import type { PostgresHistoryStore } from './history-store.js';
 import { SOURCE_ID } from './sync.js';
-import { atomicTablesProjection, TABLE_BINDING } from './atomic-tables.js';
+import {
+  atomicTablesProjection,
+  TABLE_BINDING,
+  type AtomicTablesProjectionOptions,
+} from './atomic-tables.js';
 
 const MAX_BYTES = 64 * 1024 * 1024;
 const IS_A = 'https://atomicdata.dev/properties/is-a';
@@ -294,7 +298,8 @@ export async function runAtomicPeer(
 }
 
 export interface AtomicTablesPeerOptions
-  extends Omit<AtomicPeerOptions, 'collection' | 'scope'> {
+  extends Omit<AtomicPeerOptions, 'collection' | 'scope'>,
+    AtomicTablesProjectionOptions {
   collections: import('./sync.js').PreparedCollection[];
 }
 
@@ -323,6 +328,32 @@ export async function runAtomicTablesPeer(
     throw new Error(
       'Invalid native table peer paths, collections, owner, readers or revision selection',
     );
+  const readSources = async (): Promise<
+    import('./atomic-tables.js').TableSource[]
+  > => {
+    const sources: import('./atomic-tables.js').TableSource[] = [];
+    for (const prepared of options.collections) {
+      const revision = options.at
+        ? await store.resolveRevision(prepared.scope, options.at)
+        : await store.head(prepared.scope);
+      if (!revision)
+        throw new Error(
+          `No accepted PostgreSQL revision for ${prepared.source.platform}/${prepared.source.account}/${prepared.source.name}`,
+        );
+      sources.push({ prepared, revision });
+    }
+    return sources;
+  };
+  // Reject invalid projection metadata before the native peer allocates a drive.
+  const projectionOptions: AtomicTablesProjectionOptions = structuredClone({
+    projectionContracts: options.projectionContracts ?? [],
+  });
+  const initialSources = await readSources();
+  const initialProjection = await atomicTablesProjection(
+    store,
+    initialSources,
+    projectionOptions,
+  );
   const native = new NativePeer(options.binary);
   try {
     let status = await native.request(
@@ -337,25 +368,19 @@ export async function runAtomicTablesPeer(
       signal,
     );
     let previous = '',
+      first = true,
       listening = false;
     while (!signal.aborted) {
       native.check();
-      const sources: import('./atomic-tables.js').TableSource[] = [];
-      for (const prepared of options.collections) {
-        const revision = options.at
-          ? await store.resolveRevision(prepared.scope, options.at)
-          : await store.head(prepared.scope);
-        if (!revision)
-          throw new Error(
-            `No accepted PostgreSQL revision for ${prepared.source.platform}/${prepared.source.account}/${prepared.source.name}`,
-          );
-        sources.push({ prepared, revision });
-      }
-      const signature = JSON.stringify(
+      const sources = first ? initialSources : await readSources();
+      const signature = JSON.stringify([
         sources.map((s) => [s.prepared.scope, s.revision]),
-      );
+        projectionOptions.projectionContracts,
+      ]);
       if (signature !== previous) {
-        const projection = await atomicTablesProjection(store, sources);
+        const projection = first
+          ? initialProjection
+          : await atomicTablesProjection(store, sources, projectionOptions);
         status = await native.request(
           { type: 'projectTables', projection },
           signal,
@@ -367,6 +392,7 @@ export async function runAtomicTablesPeer(
         previous = signature;
         report(status);
       }
+      first = false;
       if (!listening) {
         status = await native.request({ type: 'listen' }, signal);
         listening = true;
