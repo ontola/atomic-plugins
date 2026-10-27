@@ -9,6 +9,11 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   paced at the tier whose `plans` name the plan the catalog selection's
   `throttlingPlans` gives for it, else within every tier at once (each its
   own count). Unknown entries are logged at load and ignored.
+
+- Owner writes and key transfers share the startup schema lock, like device
+  transactions, so a rolling instance's DDL cannot deadlock a transfer's
+  upgrade from a row-locking read to an update.
+
 - Key rotation (#410): `POST /agents/transfer`, signed by the old agent with
   a proof by the new one, moves the old agent's connections and runtimes to
   the new id in one transaction and retires the old id (new `retired_agents`
