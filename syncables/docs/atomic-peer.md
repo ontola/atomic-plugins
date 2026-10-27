@@ -177,6 +177,13 @@ on the same tested revision so browser and companion protocol changes are
 validated together. CI's `Native Atomic peer compatibility` job enforces that
 the current package builds and replicates against its selected immutable core.
 
+Genesis uses the core's `Commit::create_did` certificate path. On this pin,
+`Resource::save_as_genesis` still uses the legacy commit-signature identity
+path, omitting the inline creator certificate and inherited drive stamp.
+Substituting that API fails the existing replication test's verified-creator
+assertion. The small `create_certified_genesis` adapter therefore remains until
+the resource API provides equivalent certified genesis behavior.
+
 The read-only session adapter still supplies transport-specific gates that this
 core does not expose as one policy: issued-nonce origin authentication, explicit
 frame allowlisting, collection-only subscriptions/reconciliation, local-only

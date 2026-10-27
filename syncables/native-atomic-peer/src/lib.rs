@@ -76,6 +76,29 @@ fn subjects(values: impl IntoIterator<Item = String>) -> Value {
     Value::ResourceArray(values.into_iter().map(Into::into).collect())
 }
 
+/// Use the core's certificate-based genesis path. At this pin,
+/// `Resource::save_as_genesis` still creates a legacy commit-signature DID:
+/// it omits the inline creator certificate and inherited drive stamp.
+async fn create_certified_genesis(db: &Db, resource: Resource) -> AtomicResult<Resource> {
+    let signer = db.get_default_agent()?;
+    let commit =
+        atomic_lib::Commit::create_did(resource.get_commit_builder().clone(), &signer, db).await?;
+    let result = db
+        .apply_commit(
+            commit,
+            &atomic_lib::commit::CommitOpts {
+                validate_schema: true,
+                validate_signature: true,
+                update_index: true,
+                ..atomic_lib::commit::CommitOpts::no_validations_no_index()
+            },
+        )
+        .await?;
+    result
+        .resource_new
+        .ok_or_else(|| "Genesis created no resource".into())
+}
+
 impl Peer {
     pub async fn open(
         directory: &Path,
@@ -122,7 +145,7 @@ impl Peer {
                 urls::READ.into(),
                 subjects(readers.iter().cloned().chain([signer.subject.to_string()])),
             )?;
-            root.save_as_genesis(&db).await?;
+            let root = create_certified_genesis(&db, root).await?;
             db.flush()?;
             root
         } else {
@@ -284,7 +307,7 @@ impl Peer {
         for (key, value) in props {
             resource.set_unsafe(key.into(), value)?;
         }
-        resource.save_as_genesis(&self.db).await?;
+        let resource = create_certified_genesis(&self.db, resource).await?;
         // Identity and genesis must survive even if publication is interrupted.
         self.db.flush()?;
         Ok(resource.get_subject().to_string())

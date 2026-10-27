@@ -108,7 +108,7 @@ async fn persistent_signed_projection_syncs_losslessly_and_resumes() {
     let owner = Agent::new(Some("Invented owner")).unwrap();
     let reader = Agent::new(Some("Invented reader")).unwrap();
     let readers = vec![reader.subject.to_string()];
-    let peer = Peer::open(
+    let peer = common::open_peer(
         dir.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -120,6 +120,11 @@ async fn persistent_signed_projection_syncs_losslessly_and_resumes() {
     let first = projection(&owner, 1, "9007199254740993123456789.00100", true);
     peer.project(&first).await.unwrap();
     let drive = peer.drive.clone();
+    let root = peer.db.get_resource(&drive.clone().into()).await.unwrap();
+    assert_eq!(
+        root.genesis_signer().as_deref(),
+        Some(owner.subject.as_str())
+    );
     let original = members(&peer, &peer.db).await[0].clone();
     let native = peer
         .db
@@ -170,7 +175,7 @@ async fn persistent_signed_projection_syncs_losslessly_and_resumes() {
     assert_eq!(reconcile(&peer, &mut session, &replica).await, (0, 0));
     drop(session);
     drop(peer);
-    let peer = Peer::open(
+    let peer = common::open_peer(
         dir.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -232,7 +237,7 @@ async fn unauthorized_reads_all_mutations_and_cross_origin_auth_are_refused() {
     let owner = Agent::new(Some("Owner")).unwrap();
     let reader = Agent::new(Some("Reader")).unwrap();
     let stranger = Agent::new(Some("Stranger")).unwrap();
-    let peer = Peer::open(
+    let peer = common::open_peer(
         dir.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -367,7 +372,7 @@ async fn invalid_source_never_advances_checkpoint_and_bindings_are_fenced() {
     let dir = tempfile::tempdir().unwrap();
     let owner = Agent::new(Some("Owner")).unwrap();
     let readers = vec![owner.subject.to_string()];
-    let peer = Peer::open(
+    let peer = common::open_peer(
         dir.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -386,25 +391,33 @@ async fn invalid_source_never_advances_checkpoint_and_bindings_are_fenced() {
         Some(first.revision.as_str())
     );
     drop(peer);
-    assert!(Peer::open(
+    let error = common::open_peer(
         dir.path(),
         owner.clone(),
         owner.subject.as_str(),
         "another/collection/notes",
-        &readers
+        &readers,
     )
     .await
-    .is_err());
+    .err()
+    .expect("a different collection must be refused");
+    assert!(error
+        .message
+        .contains("Projection directory belongs to another owner or collection"));
     let other = Agent::new(Some("Other")).unwrap();
-    assert!(Peer::open(
+    let error = common::open_peer(
         dir.path(),
         other,
         owner.subject.as_str(),
         "invented/work/notes",
-        &readers
+        &readers,
     )
     .await
-    .is_err());
+    .err()
+    .expect("a different signer must be refused");
+    assert!(error
+        .message
+        .contains("Selected signer does not match the configured owner"));
 }
 
 #[tokio::test]
@@ -414,7 +427,7 @@ async fn interrupted_projection_is_replayed_before_it_can_be_served() {
     let dir = tempfile::tempdir().unwrap();
     let owner = Agent::new(Some("Invented owner")).unwrap();
     let readers = vec![owner.subject.to_string()];
-    let peer = Peer::open(
+    let peer = common::open_peer(
         dir.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -452,7 +465,7 @@ async fn interrupted_projection_is_replayed_before_it_can_be_served() {
     partial.save(&peer.db).await.unwrap();
     peer.db.flush().unwrap();
     drop(peer);
-    let peer = Peer::open(
+    let peer = common::open_peer(
         dir.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -496,7 +509,7 @@ async fn legacy_binding_is_matched_exactly_and_migrated_with_stable_drive_identi
     let owner = Agent::new(Some("Invented legacy owner")).unwrap();
     let readers = vec![owner.subject.to_string()];
     let collection = "invented/work/notes";
-    let peer = Peer::open(
+    let peer = common::open_peer(
         directory.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -525,7 +538,7 @@ async fn legacy_binding_is_matched_exactly_and_migrated_with_stable_drive_identi
         .to_string();
     peer.db.flush().unwrap();
     drop(peer);
-    let peer = Peer::open(
+    let peer = common::open_peer(
         directory.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -547,7 +560,7 @@ async fn legacy_binding_is_matched_exactly_and_migrated_with_stable_drive_identi
         "migration is an ordinary signed commit"
     );
     drop(peer);
-    let peer = Peer::open(
+    let peer = common::open_peer(
         directory.path(),
         owner.clone(),
         owner.subject.as_str(),
@@ -575,13 +588,17 @@ async fn legacy_binding_is_matched_exactly_and_migrated_with_stable_drive_identi
     root.save(&peer.db).await.unwrap();
     peer.db.flush().unwrap();
     drop(peer);
-    assert!(Peer::open(
+    let error = common::open_peer(
         directory.path(),
         owner.clone(),
         owner.subject.as_str(),
         collection,
-        &readers
+        &readers,
     )
     .await
-    .is_err());
+    .err()
+    .expect("a different legacy collection must be refused");
+    assert!(error
+        .message
+        .contains("Projection directory belongs to another owner or collection"));
 }

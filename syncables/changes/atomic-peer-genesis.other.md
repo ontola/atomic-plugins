@@ -1,2 +1,3 @@
-The native Atomic companion now delegates genesis creation to the pinned core's
-`Resource::save_as_genesis`, keeping signing and validation choices in the core.
+Document the native Atomic companion's certified-genesis and read-only session
+boundaries and its independent Cargo lockfile compatibility procedure. The
+validated core pin and replication permissions are unchanged.
