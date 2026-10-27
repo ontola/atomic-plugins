@@ -36,13 +36,23 @@ assurance is `assumed` because the reference documents only the 100-task cap,
 not that a short page is the last one; a task read is therefore never
 complete, and no absence is inferred from it. The Syncables fixture serves
 250 synthetic tasks: it requests `page=0`, `page=1` and `page=2`, imports all
-250, and `readCollections` reports the task read as not complete. This needs
-a Syncables release with the 0.6.0 consumer. It is not evidence of provider
-response validity or a live ClickUp synchronization.
+250, and `readCollections` reports the task read as not complete. The fixture
+passes against the current repository source and the actual published
+Syncables 0.25.0 package on Node 22.23.4. The published 0.21.0 package fails
+the same fixture by requesting page 1 first; a source merge or version label
+alone does not establish consumer support. Use the verified 0.25.0 release.
+This is not evidence of provider response validity or a live ClickUp synchronization.
 
 Run from the atomic-plugins repository root:
 
 ```sh
 python3 overlays/tests/test_clickup_readonly.py
-node overlays/tests/runtime_clickup_readonly.mjs
+(cd syncables && npx vitest run --root .. overlays/tests/clickup_syncables.test.ts)
+```
+
+To check the actual published consumer, use Node 22 and an isolated install:
+
+```sh
+npm install --prefix /tmp/clickup-consumer-check --ignore-scripts syncables@0.25.0
+(cd syncables && SYNCABLES_TEST_MODULE=/tmp/clickup-consumer-check/node_modules/syncables/build/src/browser.js npx vitest run --root .. overlays/tests/clickup_syncables.test.ts)
 ```

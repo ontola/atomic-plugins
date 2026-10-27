@@ -1639,8 +1639,9 @@ three ClickUp GET operations. Task pages follow Pagination Schemes 0.6.0:
 `page` starts at 0, and a page with fewer than 100 tasks ends the list, with
 `assurance: assumed`, since ClickUp documents only the 100-task cap. Every
 task read is therefore not complete, and no deletion is inferred from it.
-Activation needs a Syncables release that reads `start` and `shortPage`: an
-older consumer would ask for page 1 first and skip page 0.
+Consumer validation passes with published Syncables 0.25.0 on Node 22 and
+the current repository source. Use that verified release: the published
+0.21.0 package still asks for page 1 first and skips page 0.
 
 ClickUp OAuth has no selectable read scopes; the proxy profile limits reads
 to these three operations, while the provider token can have broader access
