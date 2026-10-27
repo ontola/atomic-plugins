@@ -168,6 +168,23 @@ mutations are refused, including owner-signed commits. Capabilities advertise
 only this subset. Search, plugins, application hosting, provider writeback and
 merging consumer edits are outside this peer.
 
+The native companion is an independent Cargo package with its own lockfile;
+it does not share AtomicServer's workspace or follow a moving host branch.
+An `atomic_lib` pin update is an explicit compatibility change: update both
+`native-atomic-peer/Cargo.toml` and its `Cargo.lock`, then run the locked Rust
+checks and PostgreSQL-to-native-process tests below. Keep `.atomic-server-ref`
+on the same tested revision so browser and companion protocol changes are
+validated together. CI's `Native Atomic peer compatibility` job enforces that
+the current package builds and replicates against its selected immutable core.
+
+The read-only session adapter still supplies transport-specific gates that this
+core does not expose as one policy: issued-nonce origin authentication, explicit
+frame allowlisting, collection-only subscriptions/reconciliation, local-only
+GETs, and a SYNC response that never asks a consumer to push. Do not replace it
+with an unrestricted frame-handler call. A future core read-only policy should
+cover all of those gates before this adapter delegates them; the compatibility
+tests exercise owner-signed write refusal as well as reader isolation.
+
 This core pin uses full version-vector reconciliation and does not advertise
 sparse sync. Native datatype and required-property validation remain enabled;
 the pin has no Class value-constraint validation API. Generated Classes use

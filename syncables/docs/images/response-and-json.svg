@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="790" viewBox="0 0 1200 790" role="img" aria-labelledby="title desc">
+<title id="title">Original evidence and shared JSON</title><desc id="desc">Original response text is retained for recorded body replay. A response graph and source record wrappers share the same item nodes. Two distinct issues can also share one nested user object without becoming one issue.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 Z" fill="#536b80"/></marker></defs>
+<rect width="1200" height="790" rx="18" fill="#fafbf9"/>
+<g font-family="system-ui, sans-serif" fill="#17324d">
+<text x="40" y="53" font-size="29" font-weight="700">Original evidence and shared JSON</text>
+<rect x="40" y="100" width="510" height="135" rx="13" fill="#edf1f5" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="59" y="133" font-size="22" font-weight="650">One HTTP response</text>
+<text x="59" y="165" font-size="20" font-weight="400">Status, selected headers, timestamps</text>
+<text x="59" y="194" font-size="20" font-weight="400">Body: two issues with the same user</text>
+<path d="M295 235 V270 H220 V310" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M295 235 V270 H820 V310" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="40" y="310" width="420" height="145" rx="13" fill="#edf1f5" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="59" y="343" font-size="22" font-weight="650">Original response text</text>
+<text x="59" y="375" font-size="20" font-weight="400">payloads: hash + optional compression</text>
+<text x="59" y="404" font-size="20" font-weight="400">Whitespace and escaping retained</text>
+<text x="59" y="433" font-size="20" font-weight="400">Exact recorded-body replay</text>
+<rect x="600" y="310" width="460" height="115" rx="13" fill="#ece5fa" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="619" y="343" font-size="22" font-weight="650">Full response graph root</text>
+<text x="619" y="375" font-size="20" font-weight="400">json_responses → json_nodes</text>
+<text x="619" y="404" font-size="20" font-weight="400">Envelope and traversal fields included</text>
+<path d="M720 425 V460 H655 V500" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M940 425 V460 H995 V500" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="520" y="500" width="290" height="95" rx="13" fill="#d9f2e9" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="539" y="533" font-size="22" font-weight="650">Issue 10: node A</text>
+<text x="539" y="565" font-size="20" font-weight="400">number: 10; user → U</text>
+<rect x="850" y="500" width="290" height="95" rx="13" fill="#d9f2e9" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="869" y="533" font-size="22" font-weight="650">Issue 12: node B</text>
+<text x="869" y="565" font-size="20" font-weight="400">number: 12; user → U</text>
+<rect x="40" y="500" width="390" height="95" rx="13" fill="#ece5fa" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="59" y="533" font-size="22" font-weight="650">Local JSON-AD wrappers</text>
+<text x="59" y="565" font-size="20" font-weight="400">Identity + class + source-json → A / B</text>
+<path d="M430 545 H520" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M430 520 H470 V478 H995 V500" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M665 595 V630 H765 V665" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<path d="M995 595 V630 H905 V665" fill="none" stroke="#536b80" stroke-width="2.5" marker-end="url(#arrow)"/>
+<rect x="680" y="665" width="340" height="90" rx="13" fill="#d9f2e9" stroke="#91a2b1" stroke-width="1.5"/>
+<text x="699" y="698" font-size="22" font-weight="650">Shared user: node U</text>
+<text x="699" y="730" font-size="20" font-weight="400">Same nested content stored once</text>
+<text x="40" y="670" font-size="21" font-weight="400">Sharing is scoped by owner.</text>
+<text x="40" y="699" font-size="21" font-weight="400">Equal content does not establish</text>
+<text x="40" y="728" font-size="21" font-weight="400">equal real-world identity.</text>
+</g></svg>

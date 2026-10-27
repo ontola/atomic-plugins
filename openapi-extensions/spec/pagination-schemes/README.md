@@ -1,6 +1,6 @@
 # OpenAPI Pagination Schemes Extension
 
-**Spec version:** 0.10.2
+**Spec version:** 0.11.0
 
 ---
 
@@ -29,6 +29,9 @@ components:
         cap: 100
         minimumWidth: 1
         field: /date
+      coverage: { basis: orderedCursor }       # optional; §4.7
+      freshness: { mode: eventual }           # independent
+      consistency: { mode: responseSnapshot } # independent
       request:             # Request Pagination Fields Object (§4.3)
         queryParameters:
           <param-name>:    # Request Field Object (§4.3.1)
@@ -80,6 +83,10 @@ Describes a single pagination strategy.
 | `window` | `RangeWindowObject` (§4.6) | Conditional | REQUIRED when `type` is `rangeWindow`, and MUST NOT be present otherwise. Added in 0.5.0. |
 | `request` | `RequestPaginationFieldsObject` (§4.3) | Conditional* | Describes pagination request fields. |
 | `response` | `ResponsePaginationFieldsObject` (§4.4) | Conditional* | Describes pagination response fields. |
+| `coverage` | `CoverageObject` (§4.7.1) | No | Exhaustive intervals in the selected API view. |
+| `freshness` | `FreshnessObject` (§4.7.2) | No | Independent convergence/lag promise. |
+| `consistency` | `ConsistencyObject` (§4.7.3) | No | Independent response/read snapshot promise. |
+| `closedPrefix` | `ClosedPrefixObject` (§4.7.4) | No | Independent promise against later first visibility in a prefix. |
 | `x-*` | any | No | Extension fields. |
 
 \* At least one of `request` or `response` MUST be present.
@@ -555,6 +562,368 @@ In this version a `rangeWindow` operation has no page parameter, so an operation
 6. A windowed read is not a snapshot. An item whose field changes during the read can appear in two windows (and is kept once, by rule 3), or in none, when it moves from a window not yet read into one already read. A client that must not miss such an item re-reads, or uses an operation that offers a snapshot or a change feed.
 
 _Non-normative note._ The Money app's Moneybird reader (`integrations/money/moneybird/read.ts` in ontola/atomic-plugins) reads financial mutations this way today, and writes nothing when a read ends with an error. Moneybird also documents a financial mutations synchronization API (`GET /{administration_id}/financial_mutations/synchronization`, which lists every mutation's id and version) as the way to read more than 100; the read-only OpenAPI document the overlays pin does not include it, and a document that does could describe that operation instead of, or alongside, a `rangeWindow`.
+
+---
+
+### 4.7 Scoped observations and independent guarantees
+
+Added in 0.11.0 for [ontola/atomic-plugins#686](https://github.com/ontola/atomic-plugins/issues/686).
+These optional Scheme Object members describe provider contracts, not facts
+inferred from a parameter name, a sample response or repeated successful reads.
+An author MUST base a declaration on documented provider behavior and SHOULD
+cite that documentation in its `description`. Each member is independent:
+
+| Member | Question answered | When absent |
+| --- | --- | --- |
+| `coverage` | Which selected key interval is exhaustively represented by this response? | No new interval assertion. Existing traversal/window rules keep their meaning. |
+| `freshness` | How far can the evaluated view lag authoritative changes? | Unknown; no convergence or lag bound. |
+| `consistency` | Do items in a response, or pages in a logical read, share a snapshot? | Unknown; even one page need not describe a coherent instant. |
+| `closedPrefix` | Can a previously invisible member later become visible inside a key prefix? | Unknown; an increasing ID or repeated unchanged result does not close a prefix. |
+
+A consumer MUST NOT derive any one of these guarantees from another. All
+four require `autoDetect: false` and an explicit `x-pagination` application
+(rule 31). Ordinary application overrides (§5) apply; validation checks the
+effective scheme again after merging. Overrides still deep-merge: omitting
+a guarantee does not remove it, and incompatible mode/parameter leftovers
+are invalid. Use a separate scheme when a weaker operation cannot be
+expressed by those merge rules. There is no change to the meaning of
+a document without these members, to Collection Completeness's definition
+of a complete read, or to the reference traversal functions' `complete` flag.
+
+#### 4.7.1 Coverage Object
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `basis` | `orderedCursor` or `rangeWindow` | Yes | The provider's exhaustive-interval contract, as below. |
+| `initial` | `unknown` or `unbounded` | No | Ordered cursor only; default `unknown`. When the cursor is omitted, `unbounded` promises traversal starts at the beginning of the selected order, with no implicit initial cutoff. |
+| `terminal` | `unknown` or `exhaustive` | No | Ordered cursor only; default `unknown`. `exhaustive` promises a terminal response exhausts the remaining selected tail. |
+| `description` | string | No | Source and qualifications of the provider contract. |
+| `x-*` | any | No | Extension fields. |
+
+**`orderedCursor`.** The scheme MUST be a `pageToken` scheme with exactly one
+`fromLastItem` request field and a declared `order` (rule 32). This basis is an
+explicit assertion of §4.3.3's strict-bound-on-a-unique-field case (b), not
+its opaque position-in-another-order case (a): the field uniquely identifies
+a position, the request cursor is an exclusive bound in that same field,
+and the response omits no selected item between its covered endpoints.
+An ID returned as a position in a timestamp-ordered list does not qualify.
+Non-unique and composite ordering are not expressible by this version of
+coverage; do not guess a tie-breaker. `fromLastItem` supplies the covered
+field; its dot-path is converted to a JSON Pointer, escaping `~` and `/` in
+each segment. Comparison is exactly §4.3.3's checked-order comparison:
+nonnegative integers and ASCII digit strings compare as exact integers,
+other nonempty strings by code point, and mixed domains are refused. No
+floating-point coercion is permitted.
+
+For ascending order, a request cursor `a` and nonempty page ending at `b`
+establish `(a,b]`; for descending order they establish `[b,a)`. Every item
+MUST pass the exclusive request bound and strict within-page order checks.
+With no request cursor, `initial: unbounded` supplies the unbounded starting
+end. Otherwise a nonempty page establishes only `[first,last]` (ascending),
+or `[last,first]` (descending); it says nothing before its first item.
+
+A terminal response is an empty page or a boolean `hasMore: false` under
+§4.3.3. Only `terminal: exhaustive` extends the ending boundary to the end of
+the selected order. A missing `hasMore` on a nonempty page is not terminal.
+A terminal empty page with a request cursor and `terminal: exhaustive`
+establishes the remaining tail beyond that cursor, even though there is no
+last item. Without that promise it establishes no interval. With neither
+a cursor nor an item, an interval can be derived only when both `initial:
+unbounded` and `terminal: exhaustive` are declared; it covers the entire
+selected view. These are unbounded ends **within that selection**, never
+an assertion about records excluded by its filters or authorization.
+
+**`rangeWindow`.** The scheme MUST be `rangeWindow` and have a nonempty
+`window.field` JSON Pointer (rule 32). Its unit, comparison/format, timezone
+qualifications and bounds are those of §4.6; `initial` and `terminal` MUST
+NOT be present. Derive coverage from the actual requested window, not the
+first/last returned item. An answer below `cap`, even an empty answer, covers
+that window; a full answer supplies no interval assertion. Its items need
+not be sorted. Whole-unit inclusive bounds retain §4.6.2's semantics; do not
+silently turn an inclusive day into an instant at its midnight.
+
+For either basis, a non-2xx answer, an incomplete marker, invalid envelope,
+unusable bound, broken order, or another detected contract violation MUST
+NOT produce a positive coverage assertion for that response. Failed or
+unrequested pages cannot fill a gap. Existing trustworthy page observations
+may be retained as individual evidence, not published as a successful whole
+read. A successful traversal alone does not opt into this new contract.
+
+#### 4.7.2 Freshness Object
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `mode` | `unknown`, `eventual` or `bounded` | Yes | Provider guarantee described below. |
+| `scope` | `response` or `snapshotStart` | No | Default `response`; the point at which the freshness contract applies. |
+| `maxLagSeconds` | finite number >= 0 | Conditional | Required only for `bounded`; otherwise forbidden. |
+| `description` | string | No | Source and qualifications. |
+| `x-*` | any | No | Extension fields. |
+
+`unknown` makes no freshness claim. `eventual` promises convergence for
+changes whose effects on the selected view persist and remain observable
+under the same selection/auth scope (including insertion/removal effects),
+when the affected region continues to be requested; it sets no time bound
+and does not promise a forward-only cursor will revisit old keys. `bounded`
+promises persistent eligible changes committed more than `maxLagSeconds`
+before the provider accepts the request are reflected in every evaluated
+view contributing to that response. Zero is a no-pre-request-lag guarantee;
+it does not imply a single snapshot or protection from concurrent changes.
+The response may reflect newer changes too. A provider's network-independent
+acceptance/evaluation boundary is not the client's receipt timestamp.
+
+With `scope: snapshotStart`, the contract applies when the provider starts
+or selects the snapshot of a new logical read, not afresh on subsequent
+pinned pages; it requires `readSnapshot` consistency (rule 34). A previously
+selected snapshot does not become current just because a later page was
+received now. With `scope: response`, the freshness promise applies to every
+successful page, including pinned pages: a provider must uphold it or refuse
+a too-old snapshot. Neither scope supplies the snapshot's effective timestamp.
+
+These are declarations, not measurements. Clients MUST retain observation
+times separately and MUST NOT label a response as fresh from receipt time,
+unchanged content, or equal snapshot tokens. Unknown guarantees remain unknown.
+
+#### 4.7.3 Consistency Object
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `mode` | `unknown`, `responseSnapshot` or `readSnapshot` | Yes | No coherence promise, one coherent snapshot per response, or one coherent snapshot across the logical read. |
+| `snapshot` | Snapshot Binding Object | Conditional | Required only for `readSnapshot`; otherwise forbidden. |
+| `description` | string | No | Source and qualifications. |
+| `x-*` | any | No | Extension fields. |
+
+A `responseSnapshot` can differ between pages. A `readSnapshot` promises
+one coherent selected state across the read, with this explicit protocol:
+
+```yaml
+consistency:
+  mode: readSnapshot
+  snapshot:
+    request: { location: queryParameters, name: snapshot }
+    response: { location: bodyFields, name: metadata.snapshot }
+```
+
+`request` is a Request Value Locator (`location`: `queryParameters`,
+`bodyFields` or `headerFields`; `name`: parameter name or body dot-path).
+`response` is a Response Value Locator (`location`: `bodyFields` or `headers`;
+`name`: body dot-path or header name). Each locator requires both members
+and allows `x-*` extension fields. Header names compare
+case-insensitively. Body paths use the existing dot-path conventions; the
+reference observer supports literal nonempty segments only.
+
+The binding MUST NOT reuse any pagination request field or an overlapping
+parent/child body path (rule 35). A query
+or header locator, and an ordered coverage cursor in those locations, MUST
+name an operation/path parameter after local parameter refs are resolved.
+This validator does not resolve locators against body/response schemas;
+consumers must check the actual runtime values. Ordinary OpenAPI validation
+remains separate.
+
+Every successful page MUST return a nonempty string snapshot token. The
+consumer captures it from the first page, sends that exact token in every
+subsequent request and verifies every echoed token. An explicitly supplied
+first token must also match. Missing, malformed or changed tokens, or a
+missing echo/request binding on a later page, violate the contract; the
+consumer MUST NOT publish the read as one successful snapshot. Keep raw
+attempts as evidence. Tokens compare only within the same logical read and
+scope; equality across separate reads does not imply global snapshot identity.
+A provider with implicit session pinning, non-string tokens or another
+protocol needs a later extension rather than a fabricated binding.
+
+Snapshot coherence does not establish freshness, exhaustive coverage,
+property completeness, deletion or closed prefixes. Snapshot tokens and
+replay bindings may be sensitive: keep them protected like the archived
+request/response, and use a protected reference or equality handle in any
+public provenance rather than leaking a credential-like token.
+
+#### 4.7.4 Closed Prefix Object
+
+| Field | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `source` | `lastItem` or `response` | Yes | Take the boundary from the page's last item, or an explicit response watermark. |
+| `value` | Response Value Locator | Conditional | Required only for `response`; otherwise forbidden. |
+| `description` | string | No | Source of the prefix-closure promise. |
+| `x-*` | any | No | Extension fields. |
+
+This version allows `closedPrefix` only with `orderedCursor` coverage (rule
+33). It reuses that field and comparison, but closure is always a separate
+provider promise, never inferred from coverage. For ascending traversal its promise
+covers keys <= the boundary; for descending traversal, keys >= it. The
+boundary is inclusive. `lastItem` on an empty page yields no boundary; a
+response watermark must be present and comparable, even on an empty page.
+A watermark behind the page's last item is allowed: it closes a smaller
+prefix. A watermark ahead of it does not fill the unobserved coverage gap. An
+unbounded descending list of a growing log normally cannot promise closure
+in this direction: new higher keys enter its prefix. A pinned snapshot alone
+freezes one read, not visibility in future reads.
+
+The provider promises that no member absent from its selected view at this
+response can **first become visible later** inside the prefix (including reappearance of
+a member absent from that view), for the same
+fixed selection and authorization scope. This includes propagation of old
+commits, delayed indexing and old records newly matching a filter. This is a
+membership-addition closure guarantee, not a guarantee that existing values
+or membership will never change. It is distinct from freshness outside the
+prefix and from coherence of the answer. No generic bounded-lateness or
+business-date finality language is defined by this version.
+
+A client MUST NOT permanently retire discovery of a key region unless it
+has exhaustive coverage of that region and a compatible closed prefix
+**for the same coherent API view**. A single `responseSnapshot` can bind one
+page to its own closure evidence; a checked `readSnapshot` can bind several
+pages and their closure evidence. Unknown coherence is insufficient for a
+permanent-retirement decision in this version. A later watermark does not
+retroactively validate an earlier possibly stale observation: a lower-key
+record could have become visible between those observations. A watermark
+returned alongside a pinned old snapshot must promise closure relative to
+that snapshot, not merely report the provider's latest unrelated horizon.
+More general cross-view transfer of closure needs an additional documented
+contract and is outside this version.
+Stopping refresh of existing records/membership additionally requires
+independent provider guarantees of immutability/append-only membership and
+stable selection/visibility. Those lifecycle guarantees are not new machine-
+readable fields in this version. An append-only base collection with a
+mutable `status=booked` filter does not supply an append-only closed view.
+Neither `terminal: exhaustive` nor auto-increment allocation implies closure.
+
+For example, transaction A can allocate ID 10, transaction B allocate 11 and
+commit first, and a read see only 11 before A commits. A permanent `after=11`
+cursor then misses 10. Replica/index propagation can cause the same inversion.
+A provider that only offers allocation order MUST NOT declare `lastItem`
+closure. Even a coherent snapshot can have a pending lower-ID transaction
+outside that snapshot. An explicit closed-prefix watermark or documented
+ordered-visibility contract is stronger than increasing identifiers.
+
+#### 4.7.5 Scope, evidence and composition
+
+Each observation MUST retain at least the following, inline or by immutable,
+access-controlled reference. This is a minimum interoperable evidence shape,
+not a database schema or permission to publish private request data:
+
+| Member | Required content |
+| --- | --- |
+| `specVersion` | The interpreting vocabulary version, `0.11.0` here. |
+| `coverage` | Covered field, comparison (cursor ordering or window unit/format/timezone), lower/upper values and inclusivity, or no interval. An unbounded end is distinct from an unknown end. |
+| `freshness` | The independent declared freshness contract; no inferred `fresh: true`. |
+| `consistency` | The independent mode and protected read-snapshot identity when applicable. |
+| `closedPrefix` | Its field, direction, inclusive boundary and the contract/evidence supporting it, or no boundary. |
+| `provenance.documentRevision` | Exact composed document bytes/revision, not just `info.version`. |
+| `provenance.overlayRevisions` | Exact ordered applied overlay revisions; `[]` for an already composed document. |
+| `provenance.scope` | References identifying `collection`, `selection` and effective `authorization`. |
+| `provenance.read` | A distinct logical-read identity, not reused across polling loops. |
+| `provenance.request`, `.response` | Immutable evidence references, including request parameters, status, headers, returned identities/versions, truncation and snapshot/watermark evidence. |
+| `provenance.observed` | Client `startedAt` and `endedAt`, timezone-aware date-times. These are not provider effective/snapshot timestamps. |
+
+`collection` includes the actual provider/server namespace and parent/account
+bindings. `selection` retains the effective query, body and relevant headers,
+including documented defaults and any projection affecting what is observable.
+Exclude only declared traversal-only fields and bindings that merely select
+the pinned snapshot. `authorization` identifies the effective visibility
+context, without storing plaintext credentials in the assertion. If visibility
+or default/filter semantics cannot be modeled, retain the exact request and
+an opaque scope reference; do not assume an unfiltered view or compare unknown
+authorization scopes as equal. A verified principal name alone need not capture
+all permission changes.
+
+The [Filtering proposal](../filtering/README.md)'s predicates can explain the
+selection. The coverage claim is “every item satisfying P in this interval in
+the evaluated view was returned,” not “every record with these IDs exists.”
+For `account=savings AND status=booked`, `after=9` returning `10,12,15`
+establishes `(9,15]` for that predicate; gaps are not an error. It makes no
+claim about pending items, another account, another authorization scope, or
+all properties. Missing/null/projected fields and deletion inference remain
+separate contracts. In particular §4.6.4 and Collection Completeness's
+exclusion of narrowed window reads are unchanged.
+
+Adjacent or overlapping intervals may be unioned into a single-state claim
+only when field/comparison, specification/document/overlay revisions,
+selection, authorization and provider namespace are compatible **and** all
+responses demonstrably share a coherent snapshot. With this version's
+protocol, a checked `readSnapshot` binding within one logical read supplies
+that evidence. Keep every constituent request/response reference. Gaps remain
+gaps, and neither a union nor `singleSnapshot` implies whole-collection or
+property completeness. In the absence of shared-snapshot evidence, retain
+per-response intervals and observation times separately; do not construct a
+fictional common instant. Overlap checks alone do not supply coherence.
+
+Repeated equal observations mean only that the same selected/projected state
+was observed twice. They cannot distinguish no change, an unseen persistent
+change in a lagging view, or a transient change subsequently undone. Even two
+equal pagination loops can be mixed-snapshot traversals rather than coherent
+endpoint states. Periodic rereads can eventually discover persistent visible
+changes under convergence; they cannot reconstruct all events. For faithful,
+complete, comparable observations of a genuinely append-only fixed view, equal
+membership at two instants rules out additions to that view between them.
+This does not infer ordered visibility, immutable properties or a closed key
+prefix. An event log/change feed with explicit retention/cursor contracts is
+a separate way to obtain history rather than sampled state.
+
+#### 4.7.6 Reference observer and examples
+
+[`observe.py`](observe.py) implements `observe_page` for one response and
+`collect_observations` for retaining a set of observations. It does not
+perform HTTP, authenticate, store PostgreSQL coverage, certify provider
+promises, or change the traversal readers' results. It validates the effective
+scheme and evidence, checks local bounds/order/truncation, enforces supplied
+previous-page snapshot bindings, and emits the four contracts independently.
+Its `context` is the `provenance` object above (`schema.json`'s
+`$defs.observationContext`). `request` maps `(queryParameters|bodyFields|
+headerFields, name)` tuples to decoded values. `window=(start,end)` supplies
+the actual requested bounds and is checked against the request carriers.
+
+For cursor coverage it returns `lower`/`upper` as `{value, inclusive}`, with
+`null` only for an established unbounded end; `coverage: null` means no
+interval was established. For window coverage it retains the window model
+so whole-unit bounds remain interpretable. The reference observer requires
+window item values in the declared request format/unit, refuses finer
+precision rather than rounding, and supports object-only JSON Pointer
+traversal. Other conforming implementations can implement broader exact field
+comparisons. Its literal body dot-paths do not implement bracket escapes.
+Freshness declarations are retained, not measured against a provider clock.
+For `readSnapshot`, `consistency.requestBound` records whether the request
+actually carried the verified token; this is required on subsequent pages.
+
+Pass `previous` for every subsequent sequential response of a logical read
+to check snapshot continuity, context and last-item cursor progression. The
+observer also refuses alternative cursor fields that §4.3.3 forbids sending.
+Its `traversal` result retains the last item/order/termination state needed
+for sequential cursor checks, without making a coverage or finality claim.
+`collect_observations` takes
+observations in request order, additionally refuses contradictory read-
+snapshot IDs or unbound subsequent pages within a read, and marks
+`singleSnapshot` only for checked pinned observations from the same read.
+It retains constituent intervals and does not itself merge them or fill gaps.
+Callers MUST not treat individually retained pages from a failed read as a
+published successful snapshot. No PostgreSQL coverage index is added here;
+Syncables consumption/persistence is a staged follow-up to #686/#566.
+
+For the `entries` example, an `after=9` request returning IDs `10,12,15`
+produces these core members, plus the required provenance:
+
+```json
+{
+  "specVersion": "0.11.0",
+  "coverage": {
+    "field": "/id", "comparison": "itemCursor",
+    "lower": {"value": 9, "inclusive": false},
+    "upper": {"value": 15, "inclusive": true}
+  },
+  "freshness": {"mode": "eventual"},
+  "consistency": {"mode": "unknown"},
+  "closedPrefix": null
+}
+```
+
+Complete synthetic documents are [`page-coverage.yaml`](examples/page-coverage.yaml)
+and [`window-coverage.yaml`](examples/window-coverage.yaml). They declare no
+guarantees for an actual provider. The test suite includes ascending and
+descending bounds, first/empty/final pages, exact large identifiers, explicit
+windows with unordered items, caps/incomplete markers, non-unique/broken order,
+stale equal observations, mixed snapshots, changed authorization, delayed
+visibility and a separately declared immutable append-only event-log example.
+An opaque cursor without this supported interval contract remains traversal-
+only. Richer ordering, other snapshot protocols, range-window closed-prefix
+watermarks, and lifecycle/property-projection annotations require later work.
 
 ---
 
@@ -1119,6 +1488,15 @@ A consumer MUST also apply the runtime rules of §4.4.3 and §4.4.4 to every lin
 28. A scheme with a `fromLastItem` field is a `pageToken` scheme with exactly one such field, and has no response field whose `role` is `nextPageToken`, `nextCursor` or `nextLink`. A validator checks this on a component scheme and again after an application's overrides are merged. Other request fields of such a scheme whose `role` is `pageToken`, `cursor` or `previousPageToken` (Stripe's `ending_before`, say) are allowed, and a client reading with `fromLastItem` does not send them (§4.3.3).
 29. A response field whose `role` is `hasMore` MAY appear only in `bodyFields`, and only in a scheme with a `fromLastItem` field.
 30. `order` MAY appear only on a Request Field Object that has `fromLastItem`, and is `ascending` or `descending`.
+31. A scheme declaring `coverage`, `freshness`, `consistency` or `closedPrefix` MUST have `autoDetect: false`; its guarantees are used only through an explicit operation application, after overrides.
+32. `coverage.basis` is `orderedCursor` or `rangeWindow`. The former requires a `pageToken` scheme with exactly one `fromLastItem` and checked `order` and declares its unique strict-bound/exhaustiveness contract. The latter requires a `rangeWindow` scheme with nonempty `window.field` and forbids `coverage.initial` and `coverage.terminal`. Only ordered cursors support those members: `initial: unknown | unbounded`, `terminal: unknown | exhaustive`.
+33. `closedPrefix` requires ordered-cursor coverage. Its `source` is `lastItem` or `response`; a Response Value Locator `value` is required only for `response` and forbidden otherwise.
+34. `freshness.mode` is `unknown`, `eventual` or `bounded`; a finite nonnegative `maxLagSeconds` is required only for `bounded` and forbidden otherwise. `scope` is `response` or `snapshotStart`; `snapshotStart` requires `readSnapshot` consistency.
+35. `consistency.mode` is `unknown`, `responseSnapshot` or `readSnapshot`; a `snapshot` binding with request and response locators is required only for `readSnapshot` and forbidden otherwise. Its request locator MUST NOT reuse a pagination request field. Query/header locators and ordered coverage cursor carriers MUST name operation/path parameters when explicitly applied, resolving local refs. Body-schema lookup is not checked by this validator.
+
+For body locators, rule 35 includes overlapping parent/child paths.
+
+Object shapes and these dependencies MUST be checked on components and again on effective applied schemes. Consumers MUST additionally enforce §4.7's evidence, derivation, snapshot-continuity and composition rules at runtime; static validation cannot prove the provider's behavioral promises.
 
 A validation error SHOULD identify the precise location of the violation (e.g. `paginationSchemes.myScheme.request.queryParameters.page`).
 
@@ -1126,17 +1504,19 @@ A validation error SHOULD identify the precise location of the violation (e.g. `
 
 ## Schema, validator and tests
 
-[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4, 8–10, 12–16, 19, 20, 23, 24, 26, 27 and 30. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5, 11, 17, 18, 21, 22, 25, 28 and 29 (for Swagger 2.0, rule 18 reads the operation's and path item's `parameters` the same way, with `$ref`s to the root `parameters`). It also holds `read_item_cursor`, a reference implementation of §4.3.3, `response_incomplete`, which says whether a response body is marked (§4.4.6), `page_items`, which locates a page's items through the Envelope Object (with `emptyWhenAbsent`), `read_offsets`, a reference implementation of the offset traversal with `advance` (§4.3.2), `read_pages`, a reference implementation of the page-number traversal with `start` and §4.4.5 over a caller-supplied request function (with `totalPages`, `totalCount` and a reported `pageSize`, and refusing a page size above the documented maximum), `read_range`, a reference implementation of §4.6.3 and §4.6.4 over a caller-supplied request function, and `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
+[`schema.json`](schema.json) is a JSON Schema (draft 2020-12) for the Pagination Scheme Object and the Pagination Application Object. It covers rules 1–4, 8–10, 12–16, 19, 20, 23, 24, 26, 27 and 30. [`validate.py`](validate.py) checks a whole OpenAPI document (`components.paginationSchemes`, or the provisional Swagger 2.0 root `x-paginationSchemes` of §7) against that schema, and adds rules 5, 11, 17, 18, 21, 22, 25, 28 and 29 (for Swagger 2.0, rule 18 reads the operation's and path item's `parameters` the same way, with `$ref`s to the root `parameters`). The 0.11.0 object shapes are also in the schema; the validator adds rules 31–35, including effective operation parameters. [`observe.py`](observe.py) separately implements the §4.7 per-response evidence contract and snapshot checks; its tests are `test_coverage.py`. It also holds `read_item_cursor`, a reference implementation of §4.3.3, `response_incomplete`, which says whether a response body is marked (§4.4.6), `page_items`, which locates a page's items through the Envelope Object (with `emptyWhenAbsent`), `read_offsets`, a reference implementation of the offset traversal with `advance` (§4.3.2), `read_pages`, a reference implementation of the page-number traversal with `start` and §4.4.5 over a caller-supplied request function (with `totalPages`, `totalCount` and a reported `pageSize`, and refusing a page size above the documented maximum), `read_range`, a reference implementation of §4.6.3 and §4.6.4 over a caller-supplied request function, and `resolve_link`, a reference implementation of §4.4.3 and §4.4.4 with its own strict RFC 3986 §5.2 resolution (`rfc3986_resolve`, tested against the RFC's §5.4 examples), which the tests exercise. Loop detection (§4.4.4 rule 5) is left to the consumer. The validator does not check rules 6 and 7, which need the response schemas. From the repository root:
 
 ```sh
 python3 -m venv /tmp/pagination-schemes-venv
 /tmp/pagination-schemes-venv/bin/pip install -r openapi-extensions/spec/pagination-schemes/requirements.txt
 cd openapi-extensions/spec/pagination-schemes
-/tmp/pagination-schemes-venv/bin/python -m unittest test_validate
-/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml examples/range-window.yaml examples/short-page.yaml examples/empty-when-absent.yaml examples/offset-advance.yaml examples/incomplete-marker.yaml examples/item-cursor.yaml examples/item-order.yaml
+/tmp/pagination-schemes-venv/bin/python -m unittest discover -p 'test_*.py'
+/tmp/pagination-schemes-venv/bin/python validate.py examples/relative-next-link.yaml examples/declared-base.yaml examples/range-window.yaml examples/short-page.yaml examples/empty-when-absent.yaml examples/offset-advance.yaml examples/incomplete-marker.yaml examples/item-cursor.yaml examples/item-order.yaml examples/page-coverage.yaml examples/window-coverage.yaml
 ```
 
 ## Changes
+
+- **0.11.0** (2026-10-24): adds opt-in scoped `coverage`, independent `freshness`, `consistency` and `closedPrefix` contracts (§4.7), rules 31–35, schema/context definitions, semantic validation, synthetic examples and a tested per-page reference observer. Covers unique strict-bound cursors and existing range windows, unknown/initial/terminal bounds, protected snapshot bindings, prefix watermarks and provenance/composition limits. Old documents and traversal results keep their meaning. A 0.10.x validator rejects the new members; an unvalidating old consumer ignores them and MUST NOT be assumed to publish coverage, enforce pinning or retire prefixes safely. No existing provider overlay or Syncables/PostgreSQL runtime is upgraded by this spec change.
 
 - **0.10.2** (2026-10-19): §4.3.3 says that a last item whose `fromLastItem` value is the empty string ends the read with an error (the client never sends the field empty), and, informatively, that a provider's answer to an empty cursor parameter is not described. `read_item_cursor` now raises for `""`, which 0.10.1's reader sent as the next cursor; tests. No document changes meaning.
 - **0.10.1** (2026-10-15): rule 28 and §4.3.3 step 1 say that a scheme with `fromLastItem` may also declare other `pageToken`, `cursor` or `previousPageToken` fields (Stripe's `ending_before`), and that a client reading with `fromLastItem` sends none of them, as `read_item_cursor` and syncables already do. A test. No document changes meaning.
