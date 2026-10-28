@@ -111,12 +111,16 @@ test.describe('notion drive plugin', () => {
     );
     await page.keyboard.press('Escape');
 
-    // The rows are ordinary rows of the app's table, named by the catalog
-    // entry's `app-row-name-plural` ("Pages"). After the connect round trip
-    // the app's folder is usually still expanded in the sidebar; expand it
-    // only when it is not.
+    // The rows are ordinary rows of the app's table, one table per Notion
+    // data source, named by its title; the app's own table is the first
+    // data source's ("Roadmap"), no longer the generic "Pages". After the connect
+    // round trip the app's folder is usually still expanded in the sidebar;
+    // expand it only when it is not.
     const sidebar = page.getByRole('navigation').last();
-    const items = sidebar.getByRole('button', { name: 'Pages', exact: true });
+    const items = sidebar.getByRole('button', {
+      name: 'Roadmap',
+      exact: true,
+    });
 
     if (!(await items.isVisible()))
       await sidebar
@@ -451,7 +455,9 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await review.getByRole('button', { name: 'Send 1 change' }).click();
     await expect(review.locator('[data-outcome="sent"]')).toHaveText(
       'Sent to Notion',
-      { timeout: 60_000 },
+      {
+        timeout: 60_000,
+      },
     );
     expect(
       (await driver('getPage', [LAUNCH_PAGE])).properties.Points.number,
