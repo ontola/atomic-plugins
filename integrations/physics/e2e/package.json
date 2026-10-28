@@ -1,5 +1,0 @@
-{
-  "//": "Only so Playwright loads physics.spec.ts as an ES module, as for the timesheets spec. Not a package: physics has no root package.json on purpose (certify.mjs would then require sandbox certification metadata it does not have).",
-  "private": true,
-  "type": "module"
-}

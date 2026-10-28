@@ -7,14 +7,44 @@
  * one `<style>` element, since the frame serves no stylesheet.
  */
 import css from './styles.css?raw';
+import { isResourceRef } from './adapter.js';
 import { createController } from './controller.js';
 import { stringsFor } from './strings.js';
+import { MINI_APPS } from './miniapps.js';
 import type { ViewArgs } from './store.js';
 import { page, type Actions } from './view.js';
 
 /** Root padding and tree card padding in styles.css, in px. */
 const PAD = 16;
 const CARD_PAD = 9;
+
+/**
+ * Puts `text` on the clipboard, or says it could not. The frame is sandboxed
+ * without a clipboard permission, so the async API usually refuses; the old
+ * selection-and-copy path works from a click and is the fallback.
+ */
+async function copyText(doc: Document, text: string): Promise<boolean> {
+  try {
+    await doc.defaultView!.navigator.clipboard.writeText(text);
+
+    return true;
+  } catch {
+    const field = doc.createElement('textarea');
+    field.value = text;
+    field.setAttribute('readonly', '');
+    field.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+    doc.body.append(field);
+    field.select();
+
+    try {
+      return doc.execCommand('copy');
+    } catch {
+      return false;
+    } finally {
+      field.remove();
+    }
+  }
+}
 
 export async function view({ root, store }: ViewArgs): Promise<void> {
   const doc = root.ownerDocument;
@@ -95,7 +125,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
         ?.focus({ preventScroll: true });
   };
 
-  const controller = createController(store, render);
+  const controller = createController(store, render, MINI_APPS);
   const actions: Actions = {
     select: id => controller.select(id),
     setGoal: id => controller.setGoal(id),
@@ -104,12 +134,27 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     reload: () => void controller.load(),
     open: lesson => {
       const target = lesson.content ?? lesson.subject;
-      // A DID is a resource in the drive; any other URL is a link out.
-      if (target.startsWith('did:')) void store.openResource?.(target);
+      const s = controller.state();
+      const own = s.kind === 'ready' && s.children.has(target);
+
+      // A resource, or a mini app under this app, is a resource in the drive; any
+      // other URL is a link out.
+      if (isResourceRef(target) || own) void store.openResource?.(target);
       else if (/^https?:\/\//.test(target)) void store.openExternal?.(target);
     },
     openRow: id => void store.openResource?.(id),
     link: (lesson, target) => void controller.linkLesson(lesson, target),
+    // The host gives a drive app no way to open the assistant with a prompt,
+    // so the request is copied and shown for the person to paste.
+    makeWithAI: lesson => {
+      const prompt = controller.promptFor(lesson, ui);
+
+      if (prompt)
+        void copyText(doc, prompt).then(copied =>
+          controller.showPrompt({ lesson, prompt, copied }),
+        );
+    },
+    hideAI: () => controller.showPrompt(undefined),
   };
 
   // The tree fits the width it is given, so draw again when the frame resizes.

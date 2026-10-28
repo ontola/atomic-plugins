@@ -20,6 +20,7 @@ import type {
   SkillSource,
   MasterySource,
 } from '../core/index.js';
+import type { MiniApp } from './miniapps.js';
 import type { StarterTree } from './starter.js';
 import {
   GET_MANY_MAX,
@@ -41,6 +42,7 @@ export const atomic = {
   name: 'https://atomicdata.dev/properties/name',
   description: 'https://atomicdata.dev/properties/description',
   shortname: 'https://atomicdata.dev/properties/shortname',
+  emoji: 'https://atomicdata.dev/properties/emoji',
   classtype: 'https://atomicdata.dev/properties/classtype',
   requires: 'https://atomicdata.dev/properties/requires',
   recommends: 'https://atomicdata.dev/properties/recommends',
@@ -65,6 +67,10 @@ export const P = {
   source: term('mastery-source'),
   updatedAt: term('mastery-updated-at'),
 } as const;
+
+/** A resource in a drive (`did:ad:...`, or `atomic:...` as the host writes subjects now). */
+export const isResourceRef = (target: string) =>
+  /^(did|atomic):\S+$/.test(target);
 
 export const list = (value: JSONValue): string[] =>
   Array.isArray(value)
@@ -327,20 +333,151 @@ async function appRendersProperty(
   return undefined;
 }
 
+/**
+ * What it takes to make a drive App from inside one: the drive's own App and
+ * plugin-script classes and the two properties that tie them together. None
+ * of them is a constant (they are minted per drive), so they are read off this
+ * app's own App, its entry point and the two classes, by shortname, the way
+ * `appRendersProperty` finds `renders`.
+ */
+export interface AppKit {
+  appClass: string;
+  scriptClass: string;
+  /** App property pointing at the plugin-script that renders it. */
+  entrypoint: string;
+  /** plugin-script property holding the module source. */
+  source: string;
+}
+
+/** Shortname to property subject, over what a class requires or recommends. */
+async function propertiesOf(
+  store: PluginStore,
+  klass: string,
+): Promise<Record<string, string>> {
+  const resource = await store.getResource(klass).catch(() => undefined);
+  const found: Record<string, string> = {};
+
+  for (const property of [
+    ...list(resource?.get(atomic.recommends)),
+    ...list(resource?.get(atomic.requires)),
+  ]) {
+    const shortname = await store.getResource(property).then(
+      p => p.get(atomic.shortname),
+      () => undefined,
+    );
+    if (typeof shortname === 'string') found[shortname] = property;
+  }
+
+  return found;
+}
+
+/** The kit, or `undefined` when this app is not a plain drive App (nothing to copy the shape from). */
+export async function appKit(store: PluginStore): Promise<AppKit | undefined> {
+  const app = await store.getResource(await store.getApp());
+  const appClass = list(app.get(atomic.isA))[0];
+  const entrypoint = appClass
+    ? (await propertiesOf(store, appClass)).entrypoint
+    : undefined;
+  const script = entrypoint ? text(app.get(entrypoint)) : undefined;
+
+  if (!appClass || !entrypoint || !script) return undefined;
+
+  const scriptClass = list(
+    (await store.getResource(script).catch(() => undefined))?.get(atomic.isA),
+  )[0];
+  const source = scriptClass
+    ? (await propertiesOf(store, scriptClass))['plugin-source']
+    : undefined;
+
+  return scriptClass && source
+    ? { appClass, scriptClass, entrypoint, source }
+    : undefined;
+}
+
+/**
+ * One mini app as a drive App under this app: the App, and a plugin-script
+ * child holding the module (`plugin-source`) that the App's entry point names.
+ * Found by name when it exists, in which case only a changed source is
+ * written, so pressing the starter again also brings an old copy up to date.
+ * Returns the App's subject.
+ *
+ * It lives directly under this app, not under a folder or a lesson: the host
+ * finds an App's source by walking script to App to the app above it to the
+ * drive, and gives up after that many steps (`plugin_ui.rs` `source_of`).
+ * It has no key of its own (no `app-data`, no identity), so it can read the
+ * drive but not write, which the physics apps never do.
+ */
+export async function ensureMiniApp(
+  store: PluginStore,
+  kit: AppKit,
+  mini: MiniApp,
+): Promise<string> {
+  const parent = await store.getApp();
+  const children = await store.query({
+    property: atomic.parent,
+    value: parent,
+  });
+
+  for (const child of await Promise.all(
+    children.map(s => store.getResource(s).catch(() => undefined)),
+  )) {
+    if (
+      !child ||
+      !list(child.get(atomic.isA)).includes(kit.appClass) ||
+      child.get(atomic.name) !== mini.name
+    )
+      continue;
+
+    const script = text(child.get(kit.entrypoint));
+    const entry = script ? await store.getResource(script) : undefined;
+
+    if (entry && entry.get(kit.source) !== mini.source)
+      await entry.set(kit.source, mini.source).save();
+
+    return child.subject;
+  }
+
+  const app = await store.newResource({
+    parent,
+    isA: [kit.appClass],
+    propVals: {
+      [atomic.name]: mini.name,
+      [atomic.emoji]: mini.emoji,
+      [atomic.description]: mini.description,
+    },
+  });
+  const script = await store.newResource({
+    parent: app.subject,
+    isA: [kit.scriptClass],
+    propVals: {
+      [atomic.name]: `${mini.name} view`,
+      [kit.source]: mini.source,
+    },
+  });
+  // Pointed at last, so an app never names a view that is not saved yet.
+  await app.set(kit.entrypoint, script.subject).save();
+
+  return app.subject;
+}
+
 export type StarterResult =
-  | { status: 'loaded'; skills: number; lessons: number }
+  | { status: 'loaded'; skills: number; lessons: number; apps: number }
   | { status: 'denied' };
 
 /**
  * Creates the starter tree's skills (parents before children, so every
- * `requires` is a subject) and lessons. Safe to press twice: a skill whose
- * name is already in the table, and a lesson already teaching it, are reused.
- * On a table the app did not make, the host's "Allow editing" comes first.
+ * `requires` is a subject), its mini apps and lessons. Safe to press twice: a
+ * skill whose name is already in the table, a lesson already teaching it and a
+ * mini app of the same name are reused. A lesson that names an `app` and has
+ * no material yet is linked to it; one the teacher linked elsewhere is left
+ * alone. On a table the app did not make, the host's "Allow editing" comes
+ * first.
  */
 export async function loadStarter(
   store: PluginStore,
   tables: Tables,
   tree: StarterTree,
+  miniApps: Record<string, MiniApp> = {},
 ): Promise<StarterResult> {
   if (!tables.ownSkills) {
     const access = await store.rowAccess?.();
@@ -350,6 +487,17 @@ export async function loadStarter(
       if (asked?.status !== 'granted') return { status: 'denied' };
     }
   }
+
+  // First, so the lessons below can point at them.
+  const appSubjects = new Map<string, string>();
+  const used = new Set(tree.lessons.flatMap(l => (l.app ? [l.app] : [])));
+  const kit = used.size ? await appKit(store) : undefined;
+
+  // In the order the mini apps are declared, which is the sidebar's order.
+  if (kit)
+    for (const [key, mini] of Object.entries(miniApps))
+      if (used.has(key))
+        appSubjects.set(key, await ensureMiniApp(store, kit, mini));
 
   const existing = new Map(
     (await rowsOf(store, tables.skills)).map(r => [
@@ -395,16 +543,25 @@ export async function loadStarter(
     created += 1;
   }
 
-  const have = new Set(
-    (await readLessons(store, tables.lessons)).map(
-      l => `${l.teaches.join()}|${l.name}`,
-    ),
+  const have = new Map(
+    (await readLessons(store, tables.lessons)).map(l => [
+      `${l.teaches.join()}|${l.name}`,
+      l,
+    ]),
   );
   let lessons = 0;
 
   for (const l of tree.lessons) {
     const skill = subjectOf.get(l.skill)!;
-    if (have.has(`${skill}|${l.name}`)) continue;
+    const app = l.app ? appSubjects.get(l.app) : undefined;
+    const content = l.content ?? app;
+    const known = have.get(`${skill}|${l.name}`);
+
+    if (known) {
+      if (app && !known.content) await linkLesson(store, known.subject, app);
+      continue;
+    }
+
     await store.newResource({
       parent: tables.lessons,
       isA: [LESSON],
@@ -414,11 +571,11 @@ export async function loadStarter(
         [P.format]: l.format,
         [P.minutes]: l.minutes,
         [P.language]: l.language,
-        ...(l.content ? { [P.content]: l.content } : {}),
+        ...(content ? { [P.content]: content } : {}),
       },
     });
     lessons += 1;
   }
 
-  return { status: 'loaded', skills: created, lessons };
+  return { status: 'loaded', skills: created, lessons, apps: appSubjects.size };
 }

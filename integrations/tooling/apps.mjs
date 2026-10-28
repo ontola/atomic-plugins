@@ -127,9 +127,6 @@ export function appVersion(id, base = root) {
 export const APP_FOLDERS = Object.freeze({
   moneybird: 'integrations/money/moneybird',
   todoist: 'integrations/issue-tracker/todoist-app',
-  'physics-lens': 'integrations/physics/lens',
-  'physics-magnet': 'integrations/physics/magnet',
-  'physics-spring': 'integrations/physics/spring',
 });
 
 /** The repository-relative folder holding an app's `build.mjs`. */

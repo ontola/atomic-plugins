@@ -85,12 +85,28 @@ test.describe('learning drive app', () => {
     await expect(node('Rekenen met getallen')).toHaveClass(/is-mastered/);
     await expect(node('Breuken')).toHaveClass(/is-available/);
 
-    // An interactive lesson starts unlinked; pasting a resource links it.
+    // The physics lessons are linked to their mini apps by the starter tree
+    // (mini-apps.spec.ts opens them); any other interactive lesson starts
+    // unlinked, offers "Create with AI", and pasting a resource links it.
+    await expect(app.locator('.lb-notices')).toContainText('3 mini apps', {
+      timeout: 120_000,
+    });
     await node('Optica').click();
+    await expect(
+      app.getByRole('button', { name: 'Start: Lenzen (interactief)' }),
+    ).toBeVisible();
+    await node('Elektriciteit').click();
     await expect(app.locator('.lb-lessons')).toContainText('not linked yet');
+    await app.getByRole('button', { name: /^Create with AI/ }).click();
+    await expect(app.locator('.lb-prompt')).toHaveValue(
+      /^Make an interactive mini app \(drive app\) that explains Elektriciteit for my students, and link it to the lesson Interactief: Elektriciteit \(/,
+    );
+    await app.getByRole('button', { name: 'Close' }).click();
     await app.getByLabel(/Link a resource/).fill('did:ad:lens-demo');
     await app.getByRole('button', { name: 'Link', exact: true }).click();
-    await expect(app.getByRole('button', { name: /^Start/ })).toBeVisible();
+    await expect(
+      app.getByRole('button', { name: 'Start: Interactief: Elektriciteit' }),
+    ).toBeVisible();
 
     await page.reload();
     await expect(node('Rekenen met getallen')).toHaveClass(/is-mastered/, {

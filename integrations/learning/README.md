@@ -6,10 +6,10 @@ out from the learner's own mastery rows. Phases 1 and 2 of the design in
 `leerboom/proposal.md`. Nothing here lives in `ontola/atomic-server`: the
 classes are in the shared ontology, the code is a drive app.
 
-Status: **declared, not verified.** Unit-tested against a fake host store and
-jsdom. The host E2E (`e2e/learning.spec.ts`) is written but has not been run:
-it needs an atomic-server build and network access to `ontola.github.io`. The
-catalog entry is `enabled: false` and `experimental: true`.
+Status: unit-tested against a fake host store and jsdom, and exercised in a
+real atomic-server by `e2e/learning.spec.ts` and `e2e/mini-apps.spec.ts` (they
+need network access to `ontola.github.io`). The catalog entry is
+`enabled: false` and `experimental: true`.
 
 ## The layers
 
@@ -77,6 +77,52 @@ Mastery is one row per skill in the app's own `Mastery` table
 no grant. The table inherits the App's rights, so **install the app in a drive
 that is yours**: private by default means "as private as that drive", and the
 app does not set rights of its own.
+
+## Mini apps in the drive
+
+Interactive lessons open a drive App, not a catalog entry. "Load starter tree"
+also creates the three physics mini apps (`../physics/`: Lenzen, Magneten,
+Trillingen) as Apps directly under this app and sets `lesson-content` of the
+`Lenzen`, `Magneten` and `Trillingen (interactief)` lessons to them (the
+starter JSON names them with `"app": "lens" | "magnet" | "spring"`). Start then
+calls `store.openResource` and the host shows the mini app in its own frame.
+
+- **What is created** (`adapter.ts` `ensureMiniApp`): an App (`isA` the drive's
+  App class, with name, emoji and description) and, as its child, a
+  plugin-script holding the module source in `plugin-source`; the App's
+  `entrypoint` points at it. The classes and the two property subjects are
+  minted per drive, so they are read off this app's own App, its entry point
+  and their classes by shortname (`appKit`). Pressing the button again reuses
+  an App of the same name and rewrites a changed source, so a newer learning
+  version upgrades old copies. A teacher's own link in `lesson-content` is kept.
+- **Where the source comes from**: `build.mjs` builds the three physics modules
+  in memory and hands them to the bundle as strings (the esbuild plugin behind
+  `import ... from 'virtual-physics-modules'`; unit tests alias it to
+  `app/physics-modules.stub.ts`). The module is therefore larger (about 127 kB,
+  of which 71 kB is the physics modules), and there is no fetch and no catalog entry. The
+  physics lane still tests and builds the physics code.
+- **Why directly under the app**: a drive app may only write under itself, and
+  the host finds an App's source by walking plugin-script, App, the app above
+  it, drive, at most that deep (`server/src/plugins`: `plugin_ui.rs`
+  `source_of`). A "Mini-apps" folder or a lesson as parent would be one hop too
+  many, and the source would not be found.
+- **No identity**: the mini apps are created from inside a frame, which cannot
+  mint the app key (`createApp` + `/app-agent` need the signed-in page). They
+  read and never write, which is all the physics apps do. An app that needs its
+  own table would have to be made with the New menu or the assistant.
+- **Create with AI**: an interactive lesson with no link also shows a "Maak met
+  AI" button. A drive app cannot open Atomic's assistant (see below), so it
+  builds the request ("Maak een interactieve mini-app (drive app) die <skill>
+  uitlegt voor <niveau>, en koppel hem aan les <les> (<subject>)..."), copies it
+  (`navigator.clipboard`, else a selection copy; the frame has no clipboard
+  permission, so the second path is the usual one) and shows it in a text box
+  with the instruction to paste it into the assistant.
+
+Host operations a drive app has today (atomic-server `view-client.js`):
+`getApp`, `getData`, `getResource`, `getMany`, `query`, `newResource`,
+`subscribe`, `openResource`, `openExternal`, `rowAccess`/`requestRowAccess`,
+`importer.run`, the proxy calls and theme. There is no way to open the
+assistant, to create an App with its own identity, or to write the clipboard.
 
 ## Plugging in another source
 

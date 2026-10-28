@@ -1,28 +1,45 @@
 // @wc-ignore-file
 /**
- * The three physics drive apps (Lenzen, Magneten, Trillingen) in a real host:
- * each is installed from the catalog's Drive apps section under "Show
- * experimental plugins" (the lane's dev-server serving the committed
- * `apps/physics-<id>/<version>/ui.js` in place of GitHub Pages), runs in its
- * null-origin iframe, and reacts to a keypress and to a pointer drag.
+ * The three physics mini apps (Lenzen, Magneten, Trillingen) as they now
+ * live: drive Apps created by the learning app's "Load starter tree", with
+ * their module source stored in the drive and their lessons linked to them.
+ * Each test installs the learning app from the catalog (the lane's dev-server
+ * serving the committed `apps/learning/<version>/ui.js` in place of GitHub
+ * Pages), loads the starter tree, presses Start on the lesson, and drives the
+ * app the host then shows in its null-origin iframe: a keypress and a drag.
  *
- * The apps read and write nothing and use no ontology, so unlike the
- * learning lane this needs no network access to ontola.github.io. Run it
- * the way CI does:
- *   node integrations/tooling/run-lane.mjs physics --tier e2e
+ * The first test also checks what the host really stored: the App under the
+ * learning app, its plugin-script child with the source, and the sidebar
+ * listing. Like learning.spec.ts it needs network access to ontola.github.io
+ * (the skill, lesson and mastery terms). Run it the way CI does:
+ *   node integrations/tooling/run-lane.mjs learning --tier e2e
  */
 import { test, expect, type FrameLocator, type Page } from '@playwright/test';
 import { before } from '../../../browser/e2e/tests/test-utils';
 import { appVersion } from '../../tooling/apps.mjs';
 
 const APP_FRAME = 'iframe[title="App"]';
+const VERSION = appVersion('learning');
 
-async function installFromCatalog(
-  page: Page,
-  id: string,
-  name: string,
-  version: string,
-) {
+test.beforeAll(async () => {
+  const served = (await import(
+    '../../../ontology-kit/served.mjs' as string
+  )) as {
+    classTermPaths(name: string): string[];
+    servedProblems(paths: string[]): Promise<string[]>;
+    notServedMessage(problems: string[]): string;
+  };
+  const problems = await served.servedProblems([
+    ...served.classTermPaths('skill-v1'),
+    ...served.classTermPaths('lesson-v1'),
+    ...served.classTermPaths('mastery-v1'),
+  ]);
+
+  if (problems.length) throw new Error(served.notServedMessage(problems));
+});
+
+/** Installs Atomic Education, loads the starter tree, and opens `lesson` of `skill` with Start. */
+async function startLesson(page: Page, skill: string, lesson: string) {
   await page.goto(new URL('/app/integrations', page.url()).href);
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
@@ -31,14 +48,31 @@ async function installFromCatalog(
   await expect(experimental).toBeEnabled({ timeout: 30_000 });
   const entry = page
     .getByRole('region', { name: 'Drive apps' })
-    .locator(`[data-catalog-app="${id}"]`);
-  await expect(entry).toContainText(`Version ${version}`);
-  await entry.getByRole('button', { name: `Install ${name}` }).click();
+    .locator('[data-catalog-app="learning"]');
+  await expect(entry).toContainText(`Version ${VERSION}`);
+  await entry.getByRole('button', { name: 'Install Atomic Education' }).click();
   await expect(page.getByRole('main').locator(APP_FRAME)).toBeVisible({
     timeout: 45_000,
   });
+  const learning = page.frameLocator(APP_FRAME);
+  await learning.getByRole('button', { name: 'Load starter tree' }).click();
+  await expect(learning.locator('.lb-node')).toHaveCount(30, {
+    timeout: 90_000,
+  });
+  await expect(learning.locator('.lb-notices')).toContainText('3 mini apps', {
+    timeout: 120_000,
+  });
+  await learning.locator('.lb-node', { hasText: skill }).first().click();
+  await learning.getByRole('button', { name: `Start: ${lesson}` }).click();
 
-  return page.frameLocator(APP_FRAME);
+  // The host navigates to the mini app: a different App in the same frame.
+  await expect(page.getByRole('main').locator(APP_FRAME)).toBeVisible({
+    timeout: 45_000,
+  });
+  const frame = page.frameLocator(APP_FRAME);
+  await expect(frame.locator('.lb-app')).toHaveCount(0);
+
+  return frame;
 }
 
 /** Drags from the middle of `from` by (dx, dy) screen pixels, in page coordinates. */
@@ -60,19 +94,14 @@ async function dragBy(
 
 const values = (app: FrameLocator) => app.locator('.ph-values dd');
 
-test.describe('physics drive apps', () => {
+test.describe('physics mini apps opened from the lesson programme', () => {
   test.beforeEach(before);
 
   test('Lenzen: renders the rays and the image, reacts to a key and a drag, switches to a concave lens', async ({
     page,
   }) => {
     test.setTimeout(240_000);
-    const app = await installFromCatalog(
-      page,
-      'physics-lens',
-      'Lenzen',
-      appVersion('physics-lens'),
-    );
+    const app = await startLesson(page, 'Optica', 'Lenzen (interactief)');
     await expect(app.getByRole('heading', { level: 1 })).toHaveText(
       /Lenses|Lenzen/,
       { timeout: 45_000 },
@@ -102,12 +131,7 @@ test.describe('physics drive apps', () => {
     page,
   }) => {
     test.setTimeout(240_000);
-    const app = await installFromCatalog(
-      page,
-      'physics-magnet',
-      'Magneten',
-      appVersion('physics-magnet'),
-    );
+    const app = await startLesson(page, 'Magnetisme', 'Magneten (interactief)');
     await expect(app.getByRole('heading', { level: 1 })).toHaveText(
       /Magnets|Magneten/,
       { timeout: 45_000 },
@@ -153,11 +177,10 @@ test.describe('physics drive apps', () => {
     page,
   }) => {
     test.setTimeout(240_000);
-    const app = await installFromCatalog(
+    const app = await startLesson(
       page,
-      'physics-spring',
-      'Trillingen',
-      appVersion('physics-spring'),
+      'Trillingen en golven',
+      'Trillingen (interactief)',
     );
     await expect(app.getByRole('heading', { level: 1 })).toHaveText(
       /Oscillations|Trillingen/,

@@ -15,6 +15,8 @@ export interface StarterTree {
   lessons: {
     skill: string;
     name: string;
+    /** Key of a mini app (`miniapps.ts`) the lesson is linked to when the tree loads. */
+    app?: string;
     format: string;
     minutes: number;
     language: string;

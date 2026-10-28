@@ -594,6 +594,7 @@
     {
       "skill": "trillingen-golven",
       "name": "Trillingen (interactief)",
+      "app": "spring",
       "format": "interactive",
       "minutes": 25,
       "language": "nl",
@@ -642,6 +643,7 @@
     {
       "skill": "magnetisme",
       "name": "Magneten (interactief)",
+      "app": "magnet",
       "format": "interactive",
       "minutes": 20,
       "language": "nl",
@@ -666,6 +668,7 @@
     {
       "skill": "optica",
       "name": "Lenzen (interactief)",
+      "app": "lens",
       "format": "interactive",
       "minutes": 25,
       "language": "nl",

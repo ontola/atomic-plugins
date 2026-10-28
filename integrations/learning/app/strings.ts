@@ -24,7 +24,7 @@ const nl = {
   link: 'Koppel',
   linkLabel: 'Koppel een resource of link',
   linkPlaceholder: 'Plak een resource of link',
-  badLink: 'Dat is geen resource (did:) of link (https://).',
+  badLink: 'Dat is geen resource (did: of atomic:) of link (https://).',
   mastered: 'Beheerst',
   available: 'Beschikbaar',
   locked: 'Nog niet aan de beurt',
@@ -46,7 +46,20 @@ const nl = {
   denied:
     'Geen toestemming om de tabel te bewerken, dus de startboom is niet geladen.',
   failed: 'Opslaan is niet gelukt. Probeer het opnieuw.',
-  loaded: (n: number) => `Startboom geladen: ${n} nieuwe vaardigheden.`,
+  loaded: (n: number, apps: number) =>
+    `Startboom geladen: ${n} nieuwe vaardigheden${apps ? ` en ${apps} mini-apps` : ''}.`,
+  makeWithAI: 'Maak met AI',
+  aiHint:
+    'Kopieer deze opdracht, open de Atomic-assistent en plak hem daar. De assistent bouwt de mini-app en koppelt hem aan deze les.',
+  aiCopied:
+    'De opdracht staat op je klembord. Open de Atomic-assistent en plak hem daar.',
+  aiCopyAgain: 'Kopieer opnieuw',
+  aiClose: 'Sluiten',
+  aiLabel: 'Opdracht voor de assistent',
+  aiAudience: (level: number | undefined) =>
+    level === undefined ? 'mijn leerlingen' : `niveau ${level}`,
+  aiPrompt: (skill: string, audience: string, lesson: string, id: string) =>
+    `Maak een interactieve mini-app (drive app) die ${skill} uitlegt voor ${audience}, en koppel hem aan les ${lesson} (${id}): zet de eigenschap lesson-content van die les op de nieuwe app.`,
   cycles: (n: number) =>
     `${n} afhankelijkheid(en) negeren we, want ze vormen een kringloop.`,
   missing: (n: number) =>
@@ -84,7 +97,7 @@ const en: typeof nl = {
   link: 'Link',
   linkLabel: 'Link a resource or URL',
   linkPlaceholder: 'Paste a resource or link',
-  badLink: 'That is not a resource (did:) or a link (https://).',
+  badLink: 'That is not a resource (did: or atomic:) or a link (https://).',
   mastered: 'Mastered',
   available: 'Available',
   locked: 'Not yet due',
@@ -106,7 +119,20 @@ const en: typeof nl = {
   denied:
     'No permission to edit the table, so the starter tree was not loaded.',
   failed: 'Saving failed. Try again.',
-  loaded: (n: number) => `Starter tree loaded: ${n} new skills.`,
+  loaded: (n: number, apps: number) =>
+    `Starter tree loaded: ${n} new skills${apps ? ` and ${apps} mini apps` : ''}.`,
+  makeWithAI: 'Create with AI',
+  aiHint:
+    'Copy this request, open the Atomic assistant and paste it there. The assistant builds the mini app and links it to this lesson.',
+  aiCopied:
+    'The request is on your clipboard. Open the Atomic assistant and paste it there.',
+  aiCopyAgain: 'Copy again',
+  aiClose: 'Close',
+  aiLabel: 'Request for the assistant',
+  aiAudience: (level: number | undefined) =>
+    level === undefined ? 'my students' : `level ${level}`,
+  aiPrompt: (skill: string, audience: string, lesson: string, id: string) =>
+    `Make an interactive mini app (drive app) that explains ${skill} for ${audience}, and link it to the lesson ${lesson} (${id}): set that lesson's lesson-content property to the new app.`,
   cycles: (n: number) =>
     `${n} dependency(ies) ignored because they form a cycle.`,
   missing: (n: number) => `${n} reference(s) to unknown skills ignored.`,

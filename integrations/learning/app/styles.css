@@ -431,6 +431,31 @@
   color: inherit;
   font: inherit;
 }
+.lb-ai {
+  display: grid;
+  flex: 1 1 100%;
+  gap: 8px;
+}
+.lb-ai p {
+  margin: 0;
+  font-size: 13px;
+}
+.lb-prompt {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--lb-border);
+  border-radius: var(--lb-radius);
+  background: var(--lb-surface);
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+.lb-prompt:focus-visible {
+  outline: 2px solid var(--lb-main);
+  outline-offset: 2px;
+}
 .lb-path {
   margin-top: 16px;
 }
