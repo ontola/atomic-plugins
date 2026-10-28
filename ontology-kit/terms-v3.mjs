@@ -185,6 +185,16 @@ export const properties = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/assessment-kind',
     datatype: 'https://atomicdata.dev/datatypes/string',
   }),
+  'assessment-draw': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/assessment-draw',
+    datatype: 'https://atomicdata.dev/datatypes/integer',
+  }),
+  'assessment-app': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/assessment-app',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+  }),
   'attempt-assessment': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-assessment',
@@ -201,6 +211,11 @@ export const properties = Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-answers',
     datatype: 'https://atomicdata.dev/datatypes/json',
+  }),
+  'attempt-seed': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-seed',
+    datatype: 'https://atomicdata.dev/datatypes/string',
   }),
   'attempt-created-at': Object.freeze({
     subject:
@@ -308,6 +323,8 @@ export const classes = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/assessment-questions',
       'https://ontola.github.io/atomic-plugins/ontology/properties/assessment-pass-score',
       'https://ontola.github.io/atomic-plugins/ontology/properties/assessment-kind',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/assessment-draw',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/assessment-app',
     ]),
   }),
   'attempt-v1': Object.freeze({
@@ -320,6 +337,7 @@ export const classes = Object.freeze({
     recommends: Object.freeze([
       'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-answers',
       'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-created-at',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-seed',
     ]),
   }),
 });

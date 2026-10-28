@@ -79,8 +79,11 @@ Eight classes for the teacher side of Leerboom, all `-v1`, in
 scale, weight, comment, evidence, `grade-graded-at`), `question-v1` (prompt,
 `question-type`, options, answer, explanation, skill), `assessment-v1`
 (`assessment-assesses`, `assessment-questions`, `assessment-pass-score`,
-`assessment-kind`) and `attempt-v1` (assessment, score, answers,
-`attempt-created-at`). Two plain properties, `lesson-license` and
+`assessment-kind`, `assessment-draw`: how many questions each attempt draws
+from the bank, so a learner can retest without the same questions;
+`assessment-app`: a drive app that generates and checks questions itself) and
+`attempt-v1` (assessment, score, answers, `attempt-created-at`, `attempt-seed`).
+Two plain properties, `lesson-license` and
 `lesson-generated-with`, belong to no class yet: `lesson-v1` is published and
 immutable, so a future `lesson-v2` will recommend them.
 

@@ -50,10 +50,13 @@
     "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-questions",
     "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-pass-score",
     "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-kind",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-draw",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-app",
     "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-assessment",
     "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-score",
     "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-answers",
     "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-created-at",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-seed",
     "https://ontola.github.io/atomic-plugins/ontology/properties/lesson-license",
     "https://ontola.github.io/atomic-plugins/ontology/properties/lesson-generated-with"
   ]

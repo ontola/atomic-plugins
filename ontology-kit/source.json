@@ -105,10 +105,13 @@
         "assessment-questions",
         "assessment-pass-score",
         "assessment-kind",
+        "assessment-draw",
+        "assessment-app",
         "attempt-assessment",
         "attempt-score",
         "attempt-answers",
         "attempt-created-at",
+        "attempt-seed",
         "lesson-license",
         "lesson-generated-with"
       ]
@@ -281,14 +284,16 @@
       "recommends": [
         "assessment-questions",
         "assessment-pass-score",
-        "assessment-kind"
+        "assessment-kind",
+        "assessment-draw",
+        "assessment-app"
       ]
     },
     "attempt-v1": {
       "name": "Attempt",
       "description": "One try at an assessment by one learner. Append-only, kept in the learner's own drive. Comparable to the result of an xAPI statement.",
       "requires": ["attempt-assessment", "attempt-score"],
-      "recommends": ["attempt-answers", "attempt-created-at"]
+      "recommends": ["attempt-answers", "attempt-created-at", "attempt-seed"]
     }
   },
   "properties": {
@@ -652,6 +657,16 @@
       "datatype": "https://atomicdata.dev/datatypes/string",
       "description": "One of practice, attested. Practice is for learning with direct feedback; attested is a test whose result may count as evidence."
     },
+    "assessment-draw": {
+      "name": "Questions per attempt",
+      "datatype": "https://atomicdata.dev/datatypes/integer",
+      "description": "How many questions each attempt draws from the bank, so a learner can test themselves again without getting the same questions. Draws prefer questions this learner has not answered, then those answered longest ago. Absent: every question in the bank."
+    },
+    "assessment-app": {
+      "name": "App",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "A drive app that runs this assessment instead of, or next to, the question bank: it can generate questions (procedural, seeded) and check answers with its own logic, and records each try as an attempt-v1. A score the learner's own browser computes suits practice; an attested assessment needs a check the learner does not control."
+    },
     "attempt-assessment": {
       "name": "Assessment",
       "datatype": "https://atomicdata.dev/datatypes/atomicURL",
@@ -666,7 +681,12 @@
     "attempt-answers": {
       "name": "Answers",
       "datatype": "https://atomicdata.dev/datatypes/json",
-      "description": "The learner's answers as JSON, keyed by the subject of each question."
+      "description": "The learner's answers as JSON, keyed by the subject of each question. Its keys are the questions this attempt drew."
+    },
+    "attempt-seed": {
+      "name": "Seed",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "The seed that generated or drew this attempt's questions, so the same questions can be shown again for review."
     },
     "attempt-created-at": {
       "name": "Created at",

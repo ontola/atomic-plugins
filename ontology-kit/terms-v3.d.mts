@@ -50,9 +50,12 @@ export declare const properties: {
   readonly 'assessment-questions': PropertyTerm;
   readonly 'assessment-pass-score': PropertyTerm;
   readonly 'assessment-kind': PropertyTerm;
+  readonly 'assessment-draw': PropertyTerm;
+  readonly 'assessment-app': PropertyTerm;
   readonly 'attempt-assessment': PropertyTerm;
   readonly 'attempt-score': PropertyTerm;
   readonly 'attempt-answers': PropertyTerm;
+  readonly 'attempt-seed': PropertyTerm;
   readonly 'attempt-created-at': PropertyTerm;
   readonly 'lesson-license': PropertyTerm;
   readonly 'lesson-generated-with': PropertyTerm;

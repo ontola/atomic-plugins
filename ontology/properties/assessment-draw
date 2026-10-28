@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-draw",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "assessment-draw",
+  "https://atomicdata.dev/properties/name": "Questions per attempt",
+  "https://atomicdata.dev/properties/description": "How many questions each attempt draws from the bank, so a learner can test themselves again without getting the same questions. Draws prefer questions this learner has not answered, then those answered longest ago. Absent: every question in the bank.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/integer"
+}
