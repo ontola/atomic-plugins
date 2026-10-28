@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-kind",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "assessment-kind",
+  "https://atomicdata.dev/properties/name": "Kind",
+  "https://atomicdata.dev/properties/description": "One of practice, attested. Practice is for learning with direct feedback; attested is a test whose result may count as evidence.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
+}

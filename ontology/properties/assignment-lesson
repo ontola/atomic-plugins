@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/assignment-lesson",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "assignment-lesson",
+  "https://atomicdata.dev/properties/name": "Lesson",
+  "https://atomicdata.dev/properties/description": "The lesson to use for the assignment. Optional Points at lesson-v1.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/atomicURL"
+}

@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/deck-slides",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "deck-slides",
+  "https://atomicdata.dev/properties/name": "Slides",
+  "https://atomicdata.dev/properties/description": "The slides, in presentation order (the array order is the order). A slide is any existing resource: a document fragment, a canvas, a file, a question, a plugin view.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/resourceArray"
+}

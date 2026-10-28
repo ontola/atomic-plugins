@@ -1,0 +1,19 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/assignment-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "assignment-v1",
+  "https://atomicdata.dev/properties/name": "Assignment",
+  "https://atomicdata.dev/properties/description": "Work given to a cohort on a skill, with an optional lesson and a due date.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assignment-cohort",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assignment-skill"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://atomicdata.dev/properties/name",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assignment-lesson",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assignment-due"
+  ]
+}
