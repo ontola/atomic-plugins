@@ -78,42 +78,34 @@
         "cohort-teachers",
         "cohort-goals",
         "assignment-cohort",
-        "assignment-skill",
         "assignment-lesson",
-        "assignment-due",
-        "submission-assignment",
-        "submission-student",
         "submission-work",
         "submission-submitted-at",
         "submission-status",
-        "grade-student",
-        "grade-assignment",
-        "grade-assessment",
         "grade-value",
         "grade-scale",
         "grade-weight",
-        "grade-comment",
         "grade-evidence",
-        "grade-graded-at",
         "question-prompt",
         "question-type",
         "question-options",
         "question-answer",
         "question-explanation",
-        "question-skill",
         "assessment-assesses",
         "assessment-questions",
         "assessment-pass-score",
         "assessment-kind",
         "assessment-draw",
         "assessment-app",
-        "attempt-assessment",
         "attempt-score",
         "attempt-answers",
-        "attempt-created-at",
         "attempt-seed",
-        "lesson-license",
-        "lesson-generated-with"
+        "learner",
+        "assessment",
+        "assignment",
+        "skill",
+        "license",
+        "generated-with"
       ]
     }
   },
@@ -232,18 +224,19 @@
     },
     "assignment-v1": {
       "name": "Assignment",
-      "description": "Work given to a cohort on a skill, with an optional lesson and a due date.",
-      "requires": ["assignment-cohort", "assignment-skill"],
+      "description": "Work given to a cohort on a skill, with an optional lesson and a due date (the task/v1 due-date, so a calendar or task view shows it). It does not extend a task: it has no status of its own, learners' progress lives in submissions.",
+      "requires": ["assignment-cohort", "skill"],
       "recommends": [
         "https://atomicdata.dev/properties/name",
+        "https://atomicdata.dev/properties/description",
         "assignment-lesson",
-        "assignment-due"
+        "https://atomicdata.dev/task/v1/due-date"
       ]
     },
     "submission-v1": {
       "name": "Submission",
-      "description": "One learner's handing in of the work for one assignment. Status is one of todo, in-progress, submitted, reviewed.",
-      "requires": ["submission-assignment", "submission-student"],
+      "description": "One learner's handing in of the work for one assignment.",
+      "requires": ["assignment", "learner"],
       "recommends": [
         "submission-work",
         "submission-submitted-at",
@@ -253,14 +246,14 @@
     "grade-v1": {
       "name": "Grade",
       "description": "A teacher's judgment of one learner on an assignment or assessment, with scale and weight. Not mastery (what a learner can do) and not an Open Badge or other credential.",
-      "requires": ["grade-student", "grade-value", "grade-scale"],
+      "requires": ["learner", "grade-value", "grade-scale"],
       "recommends": [
-        "grade-assignment",
-        "grade-assessment",
+        "assignment",
+        "assessment",
         "grade-weight",
-        "grade-comment",
+        "https://atomicdata.dev/properties/description",
         "grade-evidence",
-        "grade-graded-at"
+        "https://atomicdata.dev/properties/createdAt"
       ]
     },
     "question-v1": {
@@ -271,7 +264,7 @@
         "question-options",
         "question-answer",
         "question-explanation",
-        "question-skill"
+        "skill"
       ]
     },
     "assessment-v1": {
@@ -292,8 +285,13 @@
     "attempt-v1": {
       "name": "Attempt",
       "description": "One try at an assessment by one learner. Append-only, kept in the learner's own drive. Comparable to the result of an xAPI statement.",
-      "requires": ["attempt-assessment", "attempt-score"],
-      "recommends": ["attempt-answers", "attempt-created-at", "attempt-seed"]
+      "requires": ["assessment", "attempt-score"],
+      "recommends": [
+        "learner",
+        "attempt-answers",
+        "https://atomicdata.dev/properties/createdAt",
+        "attempt-seed"
+      ]
     }
   },
   "properties": {
@@ -517,32 +515,10 @@
       "description": "The cohort this assignment is for.",
       "classtype": "cohort-v1"
     },
-    "assignment-skill": {
-      "name": "Skill",
-      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
-      "description": "The skill the assignment practises Points at skill-v1."
-    },
     "assignment-lesson": {
       "name": "Lesson",
       "datatype": "https://atomicdata.dev/datatypes/atomicURL",
       "description": "The lesson to use for the assignment. Optional Points at lesson-v1."
-    },
-    "assignment-due": {
-      "name": "Due",
-      "datatype": "https://atomicdata.dev/datatypes/timestamp",
-      "description": "When the assignment is due, milliseconds since the Unix epoch."
-    },
-    "submission-assignment": {
-      "name": "Assignment",
-      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
-      "description": "The assignment this submission answers.",
-      "classtype": "assignment-v1"
-    },
-    "submission-student": {
-      "name": "Student",
-      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
-      "description": "The learner who hands in the work.",
-      "classtype": "https://atomicdata.dev/classes/Agent"
     },
     "submission-work": {
       "name": "Work",
@@ -556,26 +532,10 @@
     },
     "submission-status": {
       "name": "Status",
-      "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "One of todo, in-progress, submitted, reviewed. A view shows an unknown value as plain text."
-    },
-    "grade-student": {
-      "name": "Student",
       "datatype": "https://atomicdata.dev/datatypes/atomicURL",
-      "description": "The learner who received the grade.",
-      "classtype": "https://atomicdata.dev/classes/Agent"
-    },
-    "grade-assignment": {
-      "name": "Assignment",
-      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
-      "description": "The assignment that was graded. Give this or grade-assessment.",
-      "classtype": "assignment-v1"
-    },
-    "grade-assessment": {
-      "name": "Assessment",
-      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
-      "description": "The assessment that was graded. Give this or grade-assignment.",
-      "classtype": "assessment-v1"
+      "description": "Where the submission is in its life. A view shows a value it does not know as plain text.",
+      "classtype": "https://atomicdata.dev/classes/Tag",
+      "allowsOnly": ["todo", "in-progress", "submitted", "reviewed"]
     },
     "grade-value": {
       "name": "Value",
@@ -584,28 +544,34 @@
     },
     "grade-scale": {
       "name": "Scale",
-      "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "How to read the value: one of 1-10, percent, A-F, pass-fail."
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "How to read the grade value.",
+      "classtype": "https://atomicdata.dev/classes/Tag",
+      "allowsOnly": [
+        {
+          "id": "1-10",
+          "name": "1-10"
+        },
+        "percent",
+        {
+          "id": "a-f",
+          "name": "A-F"
+        },
+        {
+          "id": "pass-fail",
+          "name": "Pass/fail"
+        }
+      ]
     },
     "grade-weight": {
       "name": "Weight",
       "datatype": "https://atomicdata.dev/datatypes/float",
       "description": "Weight of this grade in an average. Absent: 1."
     },
-    "grade-comment": {
-      "name": "Comment",
-      "datatype": "https://atomicdata.dev/datatypes/markdown",
-      "description": "Explanation to the learner."
-    },
     "grade-evidence": {
       "name": "Evidence",
       "datatype": "https://atomicdata.dev/datatypes/atomicURL",
       "description": "The attempt or submission that was judged."
-    },
-    "grade-graded-at": {
-      "name": "Graded at",
-      "datatype": "https://atomicdata.dev/datatypes/timestamp",
-      "description": "When the grade was given, milliseconds since the Unix epoch."
     },
     "question-prompt": {
       "name": "Prompt",
@@ -614,13 +580,15 @@
     },
     "question-type": {
       "name": "Type",
-      "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "One of choice, numeric, short-text. A view shows an unknown value as plain text."
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "How the question is answered.",
+      "classtype": "https://atomicdata.dev/classes/Tag",
+      "allowsOnly": ["choice", "numeric", "short-text"]
     },
     "question-options": {
       "name": "Options",
       "datatype": "https://atomicdata.dev/datatypes/json",
-      "description": "For a choice question, the options as a JSON array of strings. The repository has no tag convention yet; a later release may point to tag resources instead."
+      "description": "For a choice question, the options as a JSON array of strings. Core has no string array datatype, and a tag resource per option would cost a resource per answer text."
     },
     "question-answer": {
       "name": "Answer",
@@ -631,11 +599,6 @@
       "name": "Explanation",
       "datatype": "https://atomicdata.dev/datatypes/markdown",
       "description": "Shown after answering."
-    },
-    "question-skill": {
-      "name": "Skill",
-      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
-      "description": "The skill this question checks Points at skill-v1."
     },
     "assessment-assesses": {
       "name": "Assesses",
@@ -654,8 +617,10 @@
     },
     "assessment-kind": {
       "name": "Kind",
-      "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "One of practice, attested. Practice is for learning with direct feedback; attested is a test whose result may count as evidence."
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "Practice is for learning with direct feedback; attested is a test whose result may count as evidence.",
+      "classtype": "https://atomicdata.dev/classes/Tag",
+      "allowsOnly": ["practice", "attested"]
     },
     "assessment-draw": {
       "name": "Questions per attempt",
@@ -666,12 +631,6 @@
       "name": "App",
       "datatype": "https://atomicdata.dev/datatypes/atomicURL",
       "description": "A drive app that runs this assessment instead of, or next to, the question bank: it can generate questions (procedural, seeded) and check answers with its own logic, and records each try as an attempt-v1. A score the learner's own browser computes suits practice; an attested assessment needs a check the learner does not control."
-    },
-    "attempt-assessment": {
-      "name": "Assessment",
-      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
-      "description": "The assessment that was attempted.",
-      "classtype": "assessment-v1"
     },
     "attempt-score": {
       "name": "Score",
@@ -688,20 +647,38 @@
       "datatype": "https://atomicdata.dev/datatypes/string",
       "description": "The seed that generated or drew this attempt's questions, so the same questions can be shown again for review."
     },
-    "attempt-created-at": {
-      "name": "Created at",
-      "datatype": "https://atomicdata.dev/datatypes/timestamp",
-      "description": "When the attempt was made, milliseconds since the Unix epoch."
+    "learner": {
+      "name": "Learner",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The learner this is about: who handed in a submission, received a grade or made an attempt.",
+      "classtype": "https://atomicdata.dev/classes/Agent"
     },
-    "lesson-license": {
+    "assessment": {
+      "name": "Assessment",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The assessment this is about: the one that was graded or attempted.",
+      "classtype": "assessment-v1"
+    },
+    "assignment": {
+      "name": "Assignment",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The assignment this is about: the one that was handed in or graded.",
+      "classtype": "assignment-v1"
+    },
+    "skill": {
+      "name": "Skill",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The skill this is about: what an assignment practises or a question checks. Points at skill-v1."
+    },
+    "license": {
       "name": "License",
       "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "The license of the material, as an SPDX identifier or a URL. Maps to schema.org license. For a future lesson-v2 to recommend."
+      "description": "The license of a creative work (a lesson, deck, question bank), as an SPDX identifier or a URL. Maps to schema.org license."
     },
-    "lesson-generated-with": {
+    "generated-with": {
       "name": "Generated with",
       "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "The tool or model that generated the material, if any, for example the model name. For a future lesson-v2 to recommend."
+      "description": "The tool or model that generated the material, if any, for example the model name. Fits any resource."
     }
   }
 }

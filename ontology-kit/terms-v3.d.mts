@@ -7,6 +7,8 @@ export interface PropertyTerm {
   readonly subject: string;
   readonly datatype: string;
   readonly classtype?: string;
+  /** Value id to value subject, for a property with fixed values. */
+  readonly allowsOnly?: Readonly<Record<string, string>>;
 }
 
 /** The ontology base URL, from base.json at build time. */
@@ -23,42 +25,34 @@ export declare const properties: {
   readonly 'cohort-teachers': PropertyTerm;
   readonly 'cohort-goals': PropertyTerm;
   readonly 'assignment-cohort': PropertyTerm;
-  readonly 'assignment-skill': PropertyTerm;
   readonly 'assignment-lesson': PropertyTerm;
-  readonly 'assignment-due': PropertyTerm;
-  readonly 'submission-assignment': PropertyTerm;
-  readonly 'submission-student': PropertyTerm;
   readonly 'submission-work': PropertyTerm;
   readonly 'submission-submitted-at': PropertyTerm;
   readonly 'submission-status': PropertyTerm;
-  readonly 'grade-student': PropertyTerm;
-  readonly 'grade-assignment': PropertyTerm;
-  readonly 'grade-assessment': PropertyTerm;
   readonly 'grade-value': PropertyTerm;
   readonly 'grade-scale': PropertyTerm;
   readonly 'grade-weight': PropertyTerm;
-  readonly 'grade-comment': PropertyTerm;
   readonly 'grade-evidence': PropertyTerm;
-  readonly 'grade-graded-at': PropertyTerm;
   readonly 'question-prompt': PropertyTerm;
   readonly 'question-type': PropertyTerm;
   readonly 'question-options': PropertyTerm;
   readonly 'question-answer': PropertyTerm;
   readonly 'question-explanation': PropertyTerm;
-  readonly 'question-skill': PropertyTerm;
   readonly 'assessment-assesses': PropertyTerm;
   readonly 'assessment-questions': PropertyTerm;
   readonly 'assessment-pass-score': PropertyTerm;
   readonly 'assessment-kind': PropertyTerm;
   readonly 'assessment-draw': PropertyTerm;
   readonly 'assessment-app': PropertyTerm;
-  readonly 'attempt-assessment': PropertyTerm;
   readonly 'attempt-score': PropertyTerm;
   readonly 'attempt-answers': PropertyTerm;
   readonly 'attempt-seed': PropertyTerm;
-  readonly 'attempt-created-at': PropertyTerm;
-  readonly 'lesson-license': PropertyTerm;
-  readonly 'lesson-generated-with': PropertyTerm;
+  readonly learner: PropertyTerm;
+  readonly assessment: PropertyTerm;
+  readonly assignment: PropertyTerm;
+  readonly skill: PropertyTerm;
+  readonly license: PropertyTerm;
+  readonly 'generated-with': PropertyTerm;
 };
 
 export declare const classes: {

@@ -1,11 +1,18 @@
 {
   "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/question-type",
   "https://atomicdata.dev/properties/isA": [
-    "https://atomicdata.dev/classes/Property"
+    "https://atomicdata.dev/classes/Property",
+    "https://atomicdata.dev/classes/SelectProperty"
   ],
   "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "question-type",
   "https://atomicdata.dev/properties/name": "Type",
-  "https://atomicdata.dev/properties/description": "One of choice, numeric, short-text. A view shows an unknown value as plain text.",
-  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
+  "https://atomicdata.dev/properties/description": "How the question is answered.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/atomicURL",
+  "https://atomicdata.dev/properties/classtype": "https://atomicdata.dev/classes/Tag",
+  "https://atomicdata.dev/properties/allowsOnly": [
+    "https://ontola.github.io/atomic-plugins/ontology/values/question-type-choice",
+    "https://ontola.github.io/atomic-plugins/ontology/values/question-type-numeric",
+    "https://ontola.github.io/atomic-plugins/ontology/values/question-type-short-text"
+  ]
 }

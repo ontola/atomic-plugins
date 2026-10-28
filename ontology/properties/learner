@@ -1,12 +1,12 @@
 {
-  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/grade-student",
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/learner",
   "https://atomicdata.dev/properties/isA": [
     "https://atomicdata.dev/classes/Property"
   ],
   "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
-  "https://atomicdata.dev/properties/shortname": "grade-student",
-  "https://atomicdata.dev/properties/name": "Student",
-  "https://atomicdata.dev/properties/description": "The learner who received the grade.",
+  "https://atomicdata.dev/properties/shortname": "learner",
+  "https://atomicdata.dev/properties/name": "Learner",
+  "https://atomicdata.dev/properties/description": "The learner this is about: who handed in a submission, received a grade or made an attempt.",
   "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/atomicURL",
   "https://atomicdata.dev/properties/classtype": "https://atomicdata.dev/classes/Agent"
 }

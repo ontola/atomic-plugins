@@ -42,33 +42,10 @@ export const properties = Object.freeze({
     classtype:
       'https://ontola.github.io/atomic-plugins/ontology/classes/cohort-v1',
   }),
-  'assignment-skill': Object.freeze({
-    subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/assignment-skill',
-    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
-  }),
   'assignment-lesson': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/assignment-lesson',
     datatype: 'https://atomicdata.dev/datatypes/atomicURL',
-  }),
-  'assignment-due': Object.freeze({
-    subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/assignment-due',
-    datatype: 'https://atomicdata.dev/datatypes/timestamp',
-  }),
-  'submission-assignment': Object.freeze({
-    subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/submission-assignment',
-    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
-    classtype:
-      'https://ontola.github.io/atomic-plugins/ontology/classes/assignment-v1',
-  }),
-  'submission-student': Object.freeze({
-    subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/submission-student',
-    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
-    classtype: 'https://atomicdata.dev/classes/Agent',
   }),
   'submission-work': Object.freeze({
     subject:
@@ -83,27 +60,17 @@ export const properties = Object.freeze({
   'submission-status': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/submission-status',
-    datatype: 'https://atomicdata.dev/datatypes/string',
-  }),
-  'grade-student': Object.freeze({
-    subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/grade-student',
     datatype: 'https://atomicdata.dev/datatypes/atomicURL',
-    classtype: 'https://atomicdata.dev/classes/Agent',
-  }),
-  'grade-assignment': Object.freeze({
-    subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/grade-assignment',
-    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
-    classtype:
-      'https://ontola.github.io/atomic-plugins/ontology/classes/assignment-v1',
-  }),
-  'grade-assessment': Object.freeze({
-    subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/grade-assessment',
-    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
-    classtype:
-      'https://ontola.github.io/atomic-plugins/ontology/classes/assessment-v1',
+    classtype: 'https://atomicdata.dev/classes/Tag',
+    allowsOnly: Object.freeze({
+      todo: 'https://ontola.github.io/atomic-plugins/ontology/values/submission-status-todo',
+      'in-progress':
+        'https://ontola.github.io/atomic-plugins/ontology/values/submission-status-in-progress',
+      submitted:
+        'https://ontola.github.io/atomic-plugins/ontology/values/submission-status-submitted',
+      reviewed:
+        'https://ontola.github.io/atomic-plugins/ontology/values/submission-status-reviewed',
+    }),
   }),
   'grade-value': Object.freeze({
     subject:
@@ -113,27 +80,28 @@ export const properties = Object.freeze({
   'grade-scale': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/grade-scale',
-    datatype: 'https://atomicdata.dev/datatypes/string',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype: 'https://atomicdata.dev/classes/Tag',
+    allowsOnly: Object.freeze({
+      '1-10':
+        'https://ontola.github.io/atomic-plugins/ontology/values/grade-scale-1-10',
+      percent:
+        'https://ontola.github.io/atomic-plugins/ontology/values/grade-scale-percent',
+      'a-f':
+        'https://ontola.github.io/atomic-plugins/ontology/values/grade-scale-a-f',
+      'pass-fail':
+        'https://ontola.github.io/atomic-plugins/ontology/values/grade-scale-pass-fail',
+    }),
   }),
   'grade-weight': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/grade-weight',
     datatype: 'https://atomicdata.dev/datatypes/float',
   }),
-  'grade-comment': Object.freeze({
-    subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/grade-comment',
-    datatype: 'https://atomicdata.dev/datatypes/markdown',
-  }),
   'grade-evidence': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/grade-evidence',
     datatype: 'https://atomicdata.dev/datatypes/atomicURL',
-  }),
-  'grade-graded-at': Object.freeze({
-    subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/grade-graded-at',
-    datatype: 'https://atomicdata.dev/datatypes/timestamp',
   }),
   'question-prompt': Object.freeze({
     subject:
@@ -143,7 +111,16 @@ export const properties = Object.freeze({
   'question-type': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/question-type',
-    datatype: 'https://atomicdata.dev/datatypes/string',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype: 'https://atomicdata.dev/classes/Tag',
+    allowsOnly: Object.freeze({
+      choice:
+        'https://ontola.github.io/atomic-plugins/ontology/values/question-type-choice',
+      numeric:
+        'https://ontola.github.io/atomic-plugins/ontology/values/question-type-numeric',
+      'short-text':
+        'https://ontola.github.io/atomic-plugins/ontology/values/question-type-short-text',
+    }),
   }),
   'question-options': Object.freeze({
     subject:
@@ -159,11 +136,6 @@ export const properties = Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/question-explanation',
     datatype: 'https://atomicdata.dev/datatypes/markdown',
-  }),
-  'question-skill': Object.freeze({
-    subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/question-skill',
-    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
   }),
   'assessment-assesses': Object.freeze({
     subject:
@@ -183,7 +155,14 @@ export const properties = Object.freeze({
   'assessment-kind': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/assessment-kind',
-    datatype: 'https://atomicdata.dev/datatypes/string',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype: 'https://atomicdata.dev/classes/Tag',
+    allowsOnly: Object.freeze({
+      practice:
+        'https://ontola.github.io/atomic-plugins/ontology/values/assessment-kind-practice',
+      attested:
+        'https://ontola.github.io/atomic-plugins/ontology/values/assessment-kind-attested',
+    }),
   }),
   'assessment-draw': Object.freeze({
     subject:
@@ -194,13 +173,6 @@ export const properties = Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/assessment-app',
     datatype: 'https://atomicdata.dev/datatypes/atomicURL',
-  }),
-  'attempt-assessment': Object.freeze({
-    subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-assessment',
-    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
-    classtype:
-      'https://ontola.github.io/atomic-plugins/ontology/classes/assessment-v1',
   }),
   'attempt-score': Object.freeze({
     subject:
@@ -217,19 +189,39 @@ export const properties = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-seed',
     datatype: 'https://atomicdata.dev/datatypes/string',
   }),
-  'attempt-created-at': Object.freeze({
+  learner: Object.freeze({
     subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-created-at',
-    datatype: 'https://atomicdata.dev/datatypes/timestamp',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/learner',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype: 'https://atomicdata.dev/classes/Agent',
   }),
-  'lesson-license': Object.freeze({
+  assessment: Object.freeze({
     subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/lesson-license',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/assessment',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/assessment-v1',
+  }),
+  assignment: Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/assignment',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/assignment-v1',
+  }),
+  skill: Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/skill',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+  }),
+  license: Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/license',
     datatype: 'https://atomicdata.dev/datatypes/string',
   }),
-  'lesson-generated-with': Object.freeze({
+  'generated-with': Object.freeze({
     subject:
-      'https://ontola.github.io/atomic-plugins/ontology/properties/lesson-generated-with',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/generated-with',
     datatype: 'https://atomicdata.dev/datatypes/string',
   }),
 });
@@ -260,20 +252,21 @@ export const classes = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/classes/assignment-v1',
     requires: Object.freeze([
       'https://ontola.github.io/atomic-plugins/ontology/properties/assignment-cohort',
-      'https://ontola.github.io/atomic-plugins/ontology/properties/assignment-skill',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/skill',
     ]),
     recommends: Object.freeze([
       'https://atomicdata.dev/properties/name',
+      'https://atomicdata.dev/properties/description',
       'https://ontola.github.io/atomic-plugins/ontology/properties/assignment-lesson',
-      'https://ontola.github.io/atomic-plugins/ontology/properties/assignment-due',
+      'https://atomicdata.dev/task/v1/due-date',
     ]),
   }),
   'submission-v1': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/classes/submission-v1',
     requires: Object.freeze([
-      'https://ontola.github.io/atomic-plugins/ontology/properties/submission-assignment',
-      'https://ontola.github.io/atomic-plugins/ontology/properties/submission-student',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/assignment',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/learner',
     ]),
     recommends: Object.freeze([
       'https://ontola.github.io/atomic-plugins/ontology/properties/submission-work',
@@ -285,17 +278,17 @@ export const classes = Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/classes/grade-v1',
     requires: Object.freeze([
-      'https://ontola.github.io/atomic-plugins/ontology/properties/grade-student',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/learner',
       'https://ontola.github.io/atomic-plugins/ontology/properties/grade-value',
       'https://ontola.github.io/atomic-plugins/ontology/properties/grade-scale',
     ]),
     recommends: Object.freeze([
-      'https://ontola.github.io/atomic-plugins/ontology/properties/grade-assignment',
-      'https://ontola.github.io/atomic-plugins/ontology/properties/grade-assessment',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/assignment',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/assessment',
       'https://ontola.github.io/atomic-plugins/ontology/properties/grade-weight',
-      'https://ontola.github.io/atomic-plugins/ontology/properties/grade-comment',
+      'https://atomicdata.dev/properties/description',
       'https://ontola.github.io/atomic-plugins/ontology/properties/grade-evidence',
-      'https://ontola.github.io/atomic-plugins/ontology/properties/grade-graded-at',
+      'https://atomicdata.dev/properties/createdAt',
     ]),
   }),
   'question-v1': Object.freeze({
@@ -309,7 +302,7 @@ export const classes = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/question-options',
       'https://ontola.github.io/atomic-plugins/ontology/properties/question-answer',
       'https://ontola.github.io/atomic-plugins/ontology/properties/question-explanation',
-      'https://ontola.github.io/atomic-plugins/ontology/properties/question-skill',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/skill',
     ]),
   }),
   'assessment-v1': Object.freeze({
@@ -331,12 +324,13 @@ export const classes = Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/classes/attempt-v1',
     requires: Object.freeze([
-      'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-assessment',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/assessment',
       'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-score',
     ]),
     recommends: Object.freeze([
+      'https://ontola.github.io/atomic-plugins/ontology/properties/learner',
       'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-answers',
-      'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-created-at',
+      'https://atomicdata.dev/properties/createdAt',
       'https://ontola.github.io/atomic-plugins/ontology/properties/attempt-seed',
     ]),
   }),

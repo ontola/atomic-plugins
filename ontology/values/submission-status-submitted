@@ -1,0 +1,9 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/values/submission-status-submitted",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Tag"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/properties/submission-status",
+  "https://atomicdata.dev/properties/shortname": "submitted",
+  "https://atomicdata.dev/properties/name": "Submitted"
+}
