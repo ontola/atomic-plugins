@@ -1,0 +1,353 @@
+/* Shared by the three physics apps. Colours come from the host's theme variables
+   (--t-color-bg, --t-color-text) where it sends them; the diagram colours are
+   this app's own, one set per colour scheme, chosen for contrast on either. */
+.ph-app {
+  --ph-bg: var(--t-color-bg, #ffffff);
+  --ph-text: var(--t-color-text, #1c1c1c);
+  --ph-muted: color-mix(in srgb, var(--ph-text) 72%, var(--ph-bg));
+  --ph-line: color-mix(in srgb, var(--ph-text) 28%, var(--ph-bg));
+  --ph-soft: color-mix(in srgb, var(--ph-text) 6%, var(--ph-bg));
+  --ph-scene: color-mix(in srgb, var(--ph-text) 3%, var(--ph-bg));
+  --ph-grid: color-mix(in srgb, var(--ph-text) 11%, var(--ph-bg));
+  --ph-accent: #1d4ed8;
+  --ph-accent-ink: #ffffff;
+  --ph-focus: #0b57d0;
+  --ph-c1: #0072b2;
+  --ph-c2: #b8460a;
+  --ph-c3: #007a5a;
+  --ph-north: #c62828;
+  --ph-south: #1565c0;
+  --ph-pole-ink: #ffffff;
+  --ph-heat: #c2410c;
+  box-sizing: border-box;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 12px 16px 24px;
+  color: var(--ph-text);
+  background: var(--ph-bg);
+  font: 15px/1.45 var(--t-font-family, system-ui, sans-serif);
+}
+
+.ph-app[data-scheme='dark'] {
+  --ph-bg: var(--t-color-bg, #15171c);
+  --ph-text: var(--t-color-text, #e8e8ea);
+  --ph-accent: #8ab4ff;
+  --ph-accent-ink: #0b1220;
+  --ph-focus: #9bc1ff;
+  --ph-c1: #56b4e9;
+  --ph-c2: #f0a45d;
+  --ph-c3: #3ddc97;
+  --ph-north: #ff7b72;
+  --ph-south: #6cb6ff;
+  --ph-pole-ink: #0b0f14;
+  --ph-heat: #ffb454;
+}
+
+.ph-app *,
+.ph-app *::before,
+.ph-app *::after {
+  box-sizing: border-box;
+}
+
+.ph-title {
+  margin: 0 0 4px;
+  font-family: var(--t-font-family-header, inherit);
+  font-size: 1.35rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.ph-intro {
+  margin: 0 0 12px;
+  color: var(--ph-muted);
+  max-width: 70ch;
+}
+
+.ph-scene {
+  border: 1px solid var(--ph-line);
+  border-radius: 8px;
+  background: var(--ph-scene);
+  overflow: hidden;
+}
+
+.ph-scene svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.ph-panel {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--ph-line);
+  border-radius: 8px;
+  background: var(--ph-soft);
+}
+
+.ph-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px 20px;
+  margin-top: 12px;
+}
+
+.ph-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  align-items: baseline;
+}
+
+.ph-field label {
+  font-weight: 600;
+}
+
+.ph-readout {
+  font-variant-numeric: tabular-nums;
+  color: var(--ph-text);
+}
+
+.ph-range {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 32px;
+  margin: 0;
+  accent-color: var(--ph-accent);
+}
+
+.ph-seg {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.ph-seg legend {
+  padding: 0;
+  margin-bottom: 4px;
+  font-weight: 600;
+}
+
+.ph-seg-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ph-seg-opt {
+  position: relative;
+  display: inline-flex;
+}
+
+.ph-seg-opt input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ph-seg-opt span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 6px 14px;
+  border: 1px solid var(--ph-line);
+  border-radius: 8px;
+  background: var(--ph-bg);
+  color: var(--ph-text);
+}
+
+.ph-seg-opt input:checked + span {
+  border-color: var(--ph-accent);
+  background: var(--ph-accent);
+  color: var(--ph-accent-ink);
+  font-weight: 600;
+}
+
+.ph-seg-opt input:focus-visible + span,
+.ph-btn:focus-visible,
+.ph-check input:focus-visible,
+.ph-range:focus-visible {
+  outline: 3px solid var(--ph-focus);
+  outline-offset: 2px;
+}
+
+.ph-btn {
+  min-height: 40px;
+  padding: 6px 14px;
+  border: 1px solid var(--ph-line);
+  border-radius: 8px;
+  background: var(--ph-bg);
+  color: var(--ph-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ph-btn:hover {
+  background: var(--ph-soft);
+}
+
+.ph-btn.ph-primary {
+  border-color: var(--ph-accent);
+  background: var(--ph-accent);
+  color: var(--ph-accent-ink);
+  font-weight: 600;
+}
+
+.ph-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  cursor: pointer;
+}
+
+.ph-check input {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--ph-accent);
+}
+
+.ph-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.ph-values {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 6px 16px;
+  margin: 0;
+}
+
+.ph-values div {
+  min-width: 0;
+}
+
+.ph-values dt {
+  font-size: 0.85rem;
+  color: var(--ph-muted);
+}
+
+.ph-values dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.ph-formula {
+  margin: 8px 0 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.ph-verdict {
+  margin: 8px 0 0;
+  font-weight: 600;
+}
+
+.ph-hint {
+  margin: 8px 0 0;
+  font-size: 0.9rem;
+  color: var(--ph-muted);
+}
+
+.ph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9rem;
+}
+
+.ph-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ph-swatch {
+  display: inline-block;
+  width: 22px;
+  height: 0;
+  border-top: 3px solid currentColor;
+}
+
+/* SVG parts */
+.ph-label {
+  fill: var(--ph-text);
+  font: 600 12px var(--t-font-family, system-ui, sans-serif);
+  paint-order: stroke;
+  stroke: var(--ph-scene);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+
+.ph-label.ph-small {
+  font-weight: 400;
+  font-size: 11px;
+  fill: var(--ph-muted);
+}
+
+.ph-tick {
+  stroke: var(--ph-line);
+  stroke-width: 1;
+}
+
+.ph-gridline {
+  stroke: var(--ph-grid);
+  stroke-width: 1;
+}
+
+.ph-handle {
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+}
+
+.ph-handle:active {
+  cursor: grabbing;
+}
+
+.ph-ring {
+  fill: none;
+  stroke: var(--ph-focus);
+  stroke-width: 3;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ph-handle:focus-visible .ph-ring {
+  opacity: 1;
+}
+
+.ph-note {
+  margin: 8px 0 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ph-app * {
+    scroll-behavior: auto;
+    transition: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .ph-app {
+    padding: 10px 12px 20px;
+    font-size: 14px;
+  }
+
+  .ph-controls {
+    grid-template-columns: 1fr;
+  }
+}

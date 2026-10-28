@@ -1,0 +1,7 @@
+{
+  "name": "@atomic-integrations/physics-magnet-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Magneten drive app (bar magnets, field lines from a pole-pair model, compass, attraction and repulsion). Records only the version its catalog entry and apps/physics-magnet/<version>/ui.js carry (integrations/tooling/apps.mjs APP_FOLDERS). No npm dependencies, no ontology."
+}

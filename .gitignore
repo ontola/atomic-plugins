@@ -24,3 +24,4 @@ usertest/out/
 /integrations/pnpm-lock.yaml
 __pycache__/
 *.pyc
+/integrations/physics/*/dist

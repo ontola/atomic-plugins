@@ -328,6 +328,14 @@
       "paths": ["integrations/sync-status/**"],
       "note": "Google Keep style view of locally synced notes and checklists. Unit tests cover table and column resolution, unchecked-first ordering, source isolation and host editing grants. Browser tests use synthetic host resources; no provider calls.",
       "e2e": ["integrations/google-keep-view/e2e/google-keep-view.spec.ts"]
+    },
+    {
+      "id": "physics",
+      "index": 24,
+      "platforms": [],
+      "tiers": ["typecheck", "unit", "e2e"],
+      "note": "Three small physics drive apps for lessons, in one folder with shared code (shared/) and pure physics (core/: thin-lens ray tracing, pole-pair magnet fields and field lines, damped oscillator with RK4): Lenzen (physics-lens), Magneten (physics-magnet), Trillingen (physics-spring). Plain DOM and SVG, no network, no storage, no ontology (so not under the ontology gate: enabled and experimental). They live in lens/, magnet/ and spring/ (apps.mjs APP_FOLDERS maps each catalog shortname there). The e2e installs each from the catalog's Drive apps section under 'Show experimental plugins' and checks it renders in its null-origin iframe and reacts to a keypress and a drag.",
+      "e2e": ["integrations/physics/e2e/physics.spec.ts"]
     }
   ]
 }

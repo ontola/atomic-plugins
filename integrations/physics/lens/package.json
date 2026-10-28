@@ -1,0 +1,7 @@
+{
+  "name": "@atomic-integrations/physics-lens-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Lenzen drive app (thin lens, principal rays, 1/f = 1/v + 1/b). Records only the version its catalog entry and apps/physics-lens/<version>/ui.js carry (integrations/tooling/apps.mjs APP_FOLDERS). No npm dependencies, no ontology."
+}
