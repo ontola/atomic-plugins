@@ -46,7 +46,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     const width = Math.max(0, root.clientWidth - 2 * PAD - 2 * CARD_PAD);
     // A ping redraws everything: keep what was typed in a link field.
     const typed = [...root.querySelectorAll<HTMLInputElement>('.lb-input')].map(
-      (i) =>
+      i =>
         [
           i.getAttribute('aria-label'),
           i.value,
@@ -54,6 +54,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
         ] as const,
     );
     root.replaceChildren(...page(doc, controller.state(), ui, actions, width));
+
     for (const [label, value, active] of typed)
       for (const i of root.querySelectorAll<HTMLInputElement>('.lb-input'))
         if (i.getAttribute('aria-label') === label) {
@@ -96,18 +97,18 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
 
   const controller = createController(store, render);
   const actions: Actions = {
-    select: (id) => controller.select(id),
-    setGoal: (id) => controller.setGoal(id),
-    toggleMastery: (id) => void controller.toggleMastery(id),
+    select: id => controller.select(id),
+    setGoal: id => controller.setGoal(id),
+    toggleMastery: id => void controller.toggleMastery(id),
     loadStarter: () => void controller.loadStarter(),
     reload: () => void controller.load(),
-    open: (lesson) => {
+    open: lesson => {
       const target = lesson.content ?? lesson.subject;
       // A DID is a resource in the drive; any other URL is a link out.
       if (target.startsWith('did:')) void store.openResource?.(target);
       else if (/^https?:\/\//.test(target)) void store.openExternal?.(target);
     },
-    openRow: (id) => void store.openResource?.(id),
+    openRow: id => void store.openResource?.(id),
     link: (lesson, target) => void controller.linkLesson(lesson, target),
   };
 
