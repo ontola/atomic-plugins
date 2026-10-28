@@ -107,7 +107,7 @@ describe('notionProjection', () => {
           { id: 'a', name: 'Ay' },
         ],
       },
-      Due: { id: 'd', type: 'date', date: { start: '2026-09-23' } },
+      Owner: { id: 'd', type: 'people', people: [] },
     };
     const projected = notionProjection(fixture([page('p1', properties)]), {
       dataSource: DS.replaceAll('-', ''),
@@ -149,6 +149,30 @@ describe('notionProjection', () => {
       'notion/property/properties',
       ...added.map(t => t.path),
     ]);
+  });
+
+  it('projects a date as a string column and lists a malformed one', () => {
+    const ok = {
+      id: 'd',
+      type: 'date',
+      date: { start: '2026-03-01', end: '2026-03-02', time_zone: null },
+    };
+    const projected = notionProjection(
+      fixture([
+        page('p1', { When: ok }),
+        page('p2', { When: { ...ok, date: { start: 'soon' } } }),
+      ]),
+      { dataSource: DS },
+    );
+    const column = key('d');
+    expect(projected.records[0]!.values[column]).toBe('2026-03-01/2026-03-02');
+    expect(projected.records[1]!.values[column]).toBeUndefined();
+    expect(projected.errors).toEqual([
+      expect.stringContaining('"When" (date) has no lossless plain value'),
+    ]);
+    expect(
+      projected.ontology.terms.find(t => t.shortname === column)?.datatype,
+    ).toBe(Datatype.STRING);
   });
 
   it('distinguishes property ids that differ only in case', () => {
@@ -254,6 +278,32 @@ describe('notionFieldValue', () => {
     expect(notionFieldValue('multi_select', [])).toEqual([]);
     expect(notionFieldValue('number', null)).toBeNull();
     expect(notionFieldValue('status', null)).toBeNull();
+  });
+
+  it('reads a date as one string and gives back exactly what Notion held', () => {
+    const date = (v: unknown) => notionFieldValue('date', v);
+    expect(date(null)).toBeNull();
+    expect(date({ start: '2026-03-01', end: null, time_zone: null })).toBe(
+      '2026-03-01',
+    );
+    expect(date({ start: '2026-03-01' })).toBe('2026-03-01');
+    expect(
+      date({
+        start: '2026-03-01T09:00:00.000+01:00',
+        end: '2026-03-02T10:00:00.000+01:00',
+        time_zone: null,
+      }),
+    ).toBe('2026-03-01T09:00:00.000+01:00/2026-03-02T10:00:00.000+01:00');
+    expect(
+      date({ start: '2026-03-01T09:00:00', end: null, time_zone: 'Europe/Oslo' }),
+    ).toBe('2026-03-01T09:00:00 Europe/Oslo');
+    // Not Notion's shape, or a start that would parse as start plus zone.
+    expect(date({ start: 5 })).toBeUndefined();
+    expect(date({ end: '2026-03-01' })).toBeUndefined();
+    expect(date({ start: 'soon' })).toBeUndefined();
+    expect(date({ start: '2026-03-01 Europe/Oslo' })).toBeUndefined();
+    expect(date({ start: '2026-03-01', time_zone: 3 })).toBeUndefined();
+    expect(date('2026-03-01')).toBeUndefined();
   });
 
   it('treats links, mentions and colour as formatting', () => {

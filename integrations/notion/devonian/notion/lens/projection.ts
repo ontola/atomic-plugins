@@ -19,6 +19,7 @@ export const notionFieldTypes = [
   'url',
   'email',
   'phone_number',
+  'date',
   'select',
   'multi_select',
   'status',
@@ -42,6 +43,7 @@ const datatypes: Record<NotionFieldType, Datatype> = {
   url: Datatype.STRING,
   email: Datatype.STRING,
   phone_number: Datatype.STRING,
+  date: Datatype.STRING,
   select: Datatype.STRING,
   status: Datatype.STRING,
   multi_select: JSON_DATATYPE,
@@ -137,6 +139,40 @@ export function notionFormattedText(
   return notionTextWithoutFormatting(raw);
 }
 
+/**
+ * A Notion date property as one string: `start`, `start/end` for a range,
+ * and ` time_zone` appended when Notion holds one, e.g.
+ * `2026-03-01T09:00:00+01:00/2026-03-01T10:00:00+01:00 Europe/Amsterdam`.
+ * Start and end are Notion's own ISO 8601 strings, kept verbatim. The host's
+ * timestamp is not used: it would turn a date into midnight UTC and drop the
+ * offset and the time zone, so a date-only value could not be sent back as
+ * it was. Date-only strings still sort and compare as dates.
+ */
+const ISO_DATE =
+  '\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d+)?)?(?:Z|[+-]\\d{2}:\\d{2})?)?';
+const TIME_ZONE = '[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)*';
+const DATE_VALUE = new RegExp(
+  `^(${ISO_DATE})(?:/(${ISO_DATE}))?(?: (${TIME_ZONE}))?$`,
+);
+
+const formatDate = (raw: unknown): string | undefined => {
+  const { start, end = null, time_zone: zone = null } = object(raw);
+  const optional = (v: unknown) => v === null || typeof v === 'string';
+  if (typeof start !== 'string' || !optional(end) || !optional(zone))
+    return undefined;
+  const text = `${start}${end === null ? '' : `/${end}`}${zone === null ? '' : ` ${zone}`}`;
+  const parsed = DATE_VALUE.exec(text);
+
+  // Only a string that splits back into the same parts is read, so the
+  // reverse mapping sends exactly what Notion held.
+  return parsed &&
+    parsed[1] === start &&
+    (parsed[2] ?? null) === end &&
+    (parsed[3] ?? null) === zone
+    ? text
+    : undefined;
+};
+
 const optionId = (value: unknown): string | undefined => {
   const id = object(value).id;
 
@@ -168,6 +204,8 @@ export function notionFieldValue(
     case 'email':
     case 'phone_number':
       return raw === null || typeof raw === 'string' ? raw : undefined;
+    case 'date':
+      return raw === null ? null : formatDate(raw);
     case 'select':
     case 'status':
       if (raw === null) return null;
@@ -244,6 +282,18 @@ export function notionPropertyValue(
       if (value === undefined) return null;
 
       return typeof value === 'string' ? value : fail();
+    case 'date': {
+      if (value === undefined) return null;
+      const parsed = typeof value === 'string' ? DATE_VALUE.exec(value) : null;
+      if (!parsed) return fail();
+
+      return {
+        start: parsed[1],
+        end: parsed[2] ?? null,
+        time_zone: parsed[3] ?? null,
+      };
+    }
+
     case 'select':
     case 'status':
       if (value === undefined) return null;
@@ -291,7 +341,7 @@ const normalizeUuid = (value: unknown): string =>
  * - Formatted rich text is projected as its words without the formatting
  *   (`notionFormattedText`, from 0.5.3) and listed in `errors`; malformed
  *   option values are left unprojected and listed too. The raw `properties` object passes through
- *   untouched, as do unsupported types (formula, relation, date, people, files,
+ *   untouched, as do unsupported types (formula, relation, people, files,
  *   ...), so nothing provider-side is lost.
  * - A property id whose type differs between pages in one fetch (the schema
  *   changed mid-read) throws.

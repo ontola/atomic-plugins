@@ -313,7 +313,16 @@ syncables read (`resource: 'page'`) to typed values. Each value is keyed by
 Notion property id.
 
 - Covered: plain title/rich text, number, checkbox, url, email, phone,
-  select/status option id, and sorted multi-select option ids.
+  date, select/status option id, and sorted multi-select option ids.
+- A date is one string column: `2026-03-01`, a range `2026-03-01/2026-03-05`,
+  and ` Europe/Amsterdam` appended when Notion holds a `time_zone` (start and
+  end are Notion's ISO 8601 strings, kept verbatim, offsets included). It is
+  not the host's timestamp: that would turn a date into midnight UTC and drop
+  the offset, the range end and the time zone, so nothing could be sent back
+  as it was. It is editable: `notionPropertyValue` splits the string back into
+  `start`, `end` and `time_zone`, and the review holds back (and names) any
+  text that is not in that form instead of sending it. A date Notion sends in
+  some other shape is left unprojected and listed in the warnings.
 - Notion `null` leaves the key absent; `0`, `false` and `[]` are kept.
 - Formatted text, mentions and links are projected as their words without
   the formatting (from 0.5.3) and listed in `errors`. A value with no plain

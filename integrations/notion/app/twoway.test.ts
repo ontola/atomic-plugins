@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { notionFieldShortname } from '../devonian/notion/index.js';
-import { pages } from '../fixtures/notion/scenario.mjs';
+import { pages, pages2 } from '../fixtures/notion/scenario.mjs';
 import {
   BASELINE_SHORTNAME,
   localChanges,
@@ -31,9 +31,14 @@ const NOTES = notionFieldShortname('Nt0s');
 const TITLE = notionFieldShortname('title');
 const SHIPPED = 'b1f5a3c2-0001-4000-8000-000000000003';
 const [LAUNCH, CHANGELOG, RETRO] = pages.map(p => p.id);
+const [SYSTEMS, LOCAL_FIRST] = pages2.map(p => p.id);
+const DATE_READ = notionFieldShortname('dt%40r');
 
-async function synced(overrides: Partial<HostProxy> = {}) {
-  const proxy = { ...fixtureProxy(), ...overrides };
+async function synced(
+  overrides: Partial<HostProxy> = {},
+  scenario = 'default',
+) {
+  const proxy = { ...fixtureProxy('conn-1', { scenario }), ...overrides };
   const store = fakeStore({ proxy });
   const controller = createController(
     store,
@@ -250,6 +255,37 @@ describe('review and send', () => {
     // The next sync agrees: nothing to send, nothing rewritten.
     expect(changesOf(await controller.sync())).toEqual([]);
     expect(patches()).toHaveLength(1);
+  });
+
+  it('sends a date edit as start, end and time zone, and refuses one it cannot represent', async () => {
+    const { controller, edit, notion, patches, value } = await synced(
+      {},
+      'two-sources',
+    );
+    expect(value(SYSTEMS, DATE_READ)).toBe('2026-08-30/2026-09-02');
+    expect(value(LOCAL_FIRST, DATE_READ)).toBe(
+      '2026-08-28T15:00:00 Europe/Amsterdam',
+    );
+    edit(SYSTEMS, DATE_READ, '2026-09-03');
+    edit(LOCAL_FIRST, DATE_READ, 'next tuesday');
+    await controller.refreshRows();
+    const state = await controller.send();
+    expect(patches()).toHaveLength(1);
+    expect(JSON.parse(patches()[0]!.body!)).toEqual({
+      properties: {
+        'dt%40r': { date: { start: '2026-09-03', end: null, time_zone: null } },
+      },
+    });
+    expect(notion(SYSTEMS).properties['Date read']!.date).toEqual({
+      start: '2026-09-03',
+      end: null,
+      time_zone: null,
+    });
+    // The unrepresentable value is held back and named, and stays in the row.
+    expect(changesOf(state).map(c => c.fields[0]!.problem)).toEqual([
+      expect.stringMatching(/is not a date/),
+    ]);
+    expect(value(LOCAL_FIRST, DATE_READ)).toBe('next tuesday');
   });
 
   it('sends a renamed row as the Notion title', async () => {

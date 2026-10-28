@@ -26,8 +26,9 @@
  * `POST /fixture/notion/setScenario` with `["<name>"]`:
  * - `default`: the one data source above;
  * - `two-sources`: also a "Reading list" data source whose "Status" has
- *   another property id, a "Format" select, plus a people and a date property
- *   (not projected);
+ *   another property id, a "Format" select, plus a people property (not
+ *   projected) and a "Date read" date (a range on one page, a time zone on
+ *   the other);
  * - `empty`: the search shares no data source;
  * - `unauthorized`: every request answers 401 (the connection was revoked);
  * - `rate-limited`: the search works, every query answers 429 with
@@ -258,7 +259,7 @@ export const dataSource2 = {
   url: `https://www.notion.so/${DATABASE_2.replaceAll('-', '')}`,
 };
 
-function page2(id, { title, status, format, author, link, edited }) {
+function page2(id, { title, status, format, author, link, date = null, edited }) {
   const value = (key, content) => ({
     id: schema2[key].id,
     type: schema2[key].type,
@@ -288,7 +289,7 @@ function page2(id, { title, status, format, author, link, edited }) {
       Author: value('Author', [text(author)]),
       Link: value('Link', link),
       'Recommended by': value('Recommended by', []),
-      'Date read': value('Date read', null),
+      'Date read': value('Date read', date),
     },
     url: `https://www.notion.so/${title.replaceAll(/\W+/g, '-')}-${id.replaceAll('-', '')}`,
     public_url: null,
@@ -302,6 +303,7 @@ export const pages2 = [
     format: BOOK,
     author: 'Donella Meadows',
     link: 'https://example.org/thinking-in-systems',
+    date: { start: '2026-08-30', end: '2026-09-02', time_zone: null },
     edited: '2026-09-02T09:30:00.000Z',
   }),
   page2('2b3c4d5e-0000-4000-8000-000000000002', {
@@ -310,6 +312,11 @@ export const pages2 = [
     format: ARTICLE,
     author: 'Kleppmann et al.',
     link: null,
+    date: {
+      start: '2026-08-28T15:00:00',
+      end: null,
+      time_zone: 'Europe/Amsterdam',
+    },
     edited: '2026-08-28T15:00:00.000Z',
   }),
 ];
@@ -417,6 +424,17 @@ function patchPage(target, schemaOf, properties) {
       if (!Array.isArray(value) || !value.every(known))
         return error(400, 'validation_error', 'Invalid multi_select option.');
       next[name][type] = value.map(known);
+    } else if (type === 'date') {
+      if (value !== null && typeof value?.start !== 'string')
+        return error(400, 'validation_error', `${name} needs a start date.`);
+      next[name][type] =
+        value === null
+          ? null
+          : {
+              start: value.start,
+              end: value.end ?? null,
+              time_zone: value.time_zone ?? null,
+            };
     } else if (
       ['number', 'checkbox', 'url', 'email', 'phone_number'].includes(type)
     ) {
