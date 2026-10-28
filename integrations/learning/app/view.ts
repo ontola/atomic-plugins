@@ -12,6 +12,7 @@ import {
   stateOf,
   type SkillState,
 } from '../core/index.js';
+import type { Lesson } from './adapter.js';
 import type { State } from './controller.js';
 import { FORMAT_ICON, type Strings } from './strings.js';
 
@@ -25,12 +26,16 @@ export interface Actions {
   reload(): void;
   open(lesson: { content?: string; subject: string }): void;
   openRow(id: string): void;
+  link(lesson: string, target: string): void;
 }
 
-const NODE_W = 156;
-const NODE_H = 46;
-const GAP_X = 52;
-const GAP_Y = 14;
+const NODE_W = 144;
+const NODE_H = 44;
+const GAP_X = 16;
+const GAP_Y = 12;
+const HEAD_H = 26;
+/** Below this the tree scrolls sideways instead of shrinking further. */
+const MIN_SCALE = 0.8;
 const SVG = 'http://www.w3.org/2000/svg';
 
 type Attrs = Record<string, string | boolean | undefined>;
@@ -49,11 +54,19 @@ export function h(
   return el;
 }
 
+const mark = (doc: Document, s: SkillState) =>
+  h(doc, 'span', { class: `lb-mark is-${s}`, 'aria-hidden': 'true' });
+
+const stateLabel = (ui: Strings, s: SkillState) =>
+  ({ mastered: ui.mastered, available: ui.available, locked: ui.locked })[s];
+
 export function page(
   doc: Document,
   state: State,
   ui: Strings,
   actions: Actions,
+  /** The width the tree may use, in px; 0 when unknown (no layout yet). */
+  width = 0,
 ): HTMLElement[] {
   const head = (extra?: Node) =>
     h(doc, 'header', { class: 'lb-head' }, h(doc, 'h1', {}, ui.title), extra);
@@ -84,34 +97,57 @@ export function page(
     ];
   }
 
-  const starter = h(
-    doc,
-    'button',
-    {
-      type: 'button',
-      class: 'lb-btn lb-primary',
-      disabled: state.busy === 'starter',
-    },
-    state.busy === 'starter' ? ui.starterBusy : ui.starter,
-  );
-  starter.addEventListener('click', actions.loadStarter);
-  const out: HTMLElement[] = [head(starter), notices(doc, state, ui)];
+  const total = state.graph.order.length;
 
-  if (state.graph.order.length === 0)
-    return [...out, h(doc, 'p', { class: 'lb-note' }, ui.empty)];
-
-  out.push(
-    nextBar(doc, state, ui, actions),
-    h(
+  if (total === 0) {
+    const starter = h(
       doc,
-      'div',
-      { class: 'lb-main' },
-      tree(doc, state, ui, actions),
-      detail(doc, state, ui, actions),
-    ),
-  );
+      'button',
+      {
+        type: 'button',
+        class: 'lb-btn lb-primary',
+        disabled: state.busy === 'starter',
+      },
+      state.busy === 'starter' ? ui.starterBusy : ui.starter,
+    );
+    starter.addEventListener('click', actions.loadStarter);
 
-  return out;
+    return [
+      head(),
+      notices(doc, state, ui),
+      h(
+        doc,
+        'section',
+        { class: 'lb-card lb-empty' },
+        h(doc, 'h2', {}, ui.emptyTitle),
+        h(doc, 'p', { class: 'lb-muted' }, ui.empty),
+        starter,
+      ),
+    ];
+  }
+
+  const done = state.graph.order.filter((id) => state.mastered.has(id)).length;
+
+  return [
+    head(
+      h(
+        doc,
+        'div',
+        { class: 'lb-progress', role: 'status' },
+        h(doc, 'span', {}, ui.progress(done, total)),
+        h(
+          doc,
+          'span',
+          { class: 'lb-bar', 'aria-hidden': 'true' },
+          h(doc, 'span', { style: `width:${(100 * done) / total}%` }),
+        ),
+      ),
+    ),
+    notices(doc, state, ui),
+    nextBar(doc, state, ui, actions),
+    tree(doc, state, ui, actions, width),
+    detail(doc, state, ui, actions),
+  ];
 }
 
 function notices(doc: Document, state: Ready, ui: Strings): HTMLElement {
@@ -119,6 +155,7 @@ function notices(doc: Document, state: Ready, ui: Strings): HTMLElement {
   const n = state.notice;
   if (n === 'denied') lines.push(['lb-bad', ui.denied]);
   else if (n === 'failed') lines.push(['lb-bad', ui.failed]);
+  else if (n === 'badLink') lines.push(['lb-bad', ui.badLink]);
   else if (n) lines.push(['lb-ok', ui.loaded(n.loaded)]);
   if (state.graph.ignored.length)
     lines.push(['lb-warn', ui.cycles(state.graph.ignored.length)]);
@@ -147,6 +184,7 @@ function skillButton(
     doc,
     'button',
     { type: 'button', class: cls, 'data-id': id },
+    mark(doc, stateOf(state.graph, state.mastered, id)),
     nameOf(state, id),
   );
   b.addEventListener('click', () => actions.select(id));
@@ -176,8 +214,7 @@ function nextBar(
     shown.length
       ? undefined
       : h(doc, 'span', { class: 'lb-muted' }, ui.nothingNext),
-    ...shown.map(id => skillButton(doc, state, id, actions)),
-    h(doc, 'span', { class: 'lb-muted lb-legend' }, ui.legend),
+    ...shown.map((id) => skillButton(doc, state, id, actions)),
   );
 }
 
@@ -186,21 +223,29 @@ function tree(
   state: Ready,
   ui: Strings,
   actions: Actions,
+  avail: number,
 ): HTMLElement {
   const { graph } = state;
   const grid = layers(graph);
   const pos = new Map<string, { x: number; y: number }>();
   grid.forEach((layer, col) =>
     layer.forEach((id, row) =>
-      pos.set(id, { x: col * (NODE_W + GAP_X), y: row * (NODE_H + GAP_Y) }),
+      pos.set(id, {
+        x: col * (NODE_W + GAP_X) + GAP_X / 2,
+        y: HEAD_H + row * (NODE_H + GAP_Y),
+      }),
     ),
   );
-  const width = grid.length * (NODE_W + GAP_X) - GAP_X;
+  const width = grid.length * (NODE_W + GAP_X);
   const height =
-    Math.max(...grid.map(l => l.length)) * (NODE_H + GAP_Y) - GAP_Y;
+    HEAD_H + Math.max(...grid.map((l) => l.length)) * (NODE_H + GAP_Y);
+  // Fit the width when it is not much smaller than the tree; otherwise keep
+  // text readable and let the tree scroll sideways.
+  const scale = avail > 0 ? Math.max(MIN_SCALE, Math.min(1, avail / width)) : 1;
   const path = new Set(
     state.goal ? pathTo(graph, state.mastered, state.goal) : [],
   );
+  const sel = state.selected;
 
   const svg = doc.createElementNS(SVG, 'svg');
   svg.setAttribute('class', 'lb-edges');
@@ -208,7 +253,29 @@ function tree(
   svg.setAttribute('height', String(height));
   svg.setAttribute('aria-hidden', 'true');
 
-  const edge = (from: string, to: string, cls: string) => {
+  const edges: [string, string, string][] = [];
+
+  for (const id of graph.order) {
+    const node = graph.nodes.get(id)!;
+    for (const r of node.requires)
+      edges.push([
+        r,
+        id,
+        path.has(id) && path.has(r)
+          ? 'on-path'
+          : r === sel || id === sel
+            ? 'is-near'
+            : '',
+      ]);
+    for (const r of node.recommends)
+      if (r === sel || id === sel) edges.push([r, id, 'is-near lb-rec']);
+  }
+
+  // Faint edges first so the highlighted ones are drawn on top.
+  const rank = (c: string) => (c.includes('on-path') ? 2 : c ? 1 : 0);
+  edges.sort((a, b) => rank(a[2]) - rank(b[2]));
+
+  for (const [from, to, cls] of edges) {
     const a = pos.get(from)!;
     const b = pos.get(to)!;
     const x1 = a.x + NODE_W;
@@ -218,35 +285,35 @@ function tree(
     const mid = (x1 + x2) / 2;
     const p = doc.createElementNS(SVG, 'path');
     p.setAttribute('d', `M${x1},${y1} C${mid},${y1} ${mid},${y2} ${x2},${y2}`);
-    p.setAttribute('class', cls);
+    p.setAttribute('class', `lb-edge ${cls}`.trim());
     svg.append(p);
-  };
-
-  for (const id of graph.order) {
-    const node = graph.nodes.get(id)!;
-    for (const r of node.requires)
-      edge(r, id, path.has(id) && path.has(r) ? 'lb-edge on-path' : 'lb-edge');
-    if (state.selected === id || node.recommends.includes(state.selected ?? ''))
-      for (const r of node.recommends)
-        if (state.selected === id || r === state.selected)
-          edge(r, id, 'lb-edge lb-rec');
   }
 
   const canvas = h(
     doc,
     'div',
-    { class: 'lb-canvas', style: `width:${width}px;height:${height}px` },
+    {
+      class: 'lb-canvas',
+      style: `width:${width}px;height:${height}px;transform:scale(${scale})`,
+    },
+    ...grid.map((_, col) =>
+      h(
+        doc,
+        'div',
+        {
+          class: `lb-band${col % 2 ? ' is-odd' : ''}`,
+          'aria-hidden': 'true',
+          style: `left:${col * (NODE_W + GAP_X)}px;width:${NODE_W + GAP_X}px`,
+        },
+        h(doc, 'span', {}, ui.level(col + 1)),
+      ),
+    ),
     svg,
   );
 
   for (const id of graph.order) {
     const s: SkillState = stateOf(graph, state.mastered, id);
     const at = pos.get(id)!;
-    const label = {
-      mastered: ui.mastered,
-      available: ui.available,
-      locked: ui.locked,
-    }[s];
     const b = h(
       doc,
       'button',
@@ -257,25 +324,133 @@ function tree(
           `is-${s}`,
           path.has(id) && 'on-path',
           state.goal === id && 'is-goal',
-          state.selected === id && 'is-selected',
+          sel === id && 'is-selected',
         ]
           .filter(Boolean)
           .join(' '),
         style: `left:${at.x}px;top:${at.y}px;width:${NODE_W}px;height:${NODE_H}px`,
         'data-id': id,
-        'aria-pressed': String(state.selected === id),
-        'aria-label': `${nameOf(state, id)}, ${label}`,
+        title: nameOf(state, id),
+        'aria-pressed': String(sel === id),
+        'aria-label': `${nameOf(state, id)}, ${stateLabel(ui, s)}`,
       },
-      s === 'mastered'
-        ? h(doc, 'span', { class: 'lb-tick', 'aria-hidden': 'true' }, '✓')
-        : undefined,
+      mark(doc, s),
       h(doc, 'span', { class: 'lb-label' }, nameOf(state, id)),
     );
     b.addEventListener('click', () => actions.select(id));
     canvas.append(b);
   }
 
-  return h(doc, 'div', { class: 'lb-tree', tabindex: '-1' }, canvas);
+  const legend = h(
+    doc,
+    'div',
+    { class: 'lb-legend' },
+    ...(['mastered', 'available', 'locked'] as const).map((s) =>
+      h(doc, 'span', {}, mark(doc, s), stateLabel(ui, s)),
+    ),
+    h(doc, 'span', { class: 'lb-hint' }, ui.scrollHint),
+  );
+
+  return h(
+    doc,
+    'section',
+    { class: 'lb-card lb-treecard', 'aria-label': ui.title },
+    h(
+      doc,
+      'div',
+      { class: 'lb-tree', tabindex: '-1' },
+      h(
+        doc,
+        'div',
+        {
+          class: 'lb-fit',
+          style: `width:${Math.round(width * scale)}px;height:${Math.round(height * scale)}px`,
+        },
+        canvas,
+      ),
+    ),
+    legend,
+  );
+}
+
+function lessonRow(
+  doc: Document,
+  ui: Strings,
+  actions: Actions,
+  l: Lesson,
+): HTMLElement {
+  const interactive = l.format === 'interactive';
+  const meta = [
+    ui.formats[l.format ?? ''] ?? l.format,
+    l.minutes ? `${l.minutes} ${ui.minutes}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const body = h(
+    doc,
+    'span',
+    { class: 'lb-lbody' },
+    h(doc, 'span', { class: 'lb-lname' }, l.name),
+    h(doc, 'span', { class: 'lb-muted lb-lmeta' }, meta),
+  );
+  const icon = h(
+    doc,
+    'span',
+    { class: 'lb-icon', 'aria-hidden': 'true' },
+    FORMAT_ICON[l.format ?? ''] ?? '\u{1F4D6}',
+  );
+  const li = h(doc, 'li', { class: 'lb-lesson' }, icon, body);
+
+  if (l.content) {
+    const go = h(
+      doc,
+      'button',
+      {
+        type: 'button',
+        class: `lb-btn${interactive ? ' lb-primary' : ''}`,
+        'aria-label': `${interactive ? ui.start : ui.openLesson}: ${l.name}`,
+      },
+      interactive ? ui.start : ui.openLesson,
+    );
+    go.addEventListener('click', () => actions.open(l));
+    li.append(go);
+
+    return li;
+  }
+
+  body.append(
+    h(
+      doc,
+      'span',
+      { class: 'lb-muted lb-lmeta' },
+      interactive ? ui.notLinked : ui.noMaterial,
+    ),
+  );
+
+  if (interactive) {
+    const input = h(doc, 'input', {
+      type: 'text',
+      class: 'lb-input',
+      placeholder: ui.linkPlaceholder,
+      'aria-label': `${ui.linkLabel}: ${l.name}`,
+    }) as HTMLInputElement;
+    const submit = h(
+      doc,
+      'button',
+      { type: 'button', class: 'lb-btn' },
+      ui.link,
+    );
+    // Not a <form>: the host's frame is sandboxed without allow-forms.
+    const go = () => actions.link(l.subject, input.value);
+    submit.addEventListener('click', go);
+    input.addEventListener('keydown', (e) => {
+      if ((e as KeyboardEvent).key === 'Enter') go();
+    });
+    const form = h(doc, 'div', { class: 'lb-linkform' }, input, submit);
+    li.append(form);
+  }
+
+  return li;
 }
 
 function detail(
@@ -286,7 +461,10 @@ function detail(
 ): HTMLElement {
   const { graph } = state;
   const id = state.selected;
-  const panel = h(doc, 'aside', { class: 'lb-detail', 'aria-live': 'polite' });
+  const panel = h(doc, 'aside', {
+    class: 'lb-card lb-detail',
+    'aria-live': 'polite',
+  });
   const node = id ? graph.nodes.get(id) : undefined;
 
   if (!id || !node) {
@@ -297,15 +475,16 @@ function detail(
   }
 
   const s = stateOf(graph, state.mastered, id);
-  const unmet = node.requires.filter(r => !state.mastered.has(r));
-  const mine = state.lessons.filter(l =>
-    l.teaches.some(t => graph.resolve(t) === id),
+  const unmet = node.requires.filter((r) => !state.mastered.has(r));
+  const mine = state.lessons.filter((l) =>
+    l.teaches.some((t) => graph.resolve(t) === id),
   );
+  const mastered = s === 'mastered';
   const master = h(
     doc,
     'button',
-    { type: 'button', class: 'lb-btn lb-primary' },
-    s === 'mastered' ? ui.noLonger : ui.iMaster,
+    { type: 'button', class: `lb-btn${mastered ? '' : ' lb-primary'}` },
+    mastered ? ui.noLonger : ui.iMaster,
   );
   master.addEventListener('click', () => actions.toggleMastery(id));
   const goal = h(
@@ -319,87 +498,72 @@ function detail(
     ui.pathTo,
   );
   goal.addEventListener('click', () => actions.setGoal(id));
-  const row = h(doc, 'button', { type: 'button', class: 'lb-link' }, ui.open);
+  const row = h(
+    doc,
+    'button',
+    { type: 'button', class: 'lb-btn lb-ghost' },
+    ui.open,
+  );
   row.addEventListener('click', () => actions.openRow(id));
+  const refs = (ids: string[]) =>
+    ids.flatMap((r, i) => [i ? ' ' : '', skillButton(doc, state, r, actions)]);
 
   panel.append(
-    ...([
-      h(doc, 'h2', {}, node.name),
+    h(
+      doc,
+      'div',
+      { class: 'lb-info' },
       h(
         doc,
-        'p',
-        { class: `lb-state is-${s}` },
-        { mastered: ui.mastered, available: ui.available, locked: ui.locked }[
-          s
-        ],
+        'div',
+        { class: 'lb-dhead' },
+        h(doc, 'h2', {}, node.name),
+        h(
+          doc,
+          'span',
+          { class: `lb-state is-${s}` },
+          mark(doc, s),
+          stateLabel(ui, s),
+        ),
       ),
-      node.description && h(doc, 'p', {}, node.description),
-      s === 'locked' && h(doc, 'p', { class: 'lb-muted' }, ui.advisory),
+      node.description && h(doc, 'p', { class: 'lb-desc' }, node.description),
+      s === 'locked' && h(doc, 'p', { class: 'lb-advice' }, ui.advisory),
       unmet.length
         ? h(
             doc,
             'p',
-            {},
+            { class: 'lb-refs' },
             `${ui.firstAdvised}: `,
-            ...unmet.flatMap((r, i) => [
-              i ? ', ' : '',
-              skillButton(doc, state, r, actions, 'lb-link'),
-            ]),
+            ...refs(unmet),
           )
         : undefined,
       node.recommends.length
         ? h(
             doc,
             'p',
-            { class: 'lb-muted' },
+            { class: 'lb-refs lb-muted' },
             `${ui.recommended}: `,
-            ...node.recommends.flatMap((r, i) => [
-              i ? ', ' : '',
-              skillButton(doc, state, r, actions, 'lb-link'),
-            ]),
+            ...refs(node.recommends),
           )
         : undefined,
-      h(doc, 'div', { class: 'lb-actions' }, master, goal),
+      h(doc, 'div', { class: 'lb-actions' }, master, goal, row),
+    ),
+    h(
+      doc,
+      'div',
+      { class: 'lb-more' },
       h(doc, 'h3', {}, ui.lessons),
       mine.length
         ? h(
             doc,
             'ul',
             { class: 'lb-lessons' },
-            ...mine.map(l => {
-              const btn = h(
-                doc,
-                'button',
-                { type: 'button', class: 'lb-link', disabled: !l.content },
-                h(
-                  doc,
-                  'span',
-                  { class: 'lb-icon', 'aria-hidden': 'true' },
-                  FORMAT_ICON[l.format ?? ''] ?? '\u{1F4D6}',
-                ),
-                l.name,
-              );
-              btn.addEventListener('click', () => actions.open(l));
-
-              return h(
-                doc,
-                'li',
-                {},
-                btn,
-                h(
-                  doc,
-                  'span',
-                  { class: 'lb-muted' },
-                  ` ${[ui.formats[l.format ?? ''] ?? l.format, l.minutes ? `${l.minutes} ${ui.minutes}` : undefined, l.content ? undefined : ui.noMaterial].filter(Boolean).join(', ')}`,
-                ),
-              );
-            }),
+            ...mine.map((l) => lessonRow(doc, ui, actions, l)),
           )
         : h(doc, 'p', { class: 'lb-muted' }, ui.noLessons),
-      row,
-    ].filter(Boolean) as (Node | string)[]),
+      state.goal ? pathBlock(doc, state, ui, actions) : undefined,
+    ),
   );
-  if (state.goal) panel.append(pathBlock(doc, state, ui, actions));
 
   return panel;
 }
@@ -414,7 +578,7 @@ function pathBlock(
   const clear = h(
     doc,
     'button',
-    { type: 'button', class: 'lb-link' },
+    { type: 'button', class: 'lb-btn lb-ghost' },
     ui.clearPath,
   );
   clear.addEventListener('click', () => actions.setGoal(undefined));
@@ -433,8 +597,8 @@ function pathBlock(
       doc,
       'ol',
       {},
-      ...steps.map(id =>
-        h(doc, 'li', {}, skillButton(doc, state, id, actions, 'lb-link')),
+      ...steps.map((id) =>
+        h(doc, 'li', {}, skillButton(doc, state, id, actions, 'lb-chip')),
       ),
     ),
     clear,

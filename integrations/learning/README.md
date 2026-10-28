@@ -1,4 +1,4 @@
-# Leerboom (learning tree)
+# Atomic Education (learning tree)
 
 A learning tree as an Atomic drive app: a graph of skills with the skills they
 need, the lessons for each, and a per-learner answer to "what next?", worked
