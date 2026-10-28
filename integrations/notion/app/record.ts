@@ -18,7 +18,13 @@ import {
   loadOptionIndex,
   type OptionIndex,
 } from './options.js';
-import { atomic, type DataSourceReport, type SyncResult } from './sync.js';
+import {
+  atomic,
+  SOURCE_SHORTNAME,
+  stampedTables,
+  type DataSourceReport,
+  type SyncResult,
+} from './sync.js';
 import type { PluginResource, PluginStore } from './store.js';
 
 export const RECORD_SHORTNAME = 'notion-sync-record';
@@ -54,7 +60,10 @@ export interface Column {
 }
 
 export interface Schema {
+  /** The app's table: it carries the sync record. */
   table: string;
+  /** Every table the sync fills: one per data source, or just `table`. */
+  tables: string[];
   rowClass: string;
   ontology: string;
   /** By shortname. */
@@ -69,7 +78,7 @@ const strings = (resource: PluginResource, property: string): string[] => {
   return Array.isArray(raw) ? raw.map(String) : [];
 };
 
-/** The app's table, row class, ontology and the Properties in it. */
+/** The app's tables, row class, ontology and the Properties in it. */
 export async function loadSchema(
   store: PluginStore,
 ): Promise<Schema | undefined> {
@@ -103,8 +112,16 @@ export async function loadSchema(
     });
   }
 
+  const source = columns.get(SOURCE_SHORTNAME);
+  const stamped = source
+    ? await stampedTables(store, source.subject)
+    : new Map<string, { table: string }>();
+
   return {
     table: data.table,
+    tables: [
+      ...new Set([data.table, ...[...stamped.values()].map(t => t.table)]),
+    ],
     rowClass: data.rowClass,
     ontology,
     columns,

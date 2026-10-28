@@ -364,6 +364,8 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     ).toContainText('3 rows');
     await expect(card).toContainText('5 rows in this table');
     await expect(app.locator('.pl-connbar')).toContainText('2 databases');
+    // One table per database: the second is a table of its own (0.5.8).
+    await expect(dbBlock.getByRole('button', { name: 'Open' })).toHaveCount(2);
     await shot('s6-status');
 
     // S10: sync details list what was not copied, per database.
@@ -387,7 +389,21 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await driver('renameOption', [DONE_OPTION, 'Shipped']);
     await syncNow();
     const statusAppUrl = page.url();
-    await dbBlock.getByRole('button', { name: 'Open table' }).click();
+    // Each database has its own table, so each has its own "Open" button.
+    const openTable = (title: string) =>
+      databases
+        .getByRole('listitem')
+        .filter({ hasText: title })
+        .getByRole('button', { name: 'Open' });
+    await openTable('Reading list').click();
+    await expect(
+      page
+        .getByRole('main')
+        .getByText('Thinking in Systems', { exact: true })
+        .first(),
+    ).toBeVisible({ timeout: 30_000 });
+    await page.goto(statusAppUrl);
+    await openTable('Roadmap').click();
     const shipped = page
       .getByRole('main')
       .getByText('Shipped', { exact: true })

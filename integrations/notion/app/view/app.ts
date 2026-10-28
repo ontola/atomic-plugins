@@ -47,8 +47,8 @@ export interface AppActions {
   discard(subject: string): void;
   /** Resolves a field changed both here and in Notion. */
   resolve(subject: string, shortname: string, keep: 'mine' | 'notion'): void;
-  /** Shows the app's data table in the host (`store.openResource`). */
-  openTable?(): void;
+  /** Shows a table in the host (`store.openResource`); the app's own without an argument. */
+  openTable?(table?: string): void;
   /** Stops this app using Notion (`store.proxy.disconnect`). */
   disconnect?(): void;
 }
@@ -249,7 +249,7 @@ export function createApp(
                   {
                     label: 'Open data table',
                     icon: 'table',
-                    onClick: actions.openTable,
+                    onClick: () => actions.openTable!(),
                   },
                 ]
               : []),

@@ -1,7 +1,7 @@
 // @wc-ignore-file
 /**
  * Reads the imported rows back from the app's data table, so the view can
- * show them without leaving the app (DESIGN.md §1, §7). One `query` for the
+ * show them without leaving the app (DESIGN.md §1, §7). One `query` for each
  * table's children, then `getMany` in batches of 100 (one round trip each).
  * A host without `getMany` gets one `getResource` per row, 16 at a time.
  */
@@ -42,10 +42,13 @@ export async function loadRows(
   store: PluginStore,
   schema: Schema,
 ): Promise<Row[]> {
-  const subjects = await store.query({
-    property: atomic.parent,
-    value: schema.table,
-  });
+  const subjects = (
+    await Promise.all(
+      schema.tables.map(table =>
+        store.query({ property: atomic.parent, value: table }),
+      ),
+    )
+  ).flat();
   const bySubject = new Map(
     [...schema.columns.values()].map(c => [c.subject, c]),
   );

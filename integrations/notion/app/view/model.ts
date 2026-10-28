@@ -15,6 +15,8 @@ import type { PillModel } from '../ui/shell.js';
 export interface Source {
   title: string;
   count: number;
+  /** The table holding its rows, once a sync has made it. */
+  table?: string;
   report?: DataSourceReport;
 }
 
@@ -29,6 +31,7 @@ export function sources(rows: readonly Row[], last?: SyncRecord): Source[] {
     out.push({
       title: report.title,
       count: counts.get(report.title) ?? 0,
+      ...(report.table ? { table: report.table } : {}),
       report,
     });
     counts.delete(report.title);

@@ -16,7 +16,7 @@ import {
   reconcile,
 } from './changes.js';
 import { createController, type ViewState } from './controller.js';
-import { fakeStore, fixtureProxy, PARENT, TABLE } from './fakeStore.js';
+import { fakeStore, fixtureProxy, PARENT } from './fakeStore.js';
 import { OPTION_ID_SHORTNAME } from './options.js';
 import { loadSchema } from './record.js';
 import type { HostProxy, JSONValue } from './store.js';
@@ -51,7 +51,7 @@ async function synced(
   const column = (shortname: string) => schema.columns.get(shortname)!.subject;
   const rowOf = (pageId: string) =>
     [...store.resources].find(
-      ([, p]) => p[PARENT] === TABLE && p[column('notion-page-id')] === pageId,
+      ([, p]) => p[column('notion-page-id')] === pageId,
     )!;
 
   /** An edit made in the host (its table, another view): straight to the store. */
