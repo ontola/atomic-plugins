@@ -154,6 +154,17 @@ export async function readLessons(
   }));
 }
 
+/** Points a lesson at a resource or URL, as `lesson-content`. */
+export async function linkLesson(
+  store: PluginStore,
+  lesson: string,
+  target: string,
+): Promise<void> {
+  const row = await store.getResource(lesson);
+  row.set(P.content, target);
+  await row.save();
+}
+
 /** The learner's mastery rows, as the core's `MasterySource`, and the write side. */
 export function masteryStore(
   store: PluginStore,
