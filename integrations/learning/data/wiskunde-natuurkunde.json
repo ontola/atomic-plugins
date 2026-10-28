@@ -1,0 +1,715 @@
+{
+  "//": "Startboom wiskunde en natuurkunde voor het Leerboom-plugin. Sleutels (key) zijn lokaal; bij laden worden ze Skill-rijen in de tabel. Lessen hebben nog geen echt materiaal: elk `content` is een TODO (alleen opnemen als de bron zeker stabiel en publiek is). Geen em-streepjes in de Nederlandse tekst.",
+  "name": "Wiskunde en natuurkunde",
+  "language": "nl",
+  "skills": [
+    {
+      "key": "rekenen",
+      "name": "Rekenen met getallen",
+      "description": "Je kunt optellen, aftrekken, vermenigvuldigen en delen met hele getallen en kommagetallen, en je kent de rekenvolgorde.",
+      "requires": [],
+      "recommends": []
+    },
+    {
+      "key": "breuken",
+      "name": "Breuken",
+      "description": "Je kunt breuken vereenvoudigen, vergelijken en ermee rekenen, en breuken omzetten naar kommagetallen.",
+      "requires": ["rekenen"],
+      "recommends": []
+    },
+    {
+      "key": "procenten",
+      "name": "Procenten en verhoudingen",
+      "description": "Je kunt procenten, verhoudingen en evenredigheid gebruiken om een deel, een toename of een afname uit te rekenen.",
+      "requires": ["breuken"],
+      "recommends": []
+    },
+    {
+      "key": "machten-wortels",
+      "name": "Machten en wortels",
+      "description": "Je kunt rekenen met kwadraten, machten en wortels en schrijven in wetenschappelijke notatie.",
+      "requires": ["rekenen"],
+      "recommends": []
+    },
+    {
+      "key": "algebra-basis",
+      "name": "Algebra: rekenen met letters",
+      "description": "Je kunt met letters in plaats van getallen rekenen: haakjes wegwerken, termen samenvatten en een formule herschrijven.",
+      "requires": ["rekenen"],
+      "recommends": ["breuken", "machten-wortels"]
+    },
+    {
+      "key": "vergelijkingen",
+      "name": "Vergelijkingen oplossen",
+      "description": "Je kunt lineaire en kwadratische vergelijkingen en stelsels van twee vergelijkingen oplossen.",
+      "requires": ["algebra-basis"],
+      "recommends": []
+    },
+    {
+      "key": "functies",
+      "name": "Functies en grafieken",
+      "description": "Je kunt een formule als functie lezen, een grafiek tekenen en nulpunten, snijpunten en stijging aflezen.",
+      "requires": ["vergelijkingen"],
+      "recommends": []
+    },
+    {
+      "key": "meetkunde",
+      "name": "Meetkunde",
+      "description": "Je kunt hoeken, omtrek, oppervlakte en inhoud berekenen en de stelling van Pythagoras en gelijkvormigheid gebruiken.",
+      "requires": ["rekenen"],
+      "recommends": ["breuken"]
+    },
+    {
+      "key": "trigonometrie",
+      "name": "Trigonometrie",
+      "description": "Je kunt sinus, cosinus en tangens gebruiken om zijden en hoeken van driehoeken te berekenen en je kent de eenheidscirkel.",
+      "requires": ["meetkunde", "vergelijkingen"],
+      "recommends": []
+    },
+    {
+      "key": "exponenten-logaritmen",
+      "name": "Exponentiële functies en logaritmen",
+      "description": "Je kunt exponentiële groei en afname beschrijven en logaritmen gebruiken om een exponent op te lossen.",
+      "requires": ["functies", "machten-wortels"],
+      "recommends": []
+    },
+    {
+      "key": "afgeleiden",
+      "name": "Afgeleiden",
+      "description": "Je begrijpt de afgeleide als verandersnelheid en kunt de afgeleide van veelvoorkomende functies bepalen en gebruiken voor extremen.",
+      "requires": ["functies"],
+      "recommends": ["trigonometrie", "exponenten-logaritmen"]
+    },
+    {
+      "key": "integralen",
+      "name": "Integralen",
+      "description": "Je begrijpt de integraal als oppervlakte onder een grafiek en als omgekeerde van de afgeleide, en kunt eenvoudige integralen berekenen.",
+      "requires": ["afgeleiden"],
+      "recommends": []
+    },
+    {
+      "key": "vectoren",
+      "name": "Vectoren",
+      "description": "Je kunt vectoren optellen, ontbinden in componenten en de lengte en richting ervan bepalen.",
+      "requires": ["trigonometrie"],
+      "recommends": []
+    },
+    {
+      "key": "lineaire-algebra",
+      "name": "Lineaire algebra: basis",
+      "description": "Je kunt rekenen met matrices, het inproduct gebruiken en een stelsel lineaire vergelijkingen met matrices oplossen.",
+      "requires": ["vectoren", "vergelijkingen"],
+      "recommends": []
+    },
+    {
+      "key": "kans-statistiek",
+      "name": "Kansrekening en statistiek",
+      "description": "Je kunt kansen berekenen, gemiddelde, mediaan en standaardafwijking bepalen en een normale verdeling lezen.",
+      "requires": ["procenten"],
+      "recommends": ["algebra-basis"]
+    },
+    {
+      "key": "eenheden-meten",
+      "name": "Eenheden en meten",
+      "description": "Je kunt SI-eenheden omrekenen, voorvoegsels gebruiken, significante cijfers hanteren en de onzekerheid van een meting noemen.",
+      "requires": ["rekenen"],
+      "recommends": ["procenten", "machten-wortels"]
+    },
+    {
+      "key": "kinematica",
+      "name": "Beweging: snelheid en versnelling",
+      "description": "Je kunt beweging met constante snelheid en versnelling beschrijven met formules en x,t- en v,t-diagrammen.",
+      "requires": ["eenheden-meten", "vergelijkingen"],
+      "recommends": ["functies", "afgeleiden"]
+    },
+    {
+      "key": "krachten-newton",
+      "name": "Krachten en de wetten van Newton",
+      "description": "Je kunt krachten als vectoren optellen en met de drie wetten van Newton de versnelling van een voorwerp bepalen.",
+      "requires": ["kinematica", "algebra-basis", "vectoren"],
+      "recommends": []
+    },
+    {
+      "key": "energie-arbeid",
+      "name": "Arbeid en energie",
+      "description": "Je kunt arbeid, kinetische en potentiële energie berekenen en behoud van energie gebruiken. Met integralen reken je ook met krachten die niet constant zijn.",
+      "requires": ["krachten-newton"],
+      "recommends": ["integralen"]
+    },
+    {
+      "key": "impuls",
+      "name": "Impuls en botsingen",
+      "description": "Je kunt impuls en impulsbehoud gebruiken om elastische en inelastische botsingen door te rekenen.",
+      "requires": ["krachten-newton"],
+      "recommends": ["energie-arbeid"]
+    },
+    {
+      "key": "cirkelbeweging",
+      "name": "Cirkelbeweging",
+      "description": "Je kunt hoeksnelheid, periode en middelpuntzoekende kracht berekenen voor een voorwerp dat een cirkel beschrijft.",
+      "requires": ["krachten-newton", "trigonometrie"],
+      "recommends": []
+    },
+    {
+      "key": "rotatie",
+      "name": "Rotatie en koppel",
+      "description": "Je kunt koppel, traagheidsmoment en draaiimpuls gebruiken om het draaien van een star voorwerp te beschrijven.",
+      "requires": ["krachten-newton", "vectoren"],
+      "recommends": ["cirkelbeweging"]
+    },
+    {
+      "key": "gravitatie",
+      "name": "Gravitatie",
+      "description": "Je kunt de gravitatiewet van Newton toepassen op planeten en satellieten en banen en ontsnappingssnelheid berekenen.",
+      "requires": ["krachten-newton", "cirkelbeweging"],
+      "recommends": ["energie-arbeid"]
+    },
+    {
+      "key": "trillingen-golven",
+      "name": "Trillingen en golven",
+      "description": "Je kunt trillingen en golven beschrijven met amplitude, frequentie, golflengte en snelheid, en interferentie en staande golven verklaren.",
+      "requires": ["functies", "trigonometrie"],
+      "recommends": ["krachten-newton"]
+    },
+    {
+      "key": "elektriciteit",
+      "name": "Elektriciteit",
+      "description": "Je kunt spanning, stroom, weerstand en vermogen berekenen in eenvoudige schakelingen en de wet van Coulomb toepassen.",
+      "requires": ["vergelijkingen", "eenheden-meten"],
+      "recommends": ["krachten-newton", "energie-arbeid"]
+    },
+    {
+      "key": "magnetisme",
+      "name": "Magnetisme",
+      "description": "Je kunt magnetische velden en de kracht op een lading of stroomdraad beschrijven en inductie kwalitatief verklaren.",
+      "requires": ["elektriciteit", "vectoren"],
+      "recommends": ["cirkelbeweging"]
+    },
+    {
+      "key": "thermodynamica",
+      "name": "Warmte en thermodynamica",
+      "description": "Je kunt temperatuur, warmte, soortelijke warmte en de gaswetten gebruiken en de hoofdwetten van de thermodynamica noemen.",
+      "requires": ["energie-arbeid", "eenheden-meten"],
+      "recommends": ["kans-statistiek", "exponenten-logaritmen"]
+    },
+    {
+      "key": "optica",
+      "name": "Optica",
+      "description": "Je kunt breking, terugkaatsing en beeldvorming met lenzen en spiegels uitrekenen met stralengang en de lenzenformule.",
+      "requires": ["trillingen-golven", "meetkunde", "trigonometrie"],
+      "recommends": []
+    },
+    {
+      "key": "quantum-intro",
+      "name": "Inleiding quantummechanica",
+      "description": "Je kunt het foto-elektrisch effect, golf-deeltjedualiteit en energieniveaus in atomen beschrijven.",
+      "requires": ["trillingen-golven", "energie-arbeid"],
+      "recommends": ["kans-statistiek", "lineaire-algebra", "magnetisme"]
+    },
+    {
+      "key": "relativiteit-intro",
+      "name": "Inleiding relativiteitstheorie",
+      "description": "Je kunt tijdsdilatatie, lengtecontractie en de relatie tussen massa en energie uitleggen en eenvoudig doorrekenen.",
+      "requires": ["kinematica", "energie-arbeid", "vergelijkingen"],
+      "recommends": ["vectoren", "magnetisme"]
+    }
+  ],
+  "lessons": [
+    {
+      "skill": "rekenen",
+      "name": "Uitleg: Rekenen met getallen",
+      "format": "text",
+      "minutes": 15,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "rekenen",
+      "name": "Oefenen: Rekenen met getallen",
+      "format": "exercise",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "breuken",
+      "name": "Video: Breuken",
+      "format": "video",
+      "minutes": 10,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "breuken",
+      "name": "Oefenen: Breuken",
+      "format": "exercise",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "procenten",
+      "name": "Uitleg: Procenten en verhoudingen",
+      "format": "text",
+      "minutes": 15,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "procenten",
+      "name": "Oefenen: Procenten en verhoudingen",
+      "format": "exercise",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "machten-wortels",
+      "name": "Video: Machten en wortels",
+      "format": "video",
+      "minutes": 12,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "machten-wortels",
+      "name": "Oefenen: Machten en wortels",
+      "format": "exercise",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "algebra-basis",
+      "name": "Video: Algebra: rekenen met letters",
+      "format": "video",
+      "minutes": 15,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "algebra-basis",
+      "name": "Interactief: Algebra: rekenen met letters",
+      "format": "interactive",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "vergelijkingen",
+      "name": "Video: Vergelijkingen oplossen",
+      "format": "video",
+      "minutes": 15,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "vergelijkingen",
+      "name": "Oefenen: Vergelijkingen oplossen",
+      "format": "exercise",
+      "minutes": 30,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "functies",
+      "name": "Interactief: Functies en grafieken",
+      "format": "interactive",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "functies",
+      "name": "Oefenen: Functies en grafieken",
+      "format": "exercise",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "meetkunde",
+      "name": "Uitleg: Meetkunde",
+      "format": "text",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "meetkunde",
+      "name": "Oefenen: Meetkunde",
+      "format": "exercise",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "trigonometrie",
+      "name": "Video: Trigonometrie",
+      "format": "video",
+      "minutes": 15,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "trigonometrie",
+      "name": "Interactief: Trigonometrie",
+      "format": "interactive",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "exponenten-logaritmen",
+      "name": "Video: Exponentiële functies en logaritmen",
+      "format": "video",
+      "minutes": 15,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "exponenten-logaritmen",
+      "name": "Oefenen: Exponentiële functies en logaritmen",
+      "format": "exercise",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "afgeleiden",
+      "name": "Video: Afgeleiden",
+      "format": "video",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "afgeleiden",
+      "name": "Oefenen: Afgeleiden",
+      "format": "exercise",
+      "minutes": 30,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "integralen",
+      "name": "Video: Integralen",
+      "format": "video",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "integralen",
+      "name": "Oefenen: Integralen",
+      "format": "exercise",
+      "minutes": 30,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "vectoren",
+      "name": "Interactief: Vectoren",
+      "format": "interactive",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "vectoren",
+      "name": "Oefenen: Vectoren",
+      "format": "exercise",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "lineaire-algebra",
+      "name": "Video: Lineaire algebra: basis",
+      "format": "video",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "lineaire-algebra",
+      "name": "Oefenen: Lineaire algebra: basis",
+      "format": "exercise",
+      "minutes": 30,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "kans-statistiek",
+      "name": "Uitleg: Kansrekening en statistiek",
+      "format": "text",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "kans-statistiek",
+      "name": "Oefenen: Kansrekening en statistiek",
+      "format": "exercise",
+      "minutes": 30,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "eenheden-meten",
+      "name": "Uitleg: Eenheden en meten",
+      "format": "text",
+      "minutes": 15,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "eenheden-meten",
+      "name": "Oefenen: Eenheden en meten",
+      "format": "exercise",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "kinematica",
+      "name": "Video: Beweging: snelheid en versnelling",
+      "format": "video",
+      "minutes": 15,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "kinematica",
+      "name": "Interactief: Beweging: snelheid en versnelling",
+      "format": "interactive",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "krachten-newton",
+      "name": "Video: Krachten en de wetten van Newton",
+      "format": "video",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "krachten-newton",
+      "name": "Interactief: Krachten en de wetten van Newton",
+      "format": "interactive",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "krachten-newton",
+      "name": "Oefenen: Krachten en de wetten van Newton",
+      "format": "exercise",
+      "minutes": 30,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "energie-arbeid",
+      "name": "Video: Arbeid en energie",
+      "format": "video",
+      "minutes": 15,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "energie-arbeid",
+      "name": "Oefenen: Arbeid en energie",
+      "format": "exercise",
+      "minutes": 30,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "impuls",
+      "name": "Uitleg: Impuls en botsingen",
+      "format": "text",
+      "minutes": 15,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "impuls",
+      "name": "Oefenen: Impuls en botsingen",
+      "format": "exercise",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "cirkelbeweging",
+      "name": "Video: Cirkelbeweging",
+      "format": "video",
+      "minutes": 15,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "cirkelbeweging",
+      "name": "Oefenen: Cirkelbeweging",
+      "format": "exercise",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "rotatie",
+      "name": "Uitleg: Rotatie en koppel",
+      "format": "text",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "rotatie",
+      "name": "Oefenen: Rotatie en koppel",
+      "format": "exercise",
+      "minutes": 30,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "gravitatie",
+      "name": "Video: Gravitatie",
+      "format": "video",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "gravitatie",
+      "name": "Interactief: Gravitatie",
+      "format": "interactive",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "trillingen-golven",
+      "name": "Interactief: Trillingen en golven",
+      "format": "interactive",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "trillingen-golven",
+      "name": "Oefenen: Trillingen en golven",
+      "format": "exercise",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "elektriciteit",
+      "name": "Video: Elektriciteit",
+      "format": "video",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "elektriciteit",
+      "name": "Interactief: Elektriciteit",
+      "format": "interactive",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "elektriciteit",
+      "name": "Oefenen: Elektriciteit",
+      "format": "exercise",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "magnetisme",
+      "name": "Video: Magnetisme",
+      "format": "video",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "magnetisme",
+      "name": "Interactief: Magnetisme",
+      "format": "interactive",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "thermodynamica",
+      "name": "Uitleg: Warmte en thermodynamica",
+      "format": "text",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "thermodynamica",
+      "name": "Oefenen: Warmte en thermodynamica",
+      "format": "exercise",
+      "minutes": 30,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "optica",
+      "name": "Interactief: Optica",
+      "format": "interactive",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "optica",
+      "name": "Oefenen: Optica",
+      "format": "exercise",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "quantum-intro",
+      "name": "Video: Inleiding quantummechanica",
+      "format": "video",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "quantum-intro",
+      "name": "Uitleg: Inleiding quantummechanica",
+      "format": "text",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "relativiteit-intro",
+      "name": "Video: Inleiding relativiteitstheorie",
+      "format": "video",
+      "minutes": 25,
+      "language": "nl",
+      "content": null
+    },
+    {
+      "skill": "relativiteit-intro",
+      "name": "Uitleg: Inleiding relativiteitstheorie",
+      "format": "text",
+      "minutes": 20,
+      "language": "nl",
+      "content": null
+    }
+  ]
+}

@@ -517,5 +517,26 @@
       "public-origin",
       "wasm-sandbox"
     ]
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "learning",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "learning",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": false,
+    "https://atomicdata.dev/properties/name": "Leerboom",
+    "https://atomicdata.dev/properties/emoji": "🌳",
+    "https://atomicdata.dev/properties/description": "A drive app that shows a learning tree: skills with the skills they need, the lessons for each, and what to learn next, worked out from what you say you master.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Shows any table of the shared Skill class (skill-v1) as a layered dependency graph. A skill is mastered, available or not yet due; the last is only advice, and every skill can be opened. Per skill it lists lessons (the shared Lesson class, lesson-v1) with an icon per format, offers \"I master this\", which writes a Mastery row (mastery-v1) to a table the app keeps in your drive, and \"Path to this goal\", which highlights the unmastered skills on the way and suggests the next logical steps. \"Load starter tree\" adds about 30 skills of mathematics and physics (Dutch) to the table, with placeholder lessons. Trees from different tables or drives can be linked by marking skills as equivalent. No account, network or provider.",
+    "https://atomicdata.dev/integrations/properties/events": "Add it as a view to a Skill table, or open it and load the starter tree. Mastery is written when you press \"I master this\". Nothing runs while the app is closed.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Declared, not verified: unit-tested against a fake host store only, with no host E2E run yet. Mastery is self-reported; there are no assessments, attempts, credentials or attested results. The starter lessons name no material yet (every content link is a TODO). Mastery rows inherit the rights of the App in your drive, so install it in a drive that is yours. On a Skill table the app did not make, loading the starter tree needs the host's Allow editing. Waits for the stable ontology domain.",
+    "https://atomicdata.dev/integrations/properties/keywords": "learning tree leerboom skills lessons mastery curriculum education mathematics physics drive app",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Skill",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Skills",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/learning/0.1.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-hshL47qBYLNL6M0RWOs+paY+RpJ//1Sxo0AkHWpl2h71DQ8rQkjk05cUeX/dGZXw"
   }
 ]

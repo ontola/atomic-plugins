@@ -1,0 +1,30 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/class/ontology"
+  ],
+  "https://atomicdata.dev/properties/shortname": "atomic-plugins-shared-v2",
+  "https://atomicdata.dev/properties/name": "Learning tree v2",
+  "https://atomicdata.dev/properties/description": "Skill, lesson and mastery classes for learning trees (Leerboom). Property names follow schema.org LRMI where one fits: teaches, competencyRequired, timeRequired. Assessments, questions and attempts are not part of this release. Declared, not verified.",
+  "https://atomicdata.dev/properties/classes": [
+    "https://ontola.github.io/atomic-plugins/ontology/classes/skill-v1",
+    "https://ontola.github.io/atomic-plugins/ontology/classes/lesson-v1",
+    "https://ontola.github.io/atomic-plugins/ontology/classes/mastery-v1"
+  ],
+  "https://atomicdata.dev/properties/properties": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/skill-requires",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/skill-recommends",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/skill-equivalent-to",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/skill-level",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/skill-mastery-threshold",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/lesson-teaches",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/lesson-content",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/lesson-format",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/lesson-minutes",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/lesson-language",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/mastery-skill",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/mastery-level",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/mastery-source",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/mastery-updated-at"
+  ]
+}

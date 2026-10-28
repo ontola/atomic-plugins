@@ -45,6 +45,29 @@ offer themselves as a view of a hand-made table of their class, and (from
 0.3.0, 0.3.0 and 0.6.0) can sync one. Each plugin's README is the authority
 for what it has checked.
 
+## Release v2: learning trees
+
+Three classes for the Leerboom drive app ([`integrations/learning/`](../integrations/learning/README.md)):
+`skill-v1` (name, description, `skill-requires`, `skill-recommends`,
+`skill-equivalent-to`, `skill-level`, `skill-mastery-threshold`), `lesson-v1`
+(name, `lesson-teaches`, `lesson-content`, `lesson-format`, `lesson-minutes`,
+`lesson-language`) and `mastery-v1` (`mastery-skill`, `mastery-level`,
+`mastery-source`, `mastery-updated-at`). Questions, assessments and attempts
+are left for a later release. Where schema.org LRMI has a term, ours follows
+it and says so in its description:
+
+| Ours                  | schema.org LRMI                                   |
+| --------------------- | ------------------------------------------------- |
+| `lesson-teaches`      | `teaches`                                         |
+| `skill-requires`      | `competencyRequired` (inverse direction: a skill) |
+| `lesson-minutes`      | `timeRequired` (minutes instead of ISO duration)  |
+| `lesson-format`       | `learningResourceType` (a small fixed list)       |
+| `skill-equivalent-to` | `sameAs`-like, merged when trees are combined     |
+
+`lesson-format` and `mastery-source` are plain strings with a documented list
+of values, because the kit has no enum constraint yet; a view shows an unknown
+value as text. Declared, not verified: no host E2E has used these classes yet.
+
 `name` is `https://atomicdata.dev/properties/name`. Provider data (ids, ETags,
 baselines, import bookkeeping such as `work-source-id` or `bank-source-id`) is
 never part of a shared class: each sync part defines it in its own ontology.
@@ -163,7 +186,11 @@ card copy for its `limitation`: "Waits for the stable ontology domain."
 ## Using the terms and the resolver from a plugin
 
 Plugins **bundle** both at build time, by relative import from the repository;
-they are not vendored or published to npm:
+they are not vendored or published to npm. `terms.mjs` holds release v1;
+every later release has its own module (`terms-v2.mjs`, ...), so a new release
+never changes the bytes of an older one and the published
+`apps/<id>/<version>/ui.js` of the plugins that bundle `terms.mjs` stay
+reproducible. Import a class from the module of the release that introduced it:
 
 ```ts
 // integrations/<plugin>/app/view.ts
