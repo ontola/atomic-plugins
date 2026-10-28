@@ -319,6 +319,14 @@
       "paths": ["ontology/**", "ontology-kit/**"],
       "note": "The Leerboom (learning tree) drive app (integrations/learning/app/) over a dependency-free core (integrations/learning/core/: graph with cross-tree equivalence, cycle reporting, mastered/available/locked as advice, next steps, path, outer fringe). It renders any table of the shared skill-v1 class, offers a starter tree of mathematics and physics (data/wiskunde-natuurkunde.json) and writes mastery-v1 rows to a table it owns. No provider, proxy or network of its own. paths: it bundles ontology-kit/terms.mjs and resolver.mjs and uses the published GitHub Pages subjects of skill-v1, lesson-v1 and mastery-v1, so an ontology change runs this lane too and the e2e needs network access to ontola.github.io. The e2e spec is written but, in the session that added the lane, was not run (no atomic-server build).",
       "e2e": ["integrations/learning/e2e/learning.spec.ts"]
+    },
+    {
+      "id": "physics",
+      "index": 23,
+      "platforms": [],
+      "tiers": ["typecheck", "unit", "e2e"],
+      "note": "Three small physics drive apps for lessons, in one folder with shared code (shared/) and pure physics (core/: thin-lens ray tracing, pole-pair magnet fields and field lines, damped oscillator with RK4): Lenzen (physics-lens), Magneten (physics-magnet), Trillingen (physics-spring). Plain DOM and SVG, no network, no storage, no ontology (so not under the ontology gate: enabled and experimental). They live in lens/, magnet/ and spring/ (apps.mjs APP_FOLDERS maps each catalog shortname there). The e2e installs each from the catalog's Drive apps section under 'Show experimental plugins' and checks it renders in its null-origin iframe and reacts to a keypress and a drag.",
+      "e2e": ["integrations/physics/e2e/physics.spec.ts"]
     }
   ]
 }

@@ -538,5 +538,68 @@
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Skills",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/learning/0.1.0/ui.js",
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-hshL47qBYLNL6M0RWOs+paY+RpJ//1Sxo0AkHWpl2h71DQ8rQkjk05cUeX/dGZXw"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "physics-lens",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "physics-lens",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Lenzen",
+    "https://atomicdata.dev/properties/emoji": "🔍",
+    "https://atomicdata.dev/properties/description": "Interactive thin lens: drag the object and the focal points and see the three principal rays and the image (Dutch first, English as fallback).",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Shows a converging (convex) or diverging (concave) thin lens on an optical axis. Drag the object (distance and height) and the focal points, or use the arrow keys. Draws the three principal rays, the image (real or virtual, upright or inverted) and live values for v, b, f and N = b/v with 1/f = 1/v + 1/b.",
+    "https://atomicdata.dev/integrations/properties/events": "Open it from Drive apps. Nothing runs in the background.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Experimental teaching tool. Draws a simplified model for lessons and stores nothing: nothing is saved in your drive and nothing is read from it. Needs no account, network or provider. Ideal thin lens: no aberrations, no lens thickness.",
+    "https://atomicdata.dev/integrations/properties/keywords": "lens lenzen optics optica brandpunt convex concave natuurkunde physics education onderwijs drive app",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Lens",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Lenses",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/physics-lens/0.1.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-WbyFv4H7YX8pXWveiYb7LymOS7Mp9C9L1WHSpp2V19fomm1suSIwpoNwf+SkrOWV"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "physics-magnet",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "physics-magnet",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Magneten",
+    "https://atomicdata.dev/properties/emoji": "🧲",
+    "https://atomicdata.dev/properties/description": "Interactive bar magnets: drag and rotate one or two magnets, see field lines, a compass, iron filings or the field strength.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "One or two bar magnets you can drag and turn. Draws field lines from a pole-pair model, a draggable compass that swings to the field direction, an iron filings view and a field strength view, and says whether two magnets attract or repel, with the force.",
+    "https://atomicdata.dev/integrations/properties/events": "Open it from Drive apps. Nothing runs in the background.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Experimental teaching tool. Draws a simplified model for lessons and stores nothing: nothing is saved in your drive and nothing is read from it. Needs no account, network or provider. Each magnet is two point poles in a plane (inverse-square), not a full three-dimensional magnet; the field inside the bar is not drawn.",
+    "https://atomicdata.dev/integrations/properties/keywords": "magneet magneten magnets magnetic field veldlijnen compass kompas ijzervijlsel natuurkunde physics education onderwijs drive app",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Magnet",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Magnets",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/physics-magnet/0.1.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-x958xjjbS26D+6wYQ76CdiEYaXEs8u9kAMsA/IMT1QxgMVrtv+/2Tfr7zNSAOtBH"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "physics-spring",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "physics-spring",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Trillingen",
+    "https://atomicdata.dev/properties/emoji": "🌀",
+    "https://atomicdata.dev/properties/description": "Interactive mass on a spring: set m, C, amplitude and damping, watch the motion and plot u(t) live.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "A mass on a spring with sliders for m, C, the amplitude and the damping. Animates the motion, plots u(t) live, shows T = 2π√(m/C) and the period measured from the plot (the damped period when damping is on).",
+    "https://atomicdata.dev/integrations/properties/events": "Open it from Drive apps. The animation only runs while the app is visible.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Experimental teaching tool. Draws a simplified model for lessons and stores nothing: nothing is saved in your drive and nothing is read from it. Needs no account, network or provider. Linear damping only (force proportional to speed); gravity only shifts the rest position.",
+    "https://atomicdata.dev/integrations/properties/keywords": "trillingen oscillator veer spring massa periode harmonic oscillation natuurkunde physics education onderwijs drive app",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Oscillation",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Oscillations",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/physics-spring/0.1.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-tHrOoIpOwjtUVhOFQdbn7v+nOghV8CmSer4ExJcPBbThTwlL3JGAi9NOm2jpTdWo"
   }
 ]

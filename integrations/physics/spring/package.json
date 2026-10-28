@@ -1,0 +1,7 @@
+{
+  "name": "@atomic-integrations/physics-spring-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Trillingen drive app (mass on a spring, damped harmonic oscillator, live u(t) plot, T = 2 pi sqrt(m/C)). Records only the version its catalog entry and apps/physics-spring/<version>/ui.js carry (integrations/tooling/apps.mjs APP_FOLDERS). No npm dependencies, no ontology."
+}
