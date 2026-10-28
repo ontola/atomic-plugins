@@ -19,6 +19,7 @@ export const notionFieldTypes = [
   'url',
   'email',
   'phone_number',
+  'date',
   'select',
   'multi_select',
   'status',
@@ -42,10 +43,29 @@ const datatypes: Record<NotionFieldType, Datatype> = {
   url: Datatype.STRING,
   email: Datatype.STRING,
   phone_number: Datatype.STRING,
+  date: Datatype.STRING,
   select: Datatype.STRING,
   status: Datatype.STRING,
   multi_select: JSON_DATATYPE,
 };
+
+/**
+ * Property types the lens reads but never writes: not editable, never in
+ * the baseline or the review. A relation's value is Notion page ids; the
+ * sync turns them into links to rows once every row exists
+ * (`app/sync.ts`), so the lens store does not hold the column. A formula or
+ * rollup holds its result when that is a single string, number, boolean or
+ * date (`notionComputedValue`); the lens reads it into the row like any other
+ * column and has no way to write it.
+ */
+export const notionReadOnlyTypes = ['relation', 'formula', 'rollup'] as const;
+export type NotionReadOnlyType = (typeof notionReadOnlyTypes)[number];
+
+export const isNotionReadOnlyType = (
+  type: unknown,
+): type is NotionReadOnlyType =>
+  typeof type === 'string' &&
+  (notionReadOnlyTypes as readonly string[]).includes(type);
 
 /** Whether this lens projects a Notion property type. */
 export const isNotionFieldType = (type: unknown): type is NotionFieldType =>
@@ -137,6 +157,40 @@ export function notionFormattedText(
   return notionTextWithoutFormatting(raw);
 }
 
+/**
+ * A Notion date property as one string: `start`, `start/end` for a range,
+ * and ` time_zone` appended when Notion holds one, e.g.
+ * `2026-03-01T09:00:00+01:00/2026-03-01T10:00:00+01:00 Europe/Amsterdam`.
+ * Start and end are Notion's own ISO 8601 strings, kept verbatim. The host's
+ * timestamp is not used: it would turn a date into midnight UTC and drop the
+ * offset and the time zone, so a date-only value could not be sent back as
+ * it was. Date-only strings still sort and compare as dates.
+ */
+const ISO_DATE =
+  '\\d{4}-\\d{2}-\\d{2}(?:T\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d+)?)?(?:Z|[+-]\\d{2}:\\d{2})?)?';
+const TIME_ZONE = '[A-Za-z][A-Za-z0-9_+-]*(?:/[A-Za-z0-9_+-]+)*';
+const DATE_VALUE = new RegExp(
+  `^(${ISO_DATE})(?:/(${ISO_DATE}))?(?: (${TIME_ZONE}))?$`,
+);
+
+const formatDate = (raw: unknown): string | undefined => {
+  const { start, end = null, time_zone: zone = null } = object(raw);
+  const optional = (v: unknown) => v === null || typeof v === 'string';
+  if (typeof start !== 'string' || !optional(end) || !optional(zone))
+    return undefined;
+  const text = `${start}${end === null ? '' : `/${end}`}${zone === null ? '' : ` ${zone}`}`;
+  const parsed = DATE_VALUE.exec(text);
+
+  // Only a string that splits back into the same parts is read, so the
+  // reverse mapping sends exactly what Notion held.
+  return parsed &&
+    parsed[1] === start &&
+    (parsed[2] ?? null) === end &&
+    (parsed[3] ?? null) === zone
+    ? text
+    : undefined;
+};
+
 const optionId = (value: unknown): string | undefined => {
   const id = object(value).id;
 
@@ -168,6 +222,8 @@ export function notionFieldValue(
     case 'email':
     case 'phone_number':
       return raw === null || typeof raw === 'string' ? raw : undefined;
+    case 'date':
+      return raw === null ? null : formatDate(raw);
     case 'select':
     case 'status':
       if (raw === null) return null;
@@ -244,6 +300,19 @@ export function notionPropertyValue(
       if (value === undefined) return null;
 
       return typeof value === 'string' ? value : fail();
+
+    case 'date': {
+      if (value === undefined) return null;
+      const parsed = typeof value === 'string' ? DATE_VALUE.exec(value) : null;
+      if (!parsed) return fail();
+
+      return {
+        start: parsed[1],
+        end: parsed[2] ?? null,
+        time_zone: parsed[3] ?? null,
+      };
+    }
+
     case 'select':
     case 'status':
       if (value === undefined) return null;
@@ -262,7 +331,64 @@ export function notionPropertyValue(
 interface FieldDefinition {
   id: string;
   name: string;
-  type: NotionFieldType;
+  type: NotionFieldType | NotionReadOnlyType;
+  /** For a formula or rollup: the datatype its first result fixed. */
+  datatype?: Datatype;
+}
+
+/**
+ * The result of a formula or rollup property: `value` is `null` when Notion
+ * holds none, and `datatype` is what the result's type maps to (a date is the
+ * string form of `date`). `undefined` for a result that is not one string,
+ * number, boolean or date: a rollup over a list (`array`), an `incomplete`
+ * or `unsupported` rollup.
+ */
+export function notionComputedValue(
+  type: 'formula' | 'rollup',
+  raw: unknown,
+): { value: JSONValue | null; datatype: Datatype } | undefined {
+  const result = object(raw).type;
+  const inner = typeof result === 'string' ? object(raw)[result] : undefined;
+  const one = (datatype: Datatype, value: JSONValue | null | undefined) =>
+    value === undefined ? undefined : { value, datatype };
+
+  switch (result) {
+    case 'string':
+      // A rollup has no string result.
+      return type === 'formula' && (inner === null || typeof inner === 'string')
+        ? one(Datatype.STRING, inner)
+        : undefined;
+    case 'number':
+      return inner === null ||
+        (typeof inner === 'number' && Number.isFinite(inner))
+        ? one(Datatype.FLOAT, inner)
+        : undefined;
+    case 'boolean':
+      return type === 'formula' && typeof inner === 'boolean'
+        ? one(Datatype.BOOLEAN, inner)
+        : undefined;
+    case 'date':
+      return one(Datatype.STRING, inner === null ? null : formatDate(inner));
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * The Notion page ids a relation property links to, in Notion's order.
+ * `undefined` when the list is not whole: a page property carries at most 25
+ * relations and sets `has_more` beyond that, so it is not read.
+ */
+export function notionRelationIds(
+  raw: unknown,
+  hasMore: unknown,
+): string[] | undefined {
+  if (!Array.isArray(raw) || hasMore === true) return undefined;
+  const ids = raw.map(item => object(item).id);
+
+  return ids.every((id): id is string => typeof id === 'string' && !!id)
+    ? ids
+    : undefined;
 }
 
 export interface NotionProjectionOptions {
@@ -291,8 +417,10 @@ const normalizeUuid = (value: unknown): string =>
  * - Formatted rich text is projected as its words without the formatting
  *   (`notionFormattedText`, from 0.5.3) and listed in `errors`; malformed
  *   option values are left unprojected and listed too. The raw `properties` object passes through
- *   untouched, as do unsupported types (formula, relation, date, people, files,
+ *   untouched, as do unsupported types (formula, people, files,
  *   ...), so nothing provider-side is lost.
+ * - A relation is projected as its linked page ids (read-only, see
+ *   `notionReadOnlyTypes`).
  * - A property id whose type differs between pages in one fetch (the schema
  *   changed mid-read) throws.
  *
@@ -348,13 +476,49 @@ export function notionProjection(
     )) {
       const p = object(property);
       const id = p.id;
-      if (typeof id !== 'string' || !isNotionFieldType(p.type)) continue;
+      if (
+        typeof id !== 'string' ||
+        !(isNotionFieldType(p.type) || isNotionReadOnlyType(p.type))
+      )
+        continue;
       const known = fields.get(id);
       if (known && known.type !== p.type)
         throw new Error(
           `Notion property ${id} changed type from ${known.type} to ${p.type} during one fetch`,
         );
+
+      if (p.type === 'formula' || p.type === 'rollup') {
+        const computed = notionComputedValue(p.type, p[p.type]);
+        // The first result fixes the column's datatype (an empty result still
+        // carries its type); one of another type is left out.
+        const datatype = known?.datatype ?? computed?.datatype;
+
+        if (computed === undefined || computed.datatype !== datatype)
+          errors.push(
+            `Notion page ${row.id} property "${name}" (${p.type}) has no single plain result; left unprojected`,
+          );
+        else {
+          if (!known) fields.set(id, { id, name, type: p.type, datatype });
+          if (computed.value !== null)
+            values[notionFieldShortname(id)] = computed.value;
+        }
+
+        continue;
+      }
+
       if (!known) fields.set(id, { id, name, type: p.type });
+
+      if (p.type === 'relation') {
+        const ids = notionRelationIds(p.relation, p.has_more);
+
+        if (ids === undefined)
+          errors.push(
+            `Notion page ${row.id} property "${name}" (relation) has no complete list of linked pages; left unprojected`,
+          );
+        else values[notionFieldShortname(id)] = ids;
+        continue;
+      }
+
       const value = notionFieldValue(p.type, p[p.type]);
       const formatted =
         value === undefined
@@ -391,7 +555,11 @@ export function notionProjection(
     path: `urn:atomic:notion:property:${encodeURIComponent(field.id)}`,
     kind: 'property',
     shortname: notionFieldShortname(field.id),
-    datatype: datatypes[field.type],
+    datatype:
+      field.datatype ??
+      (field.type === 'relation'
+        ? Datatype.RESOURCEARRAY
+        : datatypes[field.type as NotionFieldType]),
     description: `Notion property "${field.name}" (${field.type}, id ${field.id}).`,
     requires: [],
     recommends: [],

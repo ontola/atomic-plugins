@@ -2,7 +2,7 @@
 import { readPlatform } from 'syncables/browser';
 import { describe, expect, it } from 'vitest';
 import { notionFieldShortname } from '../devonian/notion/index.js';
-import { DATA_SOURCE, pages } from '../fixtures/notion/scenario.mjs';
+import { DATA_SOURCE, pages, pages2 } from '../fixtures/notion/scenario.mjs';
 import {
   APP,
   fakeStore,
@@ -592,15 +592,93 @@ describe('syncNotion per data source (N6, N7, N10)', () => {
     // Types the lens does not project are listed, without a column.
     expect(
       reading!.properties.filter(p => !p.shortname).map(p => [p.name, p.type]),
-    ).toEqual([
-      ['Recommended by', 'people'],
-      ['Date read', 'date'],
-    ]);
+    ).toEqual([['Recommended by', 'people']]);
     // Two "Status" properties with different ids stay two columns.
     const statuses = result.perDataSource.map(
       r => r.properties.find(p => p.name === 'Status')!.shortname,
     );
     expect(new Set(statuses).size).toBe(2);
+  });
+
+  it('links relations in a second pass: forward references resolve, unshared pages are warned about', async () => {
+    const proxy = fixtureProxy('conn-1', { scenario: 'two-sources' });
+    const store = fakeStore({ proxy });
+    const transport = syncablesTransport(proxy, 'conn-1', upstream);
+    const result = await syncNotion(store, transport);
+    const related = [...store.resources].find(
+      ([, p]) => p[atomic.shortname] === notionFieldShortname('rl%3Ad'),
+    )!;
+    expect(related[1]).toMatchObject({
+      [atomic.datatype]: 'https://atomicdata.dev/datatypes/resourceArray',
+      [dataBrowser.classtype]: ROW_CLASS,
+    });
+    const idColumn = [...store.resources].find(
+      ([, p]) => p[atomic.shortname] === 'notion-page-id',
+    )![0];
+    const rowOf = (id: string) =>
+      [...store.resources].find(
+        ([, p]) => p[PARENT] === TABLE && p[idColumn] === id,
+      )!;
+    // The Reading list row links to a Roadmap row and to a later row of its
+    // own data source, both created in this sync; the unshared page is no link.
+    expect(rowOf(pages2[0]!.id)[1][related[0]]).toEqual([
+      rowOf(pages[0]!.id)[0],
+      rowOf(pages2[1]!.id)[0],
+    ]);
+    expect(rowOf(pages2[1]!.id)[1][related[0]]).toBeUndefined();
+    const note = expect.stringContaining(
+      `property "Related" (relation) links to 1 page(s) not shared with the integration (9f9f9f9f-0000-4000-8000-00000000dead)`,
+    );
+    expect(result.warnings).toContainEqual(note);
+    expect(result.perDataSource[1]!.errors).toContainEqual(note);
+    expect(result).toMatchObject({ created: 5, updated: 0, unchanged: 0 });
+
+    // A second sync keeps the links; an unlink in Notion removes them.
+    const links = rowOf(pages2[0]!.id)[1][related[0]];
+    expect(await syncNotion(store, transport)).toMatchObject({ created: 0 });
+    expect(rowOf(pages2[0]!.id)[1][related[0]]).toEqual(links);
+    proxy.api.editPage(pages2[0]!.id, { Related: { relation: [] } });
+    await syncNotion(store, transport);
+    expect(rowOf(pages2[0]!.id)[1][related[0]]).toBeUndefined();
+  });
+
+  it('imports formula and rollup results as plain columns, and removes one Notion clears', async () => {
+    const proxy = fixtureProxy('conn-1', { scenario: 'two-sources' });
+    const store = fakeStore({ proxy });
+    const transport = syncablesTransport(proxy, 'conn-1', upstream);
+    await syncNotion(store, transport);
+    const column = (id: string) =>
+      [...store.resources].find(
+        ([, p]) => p[atomic.shortname] === notionFieldShortname(id),
+      )!;
+    expect(column('fo%3Am')[1][atomic.datatype]).toBe(
+      'https://atomicdata.dev/datatypes/string',
+    );
+    expect(column('ru%3Al')[1][atomic.datatype]).toBe(
+      'https://atomicdata.dev/datatypes/float',
+    );
+    const idColumn = [...store.resources].find(
+      ([, p]) => p[atomic.shortname] === 'notion-page-id',
+    )![0];
+    const rowOf = (id: string) =>
+      [...store.resources].find(
+        ([, p]) => p[PARENT] === TABLE && p[idColumn] === id,
+      )![1];
+    expect(rowOf(pages2[0]!.id)[column('fo%3Am')[0]]).toBe(
+      'Thinking in Systems (Reading)',
+    );
+    expect(rowOf(pages2[0]!.id)[column('ru%3Al')[0]]).toBe(3);
+    // A formula with no result in Notion leaves the cell empty; a rollup of
+    // zero is a value.
+    expect(rowOf(pages2[1]!.id)[column('fo%3Am')[0]]).toBeUndefined();
+    expect(rowOf(pages2[1]!.id)[column('ru%3Al')[0]]).toBe(0);
+
+    // A cell edited here is Notion's again on the next sync.
+    rowOf(pages2[0]!.id)[column('fo%3Am')[0]] = 'mine';
+    await syncNotion(store, transport);
+    expect(rowOf(pages2[0]!.id)[column('fo%3Am')[0]]).toBe(
+      'Thinking in Systems (Reading)',
+    );
   });
 
   it('picks up a renamed option from the schema: the Tag is renamed, no row is written', async () => {

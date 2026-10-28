@@ -313,7 +313,37 @@ syncables read (`resource: 'page'`) to typed values. Each value is keyed by
 Notion property id.
 
 - Covered: plain title/rich text, number, checkbox, url, email, phone,
-  select/status option id, and sorted multi-select option ids.
+  date, select/status option id, and sorted multi-select option ids.
+- A date is one string column: `2026-03-01`, a range `2026-03-01/2026-03-05`,
+  and ` Europe/Amsterdam` appended when Notion holds a `time_zone` (start and
+  end are Notion's ISO 8601 strings, kept verbatim, offsets included). It is
+  not the host's timestamp: that would turn a date into midnight UTC and drop
+  the offset, the range end and the time zone, so nothing could be sent back
+  as it was. It is editable: `notionPropertyValue` splits the string back into
+  `start`, `end` and `time_zone`, and the review holds back (and names) any
+  text that is not in that form instead of sending it. A date Notion sends in
+  some other shape is left unprojected and listed in the warnings.
+- A relation is read only. Its column is a resourceArray whose `classtype` is
+  the row class, holding links to the rows of the linked pages, whichever
+  data source they are in. The lens projects the page ids (`values[shortname]`,
+  Notion's order) and does not hold the column; `syncNotion` links them in a
+  second pass, after every data source's rows exist, finding the target by
+  the Notion page id column (so a row from an earlier sync counts, and a link
+  to a page that comes later in the read works). A page that is not a row
+  (not shared with the integration) cannot be linked: it is left out of the
+  cell and named in the sync warnings and the data source's notes. A relation
+  with more than 25 pages (`has_more`; the page property is cut off) is
+  listed and left as it was. Relations are never in the baseline, the review
+  or a `PATCH`: an edit made to the cell here is overwritten by Notion's
+  links on the next sync. Sending links back is not built.
+- A formula or rollup is read only, like a relation. Its result becomes a
+  plain column of the result's type (string, number, boolean; a date as the
+  string form above), set by the lens on import and removed when Notion holds
+  no result. The first result a property shows fixes the column's datatype; a
+  page whose result has another type, and a rollup over a list (`array`) or
+  an `incomplete` or `unsupported` one, are left unprojected and listed in the
+  warnings. These columns are not in the baseline, the review or a `PATCH`: an
+  edit made to the cell here is overwritten on the next sync.
 - Notion `null` leaves the key absent; `0`, `false` and `[]` are kept.
 - Formatted text, mentions and links are projected as their words without
   the formatting (from 0.5.3) and listed in `errors`. A value with no plain

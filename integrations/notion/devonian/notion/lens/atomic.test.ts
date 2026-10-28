@@ -368,4 +368,28 @@ describe('notionPropertyValue', () => {
     expect(() => notionPropertyValue('number', '3')).toThrow(/Cannot write/);
     expect(() => notionPropertyValue('select', '')).toThrow(/Cannot write/);
   });
+
+  it('writes a date as start, end and time zone, and refuses what it cannot represent', () => {
+    expect(notionPropertyValue('date', undefined)).toBeNull();
+    expect(notionPropertyValue('date', '2026-03-01')).toEqual({
+      start: '2026-03-01',
+      end: null,
+      time_zone: null,
+    });
+    expect(
+      notionPropertyValue(
+        'date',
+        '2026-03-01T09:00:00+01:00/2026-03-01T10:00:00+01:00 Europe/Amsterdam',
+      ),
+    ).toEqual({
+      start: '2026-03-01T09:00:00+01:00',
+      end: '2026-03-01T10:00:00+01:00',
+      time_zone: 'Europe/Amsterdam',
+    });
+
+    for (const bad of ['', 'tomorrow', '03/01/2026', '2026-03-01/', 5, true])
+      expect(() => notionPropertyValue('date', bad as string)).toThrow(
+        /Cannot write/,
+      );
+  });
 });

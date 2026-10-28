@@ -26,8 +26,9 @@
  * `POST /fixture/notion/setScenario` with `["<name>"]`:
  * - `default`: the one data source above;
  * - `two-sources`: also a "Reading list" data source whose "Status" has
- *   another property id, a "Format" select, plus a people and a date property
- *   (not projected);
+ *   another property id, a "Format" select, plus a people property (not
+ *   projected) and a "Date read" date (a range on one page, a time zone on
+ *   the other);
  * - `empty`: the search shares no data source;
  * - `unauthorized`: every request answers 401 (the connection was revoked);
  * - `rate-limited`: the search works, every query answers 429 with
@@ -247,6 +248,33 @@ const schema2 = {
     people: {},
   },
   'Date read': { id: 'dt%40r', name: 'Date read', type: 'date', date: {} },
+  // Computed by Notion: never written by the fixture's PATCH.
+  Label: {
+    id: 'fo%3Am',
+    name: 'Label',
+    type: 'formula',
+    formula: { expression: 'prop("Title")' },
+  },
+  'Related count': {
+    id: 'ru%3Al',
+    name: 'Related count',
+    type: 'rollup',
+    rollup: {
+      relation_property_name: 'Related',
+      rollup_property_name: 'Title',
+      function: 'count',
+    },
+  },
+  Related: {
+    id: 'rl%3Ad',
+    name: 'Related',
+    type: 'relation',
+    relation: {
+      data_source_id: DATA_SOURCE,
+      type: 'single_property',
+      single_property: {},
+    },
+  },
 };
 
 export const dataSource2 = {
@@ -258,7 +286,20 @@ export const dataSource2 = {
   url: `https://www.notion.so/${DATABASE_2.replaceAll('-', '')}`,
 };
 
-function page2(id, { title, status, format, author, link, edited }) {
+function page2(
+  id,
+  {
+    title,
+    status,
+    format,
+    author,
+    link,
+    date = null,
+    related = [],
+    label,
+    edited,
+  },
+) {
   const value = (key, content) => ({
     id: schema2[key].id,
     type: schema2[key].type,
@@ -288,7 +329,27 @@ function page2(id, { title, status, format, author, link, edited }) {
       Author: value('Author', [text(author)]),
       Link: value('Link', link),
       'Recommended by': value('Recommended by', []),
-      'Date read': value('Date read', null),
+      'Date read': value('Date read', date),
+      Label: {
+        id: schema2.Label.id,
+        type: 'formula',
+        formula: { type: 'string', string: label },
+      },
+      'Related count': {
+        id: schema2['Related count'].id,
+        type: 'rollup',
+        rollup: {
+          type: 'number',
+          number: related.length,
+          function: 'count',
+        },
+      },
+      Related: {
+        id: schema2.Related.id,
+        type: 'relation',
+        relation: related.map(pid => ({ id: pid })),
+        has_more: false,
+      },
     },
     url: `https://www.notion.so/${title.replaceAll(/\W+/g, '-')}-${id.replaceAll('-', '')}`,
     public_url: null,
@@ -302,6 +363,15 @@ export const pages2 = [
     format: BOOK,
     author: 'Donella Meadows',
     link: 'https://example.org/thinking-in-systems',
+    date: { start: '2026-08-30', end: '2026-09-02', time_zone: null },
+    label: 'Thinking in Systems (Reading)',
+    // A page of the other data source, one of this one that comes later in
+    // the read, and one the integration cannot see.
+    related: [
+      '1a2b3c4d-0000-4000-8000-000000000001',
+      '2b3c4d5e-0000-4000-8000-000000000002',
+      '9f9f9f9f-0000-4000-8000-00000000dead',
+    ],
     edited: '2026-09-02T09:30:00.000Z',
   }),
   page2('2b3c4d5e-0000-4000-8000-000000000002', {
@@ -310,6 +380,12 @@ export const pages2 = [
     format: ARTICLE,
     author: 'Kleppmann et al.',
     link: null,
+    label: null,
+    date: {
+      start: '2026-08-28T15:00:00',
+      end: null,
+      time_zone: 'Europe/Amsterdam',
+    },
     edited: '2026-08-28T15:00:00.000Z',
   }),
 ];
@@ -417,6 +493,21 @@ function patchPage(target, schemaOf, properties) {
       if (!Array.isArray(value) || !value.every(known))
         return error(400, 'validation_error', 'Invalid multi_select option.');
       next[name][type] = value.map(known);
+    } else if (type === 'relation') {
+      if (!Array.isArray(value) || !value.every(v => typeof v?.id === 'string'))
+        return error(400, 'validation_error', `${name} is not a relation.`);
+      next[name][type] = value.map(v => ({ id: v.id }));
+    } else if (type === 'date') {
+      if (value !== null && typeof value?.start !== 'string')
+        return error(400, 'validation_error', `${name} needs a start date.`);
+      next[name][type] =
+        value === null
+          ? null
+          : {
+              start: value.start,
+              end: value.end ?? null,
+              time_zone: value.time_zone ?? null,
+            };
     } else if (
       ['number', 'checkbox', 'url', 'email', 'phone_number'].includes(type)
     ) {

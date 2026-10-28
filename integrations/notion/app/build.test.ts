@@ -44,6 +44,8 @@ describe('Notion drive-plugin bundle', async () => {
     // pre-PATCH GET and in the read transport (+205).
     // 0.5.6 179 742 on 2026-10-15: the read stops at the first blocked
     // answer instead of requesting every remaining data source (+19).
+    // 0.5.7 183 133 on 2026-10-28: date, relation, formula and rollup columns
+    // (+3 391).
     // A change that needs more should say why and re-measure.
     expect(bytes).toBeLessThan(197_800);
   });

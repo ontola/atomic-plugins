@@ -25,6 +25,7 @@ import {
 import type { NotionColumn } from './columns.js';
 import {
   isNotionFieldType,
+  notionComputedValue,
   notionFieldShortname,
   notionFieldValue,
   notionFormattedText,
@@ -103,6 +104,7 @@ export class NotionRowLenses {
     const schema = new AtomicSchema().property(ATOMIC_NAME, Datatype.STRING);
 
     for (const column of options.columns) {
+      if (column.relation) continue;
       const subject = options.bound.get(column.shortname);
       if (!subject) continue;
       const property = notionLensProperty(column.shortname);
@@ -226,10 +228,19 @@ export class NotionRowLenses {
     put('notion-last-edited', page.values['last-edited-time']);
 
     for (const [id, { type, raw }] of rawProperties(page)) {
-      if (!isNotionFieldType(type)) continue;
       const shortname = notionFieldShortname(id);
       const property = this.property(shortname);
       if (!property) continue;
+
+      // A formula or rollup result: read only, so `write` leaves it alone.
+      if (type === 'formula' || type === 'rollup') {
+        const computed = notionComputedValue(type, raw[type]);
+        if (computed?.value === null) unset.push(property);
+        else if (computed) put(shortname, page.values[shortname]);
+        continue;
+      }
+
+      if (!isNotionFieldType(type)) continue;
       const value = notionFieldValue(type, raw[type]);
 
       if (value === null) unset.push(property);

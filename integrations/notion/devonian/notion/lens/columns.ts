@@ -20,6 +20,11 @@ export interface NotionColumn {
    * select column, holding one Tag per option (`app/options.ts`).
    */
   options?: 'single' | 'multiple';
+  /**
+   * Set for a relation: the value is Notion page ids, read only. The sync
+   * links it to rows in a second pass, so the lens never holds the column.
+   */
+  relation?: true;
 }
 
 /** Columns every Notion row gets, besides one per projected Notion property. */
@@ -137,6 +142,7 @@ export function notionColumns(
         datatype: term.datatype,
         description: term.description,
         ...(options ? { options } : {}),
+        ...(term.notionType === 'relation' ? { relation: true as const } : {}),
       };
     }),
   ];

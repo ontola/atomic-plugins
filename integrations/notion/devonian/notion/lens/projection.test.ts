@@ -2,7 +2,11 @@
 import { Datatype } from '@tomic/lib';
 import { describe, expect, it } from 'vitest';
 import type { FetchedPlatform, JSONValue } from './types.js';
+import { notionColumns } from './columns.js';
 import {
+  isNotionFieldType,
+  isNotionReadOnlyType,
+  notionComputedValue,
   JSON_DATATYPE,
   notionFieldShortname,
   notionFieldValue,
@@ -107,7 +111,7 @@ describe('notionProjection', () => {
           { id: 'a', name: 'Ay' },
         ],
       },
-      Due: { id: 'd', type: 'date', date: { start: '2026-09-23' } },
+      Owner: { id: 'd', type: 'people', people: [] },
     };
     const projected = notionProjection(fixture([page('p1', properties)]), {
       dataSource: DS.replaceAll('-', ''),
@@ -149,6 +153,129 @@ describe('notionProjection', () => {
       'notion/property/properties',
       ...added.map(t => t.path),
     ]);
+  });
+
+  it('projects a date as a string column and lists a malformed one', () => {
+    const ok = {
+      id: 'd',
+      type: 'date',
+      date: { start: '2026-03-01', end: '2026-03-02', time_zone: null },
+    };
+    const projected = notionProjection(
+      fixture([
+        page('p1', { When: ok }),
+        page('p2', { When: { ...ok, date: { start: 'soon' } } }),
+      ]),
+      { dataSource: DS },
+    );
+    const column = key('d');
+    expect(projected.records[0]!.values[column]).toBe('2026-03-01/2026-03-02');
+    expect(projected.records[1]!.values[column]).toBeUndefined();
+    expect(projected.errors).toEqual([
+      expect.stringContaining('"When" (date) has no lossless plain value'),
+    ]);
+    expect(
+      projected.ontology.terms.find(t => t.shortname === column)?.datatype,
+    ).toBe(Datatype.STRING);
+  });
+
+  it('projects a relation as its linked page ids, and lists one that is cut off', () => {
+    const relation = (ids: string[], has_more = false) => ({
+      id: 'r',
+      type: 'relation',
+      relation: ids.map(id => ({ id })),
+      has_more,
+    });
+    const projected = notionProjection(
+      fixture([
+        page('p1', { Parent: relation(['b', 'a']) }),
+        page('p2', { Parent: relation([]) }),
+        page('p3', { Parent: relation(['c'], true) }),
+      ]),
+      { dataSource: DS },
+    );
+    const column = key('r');
+    expect(projected.records.map(r => r.values[column])).toEqual([
+      ['b', 'a'],
+      [],
+      undefined,
+    ]);
+    expect(projected.errors).toEqual([
+      expect.stringContaining('"Parent" (relation) has no complete list'),
+    ]);
+    const term = projected.ontology.terms.find(t => t.shortname === column)!;
+    expect(term).toMatchObject({
+      datatype: Datatype.RESOURCEARRAY,
+      notionType: 'relation',
+    });
+    expect(notionColumns([term], new Map([['r', 'Parent']]))[4]).toMatchObject({
+      name: 'Parent',
+      relation: true,
+    });
+    // Read only: not a type the app can edit or send.
+    expect(isNotionFieldType('relation')).toBe(false);
+    expect(isNotionReadOnlyType('relation')).toBe(true);
+  });
+
+  it('reads a formula or rollup result as a column of its result type, and lists what has no single plain result', () => {
+    const formula = (result: Record<string, unknown>) => ({
+      id: 'f',
+      type: 'formula',
+      formula: result,
+    });
+    const rollup = (result: Record<string, unknown>) => ({
+      id: 'u',
+      type: 'rollup',
+      rollup: { function: 'sum', ...result },
+    });
+    const projected = notionProjection(
+      fixture([
+        page('p1', {
+          F: formula({ type: 'number', number: 4.5 }),
+          R: rollup({ type: 'number', number: 2 }),
+        }),
+        page('p2', {
+          F: formula({ type: 'number', number: null }),
+          R: rollup({ type: 'array', array: [] }),
+        }),
+        page('p3', {
+          F: formula({ type: 'string', string: 'x' }),
+          R: rollup({ type: 'incomplete', incomplete: {} }),
+        }),
+      ]),
+      { dataSource: DS },
+    );
+    expect(projected.records.map(r => r.values[key('f')])).toEqual([
+      4.5,
+      undefined,
+      undefined,
+    ]);
+    expect(projected.records.map(r => r.values[key('u')])).toEqual([
+      2,
+      undefined,
+      undefined,
+    ]);
+    // The first result fixes the datatype; another type is listed, not coerced.
+    expect(projected.errors).toHaveLength(3);
+    expect(projected.errors![0]).toContain('"R" (rollup) has no single plain');
+    expect(projected.errors![1]).toContain('"F" (formula) has no single plain');
+    const added = projected.ontology.terms.filter(t => t.kind === 'property');
+    expect(added.map(t => [t.shortname, t.datatype])).toEqual([
+      [key('f'), Datatype.FLOAT],
+      [key('u'), Datatype.FLOAT],
+    ]);
+    expect(
+      notionComputedValue('formula', {
+        type: 'boolean',
+        boolean: false,
+      }),
+    ).toEqual({ value: false, datatype: Datatype.BOOLEAN });
+    expect(
+      notionComputedValue('rollup', {
+        type: 'date',
+        date: { start: '2026-03-01', end: null, time_zone: null },
+      }),
+    ).toEqual({ value: '2026-03-01', datatype: Datatype.STRING });
   });
 
   it('distinguishes property ids that differ only in case', () => {
@@ -254,6 +381,36 @@ describe('notionFieldValue', () => {
     expect(notionFieldValue('multi_select', [])).toEqual([]);
     expect(notionFieldValue('number', null)).toBeNull();
     expect(notionFieldValue('status', null)).toBeNull();
+  });
+
+  it('reads a date as one string and gives back exactly what Notion held', () => {
+    const date = (v: unknown) => notionFieldValue('date', v);
+    expect(date(null)).toBeNull();
+    expect(date({ start: '2026-03-01', end: null, time_zone: null })).toBe(
+      '2026-03-01',
+    );
+    expect(date({ start: '2026-03-01' })).toBe('2026-03-01');
+    expect(
+      date({
+        start: '2026-03-01T09:00:00.000+01:00',
+        end: '2026-03-02T10:00:00.000+01:00',
+        time_zone: null,
+      }),
+    ).toBe('2026-03-01T09:00:00.000+01:00/2026-03-02T10:00:00.000+01:00');
+    expect(
+      date({
+        start: '2026-03-01T09:00:00',
+        end: null,
+        time_zone: 'Europe/Oslo',
+      }),
+    ).toBe('2026-03-01T09:00:00 Europe/Oslo');
+    // Not Notion's shape, or a start that would parse as start plus zone.
+    expect(date({ start: 5 })).toBeUndefined();
+    expect(date({ end: '2026-03-01' })).toBeUndefined();
+    expect(date({ start: 'soon' })).toBeUndefined();
+    expect(date({ start: '2026-03-01 Europe/Oslo' })).toBeUndefined();
+    expect(date({ start: '2026-03-01', time_zone: 3 })).toBeUndefined();
+    expect(date('2026-03-01')).toBeUndefined();
   });
 
   it('treats links, mentions and colour as formatting', () => {
