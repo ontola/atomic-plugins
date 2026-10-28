@@ -2,25 +2,29 @@
 
 Three small interactive physics drive apps for lessons, secondary school to
 university. Plain DOM and SVG, no framework, no network, no storage, no external
-assets. They use no ontology-kit terms, so they are not under the ontology gate:
-their catalog entries are `enabled: true, experimental: true` (offered under
-"Show experimental plugins").
+assets. They use no ontology-kit terms, so they are not under the ontology gate.
 
-| Catalog id       | Folder    | App                                                                    |
-| ---------------- | --------- | ---------------------------------------------------------------------- |
-| `physics-lens`   | `lens/`   | Thin lens: drag object and focal points, three principal rays, image   |
-| `physics-magnet` | `magnet/` | One or two bar magnets: field lines, compass, filings, strength, force |
-| `physics-spring` | `spring/` | Damped mass on a spring: animation, live u(t), T = 2 pi sqrt(m/C)      |
+| Lesson key | Folder    | App                                                                    |
+| ---------- | --------- | ---------------------------------------------------------------------- |
+| `lens`     | `lens/`   | Thin lens: drag object and focal points, three principal rays, image   |
+| `magnet`   | `magnet/` | One or two bar magnets: field lines, compass, filings, strength, force |
+| `spring`   | `spring/` | Damped mass on a spring: animation, live u(t), T = 2 pi sqrt(m/C)      |
+
+They are not catalog entries. The Atomic Education app (`../learning/`) bundles
+each built module as a string and, on "Load starter tree", creates it as a drive
+App in the lesson programme, linked to its interactive lesson, with the source
+stored in the App (`plugin-source`) where a teacher or Atomic's assistant can
+read and change it. See "Mini apps in the drive" in `../learning/README.md`.
 
 ```
 core/    pure, tested physics with no DOM: optics.ts, magnet.ts, oscillator.ts
 shared/  host mount (theme, styles), DOM helpers, drag/keys, frame loop, build
 lens/ magnet/ spring/   strings.ts (nl and en), view.ts, main.ts, styles.css, build.mjs
-e2e/     physics.spec.ts: installs each from the catalog and drives it
 ```
 
-`apps.mjs` `APP_FOLDERS` maps each catalog shortname to its folder; the
-committed modules are `apps/physics-*/0.1.0/ui.js`.
+No module is committed for them (`apps/` holds catalog apps only): the learning
+build makes them. The host e2e that opens and drives each one through its lesson
+is `../learning/e2e/mini-apps.spec.ts`.
 
 ## Host integration
 
@@ -44,4 +48,5 @@ scheme. The UI is Dutch when the browser language starts with `nl`, else English
 Animation: a frame loop that asks for `requestAnimationFrame` only while the
 document is visible, the app is in view, and something moves.
 
-Tests: `node integrations/tooling/run-lane.mjs physics --tier typecheck|unit|e2e`.
+Tests: `node integrations/tooling/run-lane.mjs physics --tier typecheck|unit`
+(the host e2e is the learning lane's).

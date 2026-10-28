@@ -27,6 +27,9 @@ export interface Actions {
   open(lesson: { content?: string; subject: string }): void;
   openRow(id: string): void;
   link(lesson: string, target: string): void;
+  /** Builds the request for the assistant, copies it, and shows it under the lesson. */
+  makeWithAI(lesson: string): void;
+  hideAI(): void;
 }
 
 const NODE_W = 144;
@@ -156,7 +159,7 @@ function notices(doc: Document, state: Ready, ui: Strings): HTMLElement {
   if (n === 'denied') lines.push(['lb-bad', ui.denied]);
   else if (n === 'failed') lines.push(['lb-bad', ui.failed]);
   else if (n === 'badLink') lines.push(['lb-bad', ui.badLink]);
-  else if (n) lines.push(['lb-ok', ui.loaded(n.loaded)]);
+  else if (n) lines.push(['lb-ok', ui.loaded(n.loaded, n.apps)]);
   if (state.graph.ignored.length)
     lines.push(['lb-warn', ui.cycles(state.graph.ignored.length)]);
   if (state.graph.missing.length)
@@ -378,6 +381,7 @@ function lessonRow(
   ui: Strings,
   actions: Actions,
   l: Lesson,
+  ai?: Ready['ai'],
 ): HTMLElement {
   const interactive = l.format === 'interactive';
   const meta = [
@@ -446,11 +450,65 @@ function lessonRow(
     input.addEventListener('keydown', e => {
       if ((e as KeyboardEvent).key === 'Enter') go();
     });
-    const form = h(doc, 'div', { class: 'lb-linkform' }, input, submit);
+    const make = h(
+      doc,
+      'button',
+      { type: 'button', class: 'lb-btn lb-ghost' },
+      ui.makeWithAI,
+    );
+    make.setAttribute('aria-label', `${ui.makeWithAI}: ${l.name}`);
+    make.addEventListener('click', () => actions.makeWithAI(l.subject));
+    const form = h(doc, 'div', { class: 'lb-linkform' }, input, submit, make);
     li.append(form);
+
+    if (ai?.lesson === l.subject) li.append(aiBox(doc, ui, actions, l, ai));
   }
 
   return li;
+}
+
+/**
+ * The request for the assistant, shown (and already copied when the browser
+ * allowed it) because a drive app cannot open the assistant itself.
+ */
+function aiBox(
+  doc: Document,
+  ui: Strings,
+  actions: Actions,
+  l: Lesson,
+  ai: NonNullable<Ready['ai']>,
+): HTMLElement {
+  const text = h(doc, 'textarea', {
+    class: 'lb-prompt',
+    readonly: true,
+    rows: '4',
+    'aria-label': `${ui.aiLabel}: ${l.name}`,
+  }) as HTMLTextAreaElement;
+  text.value = ai.prompt;
+  text.addEventListener('focus', () => text.select());
+  const again = h(
+    doc,
+    'button',
+    { type: 'button', class: 'lb-btn' },
+    ui.aiCopyAgain,
+  );
+  again.addEventListener('click', () => actions.makeWithAI(l.subject));
+  const close = h(
+    doc,
+    'button',
+    { type: 'button', class: 'lb-btn lb-ghost' },
+    ui.aiClose,
+  );
+  close.addEventListener('click', () => actions.hideAI());
+
+  return h(
+    doc,
+    'div',
+    { class: 'lb-ai', role: 'status' },
+    h(doc, 'p', { class: 'lb-muted' }, ai.copied ? ui.aiCopied : ui.aiHint),
+    text,
+    h(doc, 'div', { class: 'lb-linkform' }, again, close),
+  );
 }
 
 function detail(
@@ -558,7 +616,7 @@ function detail(
             doc,
             'ul',
             { class: 'lb-lessons' },
-            ...mine.map(l => lessonRow(doc, ui, actions, l)),
+            ...mine.map(l => lessonRow(doc, ui, actions, l, state.ai)),
           )
         : h(doc, 'p', { class: 'lb-muted' }, ui.noLessons),
       state.goal ? pathBlock(doc, state, ui, actions) : undefined,

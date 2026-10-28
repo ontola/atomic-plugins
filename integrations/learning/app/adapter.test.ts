@@ -3,8 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { buildGraph, masteredSet, nextSteps, pathTo } from '../core/index.js';
 import {
   adopt,
+  appKit,
   atomic,
   LESSON,
+  linkLesson,
   loadStarter,
   masteryStore,
   MASTERY,
@@ -15,11 +17,16 @@ import {
 } from './adapter.js';
 import {
   APP,
+  APP_CLASS,
+  ENTRYPOINT,
   foreignTable,
   fakeStore,
   OWN_TABLE,
+  PLUGIN_SOURCE,
   RENDERS,
+  SCRIPT_CLASS,
 } from './fakeStore.js';
+import { MINI_APPS } from './miniapps.js';
 import { starter } from './starter.js';
 
 describe('adopt', () => {
@@ -91,6 +98,7 @@ describe('the starter tree', () => {
       status: 'loaded',
       skills: starter.skills.length,
       lessons: starter.lessons.length,
+      apps: 0,
     });
     expect(store.grant.asked).toBe(1);
 
@@ -124,11 +132,121 @@ describe('the starter tree', () => {
       status: 'loaded',
       skills: 0,
       lessons: 0,
+      apps: 0,
     });
     expect(store.grant.asked).toBe(0);
     expect(store.rowsOf(tables.skills, SKILL)).toHaveLength(
       starter.skills.length,
     );
+  });
+});
+
+describe('mini apps in the drive', () => {
+  const fresh = async () => {
+    const store = fakeStore();
+    const tables = await adopt(store, await store.getData());
+
+    return { store, tables };
+  };
+
+  const appsOf = (store: ReturnType<typeof fakeStore>) =>
+    store.rowsOf(APP, APP_CLASS);
+  const lessonNamed = async (
+    store: ReturnType<typeof fakeStore>,
+    tables: { lessons: string },
+    name: string,
+  ) => (await readLessons(store, tables.lessons)).find(l => l.name === name)!;
+
+  it('finds the drive App and plugin-script classes from its own App', async () => {
+    const { store } = await fresh();
+    expect(await appKit(store)).toEqual({
+      appClass: APP_CLASS,
+      scriptClass: SCRIPT_CLASS,
+      entrypoint: ENTRYPOINT,
+      source: PLUGIN_SOURCE,
+    });
+  });
+
+  it('creates each mini app as an App with its source in a plugin-script, and links the lessons', async () => {
+    const { store, tables } = await fresh();
+    const result = await loadStarter(store, tables, starter, MINI_APPS);
+    expect(result).toMatchObject({ status: 'loaded', apps: 3 });
+
+    const apps = appsOf(store);
+    expect(apps.map(a => a[atomic.name]).sort()).toEqual([
+      'Lenzen',
+      'Magneten',
+      'Trillingen',
+    ]);
+
+    for (const mini of Object.values(MINI_APPS)) {
+      const app = [...store.resources].find(
+        ([, p]) =>
+          p[atomic.name] === mini.name &&
+          (p[atomic.isA] as string[]).includes(APP_CLASS),
+      )!;
+      // Under the learning app, so a drive App opened from the sidebar finds it.
+      expect(app[1][atomic.parent]).toBe(APP);
+      const script = store.resources.get(app[1][ENTRYPOINT] as string)!;
+      expect(script[atomic.parent]).toBe(app[0]);
+      expect(script[atomic.isA]).toEqual([SCRIPT_CLASS]);
+      expect(script[PLUGIN_SOURCE]).toBe(mini.source);
+    }
+
+    const lens = await lessonNamed(store, tables, 'Lenzen (interactief)');
+    const apps_ = Object.fromEntries(apps.map(a => [a[atomic.name], a]));
+    expect(lens.content).toBe(
+      [...store.resources].find(([, p]) => p === apps_['Lenzen'])![0],
+    );
+    expect(
+      (await lessonNamed(store, tables, 'Magneten (interactief)')).content,
+    ).toBeDefined();
+    expect(
+      (await lessonNamed(store, tables, 'Trillingen (interactief)')).content,
+    ).toBeDefined();
+    // Only the lessons that name an app are linked.
+    expect(
+      (await readLessons(store, tables.lessons)).filter(l => l.content),
+    ).toHaveLength(3);
+  });
+
+  it('reuses the apps when pressed twice, refreshes a changed source and keeps a teacher link', async () => {
+    const { store, tables } = await fresh();
+    await loadStarter(store, tables, starter, MINI_APPS);
+    const lens = await lessonNamed(store, tables, 'Lenzen (interactief)');
+    const magnet = await lessonNamed(store, tables, 'Magneten (interactief)');
+    await linkLesson(store, magnet.subject, 'https://example.org/own');
+    await linkLesson(store, lens.subject, 'https://example.org/own');
+    store.resources.get(lens.subject)![P.content] = undefined;
+
+    const newer = {
+      ...MINI_APPS,
+      lens: { ...MINI_APPS['lens']!, source: 'export function view() {}' },
+    };
+    await loadStarter(store, tables, starter, newer);
+
+    expect(appsOf(store)).toHaveLength(3);
+    const relinked = await lessonNamed(store, tables, 'Lenzen (interactief)');
+    expect(relinked.content).toMatch(/^fake:/);
+    expect(
+      (await lessonNamed(store, tables, 'Magneten (interactief)')).content,
+    ).toBe('https://example.org/own');
+    const sources = [...store.resources.values()]
+      .map(p => p[PLUGIN_SOURCE])
+      .filter(Boolean);
+    expect(sources).toContain('export function view() {}');
+    expect(sources).not.toContain(MINI_APPS['lens']!.source);
+  });
+
+  it('makes no apps, and still loads the tree, in an app that is not a plain drive App', async () => {
+    const { store, tables } = await fresh();
+    store.resources.get(APP)![ENTRYPOINT] = undefined;
+    const result = await loadStarter(store, tables, starter, MINI_APPS);
+    expect(result).toMatchObject({ status: 'loaded', apps: 0 });
+    expect(appsOf(store)).toHaveLength(0);
+    expect(
+      (await readLessons(store, tables.lessons)).filter(l => l.content),
+    ).toHaveLength(0);
   });
 });
 

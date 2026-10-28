@@ -2,6 +2,10 @@ export default {
   root: new URL('.', import.meta.url).pathname,
   resolve: {
     alias: {
+      'virtual-physics-modules': new URL(
+        './app/physics-modules.stub.ts',
+        import.meta.url,
+      ).pathname,
       vitest: new URL(
         '../../browser/node_modules/vitest/dist/index.js',
         import.meta.url,

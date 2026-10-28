@@ -15,6 +15,10 @@ export const APP_CLASS = 'fake:app-class';
 export const RENDERS = 'fake:renders';
 export const OWN_TABLE = 'fake:app-table';
 export const OWN_ROW_CLASS = 'fake:app-row-class';
+export const ENTRYPOINT = 'fake:entrypoint';
+export const SCRIPT_CLASS = 'fake:script-class';
+export const SCRIPT = 'fake:app-script';
+export const PLUGIN_SOURCE = 'fake:plugin-source';
 
 export interface FakeStore extends PluginStore {
   resources: Map<string, Record<string, JSONValue>>;
@@ -37,9 +41,17 @@ export function fakeStore(
   };
   let counter = 0;
 
-  resources.set(APP_CLASS, { [A + 'recommends']: [RENDERS] });
+  resources.set(APP_CLASS, { [A + 'recommends']: [ENTRYPOINT, RENDERS] });
   resources.set(RENDERS, { [A + 'shortname']: 'renders' });
-  resources.set(APP, { [A + 'isA']: [APP_CLASS] });
+  resources.set(ENTRYPOINT, { [A + 'shortname']: 'entrypoint' });
+  resources.set(SCRIPT_CLASS, { [A + 'requires']: [PLUGIN_SOURCE] });
+  resources.set(PLUGIN_SOURCE, { [A + 'shortname']: 'plugin-source' });
+  resources.set(APP, { [A + 'isA']: [APP_CLASS], [ENTRYPOINT]: SCRIPT });
+  resources.set(SCRIPT, {
+    [A + 'parent']: APP,
+    [A + 'isA']: [SCRIPT_CLASS],
+    [PLUGIN_SOURCE]: 'export function view() {}',
+  });
   resources.set(OWN_TABLE, {
     [A + 'parent']: APP,
     [A + 'classtype']: OWN_ROW_CLASS,
