@@ -1,0 +1,12 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/cohort-members",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "cohort-members",
+  "https://atomicdata.dev/properties/name": "Members",
+  "https://atomicdata.dev/properties/description": "The agents (learners) in this cohort.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/resourceArray",
+  "https://atomicdata.dev/properties/classtype": "https://atomicdata.dev/classes/Agent"
+}

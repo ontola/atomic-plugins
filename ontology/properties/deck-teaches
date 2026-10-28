@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/deck-teaches",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "deck-teaches",
+  "https://atomicdata.dev/properties/name": "Teaches",
+  "https://atomicdata.dev/properties/description": "Skills this deck helps with. Same meaning as lesson-teaches, for a deck that is used as the content of a lesson. Maps to schema.org teaches Points at skill-v1.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/resourceArray"
+}

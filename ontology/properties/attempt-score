@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-score",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "attempt-score",
+  "https://atomicdata.dev/properties/name": "Score",
+  "https://atomicdata.dev/properties/description": "Result of the attempt, 0 to 1.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/float"
+}

@@ -22,6 +22,7 @@ import { readBase, root, TERMS_DIR } from './ontology.mjs';
 
 const REQUIRES = 'https://atomicdata.dev/properties/requires';
 const RECOMMENDS = 'https://atomicdata.dev/properties/recommends';
+const ALLOWS_ONLY = 'https://atomicdata.dev/properties/allowsOnly';
 
 /** Every committed term file, as a path under `ontology/`. */
 export function termPaths(base = root) {
@@ -48,7 +49,18 @@ export function classTermPaths(name, base = root) {
     .filter(subject => subject.startsWith(`${ontologyBase}/`))
     .map(subject => subject.slice(ontologyBase.length + 1));
 
-  return [path, ...properties];
+  // The fixed values of a select property are terms of their own.
+  const values = properties.flatMap(property => {
+    const doc = JSON.parse(
+      readFileSync(resolve(base, TERMS_DIR, property), 'utf8'),
+    );
+
+    return (doc[ALLOWS_ONLY] ?? []).map(subject =>
+      subject.slice(ontologyBase.length + 1),
+    );
+  });
+
+  return [path, ...properties, ...values];
 }
 
 /**

@@ -182,6 +182,65 @@ test('generate writes JSON-AD terms with absolute subjects under the base', () =
   assert.ok(files.get('ontology/v1').endsWith('}\n'));
 });
 
+test('allowsOnly writes a select property with Tag value files, and leaves other terms alone', async () => {
+  const plain = generate(source(), BASE);
+  const s = source();
+  s.properties.state = {
+    name: 'State',
+    description: 'Its state.',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype: atomic.Tag,
+    allowsOnly: ['open', { id: 'on-hold', name: 'On hold!' }],
+  };
+  s.releases.v1.properties.push('state');
+  s.classes['thing-v1'].recommends.push('state');
+  const files = generate(s, BASE);
+  const state = JSON.parse(files.get('ontology/properties/state'));
+  assert.deepEqual(state[atomic.isA], [atomic.Property, atomic.SelectProperty]);
+  assert.equal(state[atomic.classtype], atomic.Tag);
+  assert.deepEqual(state[atomic.allowsOnly], [
+    `${BASE}/values/state-open`,
+    `${BASE}/values/state-on-hold`,
+  ]);
+  const open = JSON.parse(files.get('ontology/values/state-open'));
+  assert.equal(open['@id'], `${BASE}/values/state-open`);
+  assert.deepEqual(open[atomic.isA], [atomic.Tag]);
+  assert.equal(open[atomic.parent], `${BASE}/properties/state`);
+  assert.equal(open[atomic.shortname], 'open');
+  assert.equal(open[atomic.name], 'Open');
+  assert.equal(
+    JSON.parse(files.get('ontology/values/state-on-hold'))[atomic.name],
+    'On hold!',
+  );
+
+  // Terms without allowsOnly keep their bytes.
+  for (const path of [
+    'ontology/properties/colour',
+    'ontology/properties/owner',
+  ])
+    assert.equal(files.get(path), plain.get(path), path);
+  assert.doesNotMatch(plain.get('ontology-kit/terms.d.mts'), /allowsOnly/);
+  assert.doesNotMatch(plain.get('ontology-kit/terms.mjs'), /allowsOnly/);
+  assert.match(files.get('ontology-kit/terms.d.mts'), /allowsOnly\?:/);
+  assert.match(files.get('ontology-kit/terms.mjs'), /'on-hold':/);
+});
+
+test('sourceProblems checks allowsOnly', () => {
+  const s = source();
+  s.properties.colour.allowsOnly = ['red', 'red', 'Blue'];
+  let problems = sourceProblems(s).join('\n');
+  assert.match(
+    problems,
+    /colour: allowsOnly needs an atomicURL or resourceArray/,
+  );
+  assert.match(problems, /colour: allowsOnly needs classtype .*Tag/);
+  assert.match(problems, /allowsOnly value "Blue" must be lowercase/);
+  assert.match(problems, /colour: allowsOnly lists twice: red/);
+  s.properties.colour.allowsOnly = [];
+  problems = sourceProblems(s).join('\n');
+  assert.match(problems, /colour: allowsOnly needs a non-empty array/);
+});
+
 test('a term keeps the release that first listed it as its parent', () => {
   const s = source();
   s.releases.v2 = {
@@ -632,4 +691,45 @@ test('served.mjs: a class with its own properties, checked against the committed
   assert.deepEqual(await servedProblems(paths, { fetch: changed }), [
     `${ontologyBase}/properties/money-note: served bytes differ from ontology/properties/money-note`,
   ]);
+});
+
+test('this repository: v3 enums are select properties and relations are shared', async () => {
+  const { classes, properties } = await import('./terms-v3.mjs');
+  const base = readBase(root);
+
+  for (const [name, values] of Object.entries({
+    'submission-status': ['todo', 'in-progress', 'submitted', 'reviewed'],
+    'grade-scale': ['1-10', 'percent', 'a-f', 'pass-fail'],
+    'question-type': ['choice', 'numeric', 'short-text'],
+    'assessment-kind': ['practice', 'attested'],
+  })) {
+    assert.deepEqual(Object.keys(properties[name].allowsOnly), values, name);
+    assert.equal(properties[name].classtype, atomic.Tag, name);
+
+    for (const subject of Object.values(properties[name].allowsOnly))
+      assert.ok(subject.startsWith(`${base}/values/${name}-`), subject);
+  }
+
+  // One property per relation, not per class.
+  for (const name of ['grade-v1', 'submission-v1'])
+    assert.ok(classes[name].requires.includes(properties.learner.subject));
+  assert.ok(
+    classes['attempt-v1'].recommends.includes(properties.learner.subject),
+  );
+  for (const name of ['grade-v1', 'attempt-v1'])
+    assert.ok(
+      [...classes[name].requires, ...classes[name].recommends].includes(
+        properties.assessment.subject,
+      ),
+    );
+  assert.ok(
+    classes['assignment-v1'].recommends.includes(
+      'https://atomicdata.dev/task/v1/due-date',
+    ),
+  );
+  assert.ok(
+    classes['attempt-v1'].recommends.includes(
+      'https://atomicdata.dev/properties/createdAt',
+    ),
+  );
 });
