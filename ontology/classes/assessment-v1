@@ -14,6 +14,8 @@
   "https://atomicdata.dev/properties/recommends": [
     "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-questions",
     "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-pass-score",
-    "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-kind"
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-kind",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-draw",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-app"
   ]
 }

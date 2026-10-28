@@ -13,6 +13,7 @@
   ],
   "https://atomicdata.dev/properties/recommends": [
     "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-answers",
-    "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-created-at"
+    "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-created-at",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-seed"
   ]
 }
