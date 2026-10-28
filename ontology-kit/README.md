@@ -68,6 +68,56 @@ it and says so in its description:
 of values, because the kit has no enum constraint yet; a view shows an unknown
 value as text. Declared, not verified: no host E2E has used these classes yet.
 
+## Release v3: teaching with learning trees
+
+Eight classes for the teacher side of Leerboom, all `-v1`, in
+[`terms-v3.mjs`](terms-v3.mjs): `deck-v1` (ordered `deck-slides`, `deck-teaches`),
+`cohort-v1` (`cohort-members`, `cohort-teachers`, `cohort-goals`),
+`assignment-v1` (cohort, skill, optional lesson, `assignment-due`),
+`submission-v1` (assignment, student, work, `submission-submitted-at`,
+`submission-status`), `grade-v1` (student, assignment or assessment, value,
+scale, weight, comment, evidence, `grade-graded-at`), `question-v1` (prompt,
+`question-type`, options, answer, explanation, skill), `assessment-v1`
+(`assessment-assesses`, `assessment-questions`, `assessment-pass-score`,
+`assessment-kind`) and `attempt-v1` (assessment, score, answers,
+`attempt-created-at`). Two plain properties, `lesson-license` and
+`lesson-generated-with`, belong to no class yet: `lesson-v1` is published and
+immutable, so a future `lesson-v2` will recommend them.
+
+Choices worth knowing:
+
+- Every property is prefixed with its class, as in v2. `deck-teaches` repeats
+  `lesson-teaches` instead of reusing it, because the name of a property says
+  what it is on.
+- A release may only point at classes it lists itself, so a property that
+  targets `skill-v1` or `lesson-v1` (an earlier release) has no `classtype`
+  and says in its description which class it points at.
+- Timestamps are `timestamp` (milliseconds), as `mastery-updated-at` is. Scores,
+  weights and pass scores are `float`.
+- `submission-status`, `grade-scale`, `question-type` and `assessment-kind` are
+  plain strings with the allowed values in the description (the kit has no enum
+  yet). `grade-value` is a string so that 7.5, B and pass all fit.
+- `question-options` is a JSON array of strings: the repository has no tag
+  convention to point at. The answer key sits on the question, which suits
+  practice; an attested assessment needs a key the learner cannot read, which
+  is a later class.
+
+Mapping to standards:
+
+| Ours                               | Standard                                                     |
+| ---------------------------------- | ------------------------------------------------------------ |
+| `assessment-assesses`              | LRMI `assesses`                                              |
+| `deck-teaches`                     | LRMI `teaches`                                               |
+| `lesson-license`                   | schema.org `license`                                         |
+| `attempt-v1`                       | the result of an xAPI statement (score, response, timestamp) |
+| `attempt-answers`, `attempt-score` | xAPI `result.response` and `result.score.scaled`             |
+| `grade-v1`                         | no standard; a school's own judgment, not a credential       |
+
+A grade is **not** an Open Badge. A badge or other credential is a signed claim
+a third party can verify, and will be a later class that may point at a grade
+or an attempt as its evidence. Declared, not verified: no host E2E has used
+these classes yet.
+
 `name` is `https://atomicdata.dev/properties/name`. Provider data (ids, ETags,
 baselines, import bookkeeping such as `work-source-id` or `bank-source-id`) is
 never part of a shared class: each sync part defines it in its own ontology.

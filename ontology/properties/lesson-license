@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/lesson-license",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "lesson-license",
+  "https://atomicdata.dev/properties/name": "License",
+  "https://atomicdata.dev/properties/description": "The license of the material, as an SPDX identifier or a URL. Maps to schema.org license. For a future lesson-v2 to recommend.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
+}

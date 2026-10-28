@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/submission-submitted-at",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "submission-submitted-at",
+  "https://atomicdata.dev/properties/name": "Submitted at",
+  "https://atomicdata.dev/properties/description": "When the work was handed in, milliseconds since the Unix epoch.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/timestamp"
+}

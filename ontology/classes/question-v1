@@ -1,0 +1,20 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/question-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "question-v1",
+  "https://atomicdata.dev/properties/name": "Question",
+  "https://atomicdata.dev/properties/description": "One question of an assessment, a row in a question table. Also usable as a slide in a deck.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/question-prompt",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/question-type"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/question-options",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/question-answer",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/question-explanation",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/question-skill"
+  ]
+}

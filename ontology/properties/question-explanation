@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/question-explanation",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "question-explanation",
+  "https://atomicdata.dev/properties/name": "Explanation",
+  "https://atomicdata.dev/properties/description": "Shown after answering.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/markdown"
+}
