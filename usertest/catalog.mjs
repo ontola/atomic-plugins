@@ -98,7 +98,7 @@ export const VERSIONS = {
   calendar: 'usertest-12',
   'issue-tracker': 'usertest-11',
   money: 'usertest-8',
-  notion: 'usertest-15',
+  notion: 'usertest-16',
   timesheets: 'usertest-18',
 };
 const APPS = {
