@@ -2,20 +2,29 @@
 /** UI strings, Dutch and English. The language is the browser's; English by default. */
 
 const nl = {
-  title: 'Leerboom',
+  title: 'Atomic Education',
   starter: 'Laad startboom',
   starterBusy: 'Startboom laden...',
   empty:
-    'Deze boom is nog leeg. Laad de startboom voor wiskunde en natuurkunde, of voeg zelf vaardigheden toe aan de tabel.',
+    'Een leerboom toont vaardigheden, wat je ervoor nodig hebt en de lessen erbij. Laad de startboom voor wiskunde en natuurkunde, of voeg zelf vaardigheden toe aan de tabel.',
   unusable:
     'Deze tabel bevat geen vaardigheden (klasse skill-v1). Voeg deze app toe aan een tabel van die klasse.',
-  error: 'Kon de leerboom niet laden',
+  error: 'Kon Atomic Education niet laden',
   retry: 'Opnieuw proberen',
   next: 'Volgende logische stappen',
   nextForGoal: 'Volgende stappen richting je doel',
   nothingNext: 'Niets meer te adviseren: alles is beheerst.',
-  legend:
-    'Beheerst, beschikbaar, of nog niet aan de beurt. Alles blijft te openen.',
+  emptyTitle: 'Nog geen vaardigheden',
+  progress: (n: number, total: number) => `${n} van ${total} beheerst`,
+  level: (n: number) => `Niveau ${n}`,
+  scrollHint: 'Veeg opzij voor de rest van de boom.',
+  start: 'Start',
+  openLesson: 'Open',
+  notLinked: 'nog niet gekoppeld',
+  link: 'Koppel',
+  linkLabel: 'Koppel een resource of link',
+  linkPlaceholder: 'Plak een resource of link',
+  badLink: 'Dat is geen resource (did: of atomic:) of link (https://).',
   mastered: 'Beheerst',
   available: 'Beschikbaar',
   locked: 'Nog niet aan de beurt',
@@ -37,7 +46,20 @@ const nl = {
   denied:
     'Geen toestemming om de tabel te bewerken, dus de startboom is niet geladen.',
   failed: 'Opslaan is niet gelukt. Probeer het opnieuw.',
-  loaded: (n: number) => `Startboom geladen: ${n} nieuwe vaardigheden.`,
+  loaded: (n: number, apps: number) =>
+    `Startboom geladen: ${n} nieuwe vaardigheden${apps ? ` en ${apps} mini-apps` : ''}.`,
+  makeWithAI: 'Maak met AI',
+  aiHint:
+    'Kopieer deze opdracht, open de Atomic-assistent en plak hem daar. De assistent bouwt de mini-app en koppelt hem aan deze les.',
+  aiCopied:
+    'De opdracht staat op je klembord. Open de Atomic-assistent en plak hem daar.',
+  aiCopyAgain: 'Kopieer opnieuw',
+  aiClose: 'Sluiten',
+  aiLabel: 'Opdracht voor de assistent',
+  aiAudience: (level: number | undefined) =>
+    level === undefined ? 'mijn leerlingen' : `niveau ${level}`,
+  aiPrompt: (skill: string, audience: string, lesson: string, id: string) =>
+    `Maak een interactieve mini-app (drive app) die ${skill} uitlegt voor ${audience}, en koppel hem aan les ${lesson} (${id}): zet de eigenschap lesson-content van die les op de nieuwe app.`,
   cycles: (n: number) =>
     `${n} afhankelijkheid(en) negeren we, want ze vormen een kringloop.`,
   missing: (n: number) =>
@@ -53,19 +75,29 @@ const nl = {
 };
 
 const en: typeof nl = {
-  title: 'Learning tree',
+  title: 'Atomic Education',
   starter: 'Load starter tree',
   starterBusy: 'Loading starter tree...',
   empty:
-    'This tree is empty. Load the mathematics and physics starter tree, or add skills to the table yourself.',
+    'A learning tree shows skills, what each one needs and the lessons for it. Load the mathematics and physics starter tree, or add skills to the table yourself.',
   unusable:
     'This table holds no skills (class skill-v1). Add this app to a table of that class.',
-  error: 'Could not load the learning tree',
+  error: 'Could not load Atomic Education',
   retry: 'Try again',
   next: 'Next logical steps',
   nextForGoal: 'Next steps toward your goal',
   nothingNext: 'Nothing left to advise: everything is mastered.',
-  legend: 'Mastered, available, or not yet due. Everything stays open.',
+  emptyTitle: 'No skills yet',
+  progress: (n: number, total: number) => `${n} of ${total} mastered`,
+  level: (n: number) => `Level ${n}`,
+  scrollHint: 'Swipe sideways for the rest of the tree.',
+  start: 'Start',
+  openLesson: 'Open',
+  notLinked: 'not linked yet',
+  link: 'Link',
+  linkLabel: 'Link a resource or URL',
+  linkPlaceholder: 'Paste a resource or link',
+  badLink: 'That is not a resource (did: or atomic:) or a link (https://).',
   mastered: 'Mastered',
   available: 'Available',
   locked: 'Not yet due',
@@ -87,7 +119,20 @@ const en: typeof nl = {
   denied:
     'No permission to edit the table, so the starter tree was not loaded.',
   failed: 'Saving failed. Try again.',
-  loaded: (n: number) => `Starter tree loaded: ${n} new skills.`,
+  loaded: (n: number, apps: number) =>
+    `Starter tree loaded: ${n} new skills${apps ? ` and ${apps} mini apps` : ''}.`,
+  makeWithAI: 'Create with AI',
+  aiHint:
+    'Copy this request, open the Atomic assistant and paste it there. The assistant builds the mini app and links it to this lesson.',
+  aiCopied:
+    'The request is on your clipboard. Open the Atomic assistant and paste it there.',
+  aiCopyAgain: 'Copy again',
+  aiClose: 'Close',
+  aiLabel: 'Request for the assistant',
+  aiAudience: (level: number | undefined) =>
+    level === undefined ? 'my students' : `level ${level}`,
+  aiPrompt: (skill: string, audience: string, lesson: string, id: string) =>
+    `Make an interactive mini app (drive app) that explains ${skill} for ${audience}, and link it to the lesson ${lesson} (${id}): set that lesson's lesson-content property to the new app.`,
   cycles: (n: number) =>
     `${n} dependency(ies) ignored because they form a cycle.`,
   missing: (n: number) => `${n} reference(s) to unknown skills ignored.`,
@@ -109,7 +154,7 @@ export const stringsFor = (language: string | undefined): Strings =>
 export const FORMAT_ICON: Record<string, string> = {
   video: '\u{1F3AC}',
   text: '\u{1F4C4}',
-  interactive: '\u{1F9E9}',
+  interactive: '\u25B6\uFE0E',
   exercise: '\u{270F}\u{FE0F}',
   live: '\u{1F465}',
   tour: '\u{1F9ED}',

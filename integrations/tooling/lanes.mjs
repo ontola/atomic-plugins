@@ -334,6 +334,10 @@ const ROUTE_INSTALL_LANES = [
 // against that importer's willow25 expectations, so a change to either
 // reruns the willow lane.
 export const PLUGIN_BUILD_DEPENDENCIES = Object.freeze({
+  // The Atomic Education app bundles the three physics drive apps as strings
+  // (learning/app/build.mjs), so a physics change reruns the learning lane,
+  // which is where they are exercised in a host.
+  learning: ['integrations/physics/**'],
   willow: [
     'integrations/willow-drop/william3.ts',
     'integrations/willow-drop/plugin.js',

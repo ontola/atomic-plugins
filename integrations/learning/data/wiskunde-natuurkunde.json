@@ -1,5 +1,5 @@
 {
-  "//": "Startboom wiskunde en natuurkunde voor het Leerboom-plugin. Sleutels (key) zijn lokaal; bij laden worden ze Skill-rijen in de tabel. Lessen hebben nog geen echt materiaal: elk `content` is een TODO (alleen opnemen als de bron zeker stabiel en publiek is). Geen em-streepjes in de Nederlandse tekst.",
+  "//": "Startboom wiskunde en natuurkunde voor de app Atomic Education. Sleutels (key) zijn lokaal; bij laden worden ze Skill-rijen in de tabel. Lessen hebben nog geen echt materiaal: elk `content` is een TODO (alleen opnemen als de bron zeker stabiel en publiek is). Geen em-streepjes in de Nederlandse tekst.",
   "name": "Wiskunde en natuurkunde",
   "language": "nl",
   "skills": [
@@ -593,7 +593,8 @@
     },
     {
       "skill": "trillingen-golven",
-      "name": "Interactief: Trillingen en golven",
+      "name": "Trillingen (interactief)",
+      "app": "spring",
       "format": "interactive",
       "minutes": 25,
       "language": "nl",
@@ -641,7 +642,8 @@
     },
     {
       "skill": "magnetisme",
-      "name": "Interactief: Magnetisme",
+      "name": "Magneten (interactief)",
+      "app": "magnet",
       "format": "interactive",
       "minutes": 20,
       "language": "nl",
@@ -665,7 +667,8 @@
     },
     {
       "skill": "optica",
-      "name": "Interactief: Optica",
+      "name": "Lenzen (interactief)",
+      "app": "lens",
       "format": "interactive",
       "minutes": 25,
       "language": "nl",

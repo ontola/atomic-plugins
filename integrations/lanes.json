@@ -316,9 +316,19 @@
       "index": 22,
       "platforms": [],
       "tiers": ["typecheck", "unit", "e2e"],
-      "paths": ["ontology/**", "ontology-kit/**"],
-      "note": "The Leerboom (learning tree) drive app (integrations/learning/app/) over a dependency-free core (integrations/learning/core/: graph with cross-tree equivalence, cycle reporting, mastered/available/locked as advice, next steps, path, outer fringe). It renders any table of the shared skill-v1 class, offers a starter tree of mathematics and physics (data/wiskunde-natuurkunde.json) and writes mastery-v1 rows to a table it owns. No provider, proxy or network of its own. paths: it bundles ontology-kit/terms.mjs and resolver.mjs and uses the published GitHub Pages subjects of skill-v1, lesson-v1 and mastery-v1, so an ontology change runs this lane too and the e2e needs network access to ontola.github.io. The e2e spec is written but, in the session that added the lane, was not run (no atomic-server build).",
-      "e2e": ["integrations/learning/e2e/learning.spec.ts"]
+      "paths": ["ontology/**", "ontology-kit/**", "integrations/physics/**"],
+      "note": "The Atomic Education (learning tree) drive app (integrations/learning/app/) over a dependency-free core (integrations/learning/core/: graph with cross-tree equivalence, cycle reporting, mastered/available/locked as advice, next steps, path, outer fringe). It renders any table of the shared skill-v1 class, offers a starter tree of mathematics and physics (data/wiskunde-natuurkunde.json) and writes mastery-v1 rows to a table it owns. No provider, proxy or network of its own. \"Load starter tree\" also creates the three physics mini apps (integrations/physics/) as drive Apps under the learning app, with the built modules bundled in as strings (app/build.mjs), and links the Lenzen, Magneten and Trillingen lessons to them; \"Create with AI\" on an unlinked interactive lesson copies a request for Atomic's assistant. paths: integrations/physics/** (a reviewed build dependency, lanes.mjs), because a physics change changes the bundle. The mini-apps spec (e2e/mini-apps.spec.ts) opens each physics app through its lesson's Start button and drives it. paths: it bundles ontology-kit/terms.mjs and resolver.mjs and uses the published GitHub Pages subjects of skill-v1, lesson-v1 and mastery-v1, so an ontology change runs this lane too and the e2e needs network access to ontola.github.io. The e2e spec is written but, in the session that added the lane, was not run (no atomic-server build).",
+      "e2e": [
+        "integrations/learning/e2e/learning.spec.ts",
+        "integrations/learning/e2e/mini-apps.spec.ts"
+      ]
+    },
+    {
+      "id": "physics",
+      "index": 23,
+      "platforms": [],
+      "tiers": ["typecheck", "unit"],
+      "note": "Three small physics drive apps for lessons, in one folder with shared code (shared/) and pure physics (core/: thin-lens ray tracing, pole-pair magnet fields and field lines, damped oscillator with RK4): Lenzen, Magneten, Trillingen. Plain DOM and SVG, no network, no storage, no ontology. They are not catalog entries: the learning app bundles their built modules and creates them as drive Apps in the lesson programme (integrations/learning/app/build.mjs), so the host e2e that opens and drives them is the learning lane's mini-apps spec. This lane keeps the typecheck, the physics unit tests and the bundle tests (each module builds to one self-contained ES module that exports view and runs under jsdom)."
     }
   ]
 }

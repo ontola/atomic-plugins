@@ -1,6 +1,6 @@
 // @wc-ignore-file
 /**
- * Builds the Learning (Leerboom) drive app to one ES module, `dist/ui.js`: the string an
+ * Builds the Atomic Education (learning) drive app to one ES module, `dist/ui.js`: the string an
  * install flow stores as the App's `plugin-source`.
  *
  *   node integrations/learning/app/build.mjs [--outfile path]
@@ -16,6 +16,44 @@ import { fileURLToPath } from 'node:url';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { cssRawPlugin } from '../../sync-status/build.mjs';
+import { build as buildLens } from '../../physics/lens/build.mjs';
+import { build as buildMagnet } from '../../physics/magnet/build.mjs';
+import { build as buildSpring } from '../../physics/spring/build.mjs';
+
+/**
+ * `import sources from 'virtual-physics-modules'`: the three physics drive
+ * apps, built in memory, as strings. The starter tree stores them as Apps in
+ * the drive (`miniapps.ts`), so they travel inside this one module.
+ */
+export function physicsModulesPlugin() {
+  const name = 'virtual-physics-modules';
+
+  return {
+    name,
+    setup(esbuild) {
+      esbuild.onResolve({ filter: /^virtual-physics-modules$/ }, () => ({
+        path: name,
+        namespace: name,
+      }));
+      esbuild.onLoad({ filter: /.*/, namespace: name }, async () => {
+        const [lens, magnet, spring] = await Promise.all([
+          buildLens(),
+          buildMagnet(),
+          buildSpring(),
+        ]);
+
+        return {
+          loader: 'js',
+          contents: `export default ${JSON.stringify({
+            lens: lens.text,
+            magnet: magnet.text,
+            spring: spring.text,
+          })};`,
+        };
+      });
+    },
+  };
+}
 
 const path = relative => fileURLToPath(new URL(relative, import.meta.url));
 
@@ -38,7 +76,7 @@ export async function build({ outfile } = {}) {
     // Every drive app is minified (AGENTS.md, "Bundle size"); `styles.css?raw`
     // goes through esbuild's CSS minifier in `cssRawPlugin`.
     minify: true,
-    plugins: [cssRawPlugin(esbuild)],
+    plugins: [cssRawPlugin(esbuild), physicsModulesPlugin()],
     write: false,
     outfile: outfile ?? path('dist/ui.js'),
     logLevel: 'silent',
