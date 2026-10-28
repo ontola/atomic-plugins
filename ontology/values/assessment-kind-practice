@@ -1,0 +1,9 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/values/assessment-kind-practice",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Tag"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-kind",
+  "https://atomicdata.dev/properties/shortname": "practice",
+  "https://atomicdata.dev/properties/name": "Practice"
+}

@@ -6,14 +6,15 @@
   "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "assignment-v1",
   "https://atomicdata.dev/properties/name": "Assignment",
-  "https://atomicdata.dev/properties/description": "Work given to a cohort on a skill, with an optional lesson and a due date.",
+  "https://atomicdata.dev/properties/description": "Work given to a cohort on a skill, with an optional lesson and a due date (the task/v1 due-date, so a calendar or task view shows it). It does not extend a task: it has no status of its own, learners' progress lives in submissions.",
   "https://atomicdata.dev/properties/requires": [
     "https://ontola.github.io/atomic-plugins/ontology/properties/assignment-cohort",
-    "https://ontola.github.io/atomic-plugins/ontology/properties/assignment-skill"
+    "https://ontola.github.io/atomic-plugins/ontology/properties/skill"
   ],
   "https://atomicdata.dev/properties/recommends": [
     "https://atomicdata.dev/properties/name",
+    "https://atomicdata.dev/properties/description",
     "https://ontola.github.io/atomic-plugins/ontology/properties/assignment-lesson",
-    "https://ontola.github.io/atomic-plugins/ontology/properties/assignment-due"
+    "https://atomicdata.dev/task/v1/due-date"
   ]
 }

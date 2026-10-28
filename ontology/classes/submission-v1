@@ -6,10 +6,10 @@
   "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "submission-v1",
   "https://atomicdata.dev/properties/name": "Submission",
-  "https://atomicdata.dev/properties/description": "One learner's handing in of the work for one assignment. Status is one of todo, in-progress, submitted, reviewed.",
+  "https://atomicdata.dev/properties/description": "One learner's handing in of the work for one assignment.",
   "https://atomicdata.dev/properties/requires": [
-    "https://ontola.github.io/atomic-plugins/ontology/properties/submission-assignment",
-    "https://ontola.github.io/atomic-plugins/ontology/properties/submission-student"
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assignment",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/learner"
   ],
   "https://atomicdata.dev/properties/recommends": [
     "https://ontola.github.io/atomic-plugins/ontology/properties/submission-work",

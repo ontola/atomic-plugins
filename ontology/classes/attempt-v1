@@ -8,12 +8,13 @@
   "https://atomicdata.dev/properties/name": "Attempt",
   "https://atomicdata.dev/properties/description": "One try at an assessment by one learner. Append-only, kept in the learner's own drive. Comparable to the result of an xAPI statement.",
   "https://atomicdata.dev/properties/requires": [
-    "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-assessment",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assessment",
     "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-score"
   ],
   "https://atomicdata.dev/properties/recommends": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/learner",
     "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-answers",
-    "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-created-at",
+    "https://atomicdata.dev/properties/createdAt",
     "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-seed"
   ]
 }
