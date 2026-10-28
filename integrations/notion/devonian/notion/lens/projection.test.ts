@@ -6,6 +6,7 @@ import { notionColumns } from './columns.js';
 import {
   isNotionFieldType,
   isNotionReadOnlyType,
+  notionComputedValue,
   JSON_DATATYPE,
   notionFieldShortname,
   notionFieldValue,
@@ -214,6 +215,67 @@ describe('notionProjection', () => {
     // Read only: not a type the app can edit or send.
     expect(isNotionFieldType('relation')).toBe(false);
     expect(isNotionReadOnlyType('relation')).toBe(true);
+  });
+
+  it('reads a formula or rollup result as a column of its result type, and lists what has no single plain result', () => {
+    const formula = (result: Record<string, unknown>) => ({
+      id: 'f',
+      type: 'formula',
+      formula: result,
+    });
+    const rollup = (result: Record<string, unknown>) => ({
+      id: 'u',
+      type: 'rollup',
+      rollup: { function: 'sum', ...result },
+    });
+    const projected = notionProjection(
+      fixture([
+        page('p1', {
+          F: formula({ type: 'number', number: 4.5 }),
+          R: rollup({ type: 'number', number: 2 }),
+        }),
+        page('p2', {
+          F: formula({ type: 'number', number: null }),
+          R: rollup({ type: 'array', array: [] }),
+        }),
+        page('p3', {
+          F: formula({ type: 'string', string: 'x' }),
+          R: rollup({ type: 'incomplete', incomplete: {} }),
+        }),
+      ]),
+      { dataSource: DS },
+    );
+    expect(projected.records.map(r => r.values[key('f')])).toEqual([
+      4.5,
+      undefined,
+      undefined,
+    ]);
+    expect(projected.records.map(r => r.values[key('u')])).toEqual([
+      2,
+      undefined,
+      undefined,
+    ]);
+    // The first result fixes the datatype; another type is listed, not coerced.
+    expect(projected.errors).toHaveLength(3);
+    expect(projected.errors![0]).toContain('"R" (rollup) has no single plain');
+    expect(projected.errors![1]).toContain('"F" (formula) has no single plain');
+    const added = projected.ontology.terms.filter(t => t.kind === 'property');
+    expect(added.map(t => [t.shortname, t.datatype])).toEqual([
+      [key('f'), Datatype.FLOAT],
+      [key('u'), Datatype.FLOAT],
+    ]);
+    expect(
+      notionComputedValue('formula', {
+        type: 'boolean',
+        boolean: false,
+      }),
+    ).toEqual({ value: false, datatype: Datatype.BOOLEAN });
+    expect(
+      notionComputedValue('rollup', {
+        type: 'date',
+        date: { start: '2026-03-01', end: null, time_zone: null },
+      }),
+    ).toEqual({ value: '2026-03-01', datatype: Datatype.STRING });
   });
 
   it('distinguishes property ids that differ only in case', () => {

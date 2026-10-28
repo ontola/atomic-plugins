@@ -294,6 +294,9 @@ describe('review and send', () => {
       'two-sources',
     );
     const related = notionFieldShortname('rl%3Ad');
+    // The same holds for a formula and a rollup: computed by Notion.
+    edit(SYSTEMS, notionFieldShortname('fo%3Am'), 'mine');
+    edit(SYSTEMS, notionFieldShortname('ru%3Al'), 99);
     const links = value(SYSTEMS, related);
     expect(links).toHaveLength(2);
     edit(SYSTEMS, related, [rowOf(LOCAL_FIRST)[0]]);

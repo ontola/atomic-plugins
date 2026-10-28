@@ -336,6 +336,14 @@ Notion property id.
   listed and left as it was. Relations are never in the baseline, the review
   or a `PATCH`: an edit made to the cell here is overwritten by Notion's
   links on the next sync. Sending links back is not built.
+- A formula or rollup is read only, like a relation. Its result becomes a
+  plain column of the result's type (string, number, boolean; a date as the
+  string form above), set by the lens on import and removed when Notion holds
+  no result. The first result a property shows fixes the column's datatype; a
+  page whose result has another type, and a rollup over a list (`array`) or
+  an `incomplete` or `unsupported` one, are left unprojected and listed in the
+  warnings. These columns are not in the baseline, the review or a `PATCH`: an
+  edit made to the cell here is overwritten on the next sync.
 - Notion `null` leaves the key absent; `0`, `false` and `[]` are kept.
 - Formatted text, mentions and links are projected as their words without
   the formatting (from 0.5.3) and listed in `errors`. A value with no plain

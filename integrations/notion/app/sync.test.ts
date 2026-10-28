@@ -644,6 +644,45 @@ describe('syncNotion per data source (N6, N7, N10)', () => {
     expect(rowOf(pages2[0]!.id)[1][related[0]]).toBeUndefined();
   });
 
+  it('imports formula and rollup results as plain columns, and removes one Notion clears', async () => {
+    const proxy = fixtureProxy('conn-1', { scenario: 'two-sources' });
+    const store = fakeStore({ proxy });
+    const transport = syncablesTransport(proxy, 'conn-1', upstream);
+    await syncNotion(store, transport);
+    const column = (id: string) =>
+      [...store.resources].find(
+        ([, p]) => p[atomic.shortname] === notionFieldShortname(id),
+      )!;
+    expect(column('fo%3Am')[1][atomic.datatype]).toBe(
+      'https://atomicdata.dev/datatypes/string',
+    );
+    expect(column('ru%3Al')[1][atomic.datatype]).toBe(
+      'https://atomicdata.dev/datatypes/float',
+    );
+    const idColumn = [...store.resources].find(
+      ([, p]) => p[atomic.shortname] === 'notion-page-id',
+    )![0];
+    const rowOf = (id: string) =>
+      [...store.resources].find(
+        ([, p]) => p[PARENT] === TABLE && p[idColumn] === id,
+      )![1];
+    expect(rowOf(pages2[0]!.id)[column('fo%3Am')[0]]).toBe(
+      'Thinking in Systems (Reading)',
+    );
+    expect(rowOf(pages2[0]!.id)[column('ru%3Al')[0]]).toBe(3);
+    // A formula with no result in Notion leaves the cell empty; a rollup of
+    // zero is a value.
+    expect(rowOf(pages2[1]!.id)[column('fo%3Am')[0]]).toBeUndefined();
+    expect(rowOf(pages2[1]!.id)[column('ru%3Al')[0]]).toBe(0);
+
+    // A cell edited here is Notion's again on the next sync.
+    rowOf(pages2[0]!.id)[column('fo%3Am')[0]] = 'mine';
+    await syncNotion(store, transport);
+    expect(rowOf(pages2[0]!.id)[column('fo%3Am')[0]]).toBe(
+      'Thinking in Systems (Reading)',
+    );
+  });
+
   it('picks up a renamed option from the schema: the Tag is renamed, no row is written', async () => {
     const proxy = fixtureProxy();
     const store = fakeStore({ proxy });

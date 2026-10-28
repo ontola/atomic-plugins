@@ -248,6 +248,23 @@ const schema2 = {
     people: {},
   },
   'Date read': { id: 'dt%40r', name: 'Date read', type: 'date', date: {} },
+  // Computed by Notion: never written by the fixture's PATCH.
+  Label: {
+    id: 'fo%3Am',
+    name: 'Label',
+    type: 'formula',
+    formula: { expression: 'prop("Title")' },
+  },
+  'Related count': {
+    id: 'ru%3Al',
+    name: 'Related count',
+    type: 'rollup',
+    rollup: {
+      relation_property_name: 'Related',
+      rollup_property_name: 'Title',
+      function: 'count',
+    },
+  },
   Related: {
     id: 'rl%3Ad',
     name: 'Related',
@@ -271,7 +288,17 @@ export const dataSource2 = {
 
 function page2(
   id,
-  { title, status, format, author, link, date = null, related = [], edited },
+  {
+    title,
+    status,
+    format,
+    author,
+    link,
+    date = null,
+    related = [],
+    label,
+    edited,
+  },
 ) {
   const value = (key, content) => ({
     id: schema2[key].id,
@@ -303,6 +330,20 @@ function page2(
       Link: value('Link', link),
       'Recommended by': value('Recommended by', []),
       'Date read': value('Date read', date),
+      Label: {
+        id: schema2.Label.id,
+        type: 'formula',
+        formula: { type: 'string', string: label },
+      },
+      'Related count': {
+        id: schema2['Related count'].id,
+        type: 'rollup',
+        rollup: {
+          type: 'number',
+          number: related.length,
+          function: 'count',
+        },
+      },
       Related: {
         id: schema2.Related.id,
         type: 'relation',
@@ -323,6 +364,7 @@ export const pages2 = [
     author: 'Donella Meadows',
     link: 'https://example.org/thinking-in-systems',
     date: { start: '2026-08-30', end: '2026-09-02', time_zone: null },
+    label: 'Thinking in Systems (Reading)',
     // A page of the other data source, one of this one that comes later in
     // the read, and one the integration cannot see.
     related: [
@@ -338,6 +380,7 @@ export const pages2 = [
     format: ARTICLE,
     author: 'Kleppmann et al.',
     link: null,
+    label: null,
     date: {
       start: '2026-08-28T15:00:00',
       end: null,

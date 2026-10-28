@@ -53,9 +53,12 @@ const datatypes: Record<NotionFieldType, Datatype> = {
  * Property types the lens reads but never writes: not editable, never in
  * the baseline or the review. A relation's value is Notion page ids; the
  * sync turns them into links to rows once every row exists
- * (`app/sync.ts`), so the lens store does not hold the column.
+ * (`app/sync.ts`), so the lens store does not hold the column. A formula or
+ * rollup holds its result when that is a single string, number, boolean or
+ * date (`notionComputedValue`); the lens reads it into the row like any other
+ * column and has no way to write it.
  */
-export const notionReadOnlyTypes = ['relation'] as const;
+export const notionReadOnlyTypes = ['relation', 'formula', 'rollup'] as const;
 export type NotionReadOnlyType = (typeof notionReadOnlyTypes)[number];
 
 export const isNotionReadOnlyType = (
@@ -328,6 +331,49 @@ interface FieldDefinition {
   id: string;
   name: string;
   type: NotionFieldType | NotionReadOnlyType;
+  /** For a formula or rollup: the datatype its first result fixed. */
+  datatype?: Datatype;
+}
+
+/**
+ * The result of a formula or rollup property: `value` is `null` when Notion
+ * holds none, and `datatype` is what the result's type maps to (a date is the
+ * string form of `date`). `undefined` for a result that is not one string,
+ * number, boolean or date: a rollup over a list (`array`), an `incomplete`
+ * or `unsupported` rollup.
+ */
+export function notionComputedValue(
+  type: 'formula' | 'rollup',
+  raw: unknown,
+): { value: JSONValue | null; datatype: Datatype } | undefined {
+  const result = object(raw).type;
+  const inner = typeof result === 'string' ? object(raw)[result] : undefined;
+  const one = (datatype: Datatype, value: JSONValue | null | undefined) =>
+    value === undefined ? undefined : { value, datatype };
+
+  switch (result) {
+    case 'string':
+      // A rollup has no string result.
+      return type === 'formula' && (inner === null || typeof inner === 'string')
+        ? one(Datatype.STRING, inner)
+        : undefined;
+    case 'number':
+      return inner === null ||
+        (typeof inner === 'number' && Number.isFinite(inner))
+        ? one(Datatype.FLOAT, inner)
+        : undefined;
+    case 'boolean':
+      return type === 'formula' && typeof inner === 'boolean'
+        ? one(Datatype.BOOLEAN, inner)
+        : undefined;
+    case 'date':
+      return one(
+        Datatype.STRING,
+        inner === null ? null : formatDate(inner),
+      );
+    default:
+      return undefined;
+  }
 }
 
 /**
@@ -442,6 +488,26 @@ export function notionProjection(
         throw new Error(
           `Notion property ${id} changed type from ${known.type} to ${p.type} during one fetch`,
         );
+
+      if (p.type === 'formula' || p.type === 'rollup') {
+        const computed = notionComputedValue(p.type, p[p.type]);
+        // The first result fixes the column's datatype (an empty result still
+        // carries its type); one of another type is left out.
+        const datatype = known?.datatype ?? computed?.datatype;
+
+        if (computed === undefined || computed.datatype !== datatype)
+          errors.push(
+            `Notion page ${row.id} property "${name}" (${p.type}) has no single plain result; left unprojected`,
+          );
+        else {
+          if (!known) fields.set(id, { id, name, type: p.type, datatype });
+          if (computed.value !== null)
+            values[notionFieldShortname(id)] = computed.value;
+        }
+
+        continue;
+      }
+
       if (!known) fields.set(id, { id, name, type: p.type });
 
       if (p.type === 'relation') {
@@ -492,9 +558,10 @@ export function notionProjection(
     kind: 'property',
     shortname: notionFieldShortname(field.id),
     datatype:
-      field.type === 'relation'
+      field.datatype ??
+      (field.type === 'relation'
         ? Datatype.RESOURCEARRAY
-        : datatypes[field.type],
+        : datatypes[field.type as NotionFieldType]),
     description: `Notion property "${field.name}" (${field.type}, id ${field.id}).`,
     requires: [],
     recommends: [],
