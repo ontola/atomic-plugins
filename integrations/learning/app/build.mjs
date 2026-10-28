@@ -1,6 +1,6 @@
 // @wc-ignore-file
 /**
- * Builds the Learning (Leerboom) drive app to one ES module, `dist/ui.js`: the string an
+ * Builds the Atomic Education (learning) drive app to one ES module, `dist/ui.js`: the string an
  * install flow stores as the App's `plugin-source`.
  *
  *   node integrations/learning/app/build.mjs [--outfile path]

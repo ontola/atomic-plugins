@@ -15,8 +15,8 @@ describe('learning drive-app bundle', async () => {
     );
     expect(Object.keys(mod)).toEqual(['view']);
     expect(typeof mod.view).toBe('function');
-    // Measured 44,256 bytes minified on 2026-10-27; limit is that plus ~10%.
-    expect(bytes).toBeLessThan(48_700);
+    // Measured 51,026 bytes minified on 2026-10-28; limit is that plus ~10%.
+    expect(bytes).toBeLessThan(56_100);
   });
 
   it('carries the shared skill, lesson and mastery subjects and the starter tree', () => {

@@ -2,20 +2,29 @@
 /** UI strings, Dutch and English. The language is the browser's; English by default. */
 
 const nl = {
-  title: 'Leerboom',
+  title: 'Atomic Education',
   starter: 'Laad startboom',
   starterBusy: 'Startboom laden...',
   empty:
-    'Deze boom is nog leeg. Laad de startboom voor wiskunde en natuurkunde, of voeg zelf vaardigheden toe aan de tabel.',
+    'Een leerboom toont vaardigheden, wat je ervoor nodig hebt en de lessen erbij. Laad de startboom voor wiskunde en natuurkunde, of voeg zelf vaardigheden toe aan de tabel.',
   unusable:
     'Deze tabel bevat geen vaardigheden (klasse skill-v1). Voeg deze app toe aan een tabel van die klasse.',
-  error: 'Kon de leerboom niet laden',
+  error: 'Kon Atomic Education niet laden',
   retry: 'Opnieuw proberen',
   next: 'Volgende logische stappen',
   nextForGoal: 'Volgende stappen richting je doel',
   nothingNext: 'Niets meer te adviseren: alles is beheerst.',
-  legend:
-    'Beheerst, beschikbaar, of nog niet aan de beurt. Alles blijft te openen.',
+  emptyTitle: 'Nog geen vaardigheden',
+  progress: (n: number, total: number) => `${n} van ${total} beheerst`,
+  level: (n: number) => `Niveau ${n}`,
+  scrollHint: 'Veeg opzij voor de rest van de boom.',
+  start: 'Start',
+  openLesson: 'Open',
+  notLinked: 'nog niet gekoppeld',
+  link: 'Koppel',
+  linkLabel: 'Koppel een resource of link',
+  linkPlaceholder: 'Plak een resource of link',
+  badLink: 'Dat is geen resource (did:) of link (https://).',
   mastered: 'Beheerst',
   available: 'Beschikbaar',
   locked: 'Nog niet aan de beurt',
@@ -53,19 +62,29 @@ const nl = {
 };
 
 const en: typeof nl = {
-  title: 'Learning tree',
+  title: 'Atomic Education',
   starter: 'Load starter tree',
   starterBusy: 'Loading starter tree...',
   empty:
-    'This tree is empty. Load the mathematics and physics starter tree, or add skills to the table yourself.',
+    'A learning tree shows skills, what each one needs and the lessons for it. Load the mathematics and physics starter tree, or add skills to the table yourself.',
   unusable:
     'This table holds no skills (class skill-v1). Add this app to a table of that class.',
-  error: 'Could not load the learning tree',
+  error: 'Could not load Atomic Education',
   retry: 'Try again',
   next: 'Next logical steps',
   nextForGoal: 'Next steps toward your goal',
   nothingNext: 'Nothing left to advise: everything is mastered.',
-  legend: 'Mastered, available, or not yet due. Everything stays open.',
+  emptyTitle: 'No skills yet',
+  progress: (n: number, total: number) => `${n} of ${total} mastered`,
+  level: (n: number) => `Level ${n}`,
+  scrollHint: 'Swipe sideways for the rest of the tree.',
+  start: 'Start',
+  openLesson: 'Open',
+  notLinked: 'not linked yet',
+  link: 'Link',
+  linkLabel: 'Link a resource or URL',
+  linkPlaceholder: 'Paste a resource or link',
+  badLink: 'That is not a resource (did:) or a link (https://).',
   mastered: 'Mastered',
   available: 'Available',
   locked: 'Not yet due',
@@ -109,7 +128,7 @@ export const stringsFor = (language: string | undefined): Strings =>
 export const FORMAT_ICON: Record<string, string> = {
   video: '\u{1F3AC}',
   text: '\u{1F4C4}',
-  interactive: '\u{1F9E9}',
+  interactive: '\u25B6\uFE0E',
   exercise: '\u{270F}\u{FE0F}',
   live: '\u{1F465}',
   tour: '\u{1F9ED}',

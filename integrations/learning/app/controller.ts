@@ -14,6 +14,7 @@ import { starter } from './starter.js';
 import {
   adopt,
   loadStarter,
+  linkLesson,
   masteryStore,
   readLessons,
   skillSource,
@@ -37,7 +38,7 @@ export type State =
       goal?: string;
       /** What the app is doing, or what just happened, for a status line. */
       busy?: 'starter' | 'mastery';
-      notice?: 'denied' | 'failed' | { loaded: number };
+      notice?: 'denied' | 'failed' | 'badLink' | { loaded: number };
     };
 
 export function createController(
@@ -118,6 +119,23 @@ export function createController(
       try {
         await masteryTable.set(id, level);
         patch({ busy: undefined });
+      } catch {
+        await load();
+        patch({ notice: 'failed' });
+      }
+    },
+
+    /** Links an interactive lesson to a resource (did:) or an https URL. */
+    async linkLesson(lesson: string, target: string): Promise<void> {
+      const to = target.trim();
+
+      if (!/^(did:\S+|https?:\/\/\S+)$/.test(to))
+        return patch({ notice: 'badLink' });
+
+      try {
+        await linkLesson(store, lesson, to);
+        await load();
+        patch({ notice: undefined });
       } catch {
         await load();
         patch({ notice: 'failed' });

@@ -1,6 +1,6 @@
 // @wc-ignore-file
 /**
- * The Leerboom drive app (`integrations/learning/app/`), end to end in a real
+ * The Atomic Education drive app (`integrations/learning/app/`), end to end in a real
  * host: installed from the catalog's Drive apps section (the lane's
  * dev-server serving the committed `apps/learning/<version>/ui.js` in place
  * of GitHub Pages), it runs in its null-origin iframe, turns its own table
@@ -48,7 +48,7 @@ async function installFromCatalog(page: Page) {
     .getByRole('region', { name: 'Drive apps' })
     .locator('[data-catalog-app="learning"]');
   await expect(entry).toContainText(`Version ${VERSION}`);
-  await entry.getByRole('button', { name: 'Install Leerboom' }).click();
+  await entry.getByRole('button', { name: 'Install Atomic Education' }).click();
   await expect(page.getByRole('main').locator(APP_FRAME)).toBeVisible({
     timeout: 45_000,
   });
@@ -67,7 +67,7 @@ test.describe('learning drive app', () => {
       app.locator('.lb-node', { hasText: name }).first();
 
     await expect(
-      app.getByRole('heading', { name: 'Learning tree' }),
+      app.getByRole('heading', { name: 'Atomic Education' }),
     ).toBeVisible({ timeout: 45_000 });
     await expect(app.locator('.lb-node')).toHaveCount(0);
     await app.getByRole('button', { name: 'Load starter tree' }).click();
@@ -84,6 +84,13 @@ test.describe('learning drive app', () => {
     await app.getByRole('button', { name: 'I master this' }).click();
     await expect(node('Rekenen met getallen')).toHaveClass(/is-mastered/);
     await expect(node('Breuken')).toHaveClass(/is-available/);
+
+    // An interactive lesson starts unlinked; pasting a resource links it.
+    await node('Optica').click();
+    await expect(app.locator('.lb-lessons')).toContainText('not linked yet');
+    await app.getByLabel(/Link a resource/).fill('did:ad:lens-demo');
+    await app.getByRole('button', { name: 'Link', exact: true }).click();
+    await expect(app.getByRole('button', { name: /^Start/ })).toBeVisible();
 
     await page.reload();
     await expect(node('Rekenen met getallen')).toHaveClass(/is-mastered/, {
