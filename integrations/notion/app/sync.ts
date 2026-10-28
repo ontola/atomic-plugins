@@ -919,6 +919,7 @@ export async function syncNotion(
 
         for (const id of ids.map(String)) {
           let target = rowOf.get(pageKey(id));
+
           if (!target) {
             target = (await store.query({ property: pageId, value: id })).find(
               s => own.has(s),

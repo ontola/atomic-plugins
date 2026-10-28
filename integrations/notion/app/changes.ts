@@ -15,7 +15,10 @@
  * Everything here is pure: no store, no network.
  */
 import type { NotionFieldType } from '../devonian/notion/index.js';
-import { isNotionFieldType, notionPropertyValue } from '../devonian/notion/index.js';
+import {
+  isNotionFieldType,
+  notionPropertyValue,
+} from '../devonian/notion/index.js';
 import type { SyncRecord } from './record.js';
 import type { SendOutcome } from './send.js';
 import type { DataSourceReport } from './sync.js';
@@ -170,6 +173,7 @@ export function problemWith(
     case 'email':
     case 'phone_number':
       return typeof v === 'string' ? undefined : 'is not text';
+
     case 'date':
       try {
         notionPropertyValue('date', v as string);

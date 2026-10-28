@@ -592,9 +592,7 @@ describe('syncNotion per data source (N6, N7, N10)', () => {
     // Types the lens does not project are listed, without a column.
     expect(
       reading!.properties.filter(p => !p.shortname).map(p => [p.name, p.type]),
-    ).toEqual([
-      ['Recommended by', 'people'],
-    ]);
+    ).toEqual([['Recommended by', 'people']]);
     // Two "Status" properties with different ids stay two columns.
     const statuses = result.perDataSource.map(
       r => r.properties.find(p => p.name === 'Status')!.shortname,

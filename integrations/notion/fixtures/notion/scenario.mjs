@@ -347,7 +347,7 @@ function page2(
       Related: {
         id: schema2.Related.id,
         type: 'relation',
-        relation: related.map(id => ({ id })),
+        relation: related.map(pid => ({ id: pid })),
         has_more: false,
       },
     },

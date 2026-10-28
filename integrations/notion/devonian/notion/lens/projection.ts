@@ -300,6 +300,7 @@ export function notionPropertyValue(
       if (value === undefined) return null;
 
       return typeof value === 'string' ? value : fail();
+
     case 'date': {
       if (value === undefined) return null;
       const parsed = typeof value === 'string' ? DATE_VALUE.exec(value) : null;
@@ -367,10 +368,7 @@ export function notionComputedValue(
         ? one(Datatype.BOOLEAN, inner)
         : undefined;
     case 'date':
-      return one(
-        Datatype.STRING,
-        inner === null ? null : formatDate(inner),
-      );
+      return one(Datatype.STRING, inner === null ? null : formatDate(inner));
     default:
       return undefined;
   }

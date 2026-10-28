@@ -398,7 +398,11 @@ describe('notionFieldValue', () => {
       }),
     ).toBe('2026-03-01T09:00:00.000+01:00/2026-03-02T10:00:00.000+01:00');
     expect(
-      date({ start: '2026-03-01T09:00:00', end: null, time_zone: 'Europe/Oslo' }),
+      date({
+        start: '2026-03-01T09:00:00',
+        end: null,
+        time_zone: 'Europe/Oslo',
+      }),
     ).toBe('2026-03-01T09:00:00 Europe/Oslo');
     // Not Notion's shape, or a start that would parse as start plus zone.
     expect(date({ start: 5 })).toBeUndefined();
