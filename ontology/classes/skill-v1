@@ -1,0 +1,21 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/skill-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "skill-v1",
+  "https://atomicdata.dev/properties/name": "Skill",
+  "https://atomicdata.dev/properties/description": "A unit of knowledge in a learning tree, with the skills it requires and recommends. The tree belongs to everyone who can read it; whether a skill is open is computed per learner from their own mastery rows.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://atomicdata.dev/properties/name"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://atomicdata.dev/properties/description",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/skill-requires",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/skill-recommends",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/skill-equivalent-to",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/skill-level",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/skill-mastery-threshold"
+  ]
+}
