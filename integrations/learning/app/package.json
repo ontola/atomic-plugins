@@ -1,0 +1,7 @@
+{
+  "name": "@atomic-integrations/learning-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Leerboom drive app: a learning tree view over tables of the shared skill-v1 class. Bundles ../core and ../data into app/dist/ui.js. Not a certified sandbox package (no atomicCertification); it lives in app/ so certify.mjs does not treat learning as one."
+}
