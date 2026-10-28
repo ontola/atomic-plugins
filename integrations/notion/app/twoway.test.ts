@@ -288,6 +288,23 @@ describe('review and send', () => {
     expect(value(LOCAL_FIRST, DATE_READ)).toBe('next tuesday');
   });
 
+  it('never offers a relation cell for review or sends it: Notion’s links win', async () => {
+    const { controller, column, rowOf, edit, value, patches } = await synced(
+      {},
+      'two-sources',
+    );
+    const related = notionFieldShortname('rl%3Ad');
+    const links = value(SYSTEMS, related);
+    expect(links).toHaveLength(2);
+    edit(SYSTEMS, related, [rowOf(LOCAL_FIRST)[0]]);
+    await controller.refreshRows();
+    expect(changesOf(await controller.send())).toEqual([]);
+    expect(patches()).toEqual([]);
+    expect(column(related)).toBeDefined();
+    await controller.sync();
+    expect(value(SYSTEMS, related)).toEqual(links);
+  });
+
   it('sends a renamed row as the Notion title', async () => {
     const { controller, edit, notion, patches, value } = await synced();
     edit(CHANGELOG, 'name', 'Write the changelog');

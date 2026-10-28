@@ -49,6 +49,21 @@ const datatypes: Record<NotionFieldType, Datatype> = {
   multi_select: JSON_DATATYPE,
 };
 
+/**
+ * Property types the lens reads but never writes: not editable, never in
+ * the baseline or the review. A relation's value is Notion page ids; the
+ * sync turns them into links to rows once every row exists
+ * (`app/sync.ts`), so the lens store does not hold the column.
+ */
+export const notionReadOnlyTypes = ['relation'] as const;
+export type NotionReadOnlyType = (typeof notionReadOnlyTypes)[number];
+
+export const isNotionReadOnlyType = (
+  type: unknown,
+): type is NotionReadOnlyType =>
+  typeof type === 'string' &&
+  (notionReadOnlyTypes as readonly string[]).includes(type);
+
 /** Whether this lens projects a Notion property type. */
 export const isNotionFieldType = (type: unknown): type is NotionFieldType =>
   typeof type === 'string' &&
@@ -312,7 +327,24 @@ export function notionPropertyValue(
 interface FieldDefinition {
   id: string;
   name: string;
-  type: NotionFieldType;
+  type: NotionFieldType | NotionReadOnlyType;
+}
+
+/**
+ * The Notion page ids a relation property links to, in Notion's order.
+ * `undefined` when the list is not whole: a page property carries at most 25
+ * relations and sets `has_more` beyond that, so it is not read.
+ */
+export function notionRelationIds(
+  raw: unknown,
+  hasMore: unknown,
+): string[] | undefined {
+  if (!Array.isArray(raw) || hasMore === true) return undefined;
+  const ids = raw.map(item => object(item).id);
+
+  return ids.every((id): id is string => typeof id === 'string' && !!id)
+    ? ids
+    : undefined;
 }
 
 export interface NotionProjectionOptions {
@@ -341,8 +373,10 @@ const normalizeUuid = (value: unknown): string =>
  * - Formatted rich text is projected as its words without the formatting
  *   (`notionFormattedText`, from 0.5.3) and listed in `errors`; malformed
  *   option values are left unprojected and listed too. The raw `properties` object passes through
- *   untouched, as do unsupported types (formula, relation, people, files,
+ *   untouched, as do unsupported types (formula, people, files,
  *   ...), so nothing provider-side is lost.
+ * - A relation is projected as its linked page ids (read-only, see
+ *   `notionReadOnlyTypes`).
  * - A property id whose type differs between pages in one fetch (the schema
  *   changed mid-read) throws.
  *
@@ -398,13 +432,29 @@ export function notionProjection(
     )) {
       const p = object(property);
       const id = p.id;
-      if (typeof id !== 'string' || !isNotionFieldType(p.type)) continue;
+      if (
+        typeof id !== 'string' ||
+        !(isNotionFieldType(p.type) || isNotionReadOnlyType(p.type))
+      )
+        continue;
       const known = fields.get(id);
       if (known && known.type !== p.type)
         throw new Error(
           `Notion property ${id} changed type from ${known.type} to ${p.type} during one fetch`,
         );
       if (!known) fields.set(id, { id, name, type: p.type });
+
+      if (p.type === 'relation') {
+        const ids = notionRelationIds(p.relation, p.has_more);
+
+        if (ids === undefined)
+          errors.push(
+            `Notion page ${row.id} property "${name}" (relation) has no complete list of linked pages; left unprojected`,
+          );
+        else values[notionFieldShortname(id)] = ids;
+        continue;
+      }
+
       const value = notionFieldValue(p.type, p[p.type]);
       const formatted =
         value === undefined
@@ -441,7 +491,10 @@ export function notionProjection(
     path: `urn:atomic:notion:property:${encodeURIComponent(field.id)}`,
     kind: 'property',
     shortname: notionFieldShortname(field.id),
-    datatype: datatypes[field.type],
+    datatype:
+      field.type === 'relation'
+        ? Datatype.RESOURCEARRAY
+        : datatypes[field.type],
     description: `Notion property "${field.name}" (${field.type}, id ${field.id}).`,
     requires: [],
     recommends: [],

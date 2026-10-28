@@ -248,6 +248,16 @@ const schema2 = {
     people: {},
   },
   'Date read': { id: 'dt%40r', name: 'Date read', type: 'date', date: {} },
+  Related: {
+    id: 'rl%3Ad',
+    name: 'Related',
+    type: 'relation',
+    relation: {
+      data_source_id: DATA_SOURCE,
+      type: 'single_property',
+      single_property: {},
+    },
+  },
 };
 
 export const dataSource2 = {
@@ -259,7 +269,10 @@ export const dataSource2 = {
   url: `https://www.notion.so/${DATABASE_2.replaceAll('-', '')}`,
 };
 
-function page2(id, { title, status, format, author, link, date = null, edited }) {
+function page2(
+  id,
+  { title, status, format, author, link, date = null, related = [], edited },
+) {
   const value = (key, content) => ({
     id: schema2[key].id,
     type: schema2[key].type,
@@ -290,6 +303,12 @@ function page2(id, { title, status, format, author, link, date = null, edited })
       Link: value('Link', link),
       'Recommended by': value('Recommended by', []),
       'Date read': value('Date read', date),
+      Related: {
+        id: schema2.Related.id,
+        type: 'relation',
+        relation: related.map(id => ({ id })),
+        has_more: false,
+      },
     },
     url: `https://www.notion.so/${title.replaceAll(/\W+/g, '-')}-${id.replaceAll('-', '')}`,
     public_url: null,
@@ -304,6 +323,13 @@ export const pages2 = [
     author: 'Donella Meadows',
     link: 'https://example.org/thinking-in-systems',
     date: { start: '2026-08-30', end: '2026-09-02', time_zone: null },
+    // A page of the other data source, one of this one that comes later in
+    // the read, and one the integration cannot see.
+    related: [
+      '1a2b3c4d-0000-4000-8000-000000000001',
+      '2b3c4d5e-0000-4000-8000-000000000002',
+      '9f9f9f9f-0000-4000-8000-00000000dead',
+    ],
     edited: '2026-09-02T09:30:00.000Z',
   }),
   page2('2b3c4d5e-0000-4000-8000-000000000002', {
@@ -424,6 +450,10 @@ function patchPage(target, schemaOf, properties) {
       if (!Array.isArray(value) || !value.every(known))
         return error(400, 'validation_error', 'Invalid multi_select option.');
       next[name][type] = value.map(known);
+    } else if (type === 'relation') {
+      if (!Array.isArray(value) || !value.every(v => typeof v?.id === 'string'))
+        return error(400, 'validation_error', `${name} is not a relation.`);
+      next[name][type] = value.map(v => ({ id: v.id }));
     } else if (type === 'date') {
       if (value !== null && typeof value?.start !== 'string')
         return error(400, 'validation_error', `${name} needs a start date.`);

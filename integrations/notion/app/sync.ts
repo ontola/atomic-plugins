@@ -9,6 +9,7 @@ import {
 import document from '../catalog/notion.json' with { type: 'json' };
 import {
   isNotionFieldType,
+  isNotionReadOnlyType,
   notionFieldShortname,
   notionFieldValue,
   notionFormattedText,
@@ -308,7 +309,7 @@ export function schemaProperties(
       id,
       name: typeof property.name === 'string' ? property.name : name,
       type,
-      ...(isNotionFieldType(type)
+      ...(isNotionFieldType(type) || isNotionReadOnlyType(type)
         ? { shortname: notionFieldShortname(id) }
         : {}),
       ...(Array.isArray(options)
@@ -567,6 +568,8 @@ async function ensureColumns(
         [atomic.name]: column.name,
         [atomic.datatype]: hostDatatype(column),
         [atomic.description]: column.description,
+        // Links to rows of the same table, in every data source.
+        ...(column.relation ? { [dataBrowser.classtype]: rowClass } : {}),
         ...(column.options
           ? {
               [dataBrowser.classtype]: dataBrowser.tag,
@@ -794,6 +797,13 @@ export async function syncNotion(
   const own = new Set(
     await store.query({ property: atomic.parent, value: data.table }),
   );
+  /** Row subject by Notion page id (dashes and case folded), for relations. */
+  const rowOf = new Map<string, string>();
+  /** What the first pass counted for a row, so the link pass can correct it. */
+  const counted = new Map<
+    string,
+    { report: DataSourceReport; unchanged: boolean }
+  >();
 
   for (const [index, source] of sources.entries()) {
     const report = reports[index]!;
@@ -847,11 +857,14 @@ export async function syncNotion(
           propVals,
         });
         own.add(created.subject);
+        rowOf.set(pageKey(page.id), created.subject);
+        counted.set(created.subject, { report, unchanged: false });
         result.created++;
         report.created++;
         continue;
       }
 
+      rowOf.set(pageKey(page.id), existing.subject);
       const changed = managed.filter(
         property =>
           JSON.stringify(existing.get(property)) !==
@@ -859,6 +872,7 @@ export async function syncNotion(
       );
 
       if (!changed.length) {
+        counted.set(existing.subject, { report, unchanged: true });
         result.unchanged++;
         report.unchanged++;
         continue;
@@ -868,6 +882,7 @@ export async function syncNotion(
         if (propVals[property] === undefined) existing.remove(property);
         else existing.set(property, propVals[property]);
       await existing.save();
+      counted.set(existing.subject, { report, unchanged: false });
       result.updated++;
       report.updated++;
     }
@@ -880,8 +895,74 @@ export async function syncNotion(
     });
   }
 
+  // Second pass, once every row exists: a relation's page ids become links to
+  // rows (found by the page id column, so a row from an earlier sync counts
+  // too). A page that is not a row (not shared with the integration) cannot
+  // be linked: it is left out of the cell and named in the warnings.
+  const relations = columns.filter(c => c.relation && bound.has(c.shortname));
+
+  for (const [index, source] of sources.entries()) {
+    if (!relations.length) break;
+    const report = reports[index]!;
+
+    for (const page of source.pages) {
+      const subject = rowOf.get(pageKey(page.id));
+      if (!subject) continue;
+      const row = await store.getResource(subject);
+      let changed = false;
+
+      for (const column of relations) {
+        const ids = page.values[column.shortname];
+        if (!Array.isArray(ids)) continue;
+        const links: string[] = [];
+        const missing: string[] = [];
+
+        for (const id of ids.map(String)) {
+          let target = rowOf.get(pageKey(id));
+          if (!target) {
+            target = (await store.query({ property: pageId, value: id })).find(
+              s => own.has(s),
+            );
+            if (target) rowOf.set(pageKey(id), target);
+          }
+
+          if (!target) missing.push(id);
+          else if (!links.includes(target)) links.push(target);
+        }
+
+        if (missing.length) {
+          const note = `Notion page ${page.id} property "${column.name}" (relation) links to ${missing.length} page(s) not shared with the integration (${missing.join(', ')}); left out of the links`;
+          warnings.push(note);
+          report.errors.push(note);
+        }
+
+        const property = bound.get(column.shortname)!;
+        if (JSON.stringify(row.get(property) ?? []) === JSON.stringify(links))
+          continue;
+        if (links.length) row.set(property, links);
+        else row.remove(property);
+        changed = true;
+      }
+
+      if (!changed) continue;
+      await row.save();
+      const first = counted.get(subject);
+
+      if (first?.unchanged) {
+        first.unchanged = false;
+        result.unchanged--;
+        result.updated++;
+        first.report.unchanged--;
+        first.report.updated++;
+      }
+    }
+  }
+
   return result;
 }
+
+/** Notion page ids come with or without dashes, in any case. */
+const pageKey = (id: string) => id.replaceAll('-', '').toLowerCase();
 
 const sameId = (a: string, b: string) =>
   a.replaceAll('-', '').toLowerCase() === b.replaceAll('-', '').toLowerCase();

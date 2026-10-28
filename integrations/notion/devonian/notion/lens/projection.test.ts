@@ -2,7 +2,10 @@
 import { Datatype } from '@tomic/lib';
 import { describe, expect, it } from 'vitest';
 import type { FetchedPlatform, JSONValue } from './types.js';
+import { notionColumns } from './columns.js';
 import {
+  isNotionFieldType,
+  isNotionReadOnlyType,
   JSON_DATATYPE,
   notionFieldShortname,
   notionFieldValue,
@@ -173,6 +176,44 @@ describe('notionProjection', () => {
     expect(
       projected.ontology.terms.find(t => t.shortname === column)?.datatype,
     ).toBe(Datatype.STRING);
+  });
+
+  it('projects a relation as its linked page ids, and lists one that is cut off', () => {
+    const relation = (ids: string[], has_more = false) => ({
+      id: 'r',
+      type: 'relation',
+      relation: ids.map(id => ({ id })),
+      has_more,
+    });
+    const projected = notionProjection(
+      fixture([
+        page('p1', { Parent: relation(['b', 'a']) }),
+        page('p2', { Parent: relation([]) }),
+        page('p3', { Parent: relation(['c'], true) }),
+      ]),
+      { dataSource: DS },
+    );
+    const column = key('r');
+    expect(projected.records.map(r => r.values[column])).toEqual([
+      ['b', 'a'],
+      [],
+      undefined,
+    ]);
+    expect(projected.errors).toEqual([
+      expect.stringContaining('"Parent" (relation) has no complete list'),
+    ]);
+    const term = projected.ontology.terms.find(t => t.shortname === column)!;
+    expect(term).toMatchObject({
+      datatype: Datatype.RESOURCEARRAY,
+      notionType: 'relation',
+    });
+    expect(notionColumns([term], new Map([['r', 'Parent']]))[4]).toMatchObject({
+      name: 'Parent',
+      relation: true,
+    });
+    // Read only: not a type the app can edit or send.
+    expect(isNotionFieldType('relation')).toBe(false);
+    expect(isNotionReadOnlyType('relation')).toBe(true);
   });
 
   it('distinguishes property ids that differ only in case', () => {

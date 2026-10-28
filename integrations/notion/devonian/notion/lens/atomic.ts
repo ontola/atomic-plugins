@@ -103,6 +103,7 @@ export class NotionRowLenses {
     const schema = new AtomicSchema().property(ATOMIC_NAME, Datatype.STRING);
 
     for (const column of options.columns) {
+      if (column.relation) continue;
       const subject = options.bound.get(column.shortname);
       if (!subject) continue;
       const property = notionLensProperty(column.shortname);

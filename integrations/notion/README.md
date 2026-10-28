@@ -323,6 +323,19 @@ Notion property id.
   `start`, `end` and `time_zone`, and the review holds back (and names) any
   text that is not in that form instead of sending it. A date Notion sends in
   some other shape is left unprojected and listed in the warnings.
+- A relation is read only. Its column is a resourceArray whose `classtype` is
+  the row class, holding links to the rows of the linked pages, whichever
+  data source they are in. The lens projects the page ids (`values[shortname]`,
+  Notion's order) and does not hold the column; `syncNotion` links them in a
+  second pass, after every data source's rows exist, finding the target by
+  the Notion page id column (so a row from an earlier sync counts, and a link
+  to a page that comes later in the read works). A page that is not a row
+  (not shared with the integration) cannot be linked: it is left out of the
+  cell and named in the sync warnings and the data source's notes. A relation
+  with more than 25 pages (`has_more`; the page property is cut off) is
+  listed and left as it was. Relations are never in the baseline, the review
+  or a `PATCH`: an edit made to the cell here is overwritten by Notion's
+  links on the next sync. Sending links back is not built.
 - Notion `null` leaves the key absent; `0`, `false` and `[]` are kept.
 - Formatted text, mentions and links are projected as their words without
   the formatting (from 0.5.3) and listed in `errors`. A value with no plain
