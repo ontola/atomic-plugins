@@ -28,6 +28,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   let table: string | undefined;
   const watched = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
+
   /** Rows edited in any of the app's tables are re-read. */
   const watch = (subject: string) => {
     if (watched.has(subject)) return;
@@ -40,6 +41,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
       );
     });
   };
+
   const app = createApp(root, {
     sync: () => void controller?.sync(),
     connect: () => void controller?.connect(),
