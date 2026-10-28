@@ -26,14 +26,30 @@ const REFRESH_DEBOUNCE_MS = 500;
 export async function view({ root, store }: ViewArgs): Promise<void> {
   let controller: Controller | undefined;
   let table: string | undefined;
+  const watched = new Set<string>();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  /** Rows edited in any of the app's tables are re-read. */
+  const watch = (subject: string) => {
+    if (watched.has(subject)) return;
+    watched.add(subject);
+    store.subscribe(subject, () => {
+      clearTimeout(timer);
+      timer = setTimeout(
+        () => void controller?.refreshRows(),
+        REFRESH_DEBOUNCE_MS,
+      );
+    });
+  };
+
   const app = createApp(root, {
     sync: () => void controller?.sync(),
     connect: () => void controller?.connect(),
     // Host operations since atomic-server 007869464, each feature-detected.
     ...(store.openResource
       ? {
-          openTable: () => {
-            if (table) void store.openResource!(table);
+          openTable: shown => {
+            if (shown ?? table) void store.openResource!((shown ?? table)!);
           },
         }
       : {}),
@@ -47,7 +63,12 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
   });
   if (store.getTheme) app.setColorScheme(store.getTheme().colorScheme);
   store.onThemeChange?.(({ colorScheme }) => app.setColorScheme(colorScheme));
-  controller = createController(store, state => app.render(state));
+  controller = createController(store, state => {
+    app.render(state);
+    if (isConnected(state))
+      for (const source of state.last?.dataSources ?? [])
+        if (source.table) watch(source.table);
+  });
   app.render(controller.state());
 
   try {
@@ -59,16 +80,7 @@ export async function view({ root, store }: ViewArgs): Promise<void> {
     const data = await store.getData();
     table = data?.table;
 
-    if (data?.table) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      store.subscribe(data.table, () => {
-        clearTimeout(timer);
-        timer = setTimeout(
-          () => void controller?.refreshRows(),
-          REFRESH_DEBOUNCE_MS,
-        );
-      });
-    }
+    if (data?.table) watch(data.table);
   } catch (error) {
     app.fatal(error instanceof Error ? error.message : String(error));
   }

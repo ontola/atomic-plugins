@@ -60,7 +60,7 @@ proxy. No credential ever reaches the frame.
   details; and right below it the databases block (`view/parts.ts`,
   `renderDatabases`): the databases the table syncs with and their row
   counts, when the last sync ran and how long it took, and an "Open table"
-  button. Notion's writes do not go through syncables' `pendingWrites()`,
+  button (one "Open" per database once each has its own table). Notion's writes do not go through syncables' `pendingWrites()`,
   so the card is fed from the review list and the send outcomes, as in
   Clockify.
   People browse and edit the rows with the host's own table and views; the
@@ -80,8 +80,17 @@ proxy. No credential ever reaches the frame.
     the body).
   - Pages go through `notionProjection` one data source at a time, and
     `notionColumns` derives the columns from what was read.
-  - It finds or creates one Property per column under the row class's
-    ontology and binds the lens to them.
+  - Since 0.5.8 each data source has its own table and row class, with only
+    its own columns (`ensureTables`). The app's table (`store.getData()`) is
+    the first data source's; every further one gets a Class under the same
+    ontology (listed in the ontology's `classes`) and a Table under the app,
+    both made with `store.newResource` like the Properties are. A table says
+    which data source it holds in its `notion-source` property (bookkeeping,
+    never a column), which is how later syncs find it. Properties are shared by
+    shortname across the ontology; each class recommends only its own.
+  - A relation column's `classtype` is the row class of the data source it
+    links to, set once every table exists, so a relation to a data source that
+    is not shared has none.
   - Per page: an existing row (found by the Notion page id column) is seeded
     into the lens store, the page is `ingest`ed through the data source's
     Devonian `AtomicLens`, and the lens row's values are written back to the
@@ -155,8 +164,18 @@ What it does not do, and what is not verified:
   cell given two Tags is held back in the review ("takes one option").
   Whether the host's chips and cell editor behave as the e2e shows against
   a real Notion schema is not verified.
-- All shared data sources go into one table, with their columns merged. A
-  "Data source" column says where each row came from.
+- Each shared data source is its own table since 0.5.8, with its own row
+  class. The fixed "Data source" column stays on every row. **Installs from
+  0.5.7 and earlier keep their one merged table**: when the app's table
+  already holds rows and carries no `notion-source`, the sync keeps putting
+  every data source into it, columns merged, and makes no other table. Rows
+  are never moved between tables, so nothing is migrated; to get one table
+  per database, delete the rows (or use a new app) and sync again; the old
+  merged columns then stay on that table's class until removed by hand. A hand-added
+  row also counts as "holds rows". An app that is only a view of someone
+  else's table stays merged too. Whether the pinned host accepts a Class and
+  a Table written by the app's key (the e2e creates them) is not verified
+  beyond that e2e.
 - The columns are the four fixed ones (Notion page id, Data source, Notion
   URL, Last edited in Notion) plus one per Notion property the lens
   projects (`notion-<hex of the property id>`). Nothing else: syncables also
@@ -181,7 +200,9 @@ What it does not do, and what is not verified:
   Without it, the app says so and fetches nothing.
 - The e2e runs against the mock proxy (see below). Nothing here has run against live Notion
   or a real proxy.
-- "Open table" and the menu's "Open data table" use `store.openResource`;
+- "Open table" and the menu's "Open data table" use `store.openResource`
+  (with several tables, each database has an "Open" button, and the menu
+  opens the app's own table, the first database's);
   "Disconnect Notion…" uses `store.proxy.disconnect` (rows are kept); rows
   load with `store.getMany` in batches of 100; the host's `colorScheme` sets
   the app's `color-scheme`. All since atomic-server 007869464, and each is

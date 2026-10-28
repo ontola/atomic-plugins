@@ -46,6 +46,7 @@ describe('Notion drive-plugin bundle', async () => {
     // answer instead of requesting every remaining data source (+19).
     // 0.5.7 183 133 on 2026-10-28: date, relation, formula and rollup columns
     // (+3 391).
+    // 0.5.8 186 234 on 2026-10-28: one table per data source (+3 101).
     // A change that needs more should say why and re-measure.
     expect(bytes).toBeLessThan(197_800);
   });

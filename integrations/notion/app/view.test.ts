@@ -671,6 +671,22 @@ describe('view (DOM)', () => {
       expect(q('[role=menu]')).toBeNull();
     });
 
+    it('offers one "Open" per database when each has its own table', () => {
+      const tables = {
+        ...last,
+        dataSources: [
+          { ...roadmap, table: 'atomic:t1' },
+          { ...reading, table: 'atomic:t2' },
+        ],
+      };
+      app.render({ ...ready, last: tables });
+      expect(q('[data-key=open-table]')).toBeNull();
+      q<HTMLButtonElement>('[data-key=open-table-1]')!.click();
+      expect(host.openTable).toHaveBeenCalledWith('atomic:t2');
+      q<HTMLButtonElement>('[data-key=open-table-0]')!.click();
+      expect(host.openTable).toHaveBeenLastCalledWith('atomic:t1');
+    });
+
     it('asks before disconnecting, in place of the state banner; Cancel does nothing', () => {
       app.render({ kind: 'no-databases', connectionId: 'c', rows, last });
       q<HTMLButtonElement>('[data-key="menu:More"]')!.click();

@@ -38,8 +38,11 @@ export interface ViewContext {
   update(patch: Partial<UiState>): void;
   sync(): void;
   connect(): void;
-  /** Shows the app's table in the host; absent on a host without `openResource`. */
-  openTable?: () => void;
+  /**
+   * Shows a table in the host (the app's own without an argument); absent on
+   * a host without `openResource`.
+   */
+  openTable?: (table?: string) => void;
 }
 
 /** Human names for Notion types the lens does not copy. */
@@ -85,6 +88,8 @@ const recordCounts = (last: SyncRecord) => {
 export function renderDatabases(ctx: ViewContext): HTMLElement {
   const { doc, state } = ctx;
   const last = state.last;
+  // One table per database: a button on each. One shared table: one button.
+  const several = new Set(ctx.sources.map(s => s.table)).size > 1;
 
   return h(
     doc,
@@ -96,7 +101,7 @@ export function renderDatabases(ctx: ViewContext): HTMLElement {
           doc,
           'ul',
           { class: 'nt-s-dbs', 'aria-label': 'Databases' },
-          ctx.sources.map(s =>
+          ctx.sources.map((s, i) =>
             h(
               doc,
               'li',
@@ -104,6 +109,15 @@ export function renderDatabases(ctx: ViewContext): HTMLElement {
               icon(doc, 'db'),
               h(doc, 'b', {}, s.title),
               h(doc, 'span', { class: 'nt-s-count' }, plural(s.count, 'row')),
+              several &&
+                ctx.openTable &&
+                button(doc, {
+                  kind: 'secondary',
+                  icon: 'table',
+                  label: 'Open',
+                  key: `open-table-${i}`,
+                  onClick: () => ctx.openTable!(s.table),
+                }),
             ),
           ),
         )
@@ -146,6 +160,7 @@ export function renderDatabases(ctx: ViewContext): HTMLElement {
       ),
     ),
     ctx.openTable &&
+      !several &&
       h(
         doc,
         'div',
@@ -155,7 +170,7 @@ export function renderDatabases(ctx: ViewContext): HTMLElement {
           icon: 'table',
           label: 'Open table',
           key: 'open-table',
-          onClick: ctx.openTable,
+          onClick: () => ctx.openTable!(),
         }),
       ),
   );

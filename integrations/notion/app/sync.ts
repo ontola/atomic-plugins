@@ -62,7 +62,9 @@ export const atomic = {
   parent: 'https://atomicdata.dev/properties/parent',
   properties: 'https://atomicdata.dev/properties/properties',
   recommends: 'https://atomicdata.dev/properties/recommends',
+  classes: 'https://atomicdata.dev/properties/classes',
   propertyClass: 'https://atomicdata.dev/classes/Property',
+  classClass: 'https://atomicdata.dev/classes/Class',
 } as const;
 
 export interface SyncResult {
@@ -109,6 +111,8 @@ export interface SchemaProperty {
   type: string;
   shortname?: string;
   options?: NotionOption[];
+  /** A relation's target: the data source whose pages it links to. */
+  target?: string;
 }
 
 export interface DataSourceReport {
@@ -120,6 +124,8 @@ export interface DataSourceReport {
   created: number;
   updated: number;
   unchanged: number;
+  /** The table holding this data source's rows (set by a sync from 0.5.8). */
+  table?: string;
   properties: SchemaProperty[];
   /**
    * Pages whose `property` holds formatted text: imported as plain text
@@ -160,6 +166,8 @@ export interface NotionSource {
   dataSource: string;
   title: string;
   pages: FetchedRecord[];
+  /** The columns of this data source alone. */
+  columns: NotionColumn[];
 }
 
 /**
@@ -249,11 +257,17 @@ export async function readNotion(
       else report.errors.push(message);
     }
 
-    sources.push({ dataSource, title, pages: projected.records });
+    const own = projected.ontology.terms.filter(t => t.kind === 'property');
+
+    sources.push({
+      dataSource,
+      title,
+      pages: projected.records,
+      columns: notionColumns(own, notionPropertyNames(projected.records)),
+    });
     reports.push(report);
     warnings.push(...(projected.errors ?? []));
-    for (const term of projected.ontology.terms)
-      if (term.kind === 'property') terms.set(term.shortname, term);
+    for (const term of own) terms.set(term.shortname, term);
   }
 
   return {
@@ -304,6 +318,7 @@ export function schemaProperties(
     const { id, type } = property;
     if (typeof id !== 'string' || typeof type !== 'string') continue;
     const options = record(property[type]).options;
+    const target = record(property.relation).data_source_id;
 
     out.push({
       id,
@@ -312,6 +327,7 @@ export function schemaProperties(
       ...(isNotionFieldType(type) || isNotionReadOnlyType(type)
         ? { shortname: notionFieldShortname(id) }
         : {}),
+      ...(typeof target === 'string' ? { target } : {}),
       ...(Array.isArray(options)
         ? {
             options: options.flatMap(o => {
@@ -357,6 +373,16 @@ const OPTION_ID_COLUMN: NotionColumn = {
   datatype: Datatype.STRING,
   description:
     'Written by the Notion app on each Tag of a select, status or multi-select column: the Notion option it stands for, so a rename in Notion renames the Tag and leaves the rows as they are.',
+};
+
+/** The table's bookkeeping Property: the data source whose pages it holds. */
+export const SOURCE_SHORTNAME = 'notion-source';
+const SOURCE_COLUMN: NotionColumn = {
+  shortname: SOURCE_SHORTNAME,
+  name: 'Notion data source',
+  datatype: Datatype.STRING,
+  description:
+    'Written by the Notion app on each table it makes: the Notion data source whose pages the table holds.',
 };
 
 /** The datatype the host's Property gets: a select column holds Tags. */
@@ -568,8 +594,6 @@ async function ensureColumns(
         [atomic.name]: column.name,
         [atomic.datatype]: hostDatatype(column),
         [atomic.description]: column.description,
-        // Links to rows of the same table, in every data source.
-        ...(column.relation ? { [dataBrowser.classtype]: rowClass } : {}),
         ...(column.options
           ? {
               [dataBrowser.classtype]: dataBrowser.tag,
@@ -695,13 +719,134 @@ async function ensureAllOptions(
   return indexTags(tags);
 }
 
+/** A table of the app and the class its rows are. */
+export interface SourceTable {
+  table: string;
+  rowClass: string;
+}
+
+/** The tables of the data sources (a table holds one), by `pageKey` of the id. */
+export async function stampedTables(
+  store: PluginStore,
+  sourceProperty: string,
+): Promise<Map<string, SourceTable>> {
+  const found = new Map<string, SourceTable>();
+  const children = await store.query({
+    property: atomic.parent,
+    value: await store.getApp(),
+  });
+
+  for (const subject of children) {
+    const table = await store.getResource(subject).catch(() => undefined);
+    const id = table?.get(sourceProperty);
+    const rowClass = table?.get(dataBrowser.classtype);
+    if (typeof id === 'string' && typeof rowClass === 'string')
+      found.set(pageKey(id), { table: subject, rowClass });
+  }
+
+  return found;
+}
+
+/**
+ * One table and row class per data source, so each table has only its own
+ * data source's columns. The app's table (`getData`) is the first data
+ * source's; each further one gets a class under the same ontology and a table
+ * under the app, both made through the frame like the Properties are. A table
+ * says which data source it holds in `notion-source`.
+ *
+ * Returns undefined, meaning every data source goes into the app's table with
+ * merged columns as up to 0.5.7, when that table already holds rows from such
+ * a sync (rows are not moved between tables) or is not the app's own (the
+ * app is a view of someone else's table).
+ */
+async function ensureTables(
+  store: PluginStore,
+  data: { table: string; rowClass: string },
+  sources: readonly NotionSource[],
+  sourceProperty: string,
+): Promise<Map<string, SourceTable> | undefined> {
+  const app = await store.getApp();
+  const primary = await store.getResource(data.table);
+  const found = await stampedTables(store, sourceProperty);
+  let free = ![...found.values()].some(t => t.table === data.table);
+
+  if (
+    free &&
+    (primary.get(atomic.parent) !== app ||
+      (await store.query({ property: atomic.parent, value: data.table }))
+        .length)
+  )
+    return undefined;
+
+  const klass = await store.getResource(data.rowClass);
+  const ontology = await store.getResource(String(klass.get(atomic.parent)));
+  const made: string[] = [];
+
+  for (const { dataSource, title } of sources) {
+    if (found.has(pageKey(dataSource))) continue;
+    let table = data.table;
+    let rowClass = data.rowClass;
+
+    if (free) {
+      free = false;
+      primary.set(sourceProperty, dataSource).set(atomic.name, title);
+      await primary.save();
+    } else {
+      rowClass = (
+        await store.newResource({
+          parent: ontology.subject,
+          isA: [atomic.classClass],
+          propVals: {
+            [atomic.shortname]: `notion-source-${pageKey(dataSource).slice(0, 8)}`,
+            [atomic.name]: title,
+            [atomic.description]: `A page in the Notion data source ${title}`,
+            [atomic.recommends]: [atomic.name],
+          },
+        })
+      ).subject;
+      made.push(rowClass);
+      table = (
+        await store.newResource({
+          parent: app,
+          isA: [dataBrowser.table],
+          propVals: {
+            [atomic.name]: title,
+            [dataBrowser.classtype]: rowClass,
+            [sourceProperty]: dataSource,
+          },
+        })
+      ).subject;
+    }
+
+    found.set(pageKey(dataSource), { table, rowClass });
+  }
+
+  if (made.length) {
+    ontology.set(atomic.classes, [
+      ...values(ontology, atomic.classes),
+      ...made,
+    ]);
+    await ontology.save();
+  }
+
+  return found;
+}
+
+/** One table, its row class, and the data sources whose pages it holds. */
+interface Group extends SourceTable {
+  columns: NotionColumn[];
+  entries: { source: NotionSource; report: DataSourceReport }[];
+  bound: Map<string, string>;
+}
+
 /**
  * Read every shared data source's pages through the proxy, run them through
  * the Notion row lens (Devonian `AtomicLens.ingest`), and reconcile the lens's
- * rows into the app's data table by Notion page id. Import only: nothing is
- * written to Notion, and a page that is gone from Notion (or archived) is
- * left in place, never deleted. A value cleared in Notion is removed from its
- * row; one the lens cannot read losslessly is left as it was.
+ * rows into the data source's table by Notion page id (`ensureTables`: one
+ * table per data source, or the one merged table of up to 0.5.7). Import
+ * only: nothing is written to Notion, and a page that is gone from Notion (or
+ * archived) is left in place, never deleted. A value cleared in Notion is
+ * removed from its row; one the lens cannot read losslessly is left as it was.
  */
 export async function syncNotion(
   store: PluginStore,
@@ -717,26 +862,67 @@ export async function syncNotion(
       observedTransport(transport, progressTap(onProgress)),
       read,
     );
-  const bound = await ensureColumns(store, data.rowClass, columns, warnings, [
-    BASELINE_COLUMN,
-    OPTION_ID_COLUMN,
-  ]);
-  const pageId = bound.get('notion-page-id');
-  if (!pageId) throw new Error('No column to key rows by Notion page id');
-  const baselineProperty = bound.get(BASELINE_SHORTNAME);
+  const extras = [BASELINE_COLUMN, OPTION_ID_COLUMN, SOURCE_COLUMN];
+  // The bookkeeping Properties first: a table is found by `notion-source`.
+  const allBound = await ensureColumns(
+    store,
+    data.rowClass,
+    [],
+    warnings,
+    extras,
+  );
+  const entries = sources.map((source, i) => ({
+    source,
+    report: reports[i]!,
+  }));
+  const tables = await ensureTables(
+    store,
+    { table: data.table, rowClass: data.rowClass },
+    sources,
+    allBound.get(SOURCE_SHORTNAME)!,
+  );
+  const groups: Group[] = tables
+    ? entries.map(entry => ({
+        ...tables.get(pageKey(entry.source.dataSource))!,
+        columns: entry.source.columns,
+        entries: [entry],
+        bound: new Map(),
+      }))
+    : [
+        {
+          table: data.table,
+          rowClass: data.rowClass,
+          columns,
+          entries,
+          bound: new Map(),
+        },
+      ];
+
+  for (const group of groups) {
+    group.bound = await ensureColumns(
+      store,
+      group.rowClass,
+      group.columns,
+      warnings,
+      extras,
+    );
+    for (const [shortname, subject] of group.bound)
+      allBound.set(shortname, subject);
+    for (const { report } of group.entries) report.table = group.table;
+  }
+
+  const baselineProperty = allBound.get(BASELINE_SHORTNAME);
   const options = await ensureAllOptions(
     store,
     columns,
-    bound,
+    allBound,
     sources,
     reports,
   );
-
-  const lenses = new NotionRowLenses({ columns, bound });
   const optionColumns = new Map(
     columns.flatMap(c =>
-      c.options && bound.has(c.shortname)
-        ? [[bound.get(c.shortname)!, c.options] as const]
+      c.options && allBound.has(c.shortname)
+        ? [[allBound.get(c.shortname)!, c.options] as const]
         : [],
     ),
   );
@@ -780,10 +966,6 @@ export async function syncNotion(
       : value;
   };
 
-  const managed = [
-    ...lenses.managed(),
-    ...(baselineProperty ? [baselineProperty] : []),
-  ];
   const result: SyncResult = {
     created: 0,
     updated: 0,
@@ -795,7 +977,13 @@ export async function syncNotion(
     conflicts: new Map(),
   };
   const own = new Set(
-    await store.query({ property: atomic.parent, value: data.table }),
+    (
+      await Promise.all(
+        [...new Set(groups.map(g => g.table))].map(table =>
+          store.query({ property: atomic.parent, value: table }),
+        ),
+      )
+    ).flat(),
   );
   /** Row subject by Notion page id (dashes and case folded), for relations. */
   const rowOf = new Map<string, string>();
@@ -805,158 +993,194 @@ export async function syncNotion(
     { report: DataSourceReport; unchanged: boolean }
   >();
 
-  for (const [index, source] of sources.entries()) {
-    const report = reports[index]!;
-    const lens = lenses.lens(source.dataSource, source.title, source.pages);
-    const fields = (
-      editableFields([report]).get(source.dataSource) ?? []
-    ).filter(f => bound.has(f.shortname));
-    onProgress({
-      dataSource: source.dataSource,
-      title: source.title,
-      phase: 'writing',
-      pages: report.pages,
-    });
+  for (const group of groups) {
+    const { bound } = group;
+    const pageId = bound.get('notion-page-id');
+    if (!pageId) throw new Error('No column to key rows by Notion page id');
+    const lenses = new NotionRowLenses({ columns: group.columns, bound });
+    const managed = [
+      ...lenses.managed(),
+      ...(baselineProperty ? [baselineProperty] : []),
+    ];
 
-    for (const page of source.pages) {
-      const matches = await store.query({ property: pageId, value: page.id });
-      const subject = matches.find(s => own.has(s));
-      const existing = subject ? await store.getResource(subject) : undefined;
+    for (const { source, report } of group.entries) {
+      const lens = lenses.lens(source.dataSource, source.title, source.pages);
+      const fields = (
+        editableFields([report]).get(source.dataSource) ?? []
+      ).filter(f => bound.has(f.shortname));
+      onProgress({
+        dataSource: source.dataSource,
+        title: source.title,
+        phase: 'writing',
+        pages: report.pages,
+      });
 
-      // The row's current values go into the lens store first, so the read's
-      // `unset` has something to remove.
-      if (existing)
-        lenses.seed(source.dataSource, page.id, seedValues(existing.props));
+      for (const page of source.pages) {
+        const matches = await store.query({ property: pageId, value: page.id });
+        const subject = matches.find(s => own.has(s));
+        const existing = subject ? await store.getResource(subject) : undefined;
 
-      const row = lenses.store.get(await lens.ingest(page));
-      if (!row) throw new Error(`The lens produced no row for ${page.id}`);
-      const propVals = hostValues(lenses.toHost(row));
-
-      if (baselineProperty) {
-        const { baseline, keep, conflicts } = compareOnSync(
-          fields,
-          page,
-          source.dataSource,
-          bound,
-          existing,
-          baselineProperty,
-          options,
-        );
+        // The row's current values go into the lens store first, so the read's
+        // `unset` has something to remove.
         if (existing)
-          for (const property of keep)
-            propVals[property] = keptValue(property, existing.get(property));
-        propVals[baselineProperty] = JSON.stringify(baseline);
-        if (existing && conflicts.size)
-          result.conflicts.set(existing.subject, conflicts);
+          lenses.seed(source.dataSource, page.id, seedValues(existing.props));
+
+        const row = lenses.store.get(await lens.ingest(page));
+        if (!row) throw new Error(`The lens produced no row for ${page.id}`);
+        const propVals = hostValues(lenses.toHost(row));
+
+        if (baselineProperty) {
+          const { baseline, keep, conflicts } = compareOnSync(
+            fields,
+            page,
+            source.dataSource,
+            bound,
+            existing,
+            baselineProperty,
+            options,
+          );
+          if (existing)
+            for (const property of keep)
+              propVals[property] = keptValue(property, existing.get(property));
+          propVals[baselineProperty] = JSON.stringify(baseline);
+          if (existing && conflicts.size)
+            result.conflicts.set(existing.subject, conflicts);
+        }
+
+        if (!existing) {
+          const created = await store.newResource({
+            parent: group.table,
+            isA: [group.rowClass],
+            propVals,
+          });
+          own.add(created.subject);
+          rowOf.set(pageKey(page.id), created.subject);
+          counted.set(created.subject, { report, unchanged: false });
+          result.created++;
+          report.created++;
+          continue;
+        }
+
+        rowOf.set(pageKey(page.id), existing.subject);
+        const changed = managed.filter(
+          property =>
+            JSON.stringify(existing.get(property)) !==
+            JSON.stringify(propVals[property]),
+        );
+
+        if (!changed.length) {
+          counted.set(existing.subject, { report, unchanged: true });
+          result.unchanged++;
+          report.unchanged++;
+          continue;
+        }
+
+        for (const property of changed)
+          if (propVals[property] === undefined) existing.remove(property);
+          else existing.set(property, propVals[property]);
+        await existing.save();
+        counted.set(existing.subject, { report, unchanged: false });
+        result.updated++;
+        report.updated++;
       }
 
-      if (!existing) {
-        const created = await store.newResource({
-          parent: data.table,
-          isA: [data.rowClass],
-          propVals,
-        });
-        own.add(created.subject);
-        rowOf.set(pageKey(page.id), created.subject);
-        counted.set(created.subject, { report, unchanged: false });
-        result.created++;
-        report.created++;
-        continue;
-      }
-
-      rowOf.set(pageKey(page.id), existing.subject);
-      const changed = managed.filter(
-        property =>
-          JSON.stringify(existing.get(property)) !==
-          JSON.stringify(propVals[property]),
-      );
-
-      if (!changed.length) {
-        counted.set(existing.subject, { report, unchanged: true });
-        result.unchanged++;
-        report.unchanged++;
-        continue;
-      }
-
-      for (const property of changed)
-        if (propVals[property] === undefined) existing.remove(property);
-        else existing.set(property, propVals[property]);
-      await existing.save();
-      counted.set(existing.subject, { report, unchanged: false });
-      result.updated++;
-      report.updated++;
+      onProgress({
+        dataSource: source.dataSource,
+        title: source.title,
+        phase: 'done',
+        pages: report.pages,
+      });
     }
-
-    onProgress({
-      dataSource: source.dataSource,
-      title: source.title,
-      phase: 'done',
-      pages: report.pages,
-    });
   }
+
+  // Once every table exists, a relation column's class is the target data
+  // source's row class (one table per data source), or the merged table's
+  // class. A target that is not synced leaves the column without one.
+  const classOf = new Map(
+    groups.flatMap(g =>
+      g.entries.map(e => [pageKey(e.source.dataSource), g.rowClass] as const),
+    ),
+  );
+  const relationColumns = (group: Group) =>
+    group.columns.filter(c => c.relation && group.bound.has(c.shortname));
+
+  for (const group of groups)
+    for (const column of relationColumns(group)) {
+      const target = group.entries
+        .flatMap(e => e.report.properties)
+        .find(p => p.shortname === column.shortname)?.target;
+      const rowClass = target ? classOf.get(pageKey(target)) : undefined;
+      const property = await store.getResource(
+        group.bound.get(column.shortname)!,
+      );
+      if (!rowClass || property.get(dataBrowser.classtype) === rowClass)
+        continue;
+      property.set(dataBrowser.classtype, rowClass);
+      await property.save();
+    }
 
   // Second pass, once every row exists: a relation's page ids become links to
   // rows (found by the page id column, so a row from an earlier sync counts
   // too). A page that is not a row (not shared with the integration) cannot
   // be linked: it is left out of the cell and named in the warnings.
-  const relations = columns.filter(c => c.relation && bound.has(c.shortname));
+  for (const group of groups) {
+    const relations = relationColumns(group);
+    if (!relations.length) continue;
+    const pageId = group.bound.get('notion-page-id')!;
 
-  for (const [index, source] of sources.entries()) {
-    if (!relations.length) break;
-    const report = reports[index]!;
+    for (const { source, report } of group.entries)
+      for (const page of source.pages) {
+        const subject = rowOf.get(pageKey(page.id));
+        if (!subject) continue;
+        const row = await store.getResource(subject);
+        let changed = false;
 
-    for (const page of source.pages) {
-      const subject = rowOf.get(pageKey(page.id));
-      if (!subject) continue;
-      const row = await store.getResource(subject);
-      let changed = false;
+        for (const column of relations) {
+          const ids = page.values[column.shortname];
+          if (!Array.isArray(ids)) continue;
+          const links: string[] = [];
+          const missing: string[] = [];
 
-      for (const column of relations) {
-        const ids = page.values[column.shortname];
-        if (!Array.isArray(ids)) continue;
-        const links: string[] = [];
-        const missing: string[] = [];
+          for (const id of ids.map(String)) {
+            let target = rowOf.get(pageKey(id));
 
-        for (const id of ids.map(String)) {
-          let target = rowOf.get(pageKey(id));
+            if (!target) {
+              target = (
+                await store.query({ property: pageId, value: id })
+              ).find(s => own.has(s));
+              if (target) rowOf.set(pageKey(id), target);
+            }
 
-          if (!target) {
-            target = (await store.query({ property: pageId, value: id })).find(
-              s => own.has(s),
-            );
-            if (target) rowOf.set(pageKey(id), target);
+            if (!target) missing.push(id);
+            else if (!links.includes(target)) links.push(target);
           }
 
-          if (!target) missing.push(id);
-          else if (!links.includes(target)) links.push(target);
+          if (missing.length) {
+            const note = `Notion page ${page.id} property "${column.name}" (relation) links to ${missing.length} page(s) not shared with the integration (${missing.join(', ')}); left out of the links`;
+            warnings.push(note);
+            report.errors.push(note);
+          }
+
+          const property = group.bound.get(column.shortname)!;
+          if (JSON.stringify(row.get(property) ?? []) === JSON.stringify(links))
+            continue;
+          if (links.length) row.set(property, links);
+          else row.remove(property);
+          changed = true;
         }
 
-        if (missing.length) {
-          const note = `Notion page ${page.id} property "${column.name}" (relation) links to ${missing.length} page(s) not shared with the integration (${missing.join(', ')}); left out of the links`;
-          warnings.push(note);
-          report.errors.push(note);
+        if (!changed) continue;
+        await row.save();
+        const first = counted.get(subject);
+
+        if (first?.unchanged) {
+          first.unchanged = false;
+          result.unchanged--;
+          result.updated++;
+          first.report.unchanged--;
+          first.report.updated++;
         }
-
-        const property = bound.get(column.shortname)!;
-        if (JSON.stringify(row.get(property) ?? []) === JSON.stringify(links))
-          continue;
-        if (links.length) row.set(property, links);
-        else row.remove(property);
-        changed = true;
       }
-
-      if (!changed) continue;
-      await row.save();
-      const first = counted.get(subject);
-
-      if (first?.unchanged) {
-        first.unchanged = false;
-        result.unchanged--;
-        result.updated++;
-        first.report.unchanged--;
-        first.report.updated++;
-      }
-    }
   }
 
   return result;

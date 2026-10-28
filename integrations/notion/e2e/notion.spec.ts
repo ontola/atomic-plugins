@@ -111,12 +111,16 @@ test.describe('notion drive plugin', () => {
     );
     await page.keyboard.press('Escape');
 
-    // The rows are ordinary rows of the app's table, named by the catalog
-    // entry's `app-row-name-plural` ("Pages"). After the connect round trip
-    // the app's folder is usually still expanded in the sidebar; expand it
-    // only when it is not.
+    // The rows are ordinary rows of the app's table, one table per Notion
+    // data source, named by its title; the app's own table is the first
+    // data source's ("Roadmap"), no longer the generic "Pages". After the connect
+    // round trip the app's folder is usually still expanded in the sidebar;
+    // expand it only when it is not.
     const sidebar = page.getByRole('navigation').last();
-    const items = sidebar.getByRole('button', { name: 'Pages', exact: true });
+    const items = sidebar.getByRole('button', {
+      name: 'Roadmap',
+      exact: true,
+    });
 
     if (!(await items.isVisible()))
       await sidebar
@@ -364,6 +368,8 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     ).toContainText('3 rows');
     await expect(card).toContainText('5 rows in this table');
     await expect(app.locator('.pl-connbar')).toContainText('2 databases');
+    // One table per database: the second is a table of its own (0.5.8).
+    await expect(dbBlock.getByRole('button', { name: 'Open' })).toHaveCount(2);
     await shot('s6-status');
 
     // S10: sync details list what was not copied, per database.
@@ -387,7 +393,21 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await driver('renameOption', [DONE_OPTION, 'Shipped']);
     await syncNow();
     const statusAppUrl = page.url();
-    await dbBlock.getByRole('button', { name: 'Open table' }).click();
+    // Each database has its own table, so each has its own "Open" button.
+    const openTable = (title: string) =>
+      databases
+        .getByRole('listitem')
+        .filter({ hasText: title })
+        .getByRole('button', { name: 'Open' });
+    await openTable('Reading list').click();
+    await expect(
+      page
+        .getByRole('main')
+        .getByText('Thinking in Systems', { exact: true })
+        .first(),
+    ).toBeVisible({ timeout: 30_000 });
+    await page.goto(statusAppUrl);
+    await openTable('Roadmap').click();
     const shipped = page
       .getByRole('main')
       .getByText('Shipped', { exact: true })
@@ -435,7 +455,9 @@ async function statesTour(page: Page, testInfo: TestInfo) {
     await review.getByRole('button', { name: 'Send 1 change' }).click();
     await expect(review.locator('[data-outcome="sent"]')).toHaveText(
       'Sent to Notion',
-      { timeout: 60_000 },
+      {
+        timeout: 60_000,
+      },
     );
     expect(
       (await driver('getPage', [LAUNCH_PAGE])).properties.Points.number,

@@ -25,6 +25,8 @@ export const ONTOLOGY = 'atomic:ontology';
 export const ROW_CLASS = 'atomic:class';
 export const TABLE = 'atomic:table';
 
+const CLASSTYPE = 'https://atomicdata.dev/properties/classtype';
+
 export interface FakeStore extends PluginStore {
   readonly resources: Map<string, Record<string, JSONValue>>;
   readonly writes: { op: 'create' | 'save'; subject: string }[];
@@ -44,7 +46,8 @@ export function fakeStore({
     [APP, {}],
     [ONTOLOGY, { [PARENT]: APP }],
     [ROW_CLASS, { [PARENT]: ONTOLOGY }],
-    [TABLE, { [PARENT]: APP }],
+    // As the host makes it: a table names its row class in `classtype`.
+    [TABLE, { [PARENT]: APP, [CLASSTYPE]: ROW_CLASS }],
   ]);
   const writes: FakeStore['writes'] = [];
   const hostCalls: FakeStore['hostCalls'] = [];

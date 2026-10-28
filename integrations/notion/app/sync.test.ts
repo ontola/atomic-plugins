@@ -6,6 +6,7 @@ import { DATA_SOURCE, pages, pages2 } from '../fixtures/notion/scenario.mjs';
 import {
   APP,
   fakeStore,
+  type FakeStore,
   fixtureProxy,
   IS_A,
   ONTOLOGY,
@@ -18,6 +19,7 @@ import {
   atomic,
   isStrayRawColumn,
   NOTION_DOCUMENT,
+  SOURCE_SHORTNAME,
   syncNotion,
 } from './sync.js';
 import { syncablesTransport } from './transport.js';
@@ -131,7 +133,8 @@ describe('syncNotion', () => {
         .filter(
           ([shortname]) =>
             shortname !== 'notion-sync-baseline' &&
-            shortname !== 'notion-option-id',
+            shortname !== 'notion-option-id' &&
+            shortname !== SOURCE_SHORTNAME,
         )
         .map(([, subject]) => subject),
     );
@@ -253,7 +256,7 @@ describe('syncNotion', () => {
           (p[IS_A] as string[] | undefined)?.includes(atomic.propertyClass),
       )
       .map(p => String(p[atomic.shortname]));
-    expect(shortnames).toHaveLength(12);
+    expect(shortnames).toHaveLength(13);
     for (const shortname of shortnames) expect(shortname).toMatch(/^notion-/);
     for (const subject of store.resources.get(ROW_CLASS)![
       atomic.recommends
@@ -333,7 +336,7 @@ describe('syncNotion', () => {
     expect(recommends[0]).toBe(mine);
     expect(properties[0]).toBe(mine);
     expect(recommends).toHaveLength(1 + 10);
-    expect(properties).toHaveLength(1 + 12);
+    expect(properties).toHaveLength(1 + 13);
     expect(store.resources.get(mine)).toMatchObject({
       [atomic.shortname]: 'title',
       [atomic.name]: 'Title',
@@ -616,9 +619,7 @@ describe('syncNotion per data source (N6, N7, N10)', () => {
       ([, p]) => p[atomic.shortname] === 'notion-page-id',
     )![0];
     const rowOf = (id: string) =>
-      [...store.resources].find(
-        ([, p]) => p[PARENT] === TABLE && p[idColumn] === id,
-      )!;
+      [...store.resources].find(([, p]) => p[idColumn] === id)!;
     // The Reading list row links to a Roadmap row and to a later row of its
     // own data source, both created in this sync; the unshared page is no link.
     expect(rowOf(pages2[0]!.id)[1][related[0]]).toEqual([
@@ -661,9 +662,7 @@ describe('syncNotion per data source (N6, N7, N10)', () => {
       ([, p]) => p[atomic.shortname] === 'notion-page-id',
     )![0];
     const rowOf = (id: string) =>
-      [...store.resources].find(
-        ([, p]) => p[PARENT] === TABLE && p[idColumn] === id,
-      )![1];
+      [...store.resources].find(([, p]) => p[idColumn] === id)![1];
     expect(rowOf(pages2[0]!.id)[column('fo%3Am')[0]]).toBe(
       'Thinking in Systems (Reading)',
     );
@@ -724,5 +723,112 @@ describe('syncNotion per data source (N6, N7, N10)', () => {
       created: 0,
       perDataSource: [],
     });
+  });
+});
+
+describe('one table per data source', () => {
+  const sync = async (seed?: (store: FakeStore) => Promise<unknown>) => {
+    const proxy = fixtureProxy('conn-1', { scenario: 'two-sources' });
+    const store = fakeStore({ proxy });
+    await seed?.(store);
+    const transport = syncablesTransport(proxy, 'conn-1', upstream);
+
+    return { store, transport, result: await syncNotion(store, transport) };
+  };
+
+  const children = (store: FakeStore, parent: string) =>
+    [...store.resources].filter(([, p]) => p[PARENT] === parent);
+  const recommended = (store: FakeStore, klass: string) =>
+    (store.resources.get(klass)![atomic.recommends] as string[]).map(
+      s => store.resources.get(s)?.[atomic.shortname],
+    );
+
+  it('gives each data source its own table and row class with only its columns', async () => {
+    const { store, result } = await sync();
+    const [roadmap, reading] = result.perDataSource;
+    // The app's table is the first data source's; the second gets a new one.
+    expect(roadmap!.table).toBe(TABLE);
+    const second = reading!.table!;
+    expect(second).not.toBe(TABLE);
+    expect(store.resources.get(TABLE)).toMatchObject({
+      [atomic.name]: 'Roadmap',
+    });
+    expect(store.resources.get(second)).toMatchObject({
+      [PARENT]: APP,
+      [IS_A]: [dataBrowser.table],
+      [atomic.name]: 'Reading list',
+    });
+    const readingClass = store.resources.get(second)![
+      dataBrowser.classtype
+    ] as string;
+    expect(store.resources.get(readingClass)).toMatchObject({
+      [PARENT]: ONTOLOGY,
+      [IS_A]: [atomic.classClass],
+    });
+    expect(store.resources.get(ONTOLOGY)![atomic.classes]).toEqual([
+      readingClass,
+    ]);
+    expect(children(store, TABLE)).toHaveLength(3);
+    expect(children(store, second)).toHaveLength(2);
+    for (const [, row] of children(store, second))
+      expect(row[IS_A]).toEqual([readingClass]);
+
+    const done = notionFieldShortname('BJXS');
+    const dateRead = notionFieldShortname('dt%40r');
+    expect(recommended(store, ROW_CLASS)).toContain(done);
+    expect(recommended(store, ROW_CLASS)).not.toContain(dateRead);
+    expect(recommended(store, readingClass)).toContain(dateRead);
+    expect(recommended(store, readingClass)).not.toContain(done);
+    // Both keep the fixed columns.
+    for (const klass of [ROW_CLASS, readingClass])
+      expect(recommended(store, klass)).toContain('notion-page-id');
+  });
+
+  it('points a relation column at the target data source’s row class', async () => {
+    const { store } = await sync();
+    const related = [...store.resources].find(
+      ([, p]) => p[atomic.shortname] === notionFieldShortname('rl%3Ad'),
+    )!;
+    // "Related" of the Reading list links to Roadmap pages.
+    expect(related[1][dataBrowser.classtype]).toBe(ROW_CLASS);
+  });
+
+  it('is idempotent: a second sync makes no table, class or row', async () => {
+    const { store, transport } = await sync();
+    const size = store.resources.size;
+    expect(await syncNotion(store, transport)).toMatchObject({
+      created: 0,
+      updated: 0,
+    });
+    expect(store.resources.size).toBe(size);
+  });
+
+  it('keeps syncing into the app’s one table when it already holds rows (0.5.7 installs)', async () => {
+    const { store, result } = await sync(s =>
+      s.newResource({
+        parent: TABLE,
+        isA: [ROW_CLASS],
+        propVals: { [atomic.name]: 'Imported by 0.5.7' },
+      }),
+    );
+    expect(result).toMatchObject({ created: 5 });
+    expect(result.perDataSource.map(r => r.table)).toEqual([TABLE, TABLE]);
+    expect(children(store, TABLE)).toHaveLength(1 + 5);
+    expect(children(store, APP)).toEqual([
+      [ONTOLOGY, expect.anything()],
+      [TABLE, expect.anything()],
+    ]);
+    expect(store.resources.get(ONTOLOGY)![atomic.classes]).toBeUndefined();
+    // Merged columns, and the relation still points at the one class.
+    expect(recommended(store, ROW_CLASS)).toContain(
+      notionFieldShortname('dt%40r'),
+    );
+    expect(recommended(store, ROW_CLASS)).toContain(
+      notionFieldShortname('BJXS'),
+    );
+    const related = [...store.resources].find(
+      ([, p]) => p[atomic.shortname] === notionFieldShortname('rl%3Ad'),
+    )!;
+    expect(related[1][dataBrowser.classtype]).toBe(ROW_CLASS);
   });
 });

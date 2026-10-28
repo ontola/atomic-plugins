@@ -51,6 +51,7 @@ const DATATYPE = 'https://atomicdata.dev/properties/datatype';
 export const dataBrowser = {
   tag: 'https://atomicdata.dev/classes/Tag',
   selectProperty: 'https://atomicdata.dev/classes/SelectProperty',
+  table: 'https://atomicdata.dev/classes/Table',
   color: 'https://atomicdata.dev/properties/color',
   max: 'https://atomicdata.dev/properties/max',
   classtype: 'https://atomicdata.dev/properties/classtype',
