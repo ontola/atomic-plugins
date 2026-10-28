@@ -98,7 +98,7 @@ async function rowsOf(
     const got = store.getMany
       ? await store.getMany(batch)
       : await Promise.all(
-          batch.map((s) =>
+          batch.map(s =>
             store
               .getResource(s)
               .catch(() => ({ subject: s, error: 'unreadable' })),
@@ -139,7 +139,7 @@ export async function readLessons(
   store: PluginStore,
   table: string,
 ): Promise<Lesson[]> {
-  return (await rowsOf(store, table)).map((row) => ({
+  return (await rowsOf(store, table)).map(row => ({
     subject: row.subject,
     name: text(row.get(atomic.name)) ?? row.subject,
     teaches: list(row.get(P.teaches)),
@@ -317,7 +317,7 @@ async function appRendersProperty(
 
     for (const property of properties_) {
       const shortname = await store.getResource(property).then(
-        (p) => p.get(atomic.shortname),
+        p => p.get(atomic.shortname),
         () => undefined,
       );
       if (shortname === 'renders') return property;
@@ -352,15 +352,15 @@ export async function loadStarter(
   }
 
   const existing = new Map(
-    (await rowsOf(store, tables.skills)).map((r) => [
+    (await rowsOf(store, tables.skills)).map(r => [
       text(r.get(atomic.name)),
       r.subject,
     ]),
   );
   const subjectOf = new Map<string, string>();
-  const byKey = new Map(tree.skills.map((s) => [s.key, s]));
+  const byKey = new Map(tree.skills.map(s => [s.key, s]));
   const order = buildGraph(
-    tree.skills.map((s) => ({
+    tree.skills.map(s => ({
       id: s.key,
       name: s.name,
       requires: s.requires,
@@ -380,7 +380,7 @@ export async function loadStarter(
     }
 
     const link = (keys: string[]) =>
-      keys.map((k) => subjectOf.get(k)).filter((x): x is string => !!x);
+      keys.map(k => subjectOf.get(k)).filter((x): x is string => !!x);
     const row = await store.newResource({
       parent: tables.skills,
       isA: [SKILL],
@@ -397,7 +397,7 @@ export async function loadStarter(
 
   const have = new Set(
     (await readLessons(store, tables.lessons)).map(
-      (l) => `${l.teaches.join()}|${l.name}`,
+      l => `${l.teaches.join()}|${l.name}`,
     ),
   );
   let lessons = 0;

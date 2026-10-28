@@ -6,7 +6,7 @@ import { view } from './main.js';
 
 const settle = async () => {
   for (let i = 0; i < 20; i += 1)
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
 };
 
 const text = (el: Element | null | undefined) =>
@@ -23,11 +23,11 @@ async function open() {
 }
 
 const button = (root: HTMLElement, label: string | RegExp) =>
-  [...root.querySelectorAll('button')].find((b) =>
+  [...root.querySelectorAll('button')].find(b =>
     typeof label === 'string' ? text(b) === label : label.test(text(b)),
   )!;
 const node = (root: HTMLElement, name: string) =>
-  [...root.querySelectorAll<HTMLButtonElement>('.lb-node')].find((b) =>
+  [...root.querySelectorAll<HTMLButtonElement>('.lb-node')].find(b =>
     text(b).includes(name),
   )!;
 
@@ -104,7 +104,7 @@ describe('Atomic Education view', () => {
     await settle();
     button(root, 'Path to this goal').click();
     await settle();
-    const onPath = [...root.querySelectorAll('.lb-node.on-path')].map((n) =>
+    const onPath = [...root.querySelectorAll('.lb-node.on-path')].map(n =>
       text(n),
     );
     expect(onPath).toEqual(
@@ -144,7 +144,7 @@ describe('Atomic Education view', () => {
     node(root, 'Optica').click();
     await settle();
     const row = () =>
-      [...root.querySelectorAll('.lb-lesson')].find((li) =>
+      [...root.querySelectorAll('.lb-lesson')].find(li =>
         text(li).includes('Lenzen (interactief)'),
       )!;
     expect(text(row())).toMatch(/not linked yet/);

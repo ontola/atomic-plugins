@@ -126,7 +126,7 @@ export function page(
     ];
   }
 
-  const done = state.graph.order.filter((id) => state.mastered.has(id)).length;
+  const done = state.graph.order.filter(id => state.mastered.has(id)).length;
 
   return [
     head(
@@ -214,7 +214,7 @@ function nextBar(
     shown.length
       ? undefined
       : h(doc, 'span', { class: 'lb-muted' }, ui.nothingNext),
-    ...shown.map((id) => skillButton(doc, state, id, actions)),
+    ...shown.map(id => skillButton(doc, state, id, actions)),
   );
 }
 
@@ -238,7 +238,7 @@ function tree(
   );
   const width = grid.length * (NODE_W + GAP_X);
   const height =
-    HEAD_H + Math.max(...grid.map((l) => l.length)) * (NODE_H + GAP_Y);
+    HEAD_H + Math.max(...grid.map(l => l.length)) * (NODE_H + GAP_Y);
   // Fit the width when it is not much smaller than the tree; otherwise keep
   // text readable and let the tree scroll sideways.
   const scale = avail > 0 ? Math.max(MIN_SCALE, Math.min(1, avail / width)) : 1;
@@ -345,7 +345,7 @@ function tree(
     doc,
     'div',
     { class: 'lb-legend' },
-    ...(['mastered', 'available', 'locked'] as const).map((s) =>
+    ...(['mastered', 'available', 'locked'] as const).map(s =>
       h(doc, 'span', {}, mark(doc, s), stateLabel(ui, s)),
     ),
     h(doc, 'span', { class: 'lb-hint' }, ui.scrollHint),
@@ -443,7 +443,7 @@ function lessonRow(
     // Not a <form>: the host's frame is sandboxed without allow-forms.
     const go = () => actions.link(l.subject, input.value);
     submit.addEventListener('click', go);
-    input.addEventListener('keydown', (e) => {
+    input.addEventListener('keydown', e => {
       if ((e as KeyboardEvent).key === 'Enter') go();
     });
     const form = h(doc, 'div', { class: 'lb-linkform' }, input, submit);
@@ -475,9 +475,9 @@ function detail(
   }
 
   const s = stateOf(graph, state.mastered, id);
-  const unmet = node.requires.filter((r) => !state.mastered.has(r));
-  const mine = state.lessons.filter((l) =>
-    l.teaches.some((t) => graph.resolve(t) === id),
+  const unmet = node.requires.filter(r => !state.mastered.has(r));
+  const mine = state.lessons.filter(l =>
+    l.teaches.some(t => graph.resolve(t) === id),
   );
   const mastered = s === 'mastered';
   const master = h(
@@ -558,7 +558,7 @@ function detail(
             doc,
             'ul',
             { class: 'lb-lessons' },
-            ...mine.map((l) => lessonRow(doc, ui, actions, l)),
+            ...mine.map(l => lessonRow(doc, ui, actions, l)),
           )
         : h(doc, 'p', { class: 'lb-muted' }, ui.noLessons),
       state.goal ? pathBlock(doc, state, ui, actions) : undefined,
@@ -597,7 +597,7 @@ function pathBlock(
       doc,
       'ol',
       {},
-      ...steps.map((id) =>
+      ...steps.map(id =>
         h(doc, 'li', {}, skillButton(doc, state, id, actions, 'lb-chip')),
       ),
     ),
