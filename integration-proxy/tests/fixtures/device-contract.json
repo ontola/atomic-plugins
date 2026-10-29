@@ -12,7 +12,7 @@
   "approval_encoding": "application/json",
   "approval_authentication": "existing owner Atomic v2 request signatures",
   "grant_types": ["urn:ietf:params:oauth:grant-type:device_code", "refresh_token"],
-  "scopes": ["connections:read", "proxy:read"],
+  "scopes": ["connections:read", "proxy:read", "proxy:write"],
   "reserved_unavailable_scope": "proxy:write",
   "device_response_fields": ["device_code", "user_code", "verification_uri", "verification_uri_complete", "expires_in", "interval"],
   "token_response_fields": ["access_token", "token_type", "expires_in", "refresh_token", "scope", "owner", "client_id", "session_id"],
@@ -25,6 +25,7 @@
   "resource_authentication": "Bearer",
   "discovery_response_fields": ["owner", "client_id", "session_id", "connections"],
   "connection_response_fields": ["connection_id", "platform", "owner", "label"],
+  "write_methods": ["POST", "PUT", "PATCH", "DELETE"],
   "read_methods": ["GET", "HEAD"],
   "refresh_reuse": "revoke entire session, including winner of concurrent refresh",
   "revocation": "idempotent HTTP 200, entire individual session"

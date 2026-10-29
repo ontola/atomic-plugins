@@ -16,6 +16,8 @@ interface Metadata {
 export interface Session {
   issuer: string;
   accessToken: string;
+  /** Server-approved device grant. Older stored sessions remain read-only. */
+  scope?: string;
 }
 
 export interface Connection {
@@ -230,6 +232,7 @@ export async function deviceLogin(
       const session = {
         issuer: safeUrl(options.issuer).origin,
         accessToken: text(token.access_token, 'access token'),
+        ...(typeof token.scope === 'string' ? { scope: token.scope } : {}),
       };
       if (hooks.onAuthorized) {
         if (

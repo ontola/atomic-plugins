@@ -8,7 +8,7 @@ For an illustrated overview of the whole stack, including OpenAPI extensions,
 worked GitHub/Keep examples and what a page proves, start with
 [How Syncables turns APIs into a local copy](how-it-works.md).
 
-The source implementation adds a read-only standalone daemon to the existing
+The source implementation adds a standalone daemon to the existing
 `syncables` executable. It stores original API response text and lossless,
 content-addressed nested JSON nodes in a separate local PostgreSQL database.
 Successful syncs also maintain normal working folders per collection, without requiring Git.
@@ -30,6 +30,10 @@ changing that draft branch. Device authorization uses the deployed
 signing stays in the existing laptop bridge; the daemon receives device tokens.
 The October 16 live GitHub read verified that protocol. The new daemon and
 macOS Keychain adapter still need a laptop run against the deployed issuer.
+
+Explicit, opt-in provider creates, edits and deletes are documented in
+[Provider writes and recovery](daemon-writes.md). Polling and snapshot folders
+remain read-only observations.
 
 ## From a fetch to stored data
 

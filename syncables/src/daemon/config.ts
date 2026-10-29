@@ -13,6 +13,8 @@ export interface CollectionConfig {
   bindings: Record<string, string>;
   query: Record<string, string>;
   pollSeconds: number;
+  /** Explicit provider writes; replacement also permits permanent retirement. */
+  writes?: { enabled: true; allowReplacement?: boolean };
 }
 export interface DaemonConfig {
   version: 1;
@@ -85,6 +87,23 @@ export async function loadDaemonConfig(file: string): Promise<DaemonConfig> {
       collection.pollSeconds > 86400
     )
       throw new Error('pollSeconds must be 0 (webhooks only), or 5 to 86400');
+    if (c.writes !== undefined) {
+      const writes = object(c.writes);
+      if (
+        writes.enabled !== true ||
+        (writes.allowReplacement !== undefined &&
+          typeof writes.allowReplacement !== 'boolean')
+      )
+        throw new Error(
+          'writes requires enabled: true and an optional allowReplacement boolean',
+        );
+      collection.writes = {
+        enabled: true,
+        ...(writes.allowReplacement === undefined
+          ? {}
+          : { allowReplacement: writes.allowReplacement as boolean }),
+      };
+    }
     const key = alias(collection);
     if (seen.has(key)) throw new Error('Duplicate configured collection alias');
     seen.add(key);

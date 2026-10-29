@@ -79,8 +79,13 @@ async function main(): Promise<void> {
         'source',
         'braid-port',
         'braid-origin',
+        'input',
+        'edit-id',
+        'created-id',
       ].map((key) => [key, { type: 'string' as const }]),
     );
+  options.write = { type: 'boolean' };
+  options.owned = { type: 'boolean' };
   options.help = { type: 'boolean' };
   options.archive = { type: 'boolean' };
   options.interactive = { type: 'boolean' };
@@ -102,6 +107,14 @@ async function main(): Promise<void> {
   }
   if (
     [
+      'create',
+      'edit',
+      'delete',
+      'edits',
+      'send',
+      'cancel-edit',
+      'adopt-edit',
+      'keep-both',
       'login',
       'logout',
       'sync',

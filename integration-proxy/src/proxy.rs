@@ -13,7 +13,8 @@
 //!   request signature by the capability's `cnf` key.
 //!
 //! - **A device access token** for this owner and explicitly approved
-//!   connection, allowing only GET/HEAD and checked live against its session.
+//!   connection, allowing only its approved read/write methods and checked live
+//!   against its session. Writes require an explicit proxy:write grant.
 //!
 //! The connection id is not a secret, and a signature is
 //! accepted once. The connection id is in the path, so the signature covers
@@ -316,7 +317,7 @@ async fn authenticate(
             let principal =
                 crate::device::principal(state, crate::device::bearer(headers)?.unwrap()).await?;
             if principal.owner != owner
-                || !crate::device::store::may_read(&principal, &record.connection_id, method)
+                || !crate::device::store::may_request(&principal, &record.connection_id, method)
             {
                 return Err(ApiError::TokenScope);
             }

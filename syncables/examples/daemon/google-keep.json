@@ -204,8 +204,7 @@
           "action": "create",
           "resource": "note",
           "url": {
-            "source": "bodyField",
-            "name": "name"
+            "source": "template"
           },
           "addedFields": {
             "name": {
@@ -982,14 +981,16 @@
         "properties": {
           "checked": {
             "description": "Whether this item has been checked off or not.",
-            "type": "boolean"
+            "type": "boolean",
+            "default": false
           },
           "childListItems": {
             "description": "If set, list of list items nested under this list item. Only one level of nesting is allowed.",
             "items": {
               "$ref": "#/components/schemas/ListItem"
             },
-            "type": "array"
+            "type": "array",
+            "default": []
           },
           "text": {
             "$ref": "#/components/schemas/TextContent"
@@ -1271,7 +1272,8 @@
           "urlTemplate": "/v1/{name}",
           "bindings": {
             "name": {
-              "field": "name"
+              "field": "name",
+              "x-path-segments": true
             }
           }
         },
