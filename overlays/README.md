@@ -18,7 +18,7 @@ https://ontola.github.io/atomic-plugins/overlays/<path>
 
 Each dated catalog under `catalog/` lists each platform's overlays by those
 URLs. The integration proxy's default `CATALOG_PATH` is
-`https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-29-google-keep.json`
+`https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-29-google-keep-writes.json`
 in current source (unreleased); proxy 0.2.4, and localthought.io's explicit
 `CATALOG_PATH`, use `catalog/2026-10-02.json`. Before this
 migration every overlay URL was pinned to a `localthought/overlays` commit

@@ -43,7 +43,7 @@ Status checked against this implementation branch on 2026-10-20; see the
 | Compact collection coverage and disposable hydration | Planned for the daemon. Existing `ReadCoverage` is narrower than this design. |
 | Selected one-shot incremental fetch, webhook/poll scheduler and offline browser | Implemented in this branch: configured GET full reconciliation, a standalone query-token incremental subset, durable relay hints, polling and commit-pinned local browsing. The library reader still refuses `incrementalSync`. |
 | Credentials and service lifecycle | macOS Keychain adapter and serialized refresh implemented in this branch; live laptop validation remains. Foreground daemon only; launchd/IPC deferred. |
-| PostgreSQL outgoing outbox | Planned. This daemon is read-only; existing library outbox persistence is caller-supplied. |
+| PostgreSQL outgoing outbox | Implemented experimental explicit CLI creates, replacements and deletes, default off. Local intent, dispatch state and receipts persist separately from accepted snapshots; see [commands and recovery](daemon-writes.md). File, Braid and AtomicSync edit ingestion remain future work. |
 | Atomic, NextGraph, remoteStorage, Jazz and atproto runtime replication | Planned; only the first three have scaffold configuration commands. Configuring a destination does not establish replication. |
 | Retire the source and promote the local copy | Product direction; requires a separate migration plan and implementation. |
 
@@ -617,16 +617,17 @@ Start with one configured, authenticated, read-only collection:
    disconnect/reconnect, process restart and denied access. Test full-snapshot
    recovery when the requested history is unavailable.
 
-This first interface rejects client mutations. Later writable Braid and
-AtomicSync adapters, or accepted Git pushes, need a shared local-edit model,
-durable outgoing intent, preconditions and an explicit merge/authority policy.
+This first interface rejects client mutations. An [explicit CLI edit queue](daemon-writes.md)
+now implements local provider intent and recovery. Later writable Braid and
+AtomicSync adapters, or accepted Git pushes, still need edit ingestion and an
+explicit merge/authority policy over that queue.
 Braid's version graph does not automatically supply a CRDT or make provider
 writes safe. Keep local acceptance distinct from confirmed provider delivery;
 prevent changes crossing adapters from echoing into repeated provider writes.
 
 ## One-way Atomic drive mirror: next milestone
 
-**Plan only; runtime writes are not implemented.** Start with an explicitly
+**Plan only; runtime writes to an Atomic drive are not implemented.** Start with an explicitly
 configured, one-way mirror of selected PostgreSQL collections into an existing
 Atomic drive. Git export is independent of this path and is never a prerequisite.
 

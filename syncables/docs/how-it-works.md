@@ -64,7 +64,7 @@ token, when enumeration ends, or how a list item gets a stable identity.
 | What does this parameter select? | [Filtering](../../openapi-extensions/spec/filtering/README.md): `x-filter`, `x-collection-scope`, `x-time-zone` | Vocabulary for selection and time interpretation. Current library consumption is limited to the documented time-zone subset. |
 | What can absence mean? | [Collection Completeness](../../openapi-extensions/spec/collection-completeness/README.md): `x-completeness`; [Deletion Feeds](../../openapi-extensions/spec/deletion-feeds/README.md): tombstone/feed annotations | Supported library behavior distinguishes removal from a view, unavailability and deletion. A missing item is not automatically globally deleted. |
 | How should calls be paced or retried? | [Throttling](../../openapi-extensions/spec/throttling/README.md): `x-throttling` | Shared request scheduling, within its implemented subset. |
-| When is a write safe? | [Write Preconditions](../../openapi-extensions/spec/write-preconditions/README.md): `x-write-precondition` | The library's declared write operations, not the read-only daemon. |
+| When is a write safe? | [Write Preconditions](../../openapi-extensions/spec/write-preconditions/README.md): `x-write-precondition` | The library's declared write operations. SyncD's explicit replacement sender uses its own fresh reads and durable receipts; it does not claim general Write Preconditions support. |
 | Where do account-specific field descriptions come from? | [Runtime Schemas](../../openapi-extensions/spec/runtime-schemas/README.md): `x-runtime-schema` | Library `readCollections`; not generic validation or automatic schema migration. |
 | Can this resource represent a shared ontology class? | [Produced Classes](../../openapi-extensions/spec/produced-classes/README.md): `x-produces` | Read-only metadata today; does not automatically fetch or execute a mapping lens. |
 | Which events should prompt reads? | [Webhook Deliveries](../../openapi-extensions/spec/webhook-deliveries/README.md) and [Subscriptions](../../openapi-extensions/spec/webhook-subscriptions/README.md) | Receiver, inbox and consumer contracts. Registration and signature verification are separate from interpreting an event. |
@@ -82,8 +82,9 @@ Those are narrower than a general machine-readable description of all sorting.
 The committed [GitHub profile](../examples/daemon/github-issues.json) is a
 small GET-only document. The [Keep profile](../examples/daemon/google-keep.json)
 is the full pinned Google Keep v1 OAD with the proxy catalog's auth,
-pagination and CRUD overlays applied. SyncD currently uses only its reads;
-declaring create/delete and replacement metadata does not enable write-back.
+pagination and CRUD overlays applied. SyncD reads it by default. Explicit
+[provider writes](daemon-writes.md) require collection opt-in, a separate device
+write grant and a send command. Declaring CRUD metadata alone enables no writes.
 
 | Detail | GitHub issues | Google Keep notes |
 | --- | --- | --- |

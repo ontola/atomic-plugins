@@ -116,13 +116,13 @@ export class DaemonAuth {
     private readonly credentials?: CredentialStore,
     private readonly fetchImpl: typeof fetch = globalThis.fetch,
   ) {}
-  async login(report: (message: string) => void): Promise<void> {
+  async login(report: (message: string) => void, write = false): Promise<void> {
     let grant: Omit<DeviceCredentials, 'owner'> | undefined;
     const session = await deviceLogin(
       {
         issuer: this.config.issuer,
         clientId: this.config.clientId,
-        scope: 'connections:read proxy:read',
+        scope: 'connections:read proxy:read' + (write ? ' proxy:write' : ''),
       },
       {
         fetch: this.fetchImpl,
@@ -132,6 +132,8 @@ export class DaemonAuth {
         },
       },
     );
+    if (write && !session.scope?.split(' ').includes('proxy:write'))
+      throw new Error('Server did not approve proxy:write');
     const discovered = await listConnections(session, this.fetchImpl);
     if (discovered.owner !== this.config.owner)
       throw new Error(
@@ -259,11 +261,24 @@ export class DaemonAuth {
           token.owner !== old.owner
         )
           throw new Error('Invalid refresh response');
+        if (
+          typeof token.scope === 'string' &&
+          token.scope
+            .split(' ')
+            .some(
+              (scope) =>
+                !(old.scope ?? 'connections:read proxy:read')
+                  .split(' ')
+                  .includes(scope),
+            )
+        )
+          throw new Error('Refresh attempted to widen the approved scope');
         const next = {
           ...old,
           accessToken: token.access_token,
           refreshToken: token.refresh_token,
           expiresAt: Date.now() + token.expires_in * 1000,
+          ...(typeof token.scope === 'string' ? { scope: token.scope } : {}),
         };
         if (this.credentials) await this.credentials.set(next);
         if (this.credentials)

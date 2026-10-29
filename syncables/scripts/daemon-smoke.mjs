@@ -149,6 +149,38 @@ try {
   await waitUntil(() => (daemon.output().match(/"result"/g) ?? []).length >= 1);
   daemon.child.kill('SIGTERM');
   assert.equal(await daemon.closed, 0);
+  // Exercise installed CLI writes against the invented Keep endpoint. No
+  // real Google credentials or provider requests enter this smoke test.
+  const originalSource=config.collections[0];
+  config.collections=[{...originalSource,platform:'google-keep',account:'invented',name:'notes',
+    connection:'demo-keep',document:resolve('examples/daemon/google-keep.json'),collection:'notes',
+    bindings:{},query:{},writes:{enabled:true,allowReplacement:true}}];
+  await writeFile(file,JSON.stringify(config));
+  const collection='google-keep/invented/notes';
+  const input=join(directory,'note.json');
+  await writeFile(input,JSON.stringify({title:'Invented original',body:{text:{text:'Body'}}}));
+  const queued=await run(['create','--collection',collection,'--input',input]);
+  assert.equal(queued.state,'queued');
+  assert.equal((await run(['edits','--collection',collection]))[0].id,queued.id);
+  const created=(await run(['send','--collection',collection,'--interactive']))[0];
+  assert.equal(created.state,'confirmed');
+  const readCreated=await run(['sync','--interactive']);
+  const base=readCreated[0].result.revision;
+  assert.equal(readCreated[0].result.records,1);
+  await writeFile(input,JSON.stringify({title:'Invented edited',body:{text:{text:'Body'}}}));
+  await run(['edit',created.created_id,'--collection',collection,'--at',base,'--input',input,'--owned']);
+  const replaced=(await run(['send','--collection',collection,'--interactive'])).find(edit=>edit.action==='replace');
+  assert.equal(replaced.state,'confirmed');
+  assert.notEqual(replaced.created_id,created.created_id);
+  const after=await run(['sync','--interactive']);
+  assert.equal(after[0].result.records,1);
+  await run(['delete',replaced.created_id,'--collection',collection,'--at',after[0].result.revision]);
+  const deleted=(await run(['send','--collection',collection,'--interactive'])).find(edit=>edit.action==='delete');
+  assert.equal(deleted.state,'confirmed');
+  assert.equal((await run(['sync','--interactive']))[0].result.records,0);
+  // Restore the read-only GitHub collection for the offline checks below.
+  config.collections=[originalSource];
+  await writeFile(file,JSON.stringify(config));
   mock.child.kill('SIGTERM');
   await mock.closed;
   const browse = await run([
@@ -214,7 +246,7 @@ try {
   assert.ok(exported.revisions >= 2);
   assert.ok(exported.mapping[commit]);
   const status = await run(['status']);
-  assert.equal(status[0].state, 'idle');
+  assert.equal(status.find(job=>job.alias==='github-issues/example/tasks').state, 'idle');
   // The optional Braid listener works from the installed package while the
   // provider issuer is stopped; it needs neither login nor a signing key.
   const braidToken = 'invented-local-braid-smoke-reader';
@@ -257,6 +289,7 @@ try {
     'snapshot_refs',
     'snapshot_members',
     'snapshot_revisions',
+    'local_edits',
     'daemon_inbox',
     'daemon_jobs',
     'heads',
@@ -271,7 +304,7 @@ try {
       [owner],
     );
   console.log(
-    'Installed tarball: sync, daemon/webhook, Braid GET/subscribe, clean shutdown, offline hierarchy/filter/order/pinned browse, schema tag, history, status and isolated imports passed.',
+    'Installed tarball: durable create/edit/delete/send, pull after replacement, sync, daemon/webhook, Braid GET/subscribe, clean shutdown, offline hierarchy/filter/order/pinned browse, schema tag, history, status and isolated imports passed.',
   );
 } finally {
   for (const child of children)

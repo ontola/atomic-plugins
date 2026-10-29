@@ -12,7 +12,7 @@ import unittest
 from generate_identity_catalog_fixtures import ROOT, compose
 from test_google_keep import path_matches
 
-CATALOG = ROOT / "catalog/2026-10-29-google-keep.json"
+CATALOG = ROOT / "catalog/2026-10-29-google-keep-writes.json"
 PIN = "5ccf0e09eef66d45b43e97dfc364233b2707689c"
 SCOPE = "https://www.googleapis.com/auth/keep"
 
@@ -85,7 +85,8 @@ class GoogleKeepSyncDTests(unittest.TestCase):
     def test_replacements_block_attachments_and_live_collaborators(self):
         crud = validator("crud-causality")
         note = self.document["components"]["crudResources"]["note"]
-        self.assertEqual(note["identity"], {"urlTemplate": "/v1/{name}", "bindings": {"name": {"field": "name"}}})
+        self.assertEqual(note["identity"], {"urlTemplate": "/v1/{name}", "bindings": {"name": {"field": "name", "x-path-segments": True}}})
+        self.assertEqual(self.document["paths"]["/v1/notes"]["post"]["x-crud"]["url"], {"source": "template"})
         replacement = note["replace"]
         self.assertEqual(crud.replace_block(replacement, {"attachments": [{}]})["field"], "attachments")
         owner = {"role": "OWNER"}

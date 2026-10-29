@@ -204,8 +204,7 @@
           "action": "create",
           "resource": "note",
           "url": {
-            "source": "bodyField",
-            "name": "name"
+            "source": "template"
           },
           "addedFields": {
             "name": {
@@ -1271,7 +1270,8 @@
           "urlTemplate": "/v1/{name}",
           "bindings": {
             "name": {
-              "field": "name"
+              "field": "name",
+              "x-path-segments": true
             }
           }
         },
