@@ -44,7 +44,9 @@ test('synthetic Keep view: checklist edits, search, completed section, narrow la
     new URL('../../../browser/package.json', import.meta.url),
   );
   const esbuild = require('esbuild');
-  const { cssRawPlugin } = await import('../../sync-status/build.mjs');
+  const { cssRawPlugin } = (await import(
+    '../../sync-status/build.mjs' as string
+  )) as { cssRawPlugin(esbuild: unknown): unknown };
   const bundle = await esbuild.build({
     stdin: {
       contents: `import { view } from './main.ts'; import { fixture } from './fixture.ts';
@@ -63,7 +65,11 @@ test('synthetic Keep view: checklist edits, search, completed section, narrow la
   );
   await page.addScriptTag({ content: bundle.outputFiles[0].text });
   await page.evaluate(async () => {
-    await (globalThis as any).keepTest.mount();
+    const { keepTest } = globalThis as typeof globalThis & {
+      keepTest: { mount(): Promise<unknown> };
+    };
+
+    await keepTest.mount();
   });
   const grocery = page.getByRole('article', { name: 'Imaginary groceries' });
   await expect(grocery.locator('li')).toHaveText([

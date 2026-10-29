@@ -2,6 +2,7 @@
 import type { Resource, Store, Value } from './store.js';
 
 const A = 'https://atomicdata.dev/properties/';
+
 export const P = {
   parent: A + 'parent',
   name: A + 'name',
@@ -16,6 +17,7 @@ export const P = {
 export const strings = (v: Value): string[] =>
   Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : [];
 const text = (v: Value): string => (typeof v === 'string' ? v : '');
+
 export interface Item {
   subject: string;
   text: string;
@@ -50,6 +52,7 @@ async function fields(
   klass: Resource,
 ): Promise<Map<string, string>> {
   const out = new Map<string, string>();
+
   for (const id of new Set([
     ...strings(klass.get(P.recommends)),
     ...strings(klass.get(P.requires)),
@@ -57,11 +60,13 @@ async function fields(
     const property = await store.getResource(id);
     out.set(text(property.get(P.shortname)), id);
   }
+
   return out;
 }
 
 export async function sources(store: Store): Promise<Source[]> {
   const out: Source[] = [];
+
   for (const klass of await store.query({
     property: P.shortname,
     value: 'google-keep-note',
@@ -78,12 +83,14 @@ export async function sources(store: Store): Promise<Source[]> {
       });
     }
   }
+
   return out;
 }
 
 /** Advertise locally discovered classes so Add view offers this app on Keep tables. */
 export async function register(store: Store, classes: string[]): Promise<void> {
   const app = await store.getResource(await store.getApp());
+
   for (const id of strings(app.get(P.isA))) {
     const terms = await fields(store, await store.getResource(id));
     const renders = terms.get('renders');
@@ -91,6 +98,7 @@ export async function register(store: Store, classes: string[]): Promise<void> {
     const previous = strings(app.get(renders));
     const next = [...new Set([...previous, ...classes])];
     if (next.length !== previous.length) await app.set(renders, next).save();
+
     return;
   }
 }
@@ -105,6 +113,7 @@ async function rows(
       store.getResource(id),
     ),
   );
+
   return all.filter(row => strings(row.get(P.isA)).includes(rowClass));
 }
 
@@ -116,6 +125,7 @@ export function partition(items: Item[]): {
   const ordered = [...items].sort(
     (a, b) => a.position - b.position || a.subject.localeCompare(b.subject),
   );
+
   return {
     unchecked: ordered.filter(item => !item.done),
     checked: ordered.filter(item => item.done),
@@ -124,6 +134,7 @@ export function partition(items: Item[]): {
 
 export function matches(note: Note, query: string): boolean {
   const needle = query.trim().toLocaleLowerCase();
+
   return (
     !needle ||
     [note.title, note.body, ...note.items.map(item => item.text)].some(value =>
@@ -167,6 +178,7 @@ export async function read(store: Store, source: Source): Promise<Snapshot> {
       'The Google Keep item columns are incomplete. Open the sync app first.',
     );
   const owner = table.get(P.parent);
+
   const sibling = async (rowClass: string) => {
     for (const id of await store.query({
       property: P.classtype,
@@ -174,8 +186,10 @@ export async function read(store: Store, source: Source): Promise<Snapshot> {
     })) {
       if ((await store.getResource(id)).get(P.parent) === owner) return id;
     }
+
     return undefined;
   };
+
   const itemTable =
     type === 'google-keep-item'
       ? source.table
@@ -200,6 +214,7 @@ export async function read(store: Store, source: Source): Promise<Snapshot> {
       .filter(item => item.get(itemNote) === row.subject)
       .map(item => {
         const position = item.get(positionProperty);
+
         return {
           subject: item.subject,
           text: text(item.get(P.name)),
@@ -213,6 +228,7 @@ export async function read(store: Store, source: Source): Promise<Snapshot> {
       }),
   }));
   await register(store, [noteClass.subject, itemClass.subject]);
+
   return {
     notes,
     itemTable,
@@ -229,6 +245,7 @@ export async function setDone(
   done: boolean,
 ): Promise<void> {
   const data = await store.getData();
+
   if (
     !snapshot.itemTable ||
     data?.table !== snapshot.itemTable ||
@@ -239,6 +256,7 @@ export async function setDone(
       'Allow editing on the Google Keep list items table to tick items.',
     );
   }
+
   const row = await store.getResource(subject);
   if (row.get(P.parent) !== snapshot.itemTable)
     throw new Error('This item is no longer in this table.');

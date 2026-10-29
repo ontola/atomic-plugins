@@ -11,6 +11,7 @@ async function mount(table?: 'items' | 'notes') {
   const dom = new JSDOM('<!doctype html><div id="root"></div>');
   const root = dom.window.document.getElementById('root')!;
   await view({ root, store: fake.store });
+
   return { ...fake, dom, root };
 }
 
@@ -96,9 +97,11 @@ describe('Keep view DOM', () => {
     await view({ root, store: fake.store });
     expect(root.querySelector('img')).toBeNull();
     expect(root.textContent).toContain('<img src=x onerror=alert(1)>');
+
     fake.store.getData = async () => {
       throw new Error('Temporarily unavailable');
     };
+
     [...root.querySelectorAll('button')]
       .find(node => node.textContent === 'Refresh')!
       .click();

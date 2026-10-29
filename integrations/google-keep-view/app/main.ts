@@ -21,6 +21,7 @@ export async function view({
   store: Store;
 }): Promise<void> {
   const doc = root.ownerDocument;
+
   const el = <K extends keyof HTMLElementTagNameMap>(
     tag: K,
     text = '',
@@ -29,18 +30,24 @@ export async function view({
     const node = doc.createElement(tag);
     node.textContent = text;
     node.className = className;
+
     return node;
   };
+
   const button = (label: string, action: () => void) => {
     const node = el('button', label);
     node.type = 'button';
     node.addEventListener('click', action);
+
     return node;
   };
+
   root.classList.add('keep');
+
   const theme = (value?: { colorScheme?: 'light' | 'dark' }) => {
     root.style.colorScheme = value?.colorScheme ?? 'light dark';
   };
+
   theme(store.getTheme?.());
   const stopTheme = store.onThemeChange?.(theme);
   const style = el('style', css);
@@ -98,10 +105,12 @@ export async function view({
   let stopped = false;
   const subscriptions = new Map<string, () => void>();
   const expanded = new Set<string>();
+
   const showError = (error: unknown) => {
     status.textContent = error instanceof Error ? error.message : String(error);
     status.classList.add('keep-error');
   };
+
   const open = (subject: string) => {
     void store.openResource?.(subject).catch(showError);
   };
@@ -114,9 +123,11 @@ export async function view({
     article.append(el('h2', title));
     if (note.kind === 'list' || note.items.length) {
       const { unchecked, checked } = partition(note.items);
-      const renderItems = (items: typeof unchecked, label: string) => {
+
+      const renderItems = (items: typeof unchecked, groupLabel: string) => {
         const list = el('ul', '', 'keep-items');
-        list.setAttribute('aria-label', label);
+        list.setAttribute('aria-label', groupLabel);
+
         for (const item of items) {
           const row = el('li', '', item.under ? 'keep-indented' : '');
           row.dataset.subject = item.subject;
@@ -140,9 +151,12 @@ export async function view({
           row.append(label);
           list.append(row);
         }
+
         return list;
       };
+
       article.append(renderItems(unchecked, 'Unchecked items'));
+
       if (checked.length) {
         const details = el('details', '', 'keep-completed');
         details.open = expanded.has(note.subject);
@@ -160,6 +174,7 @@ export async function view({
         );
         article.append(details);
       }
+
       if (!note.items.length)
         article.append(el('p', 'No list items yet.', 'keep-muted'));
     } else if (note.body) article.append(el('p', note.body, 'keep-body'));
@@ -175,11 +190,13 @@ export async function view({
           'keep-badge',
         ),
       );
+
     if (store.openResource) {
       const footer = el('footer');
       footer.append(button('Open note', () => open(note.subject)));
       article.append(footer);
     }
+
     return article;
   };
 
@@ -195,6 +212,7 @@ export async function view({
           ? 'No matching notes.'
           : `${visible.length} ${visible.length === 1 ? 'note' : 'notes'}`;
   };
+
   search.addEventListener('input', render);
   picker.addEventListener('change', () => {
     source = available.find(item => item.table === picker.value);
@@ -205,14 +223,19 @@ export async function view({
     clearTimeout(timer);
     timer = setTimeout(() => void load(), 200);
   };
+
   async function load(): Promise<void> {
     if (stopped) return;
+
     if (pending) {
       reloadAgain = true;
+
       return;
     }
+
     pending = true;
     refresh.disabled = true;
+
     try {
       const data = await store.getData();
       const currentTable = data
@@ -228,6 +251,7 @@ export async function view({
       const type = klass?.get('https://atomicdata.dev/properties/shortname');
       const attached =
         type === 'google-keep-note' || type === 'google-keep-item';
+
       if (attached && data && typeof rowClass === 'string')
         source = { table: data.table, rowClass, name: 'Google Keep' };
       else {
@@ -238,6 +262,7 @@ export async function view({
           ...available.map(item => {
             const option = el('option', item.name);
             option.value = item.table;
+
             return option;
           }),
         );
@@ -248,6 +273,7 @@ export async function view({
           available.map(item => item.rowClass),
         );
       }
+
       snapshot = source
         ? await read(store, source)
         : { notes: [], watches: [] };
@@ -274,11 +300,13 @@ export async function view({
         );
       else notice.append('Allow editing to tick list items.');
       const watches = new Set(snapshot.watches);
+
       for (const [subject, stop] of subscriptions)
         if (!watches.has(subject)) {
           stop();
           subscriptions.delete(subject);
         }
+
       for (const subject of watches)
         if (!subscriptions.has(subject))
           subscriptions.set(subject, store.subscribe(subject, later));
@@ -288,12 +316,14 @@ export async function view({
     } finally {
       pending = false;
       refresh.disabled = false;
+
       if (reloadAgain) {
         reloadAgain = false;
         void load();
       }
     }
   }
+
   doc.defaultView?.addEventListener(
     'pagehide',
     () => {

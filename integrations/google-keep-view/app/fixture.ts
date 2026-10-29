@@ -5,11 +5,14 @@ import type { Store, Value } from './store.js';
 
 export function fixture() {
   const resources: Record<string, Record<string, Value>> = {};
+
   const prop = (shortname: string) => {
     const subject = 'did:test:' + shortname;
     resources[subject] = { [P.shortname]: shortname };
+
     return subject;
   };
+
   const kind = prop('google-keep-kind');
   const presence = prop('google-keep-presence');
   const hold = prop('google-keep-hold');
@@ -56,6 +59,7 @@ export function fixture() {
     [P.description]: 'Take the scenic route.\nBring a notebook.',
     [kind]: 'text',
   };
+
   for (const [index, text, checked, parent] of [
     [0, 'Imaginary apples', true, ''],
     [1, 'Fictional bread', false, ''],
@@ -72,6 +76,7 @@ export function fixture() {
       [position]: index,
     };
   }
+
   let data: { table: string; rowClass?: string } | undefined;
   let granted = false;
   const writes: string[] = [];
@@ -88,6 +93,7 @@ export function fixture() {
         get: (property: string) => values[property],
         set: (property: string, value: Value) => {
           values[property] = value;
+
           return row;
         },
         save: async () => {
@@ -96,9 +102,11 @@ export function fixture() {
           for (const listener of listeners.get(subject) ?? []) listener();
           for (const listener of listeners.get(String(values[P.parent])) ?? [])
             listener();
+
           return row;
         },
       };
+
       return row;
     },
     query: async ({ property, value }) =>
@@ -107,6 +115,7 @@ export function fixture() {
       const set = listeners.get(subject) ?? new Set<() => void>();
       listeners.set(subject, set);
       set.add(handler);
+
       return () => {
         set.delete(handler);
       };
@@ -114,10 +123,12 @@ export function fixture() {
     rowAccess: async () => ({ status: granted ? 'granted' : 'none' }),
     requestRowAccess: async () => {
       granted = true;
+
       return { status: 'granted' };
     },
     getTheme: () => ({ colorScheme: 'light' }),
   };
+
   return {
     store,
     resources,

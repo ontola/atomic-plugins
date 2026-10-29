@@ -2,6 +2,7 @@
 /** Standalone synthetic browser check; does not start or use atomic-server. */
 import { existsSync } from 'node:fs';
 import { defineConfig } from '@playwright/test';
+
 export default defineConfig({
   testDir: './e2e',
   grep: /synthetic Keep view/,
