@@ -147,3 +147,16 @@ plugin. Their evidence is offline typecheck/unit tests against invented records
 and local Devonian AtomicStore state. No live or host-installed round trip is
 verified. They depend on unreleased devonian/lenses source; the per-provider
 READMEs document the bounded write directions.
+
+## Google Keep View (`google-keep-view`)
+
+Placement A, a separate drive app at `integrations/google-keep-view/app/`.
+Catalog install of `apps/google-keep-view/0.1.0/ui.js`, experimental. Discovers
+the sync app’s local note and item tables and registers both classes for Add
+view. Shows note cards, text and checklists, unchecked items first, completed
+items in a collapsible section, search, grid/list and light/dark themes. Ticking
+is scoped to the host’s editing grant on an items table; it never calls Google
+or changes sync settings. Unit and synthetic Chromium checks cover mapping,
+source isolation, order, grants, search, checkbox edits, mobile overflow and
+dark mode. The host catalog-install test is authored, not yet run; no live
+Google evidence.
