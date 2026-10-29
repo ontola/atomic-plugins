@@ -252,16 +252,16 @@ pub const OVERLAYS_PAGES_BASE: &str = "https://ontola.github.io/atomic-plugins/o
 /// the checked-in copy; `default_catalog_is_the_published_checked_in_catalog`
 /// keeps it equal to [`DEFAULT_CATALOG_PATH`]'s.
 #[cfg(test)]
-pub const DEFAULT_CATALOG_FILE: &str = "catalog/2026-10-02-auth-profiles.json";
+pub const DEFAULT_CATALOG_FILE: &str = "catalog/2026-10-29-google-keep.json";
 
-/// `overlays/catalog/2026-10-02-auth-profiles.json` as GitHub Pages publishes it from this
+/// `overlays/catalog/2026-10-29-google-keep.json` as GitHub Pages publishes it from this
 /// repository's `main`, used when `CATALOG_PATH` is not set. Unlike the
 /// unversioned catalog this replaced, its dated file and selected overlay
 /// revisions are immutable; the proxy reads it once, at startup. Shared with
 /// tests that need to validate the exact catalog the application would load
 /// by default (they read the checked-in copy; see `Catalog::load_checked_in`).
 pub const DEFAULT_CATALOG_PATH: &str =
-    "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json";
+    "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-29-google-keep.json";
 
 /// Reads a required environment variable and rejects it if unset or blank,
 /// so a blank `.env` value fails configuration explicitly instead of being

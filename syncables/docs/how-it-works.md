@@ -79,10 +79,11 @@ Those are narrower than a general machine-readable description of all sorting.
 
 ## Two concrete collection descriptions
 
-The committed [GitHub profile](../examples/daemon/github-issues.json) and
-[Keep profile](../examples/daemon/google-keep.json) are deliberately small,
-already-composed GET-only documents. They demonstrate the metadata actually
-used by these standalone snapshots, rather than every available extension.
+The committed [GitHub profile](../examples/daemon/github-issues.json) is a
+small GET-only document. The [Keep profile](../examples/daemon/google-keep.json)
+is the full pinned Google Keep v1 OAD with the proxy catalog's auth,
+pagination and CRUD overlays applied. SyncD currently uses only its reads;
+declaring create/delete and replacement metadata does not enable write-back.
 
 | Detail | GitHub issues | Google Keep notes |
 | --- | --- | --- |
