@@ -24,7 +24,7 @@ and AtomicSync peer are separate work. See the
 [three-interface design](daemon-design.md#syncd-interfaces-git-braid-and-atomicsync)
 for their roles and the implemented read-only Braid milestone.
 
-This implementation is unreleased. It reuses #567's CLI/archive work without
+This implementation is experimental. It reuses #567's CLI/archive work without
 changing that draft branch. Device authorization uses the deployed
 [integration-proxy contract](../../integration-proxy/DEVICE_AUTH.md). Owner
 signing stays in the existing laptop bridge; the daemon receives device tokens.

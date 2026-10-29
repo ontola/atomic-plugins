@@ -8,7 +8,7 @@ preconditions, compound creates or non-generated added-field derivation. Google 
 webhooks, working folders and Braid remain readers of accepted provider snapshots;
 changing or deleting a checkout file never sends a provider write.
 
-This source implementation is experimental and unreleased. Tests use invented
+This implementation is experimental. Tests use invented
 providers. Live Google writes, proxy deployment and package publication have not
 been verified by these tests.
 
