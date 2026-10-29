@@ -1,0 +1,64 @@
+# Reviewed 2026-10-29 against Google Discovery revision 20261019 and
+# https://developers.google.com/workspace/keep/api/reference/rest/v1/notes
+# Declares replacement, not an update operation. No provider writes verified.
+# name is Google's resource name (notes/<id>), not a bare note ID.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/5ccf0e09eef66d45b43e97dfc364233b2707689c/APIs/googleapis.com/keep/v1/openapi.yaml
+info:
+  title: Google Keep v1 note identity, replacement and unkeyed lists
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        note:
+          schema: { $ref: '#/components/schemas/Note' }
+          identity:
+            urlTemplate: /v1/{name}
+            bindings:
+              name: { field: name }
+          collections:
+            notes:
+              urlTemplate: /v1/notes
+              envelope: { itemsField: notes, emptyWhenAbsent: true }
+          replace:
+            description: >-
+              Keep has no note update operation. Create the replacement, durably
+              record its new resource name, then permanently delete the old note.
+              Replacements lose colour, labels, pins, reminders and Keep ordering.
+              Only the owner can delete a note; clients must verify ownership.
+            blockedBy:
+              - field: attachments
+                when: nonEmpty
+                description: The API cannot copy attachments into a replacement note.
+              - field: permissions
+                moreThan: 1
+                except: { deleted: true }
+                description: A replacement note would lose its collaborators.
+          unkeyedLists:
+            body.list.listItems:
+              match: [text.text, checked]
+              children: childListItems
+  - target: $.paths['/v1/notes'].get
+    update:
+      x-crud: { action: list, resource: note, collection: notes }
+  - target: $.paths['/v1/notes'].post
+    update:
+      x-crud:
+        action: create
+        resource: note
+        url: { source: bodyField, name: name }
+        addedFields:
+          name: { source: generated }
+          createTime: { source: generated }
+          updateTime: { source: generated }
+          trashTime: { source: generated }
+          trashed: { source: generated }
+          attachments: { source: generated }
+          permissions: { source: generated }
+  - target: $.paths['/v1/{name}'].get
+    update:
+      x-crud: { action: read, resource: note }
+  - target: $.paths['/v1/{name}'].delete
+    update:
+      x-crud: { action: delete, resource: note }

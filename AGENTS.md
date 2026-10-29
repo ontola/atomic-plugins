@@ -210,7 +210,7 @@ standalone `localthought/overlays` repo, full commit history included via
 served at `https://ontola.github.io/atomic-plugins/overlays/<path>` —
 the dated catalogs under `catalog/` reference their overlays by those URLs,
 and `integration-proxy`'s default `CATALOG_PATH` is one of them
-(`catalog/2026-10-02-auth-profiles.json` since #258; 0.2.4 and
+(`catalog/2026-10-29-google-keep.json` in current source; 0.2.4 and
 localthought.io use `catalog/2026-10-02.json`). Dated catalogs and OAD-revision overlay filenames
 are immutable; a new overlay does not change an existing catalog selection.
 The unversioned catalog was removed after the verified localthought.io switch
