@@ -87,6 +87,8 @@ class GoogleKeepSyncDTests(unittest.TestCase):
         note = self.document["components"]["crudResources"]["note"]
         self.assertEqual(note["identity"], {"urlTemplate": "/v1/{name}", "bindings": {"name": {"field": "name", "x-path-segments": True}}})
         self.assertEqual(self.document["paths"]["/v1/notes"]["post"]["x-crud"]["url"], {"source": "template"})
+        self.assertIs(self.document["components"]["schemas"]["ListItem"]["properties"]["checked"]["default"], False)
+        self.assertEqual(self.document["components"]["schemas"]["ListItem"]["properties"]["childListItems"]["default"], [])
         replacement = note["replace"]
         self.assertEqual(crud.replace_block(replacement, {"attachments": [{}]})["field"], "attachments")
         owner = {"role": "OWNER"}

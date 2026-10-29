@@ -57,6 +57,10 @@ export class WriteModel {
       throw new Error('Sending requires one declared create operation');
     const [path, item] = creates[0];
     this.createPath = this.bind(path, source.bindings);
+    if (item.post?.['x-write-precondition'] !== undefined)
+      throw new Error(
+        'Unsupported write precondition; sender refuses this operation',
+      );
     const crud = object(item.post?.['x-crud'], 'create declaration');
     // Compound creates and URL-derived identities need a different delivery protocol.
     if (
@@ -70,9 +74,15 @@ export class WriteModel {
         ? {}
         : object(crud.addedFields, 'added fields');
     this.generated = new Set(
-      Object.entries(added)
-        .filter(([, value]) => isRecord(value) && value.source === 'generated')
-        .map(([key]) => key),
+      Object.entries(added).map(([key, value]) => {
+        if (
+          key.includes('.') ||
+          !isRecord(value) ||
+          value.source !== 'generated'
+        )
+          throw new Error('Unsupported create added-field declaration');
+        return key;
+      }),
     );
     const body = object(item.post?.requestBody, 'JSON create body');
     const content = object(body.content, 'JSON create content');
@@ -144,6 +154,15 @@ export class WriteModel {
     const path = this.bind(template, values, bindings);
     // The canonical declaration must authorize this action. Proxy aliases may
     // expose an equivalent concrete route but never grant another action.
+    if (
+      method === 'delete' &&
+      this.prepared.document.paths[template]?.delete?.[
+        'x-write-precondition'
+      ] !== undefined
+    )
+      throw new Error(
+        'Unsupported write precondition; sender refuses this operation',
+      );
     const crud = this.prepared.document.paths[template]?.[method]?.['x-crud'];
     if (
       !isRecord(crud) ||
@@ -153,13 +172,44 @@ export class WriteModel {
       throw new Error('Undeclared item operation');
     return path;
   }
+  /** Recursive resource schemas retain local refs after eager document loading. */
+  private resolveSchema(input: ObjectValue): ObjectValue {
+    let schema = input;
+    const seen = new Set<string>();
+    while (schema.$ref !== undefined) {
+      const ref = schema.$ref;
+      if (
+        typeof ref !== 'string' ||
+        !ref.startsWith('#/') ||
+        seen.has(ref) ||
+        seen.size >= 32
+      )
+        throw new Error('Unsupported or cyclic writable schema reference');
+      seen.add(ref);
+      let resolved: unknown = this.prepared.document;
+      for (const part of decodeURIComponent(ref.slice(2)).split('/')) {
+        const key = part.replace(/~1/g, '/').replace(/~0/g, '~');
+        if (!isRecord(resolved) || !Object.hasOwn(resolved, key))
+          throw new Error('Unresolved writable schema reference');
+        resolved = resolved[key];
+      }
+      const siblings = { ...schema };
+      delete siblings.$ref;
+      schema = {
+        ...object(resolved, 'referenced writable schema'),
+        ...siblings,
+      };
+    }
+    return schema;
+  }
   /** Only declared writable properties may reach a create. Unknown fields fail closed. */
   payload(value: ObjectValue, strict = false): ObjectValue {
     const project = (
-      schema: ObjectValue,
+      rawSchema: ObjectValue,
       input: unknown,
       at: string,
     ): unknown => {
+      const schema = this.resolveSchema(rawSchema);
       if (schema.readOnly === true) {
         if (strict) throw new Error('Output-only field: ' + at);
         return undefined;
@@ -178,12 +228,18 @@ export class WriteModel {
           }
           if (!Object.hasOwn(properties, key))
             throw new Error('Undeclared field: ' + at + key);
-          const projected = project(
+          const property = this.resolveSchema(
             object(properties[key], 'property schema'),
-            child,
-            at + key + '.',
           );
-          if (projected !== undefined) result[key] = projected;
+          const projected = project(property, child, at + key + '.');
+          if (
+            projected !== undefined &&
+            !(
+              Object.hasOwn(property, 'default') &&
+              sameJson(projected, property.default)
+            )
+          )
+            result[key] = projected;
         }
         return result;
       }

@@ -77,6 +77,54 @@ describe('declared write model and bounded proxy transport', () => {
       'Invalid value',
     );
   });
+  it('refuses unimplemented write preconditions and create field derivation before dispatch', async () => {
+    const precondition = await prepareCollection('invented-owner', source);
+    precondition.document.paths['/v1/{name}'].delete!['x-write-precondition'] =
+      { mode: 'readVerify' };
+    expect(() => new WriteModel(precondition)).toThrow(
+      'Unsupported write precondition',
+    );
+    const fields = await prepareCollection('invented-owner', source);
+    const crud = fields.document.paths['/v1/notes'].post!['x-crud'] as Record<
+      string,
+      unknown
+    >;
+    crud.addedFields = { owner: { source: 'request' } };
+    expect(() => new WriteModel(fields)).toThrow(
+      'Unsupported create added-field',
+    );
+  });
+  it('resolves recursive checklist schemas lazily without dropping child items', async () => {
+    const model = new WriteModel(
+      await prepareCollection('invented-owner', source),
+    );
+    const body = {
+      body: {
+        list: {
+          listItems: [
+            {
+              text: { text: 'Parent' },
+              checked: true,
+              childListItems: [{ text: { text: 'Child' }, checked: false }],
+            },
+          ],
+        },
+      },
+    };
+    expect(model.payload(body, true)).toEqual({
+      body: {
+        list: {
+          listItems: [
+            {
+              text: { text: 'Parent' },
+              checked: true,
+              childListItems: [{ text: { text: 'Child' } }],
+            },
+          ],
+        },
+      },
+    });
+  });
   it('merges disjoint fields and refuses conflicting text or checklist edits', () => {
     expect(
       mergeEdit(
@@ -340,6 +388,53 @@ describe.skipIf(!database)('durable local edits against PostgreSQL', () => {
         .state,
     ).toBe('conflict');
     expect(h.calls).toEqual(['GET /v1/notes/original']);
+  });
+  it('unchecks a checklist item when ProtoJSON omits false and empty child-list defaults', async () => {
+    const h = await fixture();
+    const baseline = {
+      ...original,
+      body: {
+        list: { listItems: [{ text: { text: 'Charger' }, checked: true }] },
+      },
+    };
+    h.notes.set(original.name, baseline);
+    await h.lock((edits) =>
+      edits.enqueue({
+        action: 'replace',
+        target: original.name,
+        baseline,
+        desired: {
+          title: original.title,
+          body: {
+            list: {
+              listItems: [{ text: { text: 'Charger' }, checked: false }],
+            },
+          },
+        },
+        revision: 'r',
+        owned: true,
+      }),
+    );
+    const defaults: Transport = async (request) => {
+      const response = await h.transport(request);
+      if (request.method === 'POST') {
+        const note = h.notes.get('notes/replacement')!;
+        // Providers may serialize defaults explicitly or omit them. Both
+        // representations mean the same declared unchecked, childless item.
+        const body = note.body as {
+          list: { listItems: Record<string, unknown>[] };
+        };
+        expect(body.list.listItems[0]).not.toHaveProperty('checked');
+        body.list.listItems[0].checked = false;
+        body.list.listItems[0].childListItems = [];
+      }
+      return response;
+    };
+    expect(
+      (await h.lock((edits) => edits.send(defaults, session, connection)))[0]
+        .state,
+    ).toBe('confirmed');
+    expect(h.notes.has(original.name)).toBe(false);
   });
   it('holds a lost create response, never repeats POST, and adopts an explicitly verified replacement', async () => {
     const h = await fixture();

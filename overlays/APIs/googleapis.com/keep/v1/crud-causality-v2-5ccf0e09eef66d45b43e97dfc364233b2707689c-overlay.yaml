@@ -62,3 +62,9 @@ actions:
   - target: $.paths['/v1/{name}'].delete
     update:
       x-crud: { action: delete, resource: note }
+  # ProtoJSON may omit scalar/repeated defaults on reads. Declare these so
+  # unchecked items and absent child lists compare equally after creation.
+  - target: $.components.schemas.ListItem.properties.checked
+    update: { default: false }
+  - target: $.components.schemas.ListItem.properties.childListItems
+    update: { default: [] }

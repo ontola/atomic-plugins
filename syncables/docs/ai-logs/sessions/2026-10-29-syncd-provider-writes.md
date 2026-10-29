@@ -53,13 +53,13 @@ No live provider mutation, release or deployment was performed.
 Invented-provider PostgreSQL tests cover durable intent/receipts, explicit UUID
 idempotence, restart recovery, lost POST/DELETE responses, failed creates, remote
 conflicts, attachment/sharing guards, write configuration withdrawal, credential
-scope/connection restrictions, independent owners, concurrent collection senders
-and actual termination of the PostgreSQL lock session. A packaged CLI smoke test
+scope/connection restrictions, independent owners, concurrent collection senders, lazy recursive checklist schemas, omitted checkbox
+defaults and actual termination of the PostgreSQL lock session. A packaged CLI smoke test
 creates, pulls, replaces, pulls and deletes an invented Keep note through the
 device protocol, in addition to the existing read/archive/Braid checks.
 
-Final full Syncables run: 105 files, 1,855 tests passed. Focused
-write/auth tests: 25 passed, including 19 new write-model/queue cases. Release
+Final full Syncables run: 105 files, 1,857 tests passed before the final fail-closed declaration case. Focused
+write-model/queue tests: 22 passed. The six authentication cases also passed. Release
 build, installed-tarball smoke, formatting, lint and typecheck passed. Both legacy/current Keep Python composition
 suites passed (10 tests).
 
@@ -70,7 +70,12 @@ hit the existing concurrent chained-owner-transfer assertion; that unrelated
 case passed in isolation. A complete serial run then passed all 302 unit tests
 and the documentation test. Clippy passed with warnings denied, and all 552
 revision-pinned overlays/catalog selections passed the immutability/shape check.
-Exact-head hosted CI results are recorded in the PR. No TLS verification or merge gate was bypassed.
+The first hosted proxy run exposed an unrelated webhook test assumption:
+renewal raced lease expiry while a progress deadline and pending-age eviction
+could independently end/invalidate the subscription. Isolated the fixture's
+lease race by moving the other two deadlines beyond the tested interval;
+separate existing tests retain their progress/age coverage. No production webhook
+behavior changed. Exact-head hosted CI results are recorded in the PR. No TLS verification or merge gate was bypassed.
 
 This log omits internal tool plumbing and credential values. Only invented test
 accounts and tokens appear in committed fixtures.

@@ -158,7 +158,7 @@ try {
   await writeFile(file,JSON.stringify(config));
   const collection='google-keep/invented/notes';
   const input=join(directory,'note.json');
-  await writeFile(input,JSON.stringify({title:'Invented original',body:{text:{text:'Body'}}}));
+  await writeFile(input,JSON.stringify({title:'Invented original',body:{list:{listItems:[{text:{text:'Parent'},checked:true,childListItems:[{text:{text:'Child'},checked:true}]}]}}}));
   const queued=await run(['create','--collection',collection,'--input',input]);
   assert.equal(queued.state,'queued');
   assert.equal((await run(['edits','--collection',collection]))[0].id,queued.id);
@@ -167,7 +167,7 @@ try {
   const readCreated=await run(['sync','--interactive']);
   const base=readCreated[0].result.revision;
   assert.equal(readCreated[0].result.records,1);
-  await writeFile(input,JSON.stringify({title:'Invented edited',body:{text:{text:'Body'}}}));
+  await writeFile(input,JSON.stringify({title:'Invented edited',body:{list:{listItems:[{text:{text:'Parent'},checked:true,childListItems:[{text:{text:'Child'},checked:false}]}]}}}));
   await run(['edit',created.created_id,'--collection',collection,'--at',base,'--input',input,'--owned']);
   const replaced=(await run(['send','--collection',collection,'--interactive'])).find(edit=>edit.action==='replace');
   assert.equal(replaced.state,'confirmed');

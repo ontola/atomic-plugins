@@ -981,14 +981,16 @@
         "properties": {
           "checked": {
             "description": "Whether this item has been checked off or not.",
-            "type": "boolean"
+            "type": "boolean",
+            "default": false
           },
           "childListItems": {
             "description": "If set, list of list items nested under this list item. Only one level of nesting is allowed.",
             "items": {
               "$ref": "#/components/schemas/ListItem"
             },
-            "type": "array"
+            "type": "array",
+            "default": []
           },
           "text": {
             "$ref": "#/components/schemas/TextContent"

@@ -3,7 +3,8 @@
 SyncD can queue local creates, edits and deletes and send them through an
 owner-approved integration-proxy device session. The current delivery protocol
 supports declared JSON creates and deletes, and resources with a CRUD Causality
-`replace` declaration. Google Keep is the first composed example. Polling,
+`replace` declaration. It refuses operations requiring unimplemented write
+preconditions, compound creates or non-generated added-field derivation. Google Keep is the first composed example. Polling,
 webhooks, working folders and Braid remain readers of accepted provider snapshots;
 changing or deleting a checkout file never sends a provider write.
 
@@ -37,7 +38,9 @@ new grant; the command cannot add privileges to an old session.
 
 First run `sync` and obtain a revision from `browse` or `history`. Input files
 contain the complete desired writable object, excluding generated/output-only
-fields. For a text note:
+fields. Declared schema defaults are normalized when building the request and
+comparing receipts; for Keep, an omitted checkbox means unchecked and an omitted
+child list means empty. No defaults are guessed from field names. For a text note:
 
 ```json
 {"title":"Packing","body":{"text":{"text":"Remember the charger"}}}
