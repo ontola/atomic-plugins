@@ -319,6 +319,15 @@
       "paths": ["ontology/**", "ontology-kit/**"],
       "note": "The Leerboom (learning tree) drive app (integrations/learning/app/) over a dependency-free core (integrations/learning/core/: graph with cross-tree equivalence, cycle reporting, mastered/available/locked as advice, next steps, path, outer fringe). It renders any table of the shared skill-v1 class, offers a starter tree of mathematics and physics (data/wiskunde-natuurkunde.json) and writes mastery-v1 rows to a table it owns. No provider, proxy or network of its own. paths: it bundles ontology-kit/terms.mjs and resolver.mjs and uses the published GitHub Pages subjects of skill-v1, lesson-v1 and mastery-v1, so an ontology change runs this lane too and the e2e needs network access to ontola.github.io. The e2e spec is written but, in the session that added the lane, was not run (no atomic-server build).",
       "e2e": ["integrations/learning/e2e/learning.spec.ts"]
+    },
+    {
+      "id": "google-keep-view",
+      "index": 23,
+      "platforms": [],
+      "tiers": ["typecheck", "unit", "e2e"],
+      "paths": ["integrations/sync-status/**"],
+      "note": "Google Keep style view of locally synced notes and checklists. Unit tests cover table and column resolution, unchecked-first ordering, source isolation and host editing grants. Browser tests use synthetic host resources; no provider calls.",
+      "e2e": ["integrations/google-keep-view/e2e/google-keep-view.spec.ts"]
     }
   ]
 }

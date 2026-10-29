@@ -42,9 +42,10 @@ identity has to be inferred.
   `hostStore.ts`). A separate view app can read the Keep tables but not
   write them. atomic-server#1740 decided the fix: an "Allow editing" grant,
   given by a person when adding the app as a view, scoped to that table.
-  Its PR (#1788) was closed as stale on 2026-10-13 and was triaged risky
-  (rows signed by an app key outside the rights walk). Even as built, its
-  scope never allows `destroy`, so a view could not delete an item.
+  At the current pin (`30994948b`), the host exposes `rowAccess` and
+  `requestRowAccess`: the view can tick item rows after the person grants
+  access on the items table. The grant does not allow `destroy`, so a view
+  cannot delete an item.
 
 ## Data model
 
@@ -96,14 +97,15 @@ Built in `integrations/google-keep/app/lists.ts` (`mergeList`).
   a view tab on the items table (`appsForClass`).
 - Shows each note's items as a checklist; tick, edit, add, indent and drag
   to reorder.
-- Read-only until the host grants it row edits. It reads the table it is
-  shown on, so it needs nothing from the sync app's code.
+- Read-only without the host's row-edit grant; ticking is supported on the
+  items table with that grant. It reads the sync app's tables and resolves
+  their own class columns, without importing the sync app's code.
 
 ## Depends on atomic-server
 
-1. **#1740, Allow editing.** Without it the view is read-only. Reopen or
-   redo #1788 against `develop`, addressing its triage. atomic-server is
-   frozen, so this needs Joep.
+1. **#1740, Allow editing.** Available at the current pin through the
+   host's `rowAccess` and `requestRowAccess` calls. The view checks the
+   grant before each tick.
 2. **Deleting a row under a grant.** #1788 never allows `destroy`. Either
    the grant covers deleting rows of the table's class, or the view marks an
    item removed and the sync app deletes it.
@@ -116,6 +118,9 @@ Built in `integrations/google-keep/app/lists.ts` (`mergeList`).
 
 - [x] Sync app: the items table and per-item merge, against the fixture
       (in 0.1.0, which is not released yet; #593).
-- [ ] View app 0.1.0: read-only checklist on the items table.
-- [ ] atomic-server: settle #1740 (and deleting under a grant) with Joep.
-- [ ] View app: editing, once the grant exists.
+- [x] View app 0.1.0: Keep-style note cards and checklists in
+      `integrations/google-keep-view/`, unchecked items first.
+- [ ] atomic-server: settle deleting under a grant with Joep.
+- [x] View app: ticking on the items table under the current host’s
+      `rowAccess` / `requestRowAccess` grant. Adding, editing text, indenting,
+      reordering and deleting items remain future work.
