@@ -1,6 +1,7 @@
 // @wc-ignore-file
 import css from './styles.css?raw';
 import {
+  acceptsClass,
   matches,
   partition,
   read,
@@ -67,9 +68,9 @@ export async function view({
   layout.setAttribute('aria-pressed', 'false');
   const refresh = button('Refresh', () => void load());
   header.append(search, layout, refresh);
-  const pickerLabel = el('label', 'Notes table ', 'keep-picker');
+  const pickerLabel = el('label', 'Notes or checklist table ', 'keep-picker');
   const picker = el('select');
-  picker.setAttribute('aria-label', 'Google Keep notes table');
+  picker.setAttribute('aria-label', 'Notes or checklist table');
   pickerLabel.append(picker);
   pickerLabel.hidden = true;
   const notice = el('p', '', 'keep-notice');
@@ -205,7 +206,7 @@ export async function view({
     grid.replaceChildren(...visible.map(card));
     status.classList.remove('keep-error');
     status.textContent = !source
-      ? 'No Google Keep tables yet. Open the Google Keep sync app to import your notes, then refresh.'
+      ? 'No compatible note or checklist tables yet. Import your Keep data, then refresh.'
       : !snapshot.notes.length
         ? 'No notes yet. Notes will appear after Google Keep syncs.'
         : !visible.length
@@ -248,9 +249,21 @@ export async function view({
         typeof rowClass === 'string'
           ? await store.getResource(rowClass)
           : undefined;
-      const type = klass?.get('https://atomicdata.dev/properties/shortname');
       const attached =
-        type === 'google-keep-note' || type === 'google-keep-item';
+        typeof rowClass === 'string' &&
+        !!klass &&
+        (await acceptsClass(store, rowClass));
+
+      if (
+        data &&
+        currentTable &&
+        !attached &&
+        currentTable.get('https://atomicdata.dev/properties/parent') !==
+          (await store.getApp())
+      )
+        throw new Error(
+          'This table needs a text column and a boolean Checked or Done column to use this view.',
+        );
 
       if (attached && data && typeof rowClass === 'string')
         source = { table: data.table, rowClass, name: 'Google Keep' };

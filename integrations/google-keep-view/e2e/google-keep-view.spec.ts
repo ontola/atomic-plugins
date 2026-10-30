@@ -1,39 +1,154 @@
 // @wc-ignore-file
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { createRequire } from 'node:module';
 import { before } from '../../../browser/e2e/tests/test-utils';
 import { appVersion } from '../../tooling/apps.mjs';
 
 const VERSION = appVersion('google-keep-view');
 
+async function install(page: Page) {
+  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page
+    .getByRole('checkbox', { name: 'Show experimental plugins' })
+    .check();
+  const entry = page
+    .getByRole('region', { name: 'Drive apps' })
+    .locator('[data-catalog-app="google-keep-view"]');
+  await expect(entry).toContainText(`Version ${VERSION}`);
+  await entry.getByRole('button', { name: 'Install Google Keep View' }).click();
+  const app = page.frameLocator('iframe[title="App"]');
+  await expect(
+    app.getByRole('heading', { name: 'Google Keep', exact: true }),
+  ).toBeVisible({ timeout: 45_000 });
+
+  return app;
+}
+
 test.describe('Keep view catalog installation', () => {
   test.beforeEach(before);
   test('installs the view and explains how to import notes', async ({
     page,
   }) => {
-    await page.goto(new URL('/app/integrations', page.url()).href);
-    await page
-      .getByRole('checkbox', { name: 'Show experimental plugins' })
-      .check();
-    const entry = page
-      .getByRole('region', { name: 'Drive apps' })
-      .locator('[data-catalog-app="google-keep-view"]');
-    await expect(entry).toContainText(`Version ${VERSION}`);
-    await entry
-      .getByRole('button', { name: 'Install Google Keep View' })
-      .click();
-    const app = page.frameLocator('iframe[title="App"]');
-    await expect(
-      app.getByRole('heading', { name: 'Google Keep', exact: true }),
-    ).toBeVisible({
-      timeout: 45_000,
-    });
+    const app = await install(page);
     await expect(app.getByRole('status')).toContainText(
-      'Open the Google Keep sync app',
+      'Import your Keep data',
     );
     await expect(
       app.getByRole('searchbox', { name: 'Search notes' }),
     ).toBeVisible();
+  });
+
+  test('is offered on an imported checklist and edits its own Checked column', async ({
+    page,
+  }) => {
+    test.setTimeout(180_000);
+    const imported = await page.evaluate(async () => {
+      const store = window.store!;
+      const A = 'https://atomicdata.dev/properties/';
+      const drive = store.getDrive();
+      const properties: Record<string, string> = {};
+
+      for (const [key, name, datatype] of [
+        ['text', 'Array item', 'string'],
+        ['checked', 'Checked', 'boolean'],
+        ['position', 'Position*', 'integer'],
+      ]) {
+        const property = await store.newResource({
+          parent: drive,
+          isA: ['https://atomicdata.dev/classes/Property'],
+          propVals: {
+            [A + 'name']: name,
+            [A + 'description']: 'Synthetic imported checklist column: ' + name,
+            [A + 'shortname']: 'imported-' + key,
+            [A + 'datatype']: 'https://atomicdata.dev/datatypes/' + datatype,
+          },
+        });
+        await property.save();
+        properties[key] = property.subject;
+      }
+
+      const klass = await store.newResource({
+        parent: drive,
+        isA: ['https://atomicdata.dev/classes/Class'],
+        propVals: {
+          [A + 'name']: 'Imported list item',
+          [A + 'description']: 'A synthetic imported checklist item.',
+          [A + 'shortname']: 'imported-list-item',
+          [A + 'recommends']: [properties.text, properties.checked],
+          [A + 'requires']: [properties.position],
+        },
+      });
+      await klass.save();
+      const table = await store.newResource({
+        parent: drive,
+        isA: ['https://atomicdata.dev/classes/Table'],
+        propVals: {
+          [A + 'name']: 'Invented groceries · List',
+          [A + 'classtype']: klass.subject,
+        },
+      });
+      await table.save();
+      let tea = '';
+
+      for (const [name, checked, position] of [
+        ['Imaginary apples', true, 0],
+        ['Fictional tea', false, 2],
+        ['Pretend toast', false, 1],
+      ] as const) {
+        const row = await store.newResource({
+          parent: table.subject,
+          isA: [klass.subject],
+          propVals: {
+            [properties.text]: name,
+            [properties.checked]: checked,
+            [properties.position]: position,
+          },
+        });
+        await row.save();
+        if (name === 'Fictional tea') tea = row.subject;
+      }
+
+      return { table: table.subject, tea, checked: properties.checked };
+    });
+    const app = await install(page);
+    await expect(
+      app.getByRole('article', { name: 'Invented groceries · List' }),
+    ).toBeVisible();
+    await expect(
+      app.getByRole('list', { name: 'Unchecked items' }).locator('li'),
+    ).toHaveText(['Pretend toast', 'Fictional tea']);
+    await page.goto(
+      `${new URL(page.url()).origin}/app/show?subject=${encodeURIComponent(imported.table)}`,
+    );
+    await page
+      .getByRole('main')
+      .getByRole('button', { name: 'Add view' })
+      .click();
+    await page
+      .getByRole('menuitem', { name: 'Google Keep View' })
+      .click({ timeout: 60_000 });
+    await page
+      .locator('dialog[open]')
+      .getByRole('button', { name: 'Allow editing' })
+      .click();
+    await expect(
+      app.getByRole('checkbox', { name: 'Fictional tea' }),
+    ).toBeEnabled({ timeout: 30_000 });
+    await app.getByRole('checkbox', { name: 'Fictional tea' }).click();
+    await expect(app.getByText('2 completed items')).toBeVisible();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(async ({ tea, checked }) => {
+            const row = await window.store!.fetchResourceFromServer(tea, {
+              noWebSocket: true,
+            });
+
+            return row.get(checked);
+          }, imported),
+        { timeout: 15_000 },
+      )
+      .toBe(true);
   });
 });
 
