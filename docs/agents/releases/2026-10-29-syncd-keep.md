@@ -4,8 +4,9 @@ Prepared 2026-10-29 from `c968e34417ea37d916a3954121253518e322c339`
 (merged two-way implementation PR [#713](https://github.com/ontola/atomic-plugins/pull/713)).
 This document is a rollout handoff, not evidence of publication, deployment or a
 live Google write. Follow [Q-105 and the release recipe](../proxy-release.md):
-merged, Opus-reviewed, green `main`; Heroku rollout through the coordinator's
-worker. The cloud worker has GitHub access but no Opus or Heroku credentials.
+merged, green `main` reviewed by a state of the art model; Heroku rollout through
+the coordinator's worker. The preparing cloud worker had GitHub access but no
+Heroku credentials.
 
 ## Review and release
 
@@ -17,7 +18,8 @@ notes, especially the PostgreSQL history migration and optional inbox body.
 The proxy release includes the existing unreleased key-transfer, tier-pacing
 and webhook changes; check the rolling-deploy/downgrade notes in its changelog.
 
-1. Obtain an Opus review of the implementation/release diffs and resolve findings.
+1. Have a state of the art model review the implementation/release diffs and
+   resolve findings.
    Review the destructive replacement path, create uncertainty, durable receipt
    boundary, credential isolation, schema projection, disabled defaults and
    refresh-scope behavior. Existing green CI is test evidence, not that review.
@@ -129,6 +131,6 @@ reviewed release only after evaluating those changelog constraints.
 
 Complete when registry publications, the actual Heroku release and preserved
 production catalog are verified, and the isolated Google create/replace/delete
-trial has recorded results. The remaining blockers are the required Opus review,
-Heroku-worker access and local owner approval/Keep connection, not another
+trial has recorded results. The remaining steps are review by a state of the art
+model, Heroku-worker access and local owner approval/Keep connection, not another
 product authorization decision.

@@ -46,3 +46,22 @@ this release-only preparation.
 
 Only invented fixture data is used locally. Credential values and private note
 contents are omitted.
+
+## 2026-10-30: capability-based model guidance and worker location
+
+The maintainer requested replacing specific Claude/ChatGPT model requirements
+in docs/agents with capability descriptions such as “a state of the art model”
+and “an efficient model”. Replaced the named review requirement in the working
+model, proxy release recipe and pending SyncD release handoff. The review itself
+remains required. No smaller-model requirements were present. Product names,
+commands and actual host/path identifiers remain operational references.
+
+The maintainer also asked whether this worker runs on the laptop and can use
+Heroku CLI. Verified the current environment is a managed cloud worker running
+Linux at /workspace; Heroku CLI is absent. Reported the distinction from the
+local desktop app without inspecting credential values. The review-policy
+updates are separated from the automatic-publishing release candidate.
+
+Verification: no specific model names remain in docs/agents; whitespace and
+relative Markdown links were checked. This change adds no runtime behavior,
+release tag, package publication or deployment.
