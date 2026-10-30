@@ -151,12 +151,13 @@ READMEs document the bounded write directions.
 ## Google Keep View (`google-keep-view`)
 
 Placement A, a separate drive app at `integrations/google-keep-view/app/`.
-Catalog install of `apps/google-keep-view/0.1.0/ui.js`, experimental. Discovers
-the sync app’s local note and item tables and registers both classes for Add
-view. Shows note cards, text and checklists, unchecked items first, completed
-items in a collapsible section, search, grid/list and light/dark themes. Ticking
-is scoped to the host’s editing grant on an items table; it never calls Google
-or changes sync settings. Unit and synthetic Chromium checks cover mapping,
-source isolation, order, grants, search, checkbox edits, mobile overflow and
-dark mode. The host catalog-install test is authored, not yet run; no live
-Google evidence.
+Catalog install of `apps/google-keep-view/0.2.0/ui.js`, experimental. Discovers
+imported checklists through their own text and boolean Checked/Done columns,
+plus the sync app’s local note and item tables, and registers their classes
+for Add view. Shows note cards, text and checklists, unchecked items first,
+collapsible completed items, search, grid/list and light/dark themes. Ticking
+uses the host’s editing grant on that table and writes its actual checkbox
+property; the view never calls Google or changes sync settings. Unit and
+synthetic Chromium checks cover both models, discovery, order, grants and UI.
+The host E2E covers catalog install and adding the view to an imported table
+through Add view, with a granted Checked edit. No live Google evidence.

@@ -1,7 +1,15 @@
 // @wc-ignore-file
 import { describe, expect, it } from 'vitest';
-import { matches, P, partition, read, setDone, sources } from './data.js';
-import { fixture } from './fixture.js';
+import {
+  acceptsClass,
+  matches,
+  P,
+  partition,
+  read,
+  setDone,
+  sources,
+} from './data.js';
+import { fixture, importedFixture } from './fixture.js';
 
 const source = {
   table: 'did:test:notes',
@@ -107,5 +115,89 @@ describe('Keep table view', () => {
     await expect(
       setDone(fake.store, data, 'did:test:item-1', true),
     ).rejects.toThrow('no longer');
+  });
+});
+
+describe('imported checklist tables', () => {
+  it('discovers a typed Text/Checked/Position table with its own class and property IDs', async () => {
+    const fake = importedFixture();
+    expect(await sources(fake.store)).toEqual([
+      {
+        table: fake.table,
+        rowClass: fake.rowClass,
+        name: 'Invented groceries · List',
+      },
+    ]);
+    expect(await acceptsClass(fake.store, fake.rowClass)).toBe(true);
+  });
+
+  it('registers the imported class for Add view and renders one checklist in stored order', async () => {
+    const fake = importedFixture();
+    const data = await read(fake.store, {
+      table: fake.table,
+      rowClass: fake.rowClass,
+      name: 'List',
+    });
+    expect(fake.resources['did:test:view-app']['did:test:renders']).toEqual([
+      fake.rowClass,
+    ]);
+    expect(data.notes).toHaveLength(1);
+    expect(data.notes[0].title).toBe('Invented groceries · List');
+    const groups = partition(data.notes[0].items);
+    expect(groups.unchecked.map(item => item.text)).toEqual([
+      'Pretend toast',
+      'Fictional tea',
+    ]);
+    expect(groups.checked.map(item => item.text)).toEqual(['Imaginary apples']);
+    expect(data.watches).toEqual([fake.table]);
+    expect(fake.writes).toEqual(['did:test:view-app']);
+  });
+
+  it('edits the actual Checked property only under the grant on this table', async () => {
+    const fake = importedFixture();
+    const data = await read(fake.store, {
+      table: fake.table,
+      rowClass: fake.rowClass,
+      name: 'List',
+    });
+    fake.attachTable(fake.table);
+    await expect(
+      setDone(fake.store, data, 'did:test:import-toast', true),
+    ).rejects.toThrow('Allow editing');
+    fake.grant(true);
+    await setDone(fake.store, data, 'did:test:import-toast', true);
+    const row = fake.resources['did:test:import-toast'];
+    expect(row[fake.checked]).toBe(true);
+    expect(row[fake.position]).toBe(1);
+    expect(row[fake.textProperty]).toBe('Pretend toast');
+  });
+
+  it('does not offer a checkbox view for a string column merely named Checked', async () => {
+    const fake = importedFixture();
+    fake.resources[fake.checked][P.datatype] =
+      'https://atomicdata.dev/datatypes/string';
+    expect(await acceptsClass(fake.store, fake.rowClass)).toBe(false);
+    expect(await sources(fake.store)).toEqual([]);
+  });
+
+  it('recognizes the Array item label used by imported list tables', async () => {
+    const fake = importedFixture();
+    fake.resources[fake.textProperty][P.name] = 'Array item';
+    fake.resources[fake.textProperty][P.shortname] = 'custom-item-content';
+    const data = await read(fake.store, {
+      table: fake.table,
+      rowClass: fake.rowClass,
+      name: 'List',
+    });
+    expect(data.notes[0].items[0].text).toBe('Imaginary apples');
+  });
+
+  it('skips unrelated incomplete schemas while discovering valid checklists', async () => {
+    const fake = importedFixture();
+    fake.resources['did:test:broken-table'] = {
+      [P.isA]: ['https://atomicdata.dev/classes/Table'],
+      [P.classtype]: 'did:test:missing-class',
+    };
+    expect(await sources(fake.store)).toHaveLength(1);
   });
 });

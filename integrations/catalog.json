@@ -549,13 +549,13 @@
     "https://atomicdata.dev/properties/emoji": "☑️",
     "https://atomicdata.dev/integrations/properties/experimental": true,
     "https://atomicdata.dev/integrations/properties/enabled": true,
-    "https://atomicdata.dev/properties/description": "A familiar card and checklist view for notes imported by the Google Keep sync app, with unchecked items first.",
-    "https://atomicdata.dev/integrations/properties/capabilities": "Search notes and checklist items, switch between a responsive card grid and list, expand completed items, and follow the host light or dark theme. On the Google Keep list items table, Allow editing lets you tick items. Reads the sync app’s note and item columns from its own ontology and preserves stored item positions.",
-    "https://atomicdata.dev/integrations/properties/events": "Open after Google Keep has imported notes. Opening it registers the discovered Keep classes for Add view. Table subscriptions refresh the view as rows change; Refresh discovers newly imported tables. No provider calls or background sync.",
-    "https://atomicdata.dev/integrations/properties/limitation": "Requires the Google Keep sync app’s local note and item tables. Standalone and notes-table views are read-only; ticking requires adding the view to the items table and allowing row edits. Does not add, delete, rename or reorder notes or items. Sending edits to Google remains controlled by the separate sync app. Synthetic browser and unit tests only; no live Google evidence.",
+    "https://atomicdata.dev/properties/description": "A familiar card and checklist view for imported Keep lists and synced notes, with unchecked items first.",
+    "https://atomicdata.dev/integrations/properties/capabilities": "Shows imported checklist tables with their own text and boolean Checked or Done columns, as well as the Google Keep sync app’s notes. Preserves Position and nesting where present. Search notes and items, switch grid/list layout, expand completed items and follow the host theme. On a checklist table, Allow editing lets you tick its actual Checked or Done column.",
+    "https://atomicdata.dev/integrations/properties/events": "Install Google Keep View separately from the Google Keep connection app and open it once after importing notes. It discovers compatible tables and makes itself available under Add view on them. Reopen or Refresh after another import. Table subscriptions refresh rows; no provider calls or background sync.",
+    "https://atomicdata.dev/integrations/properties/limitation": "Imported tables need a typed text column (Array item, Text or Name) and boolean Checked or Done column. The standalone and notes-table views are read-only; ticking requires adding the view to the checklist table and allowing row edits. Does not add, delete, rename or reorder rows. Sending edits to Google remains controlled by the importer or sync app. Synthetic tests only; no live Google evidence.",
     "https://atomicdata.dev/integrations/properties/keywords": "google keep view checklist notes cards unchecked completed",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-keep-view/0.1.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-IL4h4j+/7SYJ8BXzVr2QlGOevjapthCyDZmP7lu5Uxe3Z/G1dsSIcjPIftquU+G5"
+    "https://atomicdata.dev/integrations/properties/version": "0.2.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-keep-view/0.2.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-iMQ7lCjJtodxpsCI1or++HQ6QPs72ooMDWU1cDTBvP7hQjz8M4GYmuLOqYTfHSey"
   }
 ]
