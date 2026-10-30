@@ -1,11 +1,13 @@
 # Google Keep View
 
-A Keep-style table view of imported checklists and the Google Keep sync app's
-notes. Install the separate **Google Keep View** entry from Integrations →
+A Keep-style view of account folders, individual notes and imported checklist
+tables. Install the separate **Google Keep View** entry from Integrations →
 Drive apps (under **Show experimental plugins**), then open it once. Installing
 **Google Keep** alone installs the connection and sync app, not this view.
 If the experimental checkbox is hidden, open `/app/integrations?preview=plugins`
-first. Existing installations can update to 0.2.0 from the same catalog entry.
+first. Existing installations update from the same catalog entry. On a host
+with resource-view support, the view installation stays in Integrations rather
+than ordinary drive contents, and a new view installation needs no Items table.
 
 The view discovers imported checklist tables with a text column (**Array item**,
 **Text** or **Name**) and a boolean **Checked** or **Done** column, as well as
@@ -15,9 +17,15 @@ tables are available, choose one in the view. No Google connection or another
 copy of the notes is needed. Open the view again, or Refresh it, after importing
 another list so it becomes available on that table too.
 
+The **Google Keep <account>** folder opens as cards. Opening a card navigates
+to the existing note resource, where only that checklist or text note appears.
+The renderer resolves the sync installation through the note class and its
+ontology, so moving the notes container into the drive does not lose its hidden
+list-item data. Resource-page context grants no checkbox editing access.
+
 Notes appear as a responsive grid of cards, with a list layout toggle and
 search across titles, note text and all checklist items. Unchecked items
-appear first in each note, followed by a collapsible completed section with
+appear first in each note, followed by an initially collapsed completed section with the actual count and
 struck-through text. Positions within each section and child indentation are
 preserved; sorting the display never writes new positions. Text, trashed or
 missing notes, and sync holds remain visible. The host's light/dark theme is
@@ -27,16 +35,17 @@ does not invent them.
 To tick items, open the imported checklist or **Google Keep list items** table,
 add **Google Keep View** as a view, and allow it to edit that table's rows. The
 view rechecks the host's grant before each save and writes only the actual
-Checked or Done column. Notes tables
-and the standalone view remain read-only. It never changes the sync app's
+Checked or Done column. Account folders, individual note pages, notes tables and the standalone view
+remain read-only. It never changes the sync app's
 settings, calls Google, creates or deletes rows, or starts syncing. Sending
 edits to Google remains the sync app's job, under its existing settings and
 replacement-note limits.
 
 Declared evidence: unit tests for both data models, discovery and class
 registration, table isolation, unchecked-first ordering, search, grants and DOM
-interactions; a synthetic Chromium test for checkbox edits, search, layout,
-mobile overflow and dark mode. The host E2E covers catalog installation and
+interactions, resource-target isolation, folder reuse and a 485-completed-item
+checklist; synthetic Chromium tests for checkbox edits, search, layout,
+mobile overflow, dark mode, folder-card navigation and single-note pages. The host E2E covers catalog installation and
 adding the view to an imported checklist through Add view, including a granted
 edit to its Checked column. No Google live evidence is claimed.
 

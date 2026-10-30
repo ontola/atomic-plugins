@@ -15,6 +15,7 @@ export const P = {
   classes: A + 'classes',
   datatype: A + 'datatype',
 };
+export const FOLDER_CLASS = 'https://atomicdata.dev/classes/Folder';
 export const TABLE_CLASS = 'https://atomicdata.dev/classes/Table';
 export const strings = (v: Value): string[] =>
   Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : [];
@@ -46,6 +47,11 @@ export interface Snapshot {
   watches: string[];
   itemTable?: string;
   doneProperty?: string;
+  /** Present for a folder or individual resource page, never a table grant. */
+  resource?: string;
+  title?: string;
+  single?: boolean;
+  container?: string;
 }
 
 /** Resolve the sync app's own terms from its class, never from another install. */
@@ -214,17 +220,44 @@ export async function sources(store: Store): Promise<Source[]> {
   return out;
 }
 
-/** Advertise locally discovered classes so Add view offers this app on Keep tables. */
+/** Table views and resource pages declare their capabilities separately. */
 export async function register(store: Store, classes: string[]): Promise<void> {
   const app = await store.getResource(await store.getApp());
 
   for (const id of strings(app.get(P.isA))) {
     const terms = await fields(store, await store.getResource(id));
     const renders = terms.get('renders');
-    if (!renders) continue;
-    const previous = strings(app.get(renders));
-    const next = [...new Set([...previous, ...classes])];
-    if (next.length !== previous.length) await app.set(renders, next).save();
+    const resourceRenders = terms.get('resource-renders');
+    if (!renders && !resourceRenders) continue;
+    let changed = false;
+
+    const include = (property: string, supported: string[]) => {
+      const previous = strings(app.get(property));
+      const next = [...new Set([...previous, ...supported])];
+      if (next.length === previous.length) return;
+      app.set(property, next);
+      changed = true;
+    };
+
+    if (renders) include(renders, classes);
+
+    if (resourceRenders) {
+      const notes: string[] = [];
+
+      for (const klass of new Set(classes)) {
+        if (
+          (await store.getResource(klass)).get(P.shortname) ===
+          'google-keep-note'
+        )
+          notes.push(klass);
+      }
+
+      // Item and imported-checklist row classes are table capabilities only:
+      // readResource accepts a note page or an explicitly bound account folder.
+      include(resourceRenders, notes);
+    }
+
+    if (changed) await app.save();
 
     return;
   }
@@ -234,14 +267,19 @@ async function rows(
   store: Store,
   table: string,
   rowClass: string,
+  where: { property: string; value: string } = {
+    property: P.parent,
+    value: table,
+  },
 ): Promise<Resource[]> {
   const all = await Promise.all(
-    (await store.query({ property: P.parent, value: table })).map(id =>
-      store.getResource(id),
-    ),
+    (await store.query(where)).map(id => store.getResource(id)),
   );
 
-  return all.filter(row => strings(row.get(P.isA)).includes(rowClass));
+  return all.filter(
+    row =>
+      row.get(P.parent) === table && strings(row.get(P.isA)).includes(rowClass),
+  );
 }
 
 /** Stable partitions change display order only; persisted positions are never changed. */
@@ -270,7 +308,11 @@ export function matches(note: Note, query: string): boolean {
   );
 }
 
-export async function read(store: Store, source: Source): Promise<Snapshot> {
+export async function read(
+  store: Store,
+  source: Source,
+  onlyNote?: string,
+): Promise<Snapshot> {
   const klass = await store.getResource(source.rowClass);
   const type = text(klass.get(P.shortname));
 
@@ -348,7 +390,9 @@ export async function read(store: Store, source: Source): Promise<Snapshot> {
     throw new Error(
       'The Google Keep item columns are incomplete. Open the sync app first.',
     );
-  const owner = table.get(P.parent);
+  // The notes container may be a root-level account folder. Its schema stays
+  // under the sync app, alongside the hidden list-items table.
+  const owner = text(ontology.get(P.parent)) || table.get(P.parent);
 
   const sibling = async (rowClass: string) => {
     for (const id of await store.query({
@@ -365,14 +409,44 @@ export async function read(store: Store, source: Source): Promise<Snapshot> {
     type === 'google-keep-item'
       ? source.table
       : await sibling(itemClass.subject);
+
+  const ownNotes = async () => {
+    const app = await store.getResource(String(owner)).catch(() => undefined);
+
+    for (const id of strings(app?.get(P.isA))) {
+      const terms = await fields(store, await store.getResource(id));
+      const property = terms.get('app-data');
+      const target = property ? text(app?.get(property)) : '';
+      if (!target) continue;
+      const container = await store.getResource(target);
+      if (container.get(P.classtype) === noteClass.subject) return target;
+    }
+
+    return sibling(noteClass.subject);
+  };
+
   const noteTable =
-    type === 'google-keep-note'
-      ? source.table
-      : await sibling(noteClass.subject);
+    type === 'google-keep-note' ? source.table : await ownNotes();
   if (!noteTable) throw new Error('The Google Keep notes table is missing.');
   const [noteRows, itemRows] = await Promise.all([
-    rows(store, noteTable, noteClass.subject),
-    itemTable ? rows(store, itemTable, itemClass.subject) : Promise.resolve([]),
+    onlyNote
+      ? store
+          .getResource(onlyNote)
+          .then(row =>
+            row.get(P.parent) === noteTable &&
+            strings(row.get(P.isA)).includes(noteClass.subject)
+              ? [row]
+              : [],
+          )
+      : rows(store, noteTable, noteClass.subject),
+    itemTable
+      ? rows(
+          store,
+          itemTable,
+          itemClass.subject,
+          onlyNote ? { property: itemNote, value: onlyNote } : undefined,
+        )
+      : Promise.resolve([]),
   ]);
   const notes = noteRows.map(row => ({
     subject: row.subject,
@@ -408,6 +482,67 @@ export async function read(store: Store, source: Source): Promise<Snapshot> {
   };
 }
 
+/** Read precisely the folder or note the host opened, never another account. */
+export async function readResource(
+  store: Store,
+  subject: string,
+): Promise<Snapshot> {
+  const target = await store.getResource(subject);
+  const rowClass = text(target.get(P.classtype));
+
+  if (strings(target.get(P.isA)).includes(FOLDER_CLASS) && rowClass) {
+    const klass = await store.getResource(rowClass);
+    if (klass.get(P.shortname) !== 'google-keep-note')
+      throw new Error('This folder does not contain Google Keep notes.');
+    const snapshot = await read(store, {
+      table: subject,
+      rowClass,
+      name: text(target.get(P.name)),
+    });
+
+    return {
+      ...snapshot,
+      resource: subject,
+      title: text(target.get(P.name)) || 'Google Keep',
+      single: false,
+    };
+  }
+
+  for (const id of strings(target.get(P.isA))) {
+    const klass = await store.getResource(id);
+    if (klass.get(P.shortname) !== 'google-keep-note') continue;
+    const parent = text(target.get(P.parent));
+    if (!parent) break;
+    const container = await store.getResource(parent);
+    if (container.get(P.classtype) !== id) break;
+    const snapshot = await read(
+      store,
+      {
+        table: parent,
+        rowClass: id,
+        name: text(container.get(P.name)),
+      },
+      subject,
+    );
+    const note = snapshot.notes.find(
+      candidate => candidate.subject === subject,
+    );
+    if (!note) break;
+
+    return {
+      ...snapshot,
+      notes: [note],
+      resource: subject,
+      title: note.title || 'Untitled note',
+      single: true,
+      container: parent,
+      watches: [...snapshot.watches, subject],
+    };
+  }
+
+  throw new Error('This resource is not a Google Keep note or account folder.');
+}
+
 /** Recheck the host grant and row membership for every edit, including after revocation. */
 export async function setDone(
   store: Store,
@@ -418,6 +553,7 @@ export async function setDone(
   const data = await store.getData();
 
   if (
+    !!data?.resource ||
     !snapshot.itemTable ||
     data?.table !== snapshot.itemTable ||
     !snapshot.doneProperty ||

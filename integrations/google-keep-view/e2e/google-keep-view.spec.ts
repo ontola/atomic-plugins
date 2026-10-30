@@ -238,3 +238,107 @@ test('synthetic Keep view: checklist edits, search, completed section, narrow la
     fullPage: true,
   });
 });
+
+test('synthetic Keep view: account folder cards and a single checklist with 485 completed items', async ({
+  page,
+}) => {
+  const require = createRequire(
+    new URL('../../../browser/package.json', import.meta.url),
+  );
+  const esbuild = require('esbuild');
+  const { cssRawPlugin } = (await import(
+    '../../sync-status/build.mjs' as string
+  )) as { cssRawPlugin(esbuild: unknown): unknown };
+  const bundle = await esbuild.build({
+    stdin: {
+      contents: `import { view } from './main.ts'; import { folderFixture } from './fixture.ts';
+        export async function mount() {
+          const fake = folderFixture();
+          for (const id of ['item-0','item-1','item-2','item-3']) delete fake.resources['did:test:'+id];
+          for (let i = 0; i < 490; i++) fake.resources['did:test:large-item-'+i] = {
+            ['https://atomicdata.dev/properties/parent']: 'did:test:items',
+            ['https://atomicdata.dev/properties/isA']: ['did:test:item-class'],
+            ['https://atomicdata.dev/properties/name']: i < 485 ? 'Imaginary completed item '+i : i < 488 ? 'Fictional active item '+i : '',
+            ['did:test:google-keep-item-note']: 'did:test:groceries',
+            ['did:test:google-keep-done']: i < 485,
+            ['did:test:google-keep-position']: i,
+            ['did:test:google-keep-under']: i === 487 ? 'did:test:large-item-486' : ''
+          };
+          const show = async (subject) => {
+            dispatchEvent(new Event('pagehide'));
+            fake.attachResource(subject);
+            await view({ root: document.getElementById('root'), store: fake.store });
+          };
+          fake.store.openResource = show;
+          await show('did:test:notes');
+        }`,
+      resolveDir: new URL('../app/', import.meta.url).pathname,
+    },
+    bundle: true,
+    format: 'iife',
+    globalName: 'keepTest',
+    write: false,
+    plugins: [cssRawPlugin(esbuild)],
+  });
+  await page.setContent(
+    '<!doctype html><html><head><style>body{margin:0}</style></head><body><div id="root"></div></body></html>',
+  );
+  await page.addScriptTag({ content: bundle.outputFiles[0].text });
+  await page.evaluate(async () => {
+    const { keepTest } = globalThis as typeof globalThis & {
+      keepTest: { mount(): Promise<void> };
+    };
+    await keepTest.mount();
+  });
+  await expect(
+    page.getByRole('heading', {
+      name: 'Google Keep fictional@example.test',
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole('article')).toHaveCount(2);
+  await expect(page.locator('.keep-grid')).not.toHaveClass(
+    /keep-single|keep-list/,
+  );
+  await page.screenshot({
+    path: test.info().outputPath('keep-account-folder-desktop.png'),
+    fullPage: true,
+  });
+  await page.getByRole('heading', { name: 'Imaginary groceries' }).click();
+  await expect(page.getByRole('article')).toHaveCount(1);
+  await expect(page.locator('.keep-grid')).toHaveClass(/keep-single/);
+  await expect(
+    page.getByRole('heading', { name: 'Imaginary groceries' }),
+  ).toBeVisible();
+  await expect(page.getByText('485 completed items')).toBeVisible();
+  await expect(
+    page.getByRole('list', { name: 'Completed items' }),
+  ).not.toBeVisible();
+  await expect(
+    page.getByRole('list', { name: 'Unchecked items' }).locator('li'),
+  ).toHaveCount(5);
+  await expect(
+    page.getByRole('checkbox', { name: 'Fictional active item 485' }),
+  ).toBeDisabled();
+  await expect(page.getByRole('searchbox')).toHaveCount(0);
+  await page.screenshot({
+    path: test.info().outputPath('keep-note-desktop.png'),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 375, height: 812 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: test.info().outputPath('keep-note-mobile.png'),
+    fullPage: true,
+  });
+  await page.getByRole('button', { name: 'Back to notes' }).click();
+  await expect(page.getByRole('article')).toHaveCount(2);
+  await expect(page.locator('.keep-grid')).toHaveCSS('column-count', '1');
+  await page.screenshot({
+    path: test.info().outputPath('keep-account-folder-mobile.png'),
+    fullPage: true,
+  });
+});

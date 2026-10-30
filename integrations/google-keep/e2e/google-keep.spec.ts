@@ -354,8 +354,11 @@ async function itemLines(page: Page, note: string): Promise<string[]> {
     const short = async (property: string) =>
       (await store.getResource(property)).get(`${P}shortname`);
     const row = await store.getResource(noteSubject);
-    const table = await store.getResource(row.get(`${P}parent`) as string);
-    const app = await store.getResource(table.get(`${P}parent`) as string);
+    // The notes container may be a root account folder; ownership is in
+    // the note class's ontology, independent of its current data parent.
+    const klass = await store.getResource((row.get(`${P}isA`) as string[])[0]);
+    const ontology = await store.getResource(klass.get(`${P}parent`) as string);
+    const app = await store.getResource(ontology.get(`${P}parent`) as string);
     const children = await (
       await app.getChildrenCollection(500)
     ).getAllMembers();
@@ -395,8 +398,13 @@ async function tickItem(page: Page, note: string, text: string) {
       const store = window.store!;
       const P = 'https://atomicdata.dev/properties/';
       const row = await store.getResource(a.note);
-      const table = await store.getResource(row.get(`${P}parent`) as string);
-      const app = await store.getResource(table.get(`${P}parent`) as string);
+      const klass = await store.getResource(
+        (row.get(`${P}isA`) as string[])[0],
+      );
+      const ontology = await store.getResource(
+        klass.get(`${P}parent`) as string,
+      );
+      const app = await store.getResource(ontology.get(`${P}parent`) as string);
 
       for (const child of await (
         await app.getChildrenCollection(500)

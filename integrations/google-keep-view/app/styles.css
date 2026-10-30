@@ -172,6 +172,7 @@
   padding: 4px 8px;
   margin-left: -8px;
 }
+.keep-single,
 .keep-list {
   columns: 1;
   max-width: 680px;
@@ -201,4 +202,11 @@
   .keep-grid {
     columns: 1;
   }
+}
+
+.keep-single .keep-card {
+  margin-top: 12px;
+}
+.keep-card[tabindex] {
+  cursor: pointer;
 }

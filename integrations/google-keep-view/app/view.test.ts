@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 // Host workspace's existing test DOM, not a runtime dependency of the app.
 import { JSDOM } from '../../../browser/data-browser/node_modules/jsdom/lib/api.js';
-import { fixture, importedFixture } from './fixture.js';
+import { fixture, folderFixture, importedFixture } from './fixture.js';
 import { view } from './main.js';
 
 async function mount(table?: 'items' | 'notes') {
@@ -173,5 +173,134 @@ it('does not silently show another list when the attached table no longer has a 
     'This table needs',
   );
   expect(root.querySelectorAll('article')).toHaveLength(0);
+  dom.window.close();
+});
+
+it('shows account-folder cards that open their existing note resource', async () => {
+  const fake = folderFixture();
+  fake.attachResource('did:test:notes');
+  const opened: string[] = [];
+  fake.store.openResource = async subject => opened.push(subject);
+  const dom = new JSDOM('<div id="root"></div>');
+  const root = dom.window.document.getElementById('root')!;
+  await view({ root, store: fake.store });
+  expect(root.querySelector('h1')?.textContent).toBe(
+    'Google Keep fictional@example.test',
+  );
+  expect(root.querySelectorAll('article')).toHaveLength(2);
+  expect(root.querySelector('.keep-single')).toBeNull();
+  root.querySelector<HTMLElement>('article h2')!.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(opened).toEqual(['did:test:groceries']);
+  expect(root.querySelector('details')?.open).toBe(false);
+  expect(root.querySelector<HTMLButtonElement>('button')?.hidden).toBe(true);
+  [...root.querySelectorAll<HTMLButtonElement>('button')]
+    .find(button => button.textContent === 'Open editing view')!
+    .click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(opened).toEqual(['did:test:groceries', 'did:test:items']);
+  dom.window.dispatchEvent(new dom.window.Event('pagehide'));
+  dom.window.close();
+});
+
+it('opens one checklist with 485 completed items collapsed and no implicit editing', async () => {
+  const fake = folderFixture();
+  for (const id of ['item-0', 'item-1', 'item-2', 'item-3'])
+    delete fake.resources['did:test:' + id];
+
+  for (let index = 0; index < 490; index++) {
+    fake.resources['did:test:large-item-' + index] = {
+      ['https://atomicdata.dev/properties/parent']: 'did:test:items',
+      ['https://atomicdata.dev/properties/isA']: ['did:test:item-class'],
+      ['https://atomicdata.dev/properties/name']:
+        index < 485
+          ? 'Invented completed item ' + index
+          : index < 488
+            ? 'Fictional active item ' + index
+            : '',
+      ['did:test:google-keep-item-note']: 'did:test:groceries',
+      ['did:test:google-keep-done']: index < 485,
+      ['did:test:google-keep-position']: index,
+      ['did:test:google-keep-under']:
+        index === 487 ? 'did:test:large-item-486' : '',
+    };
+  }
+
+  fake.attachResource('did:test:groceries');
+  fake.grant(true);
+  const opened: string[] = [];
+  fake.store.openResource = async subject => opened.push(subject);
+  const dom = new JSDOM('<div id="root"></div>');
+  const root = dom.window.document.getElementById('root')!;
+  await view({ root, store: fake.store });
+  expect(root.querySelector('h1')?.textContent).toBe('Imaginary groceries');
+  expect(root.querySelectorAll('article')).toHaveLength(1);
+  expect(root.querySelector('.keep-single')).not.toBeNull();
+  expect(
+    root.querySelector<HTMLParagraphElement>('[role=status]')?.hidden,
+  ).toBe(true);
+  expect(root.querySelector('.keep-notice')?.textContent).toBe(
+    'Read-only. Open editing view',
+  );
+  expect(root.querySelector('summary')?.textContent).toBe(
+    '485 completed items',
+  );
+  expect(root.querySelector('details')?.open).toBe(false);
+  expect(
+    root.querySelectorAll('ul[aria-label="Unchecked items"] li'),
+  ).toHaveLength(5);
+  expect(
+    root.querySelectorAll('ul[aria-label="Completed items"] li'),
+  ).toHaveLength(485);
+  expect(root.querySelector('li.keep-indented')?.textContent).toBe(
+    'Fictional active item 487',
+  );
+  expect(
+    root.querySelector<HTMLInputElement>('input[type=search]')?.hidden,
+  ).toBe(true);
+  expect(
+    [...root.querySelectorAll<HTMLInputElement>('input[type=checkbox]')].every(
+      input => input.disabled,
+    ),
+  ).toBe(true);
+  expect(
+    [...root.querySelectorAll<HTMLButtonElement>('button')].find(
+      button => button.textContent === 'Allow editing',
+    )?.hidden,
+  ).toBe(true);
+  expect(
+    [...root.querySelectorAll<HTMLButtonElement>('button')].find(
+      button => button.textContent === 'Open note',
+    ),
+  ).toBeUndefined();
+  root.querySelector<HTMLButtonElement>('button')!.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(opened).toEqual(['did:test:notes']);
+
+  fake.store.getData = async () => {
+    throw new Error('Temporarily unavailable');
+  };
+
+  [...root.querySelectorAll<HTMLButtonElement>('button')]
+    .find(button => button.textContent === 'Refresh')!
+    .click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(
+    root.querySelector<HTMLParagraphElement>('[role=status]')?.hidden,
+  ).toBe(false);
+  expect(root.querySelector('[role=status]')?.textContent).toBe(
+    'Temporarily unavailable',
+  );
+  dom.window.dispatchEvent(new dom.window.Event('pagehide'));
+  fake.attachResource('did:test:thought');
+  fake.store.getData = async () => ({ resource: 'did:test:thought' });
+  await view({ root, store: fake.store });
+  expect(root.querySelector('.keep-notice')?.textContent).toBe('Read-only.');
+  expect(
+    [...root.querySelectorAll<HTMLButtonElement>('button')].find(
+      button => button.textContent === 'Open editing view',
+    ),
+  ).toBeUndefined();
+  dom.window.dispatchEvent(new dom.window.Event('pagehide'));
   dom.window.close();
 });

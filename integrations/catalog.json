@@ -197,11 +197,13 @@
     "https://atomicdata.dev/integrations/properties/events": "Install from Drive apps and connect Google Keep through the host's consent bar. The app syncs when it is opened, on Sync now and every minute while it stays open; two open browsers take turns. Nothing runs while no one has it open.",
     "https://atomicdata.dev/integrations/properties/limitation": "Google offers the Keep API to Google Workspace accounts only; a personal Google account cannot connect (Google refuses the scope). The API has no update: an edited note is sent as a new note and the old one deleted, losing its colour, labels, pins and reminders, so a note that is shared or has an attachment is never replaced and its edit is held back instead. Images and drawings are not imported. One Google account per table. Declared, and tested against a synthetic fixture only: not verified against a live Workspace account.",
     "https://atomicdata.dev/integrations/properties/keywords": "google keep notes lists checklists two-way sync drive app workspace",
-    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/version": "0.2.0",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Note",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Notes",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-keep/0.1.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-3OzvVJHaPQWxKk7FF6VqMHg4QnFxFwObW40SiIqcFssjUhJ0U2KzJqEPMVLj5G8+"
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-keep/0.2.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-Kmupvx6LuhBviwLEPSJIbkKYcvNpuGYt7vv3m9r0s5utVYxGpo6GE/A3s948Jelg",
+    "https://atomicdata.dev/integrations/properties/app-data-kind": "folder",
+    "https://atomicdata.dev/integrations/properties/app-installation-hidden": true
   },
   {
     "https://atomicdata.dev/properties/localId": "google-tasks",
@@ -554,8 +556,10 @@
     "https://atomicdata.dev/integrations/properties/events": "Install Google Keep View separately from the Google Keep connection app and open it once after importing notes. It discovers compatible tables and makes itself available under Add view on them. Reopen or Refresh after another import. Table subscriptions refresh rows; no provider calls or background sync.",
     "https://atomicdata.dev/integrations/properties/limitation": "Imported tables need a typed text column (Array item, Text or Name) and boolean Checked or Done column. The standalone and notes-table views are read-only; ticking requires adding the view to the checklist table and allowing row edits. Does not add, delete, rename or reorder rows. Sending edits to Google remains controlled by the importer or sync app. Synthetic tests only; no live Google evidence.",
     "https://atomicdata.dev/integrations/properties/keywords": "google keep view checklist notes cards unchecked completed",
-    "https://atomicdata.dev/integrations/properties/version": "0.2.0",
-    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-keep-view/0.2.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-iMQ7lCjJtodxpsCI1or++HQ6QPs72ooMDWU1cDTBvP7hQjz8M4GYmuLOqYTfHSey"
+    "https://atomicdata.dev/integrations/properties/version": "0.3.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-keep-view/0.3.0/ui.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-xgGmkevLmuxWdpXFb3HkEDIfkHUAcd8q+TNY+KiDO+YMXeVcm14IFwtAOgy/RXEI",
+    "https://atomicdata.dev/integrations/properties/app-data-kind": "none",
+    "https://atomicdata.dev/integrations/properties/app-installation-hidden": true
   }
 ]
