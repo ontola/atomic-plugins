@@ -26,6 +26,11 @@ The account identity is `(platform, account)`, so identical account labels on
 different platforms cannot merge accidentally. Each configured collection alias
 gets its own table, even when two aliases query the same API resource.
 
+For an explicit projection of a selected record's nested list into typed owned
+resources, see [Owned list components](owned-list-projection.md). This separate
+consumer profile preserves the original body and does not change the default
+compact collection projection.
+
 ## Build and run
 
 Requirements: the daemon's separate local PostgreSQL database, Node 22.11+,
