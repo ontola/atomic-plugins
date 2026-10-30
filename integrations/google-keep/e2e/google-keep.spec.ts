@@ -76,7 +76,7 @@ test.describe('Google Keep drive app', () => {
       'Google offers the Keep API to Google Workspace accounts only.',
     );
     await app.getByRole('button', { name: 'Connect Google Keep' }).click();
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: 'Connect Google Keep' });
     await expect(consent).toContainText('Google Keep');
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(
@@ -454,7 +454,9 @@ async function fixture(name: string, args: unknown[]): Promise<unknown> {
 }
 
 async function installFromCatalog(page: Page) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });

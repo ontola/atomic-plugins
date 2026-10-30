@@ -558,7 +558,7 @@
     "https://atomicdata.dev/integrations/properties/keywords": "google keep view checklist notes cards unchecked completed",
     "https://atomicdata.dev/integrations/properties/version": "0.3.0",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-keep-view/0.3.0/ui.js",
-    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-xgGmkevLmuxWdpXFb3HkEDIfkHUAcd8q+TNY+KiDO+YMXeVcm14IFwtAOgy/RXEI",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-0UsISUlU+hol6LNfdWHIoSJOb0XrNEWrG7Vb0XTPtyeb17dckXXl1B1xA7GtSbV2",
     "https://atomicdata.dev/integrations/properties/app-data-kind": "none",
     "https://atomicdata.dev/integrations/properties/app-installation-hidden": true
   }

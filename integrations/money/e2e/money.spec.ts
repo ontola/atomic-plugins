@@ -1031,7 +1031,9 @@ test.describe('money integration', () => {
  * unless its bytes match `app-module-integrity`, then opens the new app.
  */
 async function installFromCatalog(page: Page) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });

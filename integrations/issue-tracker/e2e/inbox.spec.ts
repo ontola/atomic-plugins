@@ -99,7 +99,7 @@ test.describe('GitHub issues webhook inbox', () => {
     await connections
       .getByRole('button', { name: 'Connect Github Issues' })
       .click();
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     await consent.getByRole('button', { name: 'Continue' }).click();
     await expect(
       page.getByRole('heading', { name: 'Mock integration proxy' }),
@@ -487,7 +487,9 @@ async function createDraft(page: Page, code: string) {
  */
 async function installFromCard(page: Page, releaseId: string) {
   await waitForSynced(page);
-  await page.goto(new URL('/app/integrations', SERVER_URL).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', SERVER_URL).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });

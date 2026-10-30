@@ -7,7 +7,9 @@ import { appVersion } from '../../tooling/apps.mjs';
 const VERSION = appVersion('google-keep-view');
 
 async function install(page: Page) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   await page
     .getByRole('checkbox', { name: 'Show experimental plugins' })
     .check();
@@ -127,10 +129,35 @@ test.describe('Keep view catalog installation', () => {
     await page
       .getByRole('menuitem', { name: 'Google Keep View' })
       .click({ timeout: 60_000 });
-    await page
-      .locator('dialog[open]')
-      .getByRole('button', { name: 'Allow editing' })
-      .click();
+    // Hold the grant until the guest has read the real ungranted state.
+    // The acknowledged grant must refresh that guest, without a second click.
+    let releaseGrant = () => {};
+    const grantGate = new Promise<void>(resolve => {
+      releaseGrant = resolve;
+    });
+    let held = false;
+    await page.route('**/app-row-grant', async route => {
+      if (route.request().method() === 'POST' && !held) {
+        held = true;
+        await grantGate;
+      }
+
+      await route.continue();
+    });
+
+    try {
+      await page
+        .locator('dialog[open]')
+        .getByRole('button', { name: 'Allow editing' })
+        .click();
+      await expect.poll(() => held).toBe(true);
+      await expect(
+        app.getByRole('checkbox', { name: 'Fictional tea' }),
+      ).toBeDisabled();
+    } finally {
+      releaseGrant();
+    }
+
     await expect(
       app.getByRole('checkbox', { name: 'Fictional tea' }),
     ).toBeEnabled({ timeout: 30_000 });
@@ -325,11 +352,28 @@ test('synthetic Keep view: account folder cards and a single checklist with 485 
     fullPage: true,
   });
   await page.setViewportSize({ width: 375, height: 812 });
+  const title = page.getByRole('heading', { name: 'Imaginary groceries' });
+  expect((await title.boundingBox())!.width).toBeGreaterThanOrEqual(180);
+  expect((await title.boundingBox())!.height).toBeLessThanOrEqual(60);
+  // The host's mobile sidebar and frame padding leave less than the viewport.
+  // The title must wrap whole words rather than collapse between controls.
+  await page.locator('#root').evaluate(node => {
+    node.style.maxWidth = '303px';
+  });
+  expect((await title.boundingBox())!.width).toBeGreaterThanOrEqual(180);
+  expect((await title.boundingBox())!.height).toBeLessThanOrEqual(60);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+  await page.screenshot({
+    path: test.info().outputPath('keep-note-mobile-constrained.png'),
+    fullPage: true,
+  });
+  await page.locator('#root').evaluate(node => {
+    node.style.maxWidth = '';
+  });
   await page.screenshot({
     path: test.info().outputPath('keep-note-mobile.png'),
     fullPage: true,

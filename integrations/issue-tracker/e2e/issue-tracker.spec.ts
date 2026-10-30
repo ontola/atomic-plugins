@@ -106,7 +106,7 @@ test.describe('GitHub issues drive app', () => {
     await app.getByRole('button', { name: 'Connect GitHub' }).click();
 
     // Drawn by the host page, outside the frame: only a click here navigates.
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     // The host names the platform from its id: "Github Issues".
     await expect(consent).toContainText(/github issues/i);
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
@@ -590,7 +590,7 @@ test.describe('GitHub issues drive app', () => {
       app.getByRole('heading', { name: 'Sync Team issues with GitHub' }),
     ).toBeVisible({ timeout: 45_000 });
     await app.getByRole('button', { name: 'Connect GitHub' }).click();
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
     await page
       .getByRole('button', {
@@ -933,7 +933,9 @@ function appWrites(page: Page) {
 }
 
 async function installFromCatalog(page: Page) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });

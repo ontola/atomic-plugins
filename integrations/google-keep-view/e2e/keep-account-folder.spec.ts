@@ -3,7 +3,9 @@ import { test, expect, type Page } from '@playwright/test';
 import { before, waitForSynced } from '../../../browser/e2e/tests/test-utils';
 
 async function install(page: Page, id: string, name: string) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   await page
     .getByRole('checkbox', { name: 'Show experimental plugins' })
     .check();
@@ -28,6 +30,32 @@ test.describe('Keep account folder', () => {
         .frameLocator('iframe[title="App"]')
         .getByRole('button', { name: 'Connect Google Keep' }),
     ).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(async app => {
+          const store = window.store!;
+          const P = 'https://atomicdata.dev/properties/';
+          const resource = await store.getResource(app);
+
+          for (const id of resource.getSubjects(P + 'isA')) {
+            const klass = await store.getResource(id);
+
+            for (const property of klass.getSubjects(P + 'recommends')) {
+              const term = await store.getResource(property);
+              if (term.get(P + 'shortname') !== 'app-data') continue;
+              const folder = await store.getResource(
+                String(resource.get(property)),
+              );
+              const noteClass = await store.getResource(
+                String(folder.get(P + 'classtype')),
+              );
+
+              return noteClass.get(P + 'shortname');
+            }
+          }
+        }, sync),
+      )
+      .toBe('google-keep-note');
     const seeded = await page.evaluate(async app => {
       const store = window.store!;
       const P = 'https://atomicdata.dev/properties/';
@@ -129,8 +157,24 @@ test.describe('Keep account folder', () => {
         note: note.subject,
         other: other.subject,
         renderer: terms['app-resource-view'],
+        accountProperty: fields['google-keep-account'],
       };
     }, sync);
+    await waitForSynced(page);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          async ({ app, property }) => {
+            const resource = await window.store!.fetchResourceFromServer(app, {
+              noWebSocket: true,
+            });
+
+            return resource.get(property);
+          },
+          { app: sync, property: seeded.accountProperty },
+        ),
+      )
+      .toBe('michiel@example.com');
     const view = await install(page, 'google-keep-view', 'Google Keep View');
     await expect(
       page
@@ -194,6 +238,7 @@ test.describe('Keep account folder', () => {
         .getByText('2 completed items'),
     ).toBeVisible();
     const navigation = page.getByRole('navigation').last();
+    await expect(navigation).toBeVisible();
     await expect(
       navigation.getByRole('button', { name: 'Google Keep View', exact: true }),
     ).toHaveCount(0);
@@ -203,6 +248,7 @@ test.describe('Keep account folder', () => {
     await page.screenshot({
       path: test.info().outputPath('keep-account-folder.png'),
       fullPage: true,
+      animations: 'disabled',
     });
     await frame
       .getByRole('article', { name: 'Invented groceries' })
@@ -227,11 +273,20 @@ test.describe('Keep account folder', () => {
     await page.screenshot({
       path: test.info().outputPath('keep-single-note.png'),
       fullPage: true,
+      animations: 'disabled',
     });
     await page.setViewportSize({ width: 375, height: 812 });
+    await page.getByRole('button', { name: /Show \/ hide sidebar/ }).click();
+    await expect
+      .poll(
+        async () =>
+          (await page.locator('iframe[title="App"]').boundingBox())?.width ?? 0,
+      )
+      .toBeGreaterThan(300);
     await page.screenshot({
       path: test.info().outputPath('keep-single-note-mobile.png'),
       fullPage: true,
+      animations: 'disabled',
     });
   });
 });
