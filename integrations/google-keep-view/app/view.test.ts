@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 // Host workspace's existing test DOM, not a runtime dependency of the app.
 import { JSDOM } from '../../../browser/data-browser/node_modules/jsdom/lib/api.js';
-import { fixture } from './fixture.js';
+import { fixture, importedFixture } from './fixture.js';
 import { view } from './main.js';
 
 async function mount(table?: 'items' | 'notes') {
@@ -121,9 +121,57 @@ describe('Keep view DOM', () => {
     const root = dom.window.document.getElementById('root')!;
     await view({ root, store: fake.store });
     expect(root.querySelector('[role=status]')?.textContent).toContain(
-      'Open the Google Keep sync app',
+      'Import your Keep data',
     );
     expect(root.querySelectorAll('article')).toHaveLength(0);
     dom.window.close();
   });
+});
+
+it('discovers an imported list on first open and can tick it when added as a table view', async () => {
+  const fake = importedFixture();
+  const dom = new JSDOM('<div id="root"></div>');
+  const root = dom.window.document.getElementById('root')!;
+  await view({ root, store: fake.store });
+  expect(root.querySelector('h2')?.textContent).toBe(
+    'Invented groceries · List',
+  );
+  expect(fake.resources['did:test:view-app']['did:test:renders']).toEqual([
+    fake.rowClass,
+  ]);
+  expect(
+    root.querySelector<HTMLInputElement>('input[aria-label="Pretend toast"]')
+      ?.disabled,
+  ).toBe(true);
+  dom.window.dispatchEvent(new dom.window.Event('pagehide'));
+  fake.attachTable(fake.table);
+  await view({ root, store: fake.store });
+  const allow = [...root.querySelectorAll('button')].find(
+    button => button.textContent === 'Allow editing',
+  )!;
+  expect(allow.hidden).toBe(false);
+  allow.click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  root
+    .querySelector<HTMLInputElement>('input[aria-label="Pretend toast"]')!
+    .click();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(fake.resources['did:test:import-toast'][fake.checked]).toBe(true);
+  dom.window.dispatchEvent(new dom.window.Event('pagehide'));
+  dom.window.close();
+});
+
+it('does not silently show another list when the attached table no longer has a checkbox column', async () => {
+  const fake = importedFixture();
+  fake.attachTable(fake.table);
+  fake.resources[fake.checked]['https://atomicdata.dev/properties/datatype'] =
+    'https://atomicdata.dev/datatypes/string';
+  const dom = new JSDOM('<div id="root"></div>');
+  const root = dom.window.document.getElementById('root')!;
+  await view({ root, store: fake.store });
+  expect(root.querySelector('[role=status]')?.textContent).toContain(
+    'This table needs',
+  );
+  expect(root.querySelectorAll('article')).toHaveLength(0);
+  dom.window.close();
 });
