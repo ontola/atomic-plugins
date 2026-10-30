@@ -66,7 +66,7 @@ that client registered. The mock's approval is not owner authentication.
 | `GET /device/sessions` | Atomic v2 owner signature; lists only that owner's client sessions. |
 | `DELETE /device/sessions/{session_id}` | Atomic v2 owner signature; revokes that individual session. |
 | `GET /connections` | Device bearer: filtered connection discovery, or existing Atomic owner signature. |
-| `GET /proxy/{connection_id}/{platform}/{path}` | Device bearer: approved read, or existing signature/capability authentication. |
+| `GET /proxy/{connection_id}/{platform}/{path}` | Device bearer: approved read/write method, or existing signature/capability authentication. |
 
 Token/form responses use `Cache-Control: no-store` and `Pragma: no-cache`.
 Device JSON/form request bodies are limited to 8 KiB. Duplicate form fields
@@ -84,8 +84,11 @@ use `token_endpoint_auth_methods_supported: ["none"]`.
   existing live connection ownership/idle expiry, owner `AccessPolicy`,
   provider credential binding, catalog operation/security restrictions,
   validation and pacing. HEAD must itself be allowed by the catalog.
-- `proxy:write` is reserved for future upstream writes. It is not issued in
-  this pilot: requesting it (or administrative scopes) returns `invalid_scope`.
+- `proxy:write`: explicitly approved POST, PUT, PATCH and DELETE through the
+  selected connections, with the same ownership, access policy, catalog,
+  provider scope, validation and pacing checks. It does not imply `proxy:read`.
+  The owner approval screen names the permanent deletion permission. Existing
+  sessions and omitted scope stay read-only; administrative scopes are rejected.
 
 Default scope is `connections:read proxy:read`. Approval selects 1–20
 connections currently owned by the authenticated owner. This pilot does not

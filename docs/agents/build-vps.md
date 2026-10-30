@@ -203,12 +203,15 @@ when writing one:
   `docs-`) so two workers never write the same name.
 - **Rules.** The board rules in [working-model.md](working-model.md); no
   `--no-verify`; stage paths explicitly and check `git diff --cached --stat`
-  for data or secrets; no `.github/workflows/` edits; the freeze below.
+  for data or secrets; no `.github/workflows/` edits; host PRs follow the
+  current rules below.
 - **Reports back.** A worker doesn't push, open PRs, merge or comment: the
   coordinator does every GitHub write. It commits in its worktree and
   reports the branch, the commit SHAs, what changed, a PR title and body draft
   (`Closes #N` where it fully resolves an issue), the checks it ran with exact
   results, what it didn't verify, and "Question for Michiel" items.
-- **atomic-server freeze.** No atomic-server PRs and no new pin candidates
-  (#227, 2026-10-01). A host need goes in the report as an issue draft for
-  Joep, for example atomic-server#1952.
+- **atomic-server PRs.** Michiel lifted the freeze on new PRs on
+  2026-10-30. Host fixes may go through the normal PR review and CI process;
+  only Joep's agent merges into `develop`. Building new pin candidates has
+  been pre-approved since Q-104 on 2026-10-08. See
+  [working-model.md](working-model.md) and [pins.md](pins.md).

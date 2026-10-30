@@ -36,9 +36,9 @@ import {
  * action timeout, which a CI runner can miss while the page is still on the
  * boot splash (run 36891774224: the page snapshot was only the "Atomic Place"
  * logo). With the page warm, the helper's own reload finds a running app. A
- * spec that is already on a loaded page and has not needed it passes
- * `warm: false`; the Willow route spec does today (its behaviour is
- * unchanged by this module, so it is not a claim that it cannot flake).
+ * spec that has already established catalog readiness can pass `warm: false`.
+ * The Willow route spec uses the default warm-up after a cold catalog hit
+ * that same 10 s search-fill timeout (atomic-plugins#710).
  */
 export async function openNewPluginDraft(
   page: Page,

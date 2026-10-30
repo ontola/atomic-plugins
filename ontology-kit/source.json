@@ -36,6 +36,27 @@
         "money-category",
         "money-note"
       ]
+    },
+    "v2": {
+      "name": "Learning tree v2",
+      "description": "Skill, lesson and mastery classes for learning trees (Leerboom). Property names follow schema.org LRMI where one fits: teaches, competencyRequired, timeRequired. Assessments, questions and attempts are not part of this release. Declared, not verified.",
+      "classes": ["skill-v1", "lesson-v1", "mastery-v1"],
+      "properties": [
+        "skill-requires",
+        "skill-recommends",
+        "skill-equivalent-to",
+        "skill-level",
+        "skill-mastery-threshold",
+        "lesson-teaches",
+        "lesson-content",
+        "lesson-format",
+        "lesson-minutes",
+        "lesson-language",
+        "mastery-skill",
+        "mastery-level",
+        "mastery-source",
+        "mastery-updated-at"
+      ]
     }
   },
   "classes": {
@@ -108,6 +129,36 @@
         "money-category",
         "money-note"
       ]
+    },
+    "skill-v1": {
+      "name": "Skill",
+      "description": "A unit of knowledge in a learning tree, with the skills it requires and recommends. The tree belongs to everyone who can read it; whether a skill is open is computed per learner from their own mastery rows.",
+      "requires": ["https://atomicdata.dev/properties/name"],
+      "recommends": [
+        "https://atomicdata.dev/properties/description",
+        "skill-requires",
+        "skill-recommends",
+        "skill-equivalent-to",
+        "skill-level",
+        "skill-mastery-threshold"
+      ]
+    },
+    "lesson-v1": {
+      "name": "Lesson",
+      "description": "One route to a skill: a thin wrapper around the real material (video, document, exercise, live session). A skill may have many lessons.",
+      "requires": ["https://atomicdata.dev/properties/name", "lesson-teaches"],
+      "recommends": [
+        "lesson-content",
+        "lesson-format",
+        "lesson-minutes",
+        "lesson-language"
+      ]
+    },
+    "mastery-v1": {
+      "name": "Mastery",
+      "description": "How well one learner masters one skill. Private data, kept in the learner's own drive. Not a credential: nobody attests it.",
+      "requires": ["mastery-skill", "mastery-level"],
+      "recommends": ["mastery-source", "mastery-updated-at"]
     }
   },
   "properties": {
@@ -222,6 +273,81 @@
       "name": "Note",
       "datatype": "https://atomicdata.dev/datatypes/string",
       "description": "The person's own note on this transaction. Never written by an importer."
+    },
+    "skill-requires": {
+      "name": "Requires",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "Skills that must be mastered before this one. Advisory: a view may show a skill as locked but never refuses to open it. Maps to schema.org competencyRequired.",
+      "classtype": "skill-v1"
+    },
+    "skill-recommends": {
+      "name": "Recommends",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "Skills that help with this one but are never needed.",
+      "classtype": "skill-v1"
+    },
+    "skill-equivalent-to": {
+      "name": "Equivalent to",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "The same skill in another tree or drive. Equivalent skills are merged when trees are combined, so mastering one counts for all.",
+      "classtype": "skill-v1"
+    },
+    "skill-level": {
+      "name": "Level",
+      "datatype": "https://atomicdata.dev/datatypes/integer",
+      "description": "Rough difficulty, 1 and up, for layout and filters. Not a prerequisite."
+    },
+    "skill-mastery-threshold": {
+      "name": "Mastery threshold",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Mastery level from 0 to 1 at which this skill counts as mastered. Absent: the view default, 0.8."
+    },
+    "lesson-teaches": {
+      "name": "Teaches",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "Skills this lesson helps with. Maps to schema.org teaches.",
+      "classtype": "skill-v1"
+    },
+    "lesson-content": {
+      "name": "Content",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The material: a resource (document, file, canvas, plugin view, tour) or an external https link."
+    },
+    "lesson-format": {
+      "name": "Format",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "One of video, text, interactive, exercise, live, tour. A view shows an unknown value as plain text."
+    },
+    "lesson-minutes": {
+      "name": "Minutes",
+      "datatype": "https://atomicdata.dev/datatypes/integer",
+      "description": "Estimated duration in minutes. Maps to schema.org timeRequired."
+    },
+    "lesson-language": {
+      "name": "Language",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "BCP 47 language code of the material, for example nl or en."
+    },
+    "mastery-skill": {
+      "name": "Skill",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The skill this mastery is about.",
+      "classtype": "skill-v1"
+    },
+    "mastery-level": {
+      "name": "Level",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "How well the learner masters the skill, 0 to 1."
+    },
+    "mastery-source": {
+      "name": "Source",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Where the level comes from: one of attempt, lesson, self, endorsement."
+    },
+    "mastery-updated-at": {
+      "name": "Updated at",
+      "datatype": "https://atomicdata.dev/datatypes/timestamp",
+      "description": "When the level was last set, milliseconds since the Unix epoch."
     }
   }
 }

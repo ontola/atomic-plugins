@@ -37,7 +37,8 @@ fn public_client_config_and_inputs_are_bounded() {
         assert!(user_code(code).is_err());
     }
     assert_eq!(scopes(None).unwrap(), "connections:read proxy:read");
-    assert!(scopes(Some("proxy:write")).is_err());
+    assert_eq!(scopes(Some("proxy:write")).unwrap(), "proxy:write");
+    assert!(scopes(Some("proxy:admin")).is_err());
     assert!(scopes(Some("owner:admin")).is_err());
     assert!(form(&HeaderMap::new(), b"client_id=x").is_err());
     let mut headers = HeaderMap::new();
@@ -590,7 +591,7 @@ async fn permissions_expiry_and_unregistered_client_are_enforced() {
     let principal = store::authenticate(&f.security, token, &f.state.base_url)
         .await
         .unwrap();
-    assert!(!store::may_read(&principal, &f.connection, &Method::GET));
+    assert!(!store::may_request(&principal, &f.connection, &Method::GET));
     let read = f.grant("proxy:read").await;
     let token = read["access_token"].as_str().unwrap();
     assert_eq!(
@@ -707,7 +708,7 @@ async fn complete_http_contract_supports_the_cli_and_refresh_logout() {
     let response = f
         .send(post(
             "/oauth/device/code",
-            &[("client_id", "syncables-cli"), ("scope", "proxy:write")],
+            &[("client_id", "syncables-cli"), ("scope", "proxy:admin")],
         ))
         .await;
     assert_eq!(body_json(response).await["error"], "invalid_scope");
@@ -1066,4 +1067,119 @@ async fn device_and_bearer_secrets_do_not_reach_trace_logs() {
             "sensitive authentication material reached logs"
         );
     }
+}
+
+#[test]
+fn read_and_write_grants_are_independent_and_connection_scoped() {
+    let mut principal = store::Principal {
+        owner: crate::agent_id::parse(&Agent::new(214).id()).unwrap(),
+        client_id: "invented-cli".into(),
+        session_id: "invented-session".into(),
+        connections: vec!["approved".into()],
+        scope: String::new(),
+    };
+    for scope in [
+        "",
+        "connections:read",
+        "proxy:read",
+        "proxy:write",
+        "proxy:read proxy:write",
+    ] {
+        principal.scope = scope.into();
+        for method in [
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+            Method::OPTIONS,
+            Method::TRACE,
+            Method::CONNECT,
+        ] {
+            let expected = if method == Method::GET || method == Method::HEAD {
+                scope.split_whitespace().any(|s| s == READ_SCOPE)
+            } else if [Method::POST, Method::PUT, Method::PATCH, Method::DELETE].contains(&method) {
+                scope.split_whitespace().any(|s| s == WRITE_SCOPE)
+            } else {
+                false
+            };
+            assert_eq!(
+                store::may_request(&principal, "approved", &method),
+                expected,
+                "{scope}: {method}"
+            );
+            assert!(!store::may_request(&principal, "other", &method));
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn explicit_write_grant_reaches_only_approved_catalog_operations() {
+    let mut f = Fixture::new(214).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = Router::new().route(
+        "/records",
+        axum::routing::any(|headers: HeaderMap| async move {
+            assert_eq!(
+                headers[header::AUTHORIZATION],
+                "Bearer invented-provider-value"
+            );
+            Json(json!({"written":true}))
+        }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    f.state.catalog = crate::catalog::Catalog::from_test_document(
+        "service",
+        json!({"servers":[{"url":format!("http://{address}")}],"components":{"securitySchemes":{"auth":{"type":"http","scheme":"bearer"}}},"security":[{"auth":[]}],"paths":{"/records":{"get":{},"post":{},"delete":{}}}}),
+        json!({}),
+    );
+    let grant = f.grant("proxy:write").await;
+    let token = grant["access_token"].as_str().unwrap();
+    let path = format!("/proxy/{}/service/records", f.connection);
+    for method in ["POST", "DELETE"] {
+        let response = f.bearer(token, method, &path).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["written"], true);
+    }
+    assert_eq!(
+        f.bearer(token, "GET", &path).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    for method in ["PUT", "PATCH"] {
+        assert_ne!(
+            f.bearer(token, method, &path).await.status(),
+            StatusCode::OK
+        );
+    }
+    let other = f
+        .security
+        .create_connection("service", &f.owner.id(), b"{}")
+        .await
+        .unwrap();
+    assert_eq!(
+        f.bearer(token, "DELETE", &format!("/proxy/{other}/service/records"))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        f.bearer(token, "DELETE", &format!("/connections/{}", f.connection))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        f.bearer(
+            token,
+            "POST",
+            &format!("/proxy/{}/service/undeclared", f.connection)
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    server.abort();
 }

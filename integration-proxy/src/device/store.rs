@@ -427,11 +427,18 @@ pub async fn revoke_owned(
     Ok(())
 }
 
-pub fn may_read(principal: &Principal, connection: &str, method: &axum::http::Method) -> bool {
+pub fn may_request(principal: &Principal, connection: &str, method: &axum::http::Method) -> bool {
+    let needed = match *method {
+        axum::http::Method::GET | axum::http::Method::HEAD => READ_SCOPE,
+        axum::http::Method::POST
+        | axum::http::Method::PUT
+        | axum::http::Method::PATCH
+        | axum::http::Method::DELETE => super::WRITE_SCOPE,
+        _ => return false,
+    };
     principal
         .scope
         .split_ascii_whitespace()
-        .any(|s| s == READ_SCOPE)
+        .any(|s| s == needed)
         && principal.connections.iter().any(|id| id == connection)
-        && (*method == axum::http::Method::GET || *method == axum::http::Method::HEAD)
 }

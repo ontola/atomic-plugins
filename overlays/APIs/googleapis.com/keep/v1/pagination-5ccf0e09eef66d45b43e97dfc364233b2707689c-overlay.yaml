@@ -1,0 +1,33 @@
+# Reviewed 2026-10-29 against Google Discovery revision 20261019 and
+# https://developers.google.com/workspace/keep/api/reference/rest/v1/notes/list
+# An absent repeated notes field is empty under the protobuf JSON mapping:
+# https://protobuf.dev/programming-guides/json/ . Synthetic tests only.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/5ccf0e09eef66d45b43e97dfc364233b2707689c/APIs/googleapis.com/keep/v1/openapi.yaml
+info:
+  title: Google Keep v1 complete note pages, including empty pages
+  version: 1.0.0
+actions:
+  - target: $.components
+    update:
+      paginationSchemes:
+        forwardPages:
+          type: pageToken
+          autoDetect: false
+          description: >-
+            Send nextPageToken as pageToken until the token is absent or empty,
+            including after a short or empty page. Keep filters and page size
+            fixed. Zero pageSize lets Google choose the upper bound. An ABORTED
+            response is a failed reconciliation, not successful completion.
+          request:
+            queryParameters:
+              pageToken: { role: cursor }
+              pageSize: { role: pageSize }
+          response:
+            bodyFields:
+              nextPageToken: { role: nextCursor }
+            envelope: { itemsField: notes, emptyWhenAbsent: true }
+  - target: $.paths['/v1/notes'].get
+    update:
+      x-pagination:
+        - scheme: forwardPages

@@ -38,7 +38,7 @@ export function mountDeviceApproval({ root, proxyUrl, signRequest, userCode = ''
     try {
       const request = await call('/device/challenge', { user_code: input.value });
       details.append(make('h2', request.client_name), make('p', `Owner: ${request.owner}`));
-      const descriptions = { 'connections:read': 'Discover only the selected connections.', 'proxy:read': 'Read through the selected connections using GET and HEAD.' };
+      const descriptions = { 'connections:read': 'Discover only the selected connections.', 'proxy:read': 'Read through the selected connections using GET and HEAD.', 'proxy:write': 'Create, change and permanently delete data through the selected connections using POST, PUT, PATCH and DELETE, where the provider permits it.' };
       details.append(make('p', request.scope.split(' ').map(s => descriptions[s] || s).join(' ')));
       details.append(make('p', 'Select connections explicitly. New connections will require a new approval. This CLI cannot manage connections or delegations.'));
       const boxes = request.connections.map(connection => {
@@ -47,7 +47,7 @@ export function mountDeviceApproval({ root, proxyUrl, signRequest, userCode = ''
         details.append(label, make('br'));
         return { box, id: connection.connection_id };
       });
-      const approve = make('button', 'Approve selected connections');
+      const approve = make('button', request.scope.split(' ').includes('proxy:write') ? 'Allow changes in selected connections' : 'Approve selected connections');
       const deny = make('button', 'Deny');
       details.append(approve, deny);
       const finish = async approved => {

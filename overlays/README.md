@@ -18,8 +18,8 @@ https://ontola.github.io/atomic-plugins/overlays/<path>
 
 Each dated catalog under `catalog/` lists each platform's overlays by those
 URLs. The integration proxy's default `CATALOG_PATH` is
-`https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json`
-since #258 (unreleased); proxy 0.2.4, and localthought.io's explicit
+`https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-29-google-keep-writes.json`
+in current source (unreleased); proxy 0.2.4, and localthought.io's explicit
 `CATALOG_PATH`, use `catalog/2026-10-02.json`. Before this
 migration every overlay URL was pinned to a `localthought/overlays` commit
 on `raw.githubusercontent.com`. Pages URLs are not Git-commit URLs, but
@@ -87,6 +87,38 @@ deployment selects it yet; a proxy picks it up through `CATALOG_PATH`, with
 live Google connection has been made with it.
 
 ## Google Keep catalog
+
+`catalog/2026-10-29-google-keep.json` is the new proxy default in source. It
+preserves all nine entries of the previous default,
+`2026-10-02-auth-profiles.json`, byte-for-byte and adds only `google-keep`.
+The independent opt-in catalogs, including `2026-10-14-google-keep.json`,
+remain unchanged. No running service's explicit `CATALOG_PATH` is changed.
+
+Keep now pins OAD last-change commit
+`5ccf0e09eef66d45b43e97dfc364233b2707689c` in `ontola/openapi-directory`
+([refresh PR #466](https://github.com/ontola/openapi-directory/pull/466)),
+reviewed against Google's current Discovery revision `20261019`. It
+preserves all seven methods, including attachment download, and corrects
+the old conversion's simultaneous OAuth-flow requirements to alternatives.
+The new auth overlay retains the same four allowed note operations and
+`googleKeep` profile; download and sharing operations stay outside it.
+
+The new pagination overlay follows tokens through short and empty pages,
+with `emptyWhenAbsent: true` for the protobuf JSON `notes` array. The CRUD
+overlay declares note identity, the collection envelope, create/read/delete,
+generated output-only fields, replacement blocks for attachments/live
+collaborators and the checklist's unkeyed items. There is no update operation.
+The standalone SyncD example is generated from this exact composition;
+its runtime and device authorization still permit reads only.
+
+Validation covers the full OpenAPI composition, Pagination Schemes and CRUD
+Causality validators, profile/path restrictions, unchanged existing defaults,
+the exact generated example and synthetic reads through Syncables.
+The proxy's `default_catalog_keep_selects_note_reads_and_writes` test checks
+the actual Rust loader/allowlist against the pinned OAD. No live Google
+provider verification or proxy deployment is implied.
+
+The historical catalog remains published:
 
 `catalog/2026-10-14-google-keep.json` is `catalog/2026-10-12-tasks-box-pages.json`
 plus one platform, `google-keep`, for the two-way Google Keep drive app

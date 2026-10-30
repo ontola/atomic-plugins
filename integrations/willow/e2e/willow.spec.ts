@@ -55,6 +55,38 @@ test.describe('willow export route', () => {
     await enableIntegrationDiscovery(page);
   });
 
+  test('waits for the catalog before filling its template search', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    // A cold SPA can finish navigation before its catalog is interactive.
+    // Keep the first catalog render unavailable beyond the 10 s fill timeout;
+    // a subsequent navigation is warm, as with the shared setup helper.
+    await page.addInitScript(() => {
+      if (
+        location.pathname !== '/app/new' ||
+        sessionStorage.getItem('willow-cold-catalog')
+      )
+        return;
+      sessionStorage.setItem('willow-cold-catalog', 'loaded');
+      document.addEventListener(
+        'DOMContentLoaded',
+        () => {
+          const style = document.createElement('style');
+          style.textContent = 'body { visibility: hidden !important; }';
+          document.documentElement.append(style);
+          setTimeout(() => style.remove(), 12_000);
+        },
+        { once: true },
+      );
+    });
+
+    await createDraft(page);
+    await expect(
+      page.getByRole('main').getByRole('heading', { name: TITLE, level: 1 }),
+    ).toBeVisible();
+  });
+
   test('serves host-signed Willow entries of public resources as a drop', async ({
     page,
   }) => {
@@ -239,8 +271,9 @@ test.describe('willow export route', () => {
 
 /** A Plugin draft whose source is the bundle, as plugin-routes.spec.ts makes one. */
 async function createDraft(page: Page) {
-  // No warm-up here, as before this was shared.
-  await openNewPluginDraft(page, { warm: false });
+  // A cold catalog may still be booting after navigation has finished.
+  // Use the helper's readiness wait before its short-timeout search fill.
+  await openNewPluginDraft(page);
 
   return page.evaluate(
     async ({ code, title }) => {
