@@ -22,6 +22,41 @@ export interface Entry {
   reference: string;
 }
 
+/** The bank fields whose imported values identify unchanged content. */
+export function contentFingerprint(
+  format: StatementFormat,
+  statement: Pick<Statement, 'account' | 'currency'>,
+  row: Omit<Transaction, 'bankReference'>,
+): string {
+  return (
+    `${format}-content:` +
+    JSON.stringify([
+      statement.account,
+      statement.currency,
+      row.date,
+      row.bookingDate,
+      row.amount,
+      row.code,
+      row.reference,
+      row.description,
+    ])
+  );
+}
+
+/** The statement portion of a positional import identity, if it has one. */
+export function statementIdentityKey(identity: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(identity);
+    if (!Array.isArray(parsed) || parsed.length !== 4) return undefined;
+    const [format, account, currency, where] = parsed as unknown[];
+    if (!Array.isArray(where) || where[0] !== 'statement') return undefined;
+
+    return JSON.stringify([format, account, currency, where[1]]);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Identities are per export format: the same booking exported twice as MT940
  * and camt.053 carries different narratives, which would otherwise surface as
@@ -46,18 +81,7 @@ export function entries(
     ]);
 
     for (const [index, row] of statement.transactions.entries()) {
-      const fingerprint =
-        `${format}-content:` +
-        JSON.stringify([
-          statement.account,
-          statement.currency,
-          row.date,
-          row.bookingDate,
-          row.amount,
-          row.code,
-          row.reference,
-          row.description,
-        ]);
+      const fingerprint = contentFingerprint(format, statement, row);
       const reference =
         row.bankReference && row.bankReference !== 'NONREF'
           ? row.bankReference

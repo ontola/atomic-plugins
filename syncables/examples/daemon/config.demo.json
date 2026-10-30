@@ -10,7 +10,7 @@
       "account": "example",
       "name": "tasks",
       "connection": "demo-connection",
-      "document": "./github-issues.json",
+      "document": "./generated/github-issues.json",
       "collection": "issues",
       "bindings": {
         "owner": "example",

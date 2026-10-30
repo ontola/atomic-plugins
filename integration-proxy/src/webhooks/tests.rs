@@ -2213,13 +2213,16 @@ async fn acknowledgements_and_renewals_race_sweeps_consistently() {
             .subscribe(&owner, &connection, &hook.hook_id, "p", at(0))
             .await
             .unwrap();
+        // Keep the progress deadline (7 days + 2 seconds) after this test's
+        // lease sweep (7 days + 1 second). A renewal does not clear a stalled
+        // progress deadline; that independent expiry is tested separately.
         for n in 0..5 {
             env.deliver(
                 &hook.endpoint_id,
                 &format!("r{round}-{n}"),
                 "p",
                 100,
-                at(1 + n),
+                at(2 + n),
             )
             .await;
         }

@@ -26,10 +26,26 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   is acknowledged and released like any other. A `maxBytes` below 1 gets
   `400`. A page's payloads are now read only for the events it returns
   with their bodies, not for every row it looks at.
+
+- Overlay Requirements 0.1.0-draft at catalog load: a platform whose
+  selected overlays include one with `info.x-requires` that no selected
+  overlay meets, or `info.x-conflicts` naming a selected overlay, fails to
+  load, as an `extends` mismatch does; references resolve against the
+  overlay's own URL. A malformed declaration is an error too.
+
 - Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
   paced at the tier whose `plans` name the plan the catalog selection's
   `throttlingPlans` gives for it, else within every tier at once (each its
-  own count). Unknown entries are logged at load and ignored.
+  own count). Unknown entries are logged at load and ignored. A tier above
+  the 10,000-requests cap is dropped (not paced) while the other tiers still
+  count, which paces below what Throttling requires when the dropped tier
+  would have been the binding one. Tier logs are keyed by bucket id and tier
+  position, so a bucket id can never collide with another bucket's tier.
+
+- Owner writes and key transfers share the startup schema lock, like device
+  transactions, so a rolling instance's DDL cannot deadlock a transfer's
+  upgrade from a row-locking read to an update.
+
 - Key rotation (#410): `POST /agents/transfer`, signed by the old agent with
   a proof by the new one, moves the old agent's connections and runtimes to
   the new id in one transaction and retires the old id (new `retired_agents`

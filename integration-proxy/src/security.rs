@@ -17,21 +17,32 @@ pub(crate) async fn connect_once(database_url: &str) -> Result<(Client, Connecti
     let tls = postgres_native_tls::MakeTlsConnector::new(tls);
     let (client, connection) = tokio_postgres::connect(database_url, tls)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(db_error)?;
     Ok((client, Box::pin(connection)))
 }
 
 /// Drives the active connection to completion, then keeps reconnecting with
 /// exponential backoff and swapping the shared client in on success, so a
 /// dropped connection recovers without restarting the process.
+///
+/// It holds the shared client only weakly: once every [`Security`] handle
+/// is dropped, the client is dropped, its connection ends, and the
+/// supervisor stops instead of reconnecting. Holding it strongly kept one
+/// PostgreSQL connection open, and reconnecting, for every `Security` ever
+/// made; the test suite makes hundreds and ran out of server connections
+/// ("too many clients already").
 fn spawn_reconnect_supervisor(
     database_url: String,
-    current: Arc<RwLock<Arc<Client>>>,
+    current: std::sync::Weak<RwLock<Arc<Client>>>,
     mut connection: ConnectionDriver,
 ) {
     tokio::spawn(async move {
         loop {
-            if let Err(error) = connection.await {
+            let result = connection.await;
+            if current.strong_count() == 0 {
+                return;
+            }
+            if let Err(error) = result {
                 tracing::error!(%error, "postgres connection failed; reconnecting");
             } else {
                 tracing::warn!("postgres connection closed; reconnecting");
@@ -40,6 +51,9 @@ fn spawn_reconnect_supervisor(
             loop {
                 match connect_once(&database_url).await {
                     Ok((client, new_connection)) => {
+                        let Some(current) = current.upgrade() else {
+                            return;
+                        };
                         *current.write().await = Arc::new(client);
                         connection = new_connection;
                         break;
@@ -69,6 +83,17 @@ const REFRESH_LEASE_SECONDS: f64 = 30.0;
 /// (`oauth_states`, `connection_codes`) are no longer read or written; they
 /// are left in place rather than dropped, see the README's flag-day notes.
 pub(crate) const SCHEMA_LOCK: i64 = 7_316_186_474_691_124_077;
+
+/// Startup DDL takes this lock exclusively. Multi-table writes take its
+/// shared form before any owner or row lock, so a rolling instance cannot
+/// deadlock with a transaction upgrading its relation locks.
+pub(crate) async fn migration_lock(
+    tx: &tokio_postgres::Transaction<'_>,
+) -> Result<(), tokio_postgres::Error> {
+    tx.query_one("SELECT pg_advisory_xact_lock_shared($1)", &[&SCHEMA_LOCK])
+        .await?;
+    Ok(())
+}
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS used_challenges (nonce TEXT PRIMARY KEY, expires_at TIMESTAMPTZ NOT NULL);
@@ -220,7 +245,12 @@ fn timestamp(value: std::time::SystemTime) -> String {
 }
 
 fn db_error(error: tokio_postgres::Error) -> String {
-    error.to_string()
+    // `Display` alone says only "db error"; the server's message (never a
+    // parameter value) is what an operator needs in the log.
+    match error.as_db_error() {
+        Some(db) => format!("{error}: {} ({})", db.message(), db.code().code()),
+        None => error.to_string(),
+    }
 }
 
 #[derive(Clone)]
@@ -258,6 +288,7 @@ pub const OWNER_RETIRED: &str = "owner retired";
 /// transfer and such a write never interleave: the write either commits
 /// before the transfer moves things, or sees the owner retired.
 async fn lock_owners(tx: &tokio_postgres::Transaction<'_>, owners: &[&str]) -> Result<(), String> {
+    migration_lock(tx).await.map_err(db_error)?;
     let mut owners = owners.to_vec();
     owners.sort_unstable();
     owners.dedup();
@@ -325,7 +356,11 @@ impl Security {
 
         let (client, connection) = connect_once(database_url).await?;
         let database = Arc::new(RwLock::new(Arc::new(client)));
-        spawn_reconnect_supervisor(database_url.to_string(), database.clone(), connection);
+        spawn_reconnect_supervisor(
+            database_url.to_string(),
+            Arc::downgrade(&database),
+            connection,
+        );
         Ok(Self {
             device_pool: Arc::new(crate::webhooks::pool::Pool::new(database_url, 4)),
             database,
@@ -1138,6 +1173,104 @@ pub(crate) mod tests {
             let _ = connection.await;
         });
         admin
+    }
+
+    /// Dropping every handle of a `Security` closes its PostgreSQL
+    /// connections and stops its reconnect supervisor: 20 handles made and
+    /// dropped leave no connection behind (counted by an application name of
+    /// their own).
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn a_dropped_security_closes_its_connections() {
+        let tag = format!("leak_{:016x}", rand::random::<u64>());
+        let mut url = url::Url::parse(&test_database_url()).unwrap();
+        url.query_pairs_mut().append_pair("application_name", &tag);
+        let admin = admin().await;
+        let open = || async {
+            admin
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1",
+                    &[&tag],
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0)
+        };
+        for _ in 0..20 {
+            let security = Security::connect(url.as_str(), TEST_KEY).await.unwrap();
+            security
+                .create_connection("github-issues", "atomic:agent:leak", b"{}")
+                .await
+                .unwrap();
+            assert!(open().await >= 1);
+            drop(security);
+        }
+        let mut left = open().await;
+        for _ in 0..50 {
+            if left == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            left = open().await;
+        }
+        assert_eq!(left, 0, "connections left open by dropped Security handles");
+    }
+
+    /// A rolling instance must wait for an owner write before running startup
+    /// DDL. Otherwise ALTER TABLE queues behind FOR UPDATE, while UPDATE's
+    /// relation-lock upgrade queues behind the initializer: a deadlock.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn startup_schema_does_not_deadlock_an_owner_write() {
+        let security = Security::connect(&test_database_url(), TEST_KEY)
+            .await
+            .unwrap();
+        let mut writer = admin().await;
+        let tx = writer.transaction().await.unwrap();
+        lock_owners(&tx, &["atomic:agent:startup-schema-fixture"])
+            .await
+            .unwrap();
+        tx.query("SELECT 1 FROM agent_connections FOR UPDATE", &[])
+            .await
+            .unwrap();
+
+        let tag = format!("startup_{:016x}", rand::random::<u64>());
+        let mut url = url::Url::parse(&test_database_url()).unwrap();
+        url.query_pairs_mut().append_pair("application_name", &tag);
+        let startup = tokio::spawn(async move { Security::connect(url.as_str(), TEST_KEY).await });
+        let observer = admin().await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let waiting: bool = observer.query_one(
+                    "SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a USING (pid) WHERE a.application_name = $1 AND NOT l.granted)",
+                    &[&tag],
+                ).await.unwrap().get(0);
+                if waiting {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("initializer should wait for the writer");
+
+        let updated = tx
+            .execute(
+                "UPDATE agent_connections SET owner = owner WHERE false",
+                &[],
+            )
+            .await;
+        let committed = tx.commit().await;
+        let initialized = startup.await.unwrap();
+        assert!(updated.is_ok(), "owner write failed: {updated:?}");
+        assert!(
+            committed.is_ok(),
+            "owner write commit failed: {committed:?}"
+        );
+        assert!(
+            initialized.is_ok(),
+            "startup failed: {}",
+            initialized.err().unwrap_or_default()
+        );
+        drop(security);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]

@@ -290,6 +290,8 @@ describe('incomplete rows (#177; ontology-kit’s rule: shown as incomplete, nev
       'bank-amount': '',
       'bank-account': 'NL00BUNQ0000000000',
       'bank-reference': 'TEST-1',
+      // A row with no fingerprint: matched by identity alone.
+      'bank-fingerprint': '',
     });
     const incomplete = harness({ data: 'shared', rows: [stub] });
     await incomplete.controller.load();
