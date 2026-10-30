@@ -970,7 +970,7 @@ async function classesOf(
 async function connectThroughHost(page: Page, app: FrameLocator) {
   await app.getByRole('button', { name: 'Connect Google Calendar' }).click();
   // Drawn by the host page, outside the frame: only a click here navigates.
-  const consent = page.getByRole('group', { name: 'Connect an account' });
+  const consent = page.getByRole('dialog', { name: /^Connect / });
   await expect(consent).toContainText('Google Calendar');
   await consent.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(
@@ -1197,7 +1197,9 @@ async function tableOf(page: Page): Promise<string> {
  * Returns the card, for its "Installed <version>" line.
  */
 async function installFromCatalog(page: Page) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });

@@ -339,7 +339,9 @@ function importRows(bytes: Uint8Array): Record<string, string>[] {
 }
 
 async function openReview(page: Page, releaseId: string) {
-  await page.goto(new URL('/app/integrations', SERVER_URL).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', SERVER_URL).href,
+  );
   const card = page.locator(`[data-release="${releaseId}"]`);
   await expect(card).toBeVisible({ timeout: 45_000 });
   await card.getByRole('button', { name: 'Open', exact: true }).click();

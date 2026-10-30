@@ -107,7 +107,7 @@ test.describe('Google Tasks drive app', () => {
     await expect(lists).toBeHidden();
     await app.getByRole('button', { name: 'Connect Google Tasks' }).click();
 
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     await expect(consent).toContainText('Google Tasks');
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(
@@ -373,7 +373,9 @@ async function fixture(name: string, args: unknown[]): Promise<unknown> {
  * `app-module-integrity`, then opens the new app.
  */
 async function installFromCatalog(page: Page) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });

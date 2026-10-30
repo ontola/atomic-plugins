@@ -408,7 +408,7 @@ test.describe('moneybird integration', () => {
 
 /** The host's consent bar, then the mock proxy's connect page, then back. */
 async function connectThroughMockProxy(page: Page) {
-  const consent = page.getByRole('group', { name: 'Connect an account' });
+  const consent = page.getByRole('dialog', { name: /^Connect / });
   await expect(consent).toContainText('Moneybird');
   await consent.getByRole('button', { name: 'Connect', exact: true }).click();
   await expect(
@@ -524,7 +524,9 @@ async function rendersOf(page: Page, app: string): Promise<string[]> {
 
 /** The Integrations page's Moneybird card, with experimental plugins shown. */
 async function openCatalogCard(page: Page) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });

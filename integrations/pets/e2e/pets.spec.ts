@@ -70,7 +70,7 @@ test.describe('pets integration', () => {
 
     // Connection: drawn by the host page, outside the frame.
     await app.getByRole('button', { name: 'Connect Pets' }).click();
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     await expect(consent).toContainText('Pets');
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
 
@@ -254,7 +254,9 @@ async function signedInAgent(page: Page): Promise<string> {
 
 /** The Integrations page's Pets card, with experimental plugins shown. */
 async function openCatalogCard(page: Page) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });
