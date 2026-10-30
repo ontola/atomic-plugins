@@ -39,9 +39,9 @@ authoritative):
     new atomic-server pin candidates ([pins.md](pins.md)).
   - **Q-105:** npm releases (syncables, devonian, …) and integration-proxy
     crates.io releases, and proxy deploys to Heroku, only from merged,
-    Opus-reviewed, CI-green `main`, following the recipes, and named in the
-    next status report ([proxy-release.md](proxy-release.md)). Heroku deploys
-    go through the coordinator's worker, which holds the Heroku access.
+    CI-green `main` reviewed by a state of the art model, following the
+    recipes, and named in the next status report
+    ([proxy-release.md](proxy-release.md)). Heroku deploys go through the coordinator's worker, which holds the Heroku access.
 
   Nothing else in these rules changes, and the rest of the freeze stands.
 - **Never `git commit --no-verify`.** Fix or report a failing hook. This repo
