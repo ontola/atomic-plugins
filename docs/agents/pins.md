@@ -53,9 +53,10 @@ git push origin <candidate-sha>:refs/heads/claude/atomic-plugins-pin
 
 That fails unless it is a fast-forward, which is the point. Pin bumps are
 pre-approved (#227 rule 4), and since 2026-10-08 so are building and tagging
-new candidates (Decision Inbox Q-104, [working-model.md](working-model.md)),
-which lifts the freeze's "no new pin candidates". A cloud session without atomic-server push access
-hands this step to the coordinator.
+new candidates (Decision Inbox Q-104, [working-model.md](working-model.md)).
+Michiel also lifted the freeze on new atomic-server PRs on 2026-10-30;
+the rule that only Joep's agent merges into `develop` still applies. A cloud
+session without atomic-server push access hands this step to the coordinator.
 
 ## Where atomic-server work branches from
 

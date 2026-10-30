@@ -2294,6 +2294,44 @@ mod tests {
         .unwrap()
     }
 
+    /// The default Keep profile composes the full refreshed OAD, but exposes
+    /// only the four note operations selected by its authentication profile.
+    #[tokio::test]
+    #[ignore = "downloads the pinned Google Keep OAD"]
+    async fn default_catalog_keep_selects_note_reads_and_writes() {
+        let catalog = checked_in_platform(crate::config::DEFAULT_CATALOG_FILE, "google-keep").await;
+        let provider = catalog.oauth_provider("google-keep").unwrap();
+        assert_eq!(provider.scopes, ["https://www.googleapis.com/auth/keep"]);
+        for (method, path) in [
+            ("GET", "/v1/notes"),
+            ("POST", "/v1/notes"),
+            ("GET", "/v1/notes/invented-note"),
+            ("DELETE", "/v1/notes/invented-note"),
+        ] {
+            assert!(catalog.allows("google-keep", method, path).is_some());
+        }
+        for (method, path) in [
+            ("PATCH", "/v1/notes/invented-note"),
+            ("PUT", "/v1/notes/invented-note"),
+            ("GET", "/v1/notes/invented-note/attachments/invented-image"),
+            ("POST", "/v1/notes/invented-note/permissions:batchCreate"),
+            ("POST", "/v1/notes/invented-note/permissions:batchDelete"),
+        ] {
+            assert!(catalog.allows("google-keep", method, path).is_none());
+        }
+        let document: Value = serde_yaml::from_str(catalog.get("google-keep").unwrap()).unwrap();
+        assert_eq!(
+            document["components"]["crudResources"]["note"]["identity"]["bindings"]["name"]
+                ["field"],
+            "name"
+        );
+        assert_eq!(
+            document["components"]["paginationSchemes"]["forwardPages"]["response"]["envelope"]
+                ["emptyWhenAbsent"],
+            true
+        );
+    }
+
     /// atomic-plugins#258 against the catalog-pinned full Discord OAD: the
     /// default catalog selects the `discordUser` profile, which covers the
     /// two OAuth reads and nothing else; the 2026-10-02 catalog, which

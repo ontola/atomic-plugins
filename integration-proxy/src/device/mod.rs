@@ -19,6 +19,7 @@ use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 
 pub const DISCOVERY_SCOPE: &str = "connections:read";
 pub const READ_SCOPE: &str = "proxy:read";
+pub const WRITE_SCOPE: &str = "proxy:write";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// Public clients have display names fixed by the operator, never provided
@@ -206,7 +207,7 @@ fn scopes(value: Option<&str>) -> Result<String, Error> {
     if scopes.is_empty()
         || scopes
             .iter()
-            .any(|s| *s != DISCOVERY_SCOPE && *s != READ_SCOPE)
+            .any(|s| *s != DISCOVERY_SCOPE && *s != READ_SCOPE && *s != WRITE_SCOPE)
     {
         return Err(Error::oauth("invalid_scope"));
     }
@@ -277,7 +278,7 @@ async fn discovery(State(state): State<AppState>) -> Response {
     }
     let base = &state.base_url;
     protected(Json(
-        json!({"issuer":base,"device_authorization_endpoint":format!("{base}/oauth/device/code"),"token_endpoint":format!("{base}/oauth/device/token"),"revocation_endpoint":format!("{base}/oauth/device/revoke"),"grant_types_supported":[DEVICE_GRANT,"refresh_token"],"token_endpoint_auth_methods_supported":["none"],"revocation_endpoint_auth_methods_supported":["none"],"scopes_supported":[DISCOVERY_SCOPE,READ_SCOPE],"device_approval_challenge_endpoint":format!("{base}/device/challenge"),"device_approval_endpoint":format!("{base}/device/approve")}),
+        json!({"issuer":base,"device_authorization_endpoint":format!("{base}/oauth/device/code"),"token_endpoint":format!("{base}/oauth/device/token"),"revocation_endpoint":format!("{base}/oauth/device/revoke"),"grant_types_supported":[DEVICE_GRANT,"refresh_token"],"token_endpoint_auth_methods_supported":["none"],"revocation_endpoint_auth_methods_supported":["none"],"scopes_supported":[DISCOVERY_SCOPE,READ_SCOPE,WRITE_SCOPE],"device_approval_challenge_endpoint":format!("{base}/device/challenge"),"device_approval_endpoint":format!("{base}/device/approve")}),
     ))
 }
 async fn authorize(

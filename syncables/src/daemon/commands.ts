@@ -1,3 +1,4 @@
+import { EDIT_COMMANDS, editCommand } from './edit-commands.js';
 import { lstat, realpath, readFile } from 'node:fs/promises';
 import type { SnapshotStore } from './snapshot-store.js';
 import { resolve, dirname } from 'node:path';
@@ -174,6 +175,17 @@ export async function daemonCommand(
   try {
     await archive.initialize();
     await store.initialize();
+    if (EDIT_COMMANDS.includes(command)) {
+      await editCommand(
+        config,
+        archive,
+        store,
+        positionals,
+        values,
+        controller.signal,
+      );
+      return;
+    }
     if (command === 'atomic-peer') {
       if (positionals.length !== 1)
         throw new Error('Unexpected command arguments');
@@ -441,7 +453,10 @@ export async function daemonCommand(
       values.interactive ? undefined : new KeychainCredentials(config),
     );
     if (command === 'login' || values.interactive) {
-      await auth.login((message) => process.stderr.write(message + '\n'));
+      await auth.login(
+        (message) => process.stderr.write(message + '\n'),
+        values.write === true,
+      );
       if (command === 'login') {
         write({ login: 'approved', persistent: !values.interactive });
         return;

@@ -2196,7 +2196,15 @@ async fn concurrent_subscriptions_stop_at_the_quota() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
 #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
 async fn acknowledgements_and_renewals_race_sweeps_consistently() {
-    let env = env(small()).await;
+    let mut policy = small();
+    // Isolate lease expiry. With the normal pending-age/progress deadlines,
+    // renew -> sweep -> acknowledge can legitimately close for stalled progress
+    // or invalidate the acknowledgement by evicting old pending events. Neither
+    // outcome says whether renewal won the lease race. Separate deadline/age
+    // tests below cover those policies (CI run 40892356587 exposed this overlap).
+    policy.progress_deadline = Duration::from_secs(14 * DAY);
+    policy.subscription_max_pending_age = Duration::from_secs(14 * DAY);
+    let env = env(policy).await;
     let hook = env.shared().await;
     for round in 0..10 {
         let owner = agent(&format!("racer{round}"));

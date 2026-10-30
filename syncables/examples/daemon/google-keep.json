@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "servers": [
     {
-      "url": "https://keep.googleapis.com/"
+      "url": "https://keep.googleapis.com"
     }
   ],
   "info": {
@@ -31,10 +31,30 @@
         "format": "google",
         "url": "https://keep.googleapis.com/$discovery/rest?version=v1",
         "version": "v1"
+      },
+      {
+        "format": "swagger",
+        "url": "https://keep.googleapis.com/$discovery/rest?version=v1",
+        "version": "2.0"
+      },
+      {
+        "format": "openapi",
+        "url": "https://keep.googleapis.com/$discovery/rest?version=v1",
+        "version": "3.0"
       }
     ],
     "x-providerName": "googleapis.com",
-    "x-serviceName": "keep"
+    "x-serviceName": "keep",
+    "x-conversion": [
+      "Refreshed only Google Keep v1 from the official Google Discovery document, revision 20261019, checked 2026-10-29. The vendor API version remains v1.",
+      "Retrieved Discovery JSON through the web reader and parsed its complete line-numbered representation; restored escaped newlines in string values. This records semantic source content, not a byte-for-byte HTTP response hash.",
+      "Converted Google Discovery to Swagger 2.0 with google-discovery-to-swagger 2.1.0 in strict mode, then to OpenAPI 3.0.0 with swagger2openapi 7.0.8 (patch=true, warnOnly=true); zero converter patches or warnings.",
+      "Expanded media.download to /v1/notes/{note}/attachments/{attachment} using the Discovery flatPath and required resource-name pattern. Its note and attachment path parameters represent the two non-slash ID segments. Without expansion the converter overwrites notes.get because both methods use GET /v1/{+name}. All seven Discovery methods are preserved.",
+      "Strict conversion normalizes reserved-expansion templates {+name} and {+parent} to {name} and {parent}; their required resource-name patterns remain. These values include notes/ and are resource names, not single-segment IDs.",
+      "Split converter-generated OAuth2 implicit and authorization-code security requirements into alternatives for each accepted scope; either flow can authorize a request. No scopes were added.",
+      "Declared JSON responses explicitly rather than retaining swagger2openapi wildcard defaults. For media.download, also declared a binary media response because Discovery sets supportsMediaDownload=true and documents alt=media.",
+      "Preserved existing APIs.guru info/contact curation, externalDocs and tags. No update operation was invented; Google exposes create/get/list/delete notes, attachment download and two permission batch operations."
+    ]
   },
   "externalDocs": {
     "url": "https://developers.google.com/keep/api"
@@ -50,7 +70,7 @@
   "paths": {
     "/v1/notes": {
       "get": {
-        "description": "Lists notes. Every list call returns a page of results with `page_size` as the upper bound of returned items. A `page_size` of zero allows the server to choose the upper bound. The ListNotesResponse contains at most `page_size` entries. If there are more things left to list, it provides a `next_page_token` value. (Page tokens are opaque values.) To get the next page of results, copy the result's `next_page_token` into the next request's `page_token`. Repeat until the `next_page_token` returned with a page of results is empty. ListNotes return consistent results in the face of concurrent changes, or signals that it cannot with an ABORTED error.",
+        "description": "Lists notes. Every list call returns a page of results with `page_size` as the upper bound of returned items. A `page_size` of zero allows the server to choose the upper bound. The ListNotesResponse contains at most `page_size` entries. If there are more things left to list, it provides a `next_page_token` value. (Page tokens are opaque values.) To get the next page of results, copy the result's `next_page_token` into the next request's `page_token`.\nRepeat until the `next_page_token` returned with a page of results is empty. ListNotes return consistent results in the face of concurrent changes, or signals that it cannot with an ABORTED error.",
         "operationId": "keep.notes.list",
         "parameters": [
           {
@@ -92,19 +112,8 @@
         },
         "security": [
           {
-            "Oauth2": [
+            "googleKeepOAuth": [
               "https://www.googleapis.com/auth/keep"
-            ],
-            "Oauth2c": [
-              "https://www.googleapis.com/auth/keep"
-            ]
-          },
-          {
-            "Oauth2": [
-              "https://www.googleapis.com/auth/keep.readonly"
-            ],
-            "Oauth2c": [
-              "https://www.googleapis.com/auth/keep.readonly"
             ]
           }
         ],
@@ -113,9 +122,14 @@
         ],
         "x-pagination": [
           {
-            "scheme": "pages"
+            "scheme": "forwardPages"
           }
-        ]
+        ],
+        "x-crud": {
+          "action": "list",
+          "resource": "note",
+          "collection": "notes"
+        }
       },
       "parameters": [
         {
@@ -146,10 +160,10 @@
           "$ref": "#/components/parameters/quotaUser"
         },
         {
-          "$ref": "#/components/parameters/upload_protocol"
+          "$ref": "#/components/parameters/uploadType"
         },
         {
-          "$ref": "#/components/parameters/uploadType"
+          "$ref": "#/components/parameters/upload_protocol"
         }
       ],
       "post": {
@@ -178,17 +192,44 @@
         },
         "security": [
           {
-            "Oauth2": [
-              "https://www.googleapis.com/auth/keep"
-            ],
-            "Oauth2c": [
+            "googleKeepOAuth": [
               "https://www.googleapis.com/auth/keep"
             ]
           }
         ],
         "tags": [
           "notes"
-        ]
+        ],
+        "x-crud": {
+          "action": "create",
+          "resource": "note",
+          "url": {
+            "source": "template"
+          },
+          "addedFields": {
+            "name": {
+              "source": "generated"
+            },
+            "createTime": {
+              "source": "generated"
+            },
+            "updateTime": {
+              "source": "generated"
+            },
+            "trashTime": {
+              "source": "generated"
+            },
+            "trashed": {
+              "source": "generated"
+            },
+            "attachments": {
+              "source": "generated"
+            },
+            "permissions": {
+              "source": "generated"
+            }
+          }
+        }
       }
     },
     "/v1/{name}": {
@@ -222,7 +263,9 @@
           {
             "Oauth2": [
               "https://www.googleapis.com/auth/keep"
-            ],
+            ]
+          },
+          {
             "Oauth2c": [
               "https://www.googleapis.com/auth/keep"
             ]
@@ -230,7 +273,11 @@
         ],
         "tags": [
           "notes"
-        ]
+        ],
+        "x-crud": {
+          "action": "delete",
+          "resource": "note"
+        }
       },
       "get": {
         "description": "Gets a note.",
@@ -241,14 +288,6 @@
             "in": "path",
             "name": "name",
             "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "description": "The IANA MIME type format requested. The requested MIME type must be one specified in the attachment.mime_type. Required when downloading attachment media and ignored otherwise.",
-            "in": "query",
-            "name": "mimeType",
             "schema": {
               "type": "string"
             }
@@ -270,7 +309,9 @@
           {
             "Oauth2": [
               "https://www.googleapis.com/auth/keep"
-            ],
+            ]
+          },
+          {
             "Oauth2c": [
               "https://www.googleapis.com/auth/keep"
             ]
@@ -278,7 +319,9 @@
           {
             "Oauth2": [
               "https://www.googleapis.com/auth/keep.readonly"
-            ],
+            ]
+          },
+          {
             "Oauth2c": [
               "https://www.googleapis.com/auth/keep.readonly"
             ]
@@ -286,7 +329,11 @@
         ],
         "tags": [
           "notes"
-        ]
+        ],
+        "x-crud": {
+          "action": "read",
+          "resource": "note"
+        }
       },
       "parameters": [
         {
@@ -317,10 +364,10 @@
           "$ref": "#/components/parameters/quotaUser"
         },
         {
-          "$ref": "#/components/parameters/upload_protocol"
+          "$ref": "#/components/parameters/uploadType"
         },
         {
-          "$ref": "#/components/parameters/uploadType"
+          "$ref": "#/components/parameters/upload_protocol"
         }
       ]
     },
@@ -354,10 +401,10 @@
           "$ref": "#/components/parameters/quotaUser"
         },
         {
-          "$ref": "#/components/parameters/upload_protocol"
+          "$ref": "#/components/parameters/uploadType"
         },
         {
-          "$ref": "#/components/parameters/uploadType"
+          "$ref": "#/components/parameters/upload_protocol"
         }
       ],
       "post": {
@@ -399,7 +446,9 @@
           {
             "Oauth2": [
               "https://www.googleapis.com/auth/keep"
-            ],
+            ]
+          },
+          {
             "Oauth2c": [
               "https://www.googleapis.com/auth/keep"
             ]
@@ -440,10 +489,10 @@
           "$ref": "#/components/parameters/quotaUser"
         },
         {
-          "$ref": "#/components/parameters/upload_protocol"
+          "$ref": "#/components/parameters/uploadType"
         },
         {
-          "$ref": "#/components/parameters/uploadType"
+          "$ref": "#/components/parameters/upload_protocol"
         }
       ],
       "post": {
@@ -485,8 +534,233 @@
           {
             "Oauth2": [
               "https://www.googleapis.com/auth/keep"
-            ],
+            ]
+          },
+          {
             "Oauth2c": [
+              "https://www.googleapis.com/auth/keep"
+            ]
+          }
+        ],
+        "tags": [
+          "notes"
+        ]
+      }
+    },
+    "/v1/notes/{note}/attachments/{attachment}": {
+      "get": {
+        "description": "Gets an attachment. To download attachment media via REST requires the alt=media query parameter. Returns a 400 bad request error if attachment media is not available in the requested MIME type.",
+        "operationId": "keep.media.download",
+        "parameters": [
+          {
+            "description": "The note ID component of the attachment resource name notes/{note}/attachments/{attachment}.",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The attachment ID component of the attachment resource name notes/{note}/attachments/{attachment}.",
+            "in": "path",
+            "name": "attachment",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The IANA MIME type format requested. The requested MIME type must be one specified in the attachment.mime_type. Required when downloading attachment media and ignored otherwise.",
+            "in": "query",
+            "name": "mimeType",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attachment"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "security": [
+          {
+            "Oauth2": [
+              "https://www.googleapis.com/auth/keep"
+            ]
+          },
+          {
+            "Oauth2c": [
+              "https://www.googleapis.com/auth/keep"
+            ]
+          },
+          {
+            "Oauth2": [
+              "https://www.googleapis.com/auth/keep.readonly"
+            ]
+          },
+          {
+            "Oauth2c": [
+              "https://www.googleapis.com/auth/keep.readonly"
+            ]
+          }
+        ],
+        "tags": [
+          "media"
+        ]
+      },
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/_.xgafv"
+        },
+        {
+          "$ref": "#/components/parameters/access_token"
+        },
+        {
+          "$ref": "#/components/parameters/alt"
+        },
+        {
+          "$ref": "#/components/parameters/callback"
+        },
+        {
+          "$ref": "#/components/parameters/fields"
+        },
+        {
+          "$ref": "#/components/parameters/key"
+        },
+        {
+          "$ref": "#/components/parameters/oauth_token"
+        },
+        {
+          "$ref": "#/components/parameters/prettyPrint"
+        },
+        {
+          "$ref": "#/components/parameters/quotaUser"
+        },
+        {
+          "$ref": "#/components/parameters/uploadType"
+        },
+        {
+          "$ref": "#/components/parameters/upload_protocol"
+        }
+      ]
+    },
+    "/v1/notes/{note}": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/_.xgafv"
+        },
+        {
+          "$ref": "#/components/parameters/access_token"
+        },
+        {
+          "$ref": "#/components/parameters/alt"
+        },
+        {
+          "$ref": "#/components/parameters/callback"
+        },
+        {
+          "$ref": "#/components/parameters/fields"
+        },
+        {
+          "$ref": "#/components/parameters/key"
+        },
+        {
+          "$ref": "#/components/parameters/oauth_token"
+        },
+        {
+          "$ref": "#/components/parameters/prettyPrint"
+        },
+        {
+          "$ref": "#/components/parameters/quotaUser"
+        },
+        {
+          "$ref": "#/components/parameters/upload_protocol"
+        },
+        {
+          "$ref": "#/components/parameters/uploadType"
+        }
+      ],
+      "get": {
+        "description": "Gets a note (keep.notes.get, as /v1/{name} with name notes/{note}).",
+        "operationId": "keep.notes.get.byId",
+        "parameters": [
+          {
+            "description": "The note's id, the part of its resource name after notes/.",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Note"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "security": [
+          {
+            "googleKeepOAuth": [
+              "https://www.googleapis.com/auth/keep"
+            ]
+          }
+        ],
+        "tags": [
+          "notes"
+        ]
+      },
+      "delete": {
+        "description": "Deletes a note for good (keep.notes.delete, as /v1/{name} with name notes/{note}). Caller must have the OWNER role on the note. It cannot be undone.",
+        "operationId": "keep.notes.delete.byId",
+        "parameters": [
+          {
+            "description": "The note's id, the part of its resource name after notes/.",
+            "in": "path",
+            "name": "note",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Empty"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "security": [
+          {
+            "googleKeepOAuth": [
               "https://www.googleapis.com/auth/keep"
             ]
           }
@@ -529,7 +803,8 @@
             "media",
             "proto"
           ],
-          "type": "string"
+          "type": "string",
+          "default": "json"
         }
       },
       "callback": {
@@ -569,7 +844,8 @@
         "in": "query",
         "name": "prettyPrint",
         "schema": {
-          "type": "boolean"
+          "type": "boolean",
+          "default": true
         }
       },
       "quotaUser": {
@@ -662,8 +938,7 @@
             "type": "string"
           },
           "permission": {
-            "$ref": "#/components/schemas/Permission",
-            "description": "Required. The permission to create. One of Permission.email, User.email or Group.email must be supplied."
+            "$ref": "#/components/schemas/Permission"
           }
         },
         "type": "object"
@@ -706,18 +981,19 @@
         "properties": {
           "checked": {
             "description": "Whether this item has been checked off or not.",
-            "type": "boolean"
+            "type": "boolean",
+            "default": false
           },
           "childListItems": {
             "description": "If set, list of list items nested under this list item. Only one level of nesting is allowed.",
             "items": {
               "$ref": "#/components/schemas/ListItem"
             },
-            "type": "array"
+            "type": "array",
+            "default": []
           },
           "text": {
-            "$ref": "#/components/schemas/TextContent",
-            "description": "The text of this item. Length must be less than 1,000 characters."
+            "$ref": "#/components/schemas/TextContent"
           }
         },
         "type": "object"
@@ -751,8 +1027,7 @@
             "type": "array"
           },
           "body": {
-            "$ref": "#/components/schemas/Section",
-            "description": "The body of the note."
+            "$ref": "#/components/schemas/Section"
           },
           "createTime": {
             "description": "Output only. When this note was created.",
@@ -810,14 +1085,10 @@
             "type": "string"
           },
           "family": {
-            "$ref": "#/components/schemas/Family",
-            "description": "Output only. The Google Family to which this role applies.",
-            "readOnly": true
+            "$ref": "#/components/schemas/Family"
           },
           "group": {
-            "$ref": "#/components/schemas/Group",
-            "description": "Output only. The group to which this role applies.",
-            "readOnly": true
+            "$ref": "#/components/schemas/Group"
           },
           "name": {
             "description": "Output only. The resource name.",
@@ -825,7 +1096,7 @@
             "type": "string"
           },
           "role": {
-            "description": "The role granted by this permission. The role determines the entity’s ability to read, write, and share notes.",
+            "description": "The role granted by this permission. The role determines the entity\u2019s ability to read, write, and share notes.",
             "enum": [
               "ROLE_UNSPECIFIED",
               "OWNER",
@@ -834,9 +1105,7 @@
             "type": "string"
           },
           "user": {
-            "$ref": "#/components/schemas/User",
-            "description": "Output only. The user to whom this role applies.",
-            "readOnly": true
+            "$ref": "#/components/schemas/User"
           }
         },
         "type": "object"
@@ -845,12 +1114,10 @@
         "description": "The content of the note.",
         "properties": {
           "list": {
-            "$ref": "#/components/schemas/ListContent",
-            "description": "Used if this section's content is a list."
+            "$ref": "#/components/schemas/ListContent"
           },
           "text": {
-            "$ref": "#/components/schemas/TextContent",
-            "description": "Used if this section's content is a block of text. The length of the text content must be less than 20,000 characters."
+            "$ref": "#/components/schemas/TextContent"
           }
         },
         "type": "object"
@@ -891,7 +1158,7 @@
         "type": "oauth2"
       },
       "Oauth2c": {
-        "description": "Oauth 2.0 authorizationCode authentication",
+        "description": "Oauth 2.0 accessCode authentication",
         "flows": {
           "authorizationCode": {
             "authorizationUrl": "https://accounts.google.com/o/oauth2/auth",
@@ -903,16 +1170,80 @@
           }
         },
         "type": "oauth2"
+      },
+      "googleKeepOAuth": {
+        "type": "oauth2",
+        "x-oauth-authentication-details": {
+          "authorizationServerMetadata": {
+            "token_endpoint_auth_methods_supported": [
+              "client_secret_post",
+              "client_secret_basic"
+            ],
+            "code_challenge_methods_supported": [
+              "S256"
+            ]
+          },
+          "authorizationCode": {
+            "pkce": {
+              "requirement": "optional"
+            },
+            "profile": {
+              "parameters": [
+                {
+                  "parameter": {
+                    "name": "access_type",
+                    "in": "query",
+                    "schema": {
+                      "type": "string",
+                      "enum": [
+                        "offline"
+                      ]
+                    }
+                  },
+                  "value": "offline"
+                }
+              ]
+            },
+            "capabilities": [
+              "offlineAccess"
+            ],
+            "tokenIssuance": {
+              "refreshToken": {
+                "presence": "conditional",
+                "conditions": [
+                  "firstAuthorization"
+                ],
+                "description": "Google can omit a refresh token after the first authorization."
+              }
+            }
+          }
+        },
+        "flows": {
+          "authorizationCode": {
+            "authorizationUrl": "https://accounts.google.com/o/oauth2/v2/auth",
+            "tokenUrl": "https://oauth2.googleapis.com/token",
+            "scopes": {
+              "https://www.googleapis.com/auth/keep": "See, edit, create and permanently delete all your Google Keep data."
+            }
+          }
+        }
+      }
+    },
+    "x-authentication-profiles": {
+      "googleKeep": {
+        "securityScheme": "googleKeepOAuth",
+        "description": "List, read, create and delete the connected person's Google Keep notes."
       }
     },
     "paginationSchemes": {
-      "pages": {
+      "forwardPages": {
         "type": "pageToken",
         "autoDetect": false,
+        "description": "Send nextPageToken as pageToken until the token is absent or empty, including after a short or empty page. Keep filters and page size fixed. Zero pageSize lets Google choose the upper bound. An ABORTED response is a failed reconciliation, not successful completion.",
         "request": {
           "queryParameters": {
             "pageToken": {
-              "role": "pageToken"
+              "role": "cursor"
             },
             "pageSize": {
               "role": "pageSize"
@@ -922,19 +1253,27 @@
         "response": {
           "bodyFields": {
             "nextPageToken": {
-              "role": "nextPageToken"
+              "role": "nextCursor"
             }
+          },
+          "envelope": {
+            "itemsField": "notes",
+            "emptyWhenAbsent": true
           }
         }
       }
     },
     "crudResources": {
       "note": {
+        "schema": {
+          "$ref": "#/components/schemas/Note"
+        },
         "identity": {
           "urlTemplate": "/v1/{name}",
           "bindings": {
             "name": {
-              "field": "name"
+              "field": "name",
+              "x-path-segments": true
             }
           }
         },
@@ -946,13 +1285,35 @@
               "emptyWhenAbsent": true
             }
           }
+        },
+        "replace": {
+          "description": "Keep has no note update operation. Create the replacement, durably record its new resource name, then permanently delete the old note. Replacements lose colour, labels, pins, reminders and Keep ordering. Only the owner can delete a note; clients must verify ownership.",
+          "blockedBy": [
+            {
+              "field": "attachments",
+              "when": "nonEmpty",
+              "description": "The API cannot copy attachments into a replacement note."
+            },
+            {
+              "field": "permissions",
+              "moreThan": 1,
+              "except": {
+                "deleted": true
+              },
+              "description": "A replacement note would lose its collaborators."
+            }
+          ]
+        },
+        "unkeyedLists": {
+          "body.list.listItems": {
+            "match": [
+              "text.text",
+              "checked"
+            ],
+            "children": "childListItems"
+          }
         }
       }
     }
-  },
-  "x-syncd-source": {
-    "repository": "https://github.com/ontola/openapi-directory",
-    "revision": "091431739208d017c11b0b0589ab33293f8b3690",
-    "path": "APIs/googleapis.com/keep/v1/openapi.yaml"
   }
 }

@@ -8,7 +8,7 @@ For an illustrated overview of the whole stack, including OpenAPI extensions,
 worked GitHub/Keep examples and what a page proves, start with
 [How Syncables turns APIs into a local copy](how-it-works.md).
 
-The source implementation adds a read-only standalone daemon to the existing
+The source implementation adds a standalone daemon to the existing
 `syncables` executable. It stores original API response text and lossless,
 content-addressed nested JSON nodes in a separate local PostgreSQL database.
 Successful syncs also maintain normal working folders per collection, without requiring Git.
@@ -24,12 +24,16 @@ and AtomicSync peer are separate work. See the
 [three-interface design](daemon-design.md#syncd-interfaces-git-braid-and-atomicsync)
 for their roles and the implemented read-only Braid milestone.
 
-This implementation is unreleased. It reuses #567's CLI/archive work without
+This implementation is experimental. It reuses #567's CLI/archive work without
 changing that draft branch. Device authorization uses the deployed
 [integration-proxy contract](../../integration-proxy/DEVICE_AUTH.md). Owner
 signing stays in the existing laptop bridge; the daemon receives device tokens.
 The October 16 live GitHub read verified that protocol. The new daemon and
 macOS Keychain adapter still need a laptop run against the deployed issuer.
+
+Explicit, opt-in provider creates, edits and deletes are documented in
+[Provider writes and recovery](daemon-writes.md). Polling and snapshot folders
+remain read-only observations.
 
 ## From a fetch to stored data
 
@@ -339,9 +343,17 @@ key or Google client secret belongs in the daemon config. This guide does not
 establish that the deployed Keep setup has been completed.
 
 Once the connection exists, rerun the connection-discovery command above and
-approve Keep. From the checkout's `syncables/` directory, copy the complete pinned Google Keep OpenAPI document with SyncD collection
-and pagination annotations. The daemon selects the GET collection and refuses
-non-GET collection operations; retaining the full schema does not enable writes:
+approve Keep. From the checkout's `syncables/` directory, copy the composed
+Keep OAD. This is the full Google Keep v1 description from
+`ontola/openapi-directory`, refreshed from Discovery revision `20261019`,
+with the same auth, pagination and CRUD overlays selected by the proxy's
+`2026-10-29-google-keep.json` catalog. Its declared writes do not enable
+write-back: this daemon still sends GET requests only.
+
+Changing a collection's document changes its scope. When replacing the older
+GET-only example in an existing private config, the next sync bootstraps a new
+scope; previous snapshots/history remain stored in the old scope. There is
+no automatic history migration between these document revisions.
 
 ```sh
 cp -n examples/daemon/google-keep.json "$HOME/.local/share/syncables-live/google-keep.json"
@@ -403,7 +415,27 @@ failed pages and interrupted reads do not publish a partial snapshot. Each
 manual fetch is a full reconciliation. List bodies and attachment metadata are
 kept within the note's original JSON; attachment files are not downloaded.
 The daemon makes GET requests only and does not apply the Drive app's two-way
-mapping or replace/edit/delete Keep notes.
+mapping or replace/edit/delete Keep notes. The composed document preserves
+Google's schemas and all seven operations, including attachment download,
+plus the proxy's note-ID aliases. Its metadata declares that edits would
+replace a note (create, then delete), block replacement of notes with
+attachments or live collaborators, and merge unkeyed checklist items. SyncD
+does not execute those write declarations yet; its device grant remains
+`connections:read proxy:read`.
+
+Maintainers regenerate the committed example from the repository root with
+Python and the overlay test requirements installed:
+
+```sh
+python overlays/tests/compose_catalog_platform.py google-keep \
+  --catalog overlays/catalog/2026-10-29-google-keep.json \
+  --output syncables/examples/daemon/google-keep.json
+```
+
+This reads the exact pinned OAD from a sibling `openapi-directory` clone when
+present, otherwise from its immutable GitHub URL, and applies local overlay
+bytes in catalog order. The composition test requires the example to equal
+that result exactly.
 
 For a second history entry, make an intentional change to a chosen issue/note
 in its provider UI, then rerun that collection's `cli sync --interactive` with

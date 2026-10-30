@@ -1,6 +1,14 @@
 export const DAEMON_HELP = `
 Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export only):
-  syncables login --config FILE
+  syncables login --config FILE [--write]
+  syncables create --collection ALIAS --input JSON_FILE --config FILE [--edit-id UUID]
+  syncables edit ITEM_ID --collection ALIAS --at REVISION --input JSON_FILE --owned --config FILE
+  syncables delete ITEM_ID --collection ALIAS --at REVISION --config FILE
+  syncables edits --collection ALIAS --config FILE
+  syncables send --collection ALIAS --config FILE [--interactive]
+  syncables cancel-edit EDIT_UUID --collection ALIAS --config FILE
+  syncables adopt-edit EDIT_UUID --created-id ITEM_ID --collection ALIAS --config FILE [--interactive]
+  syncables keep-both EDIT_UUID --collection ALIAS --config FILE
   syncables logout --config FILE
   syncables sync --config FILE [--collections platform/account/name,...] [--interactive]
     [--message "Why this sync is being run"]
@@ -24,6 +32,12 @@ Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export on
     [--subject RESOURCE_OR_SCHEMA_IRI] [--at COMMIT|tag:NAME]
   syncables resource IRI --collection platform/account/name --config FILE [--at COMMIT|tag:NAME]
   syncables tag NAME --collection platform/account/name --config FILE [--at COMMIT|tag:NAME]
+
+Provider writes require collection writes.enabled; replacement additionally requires
+allowReplacement and --owned. Queue commands are local; only send dispatches writes.
+Input is the complete desired writable JSON object. Keep edits create a new note
+and permanently delete the old one, losing unsupported metadata. Uncertain creates
+are held for explicit adoption, never reposted. See docs/daemon-writes.md.
 
 login stores device tokens in macOS Keychain. --interactive performs a new
 browser-approved login and keeps tokens only in this foreground process.

@@ -297,7 +297,7 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `BASE_URL` | no | Public URL of the proxy, e.g. `https://localthought.io`. Defaults to `http://localhost:8080`. Used for OAuth callback URLs, as the prefix of every signed URL, and (its origin) as a capability's `aud`. Must be exactly what clients use. |
 | `PORT` | no | Port to listen on. Defaults to `8080`. |
 | `SESSION_SECRET` | no; set it in production | Secret for the short-lived consent and OAuth-binding cookies. If unset, a random key is generated at startup (with a warning in the log), and a consent screen open during a restart must be started again. Instances behind one name must share it. |
-| `CATALOG_PATH` | no | Local path or HTTPS URL for the catalog JSON. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json`, this repository's `overlays/catalog/2026-10-02-auth-profiles.json` as GitHub Pages publishes it from `main` (0.2.4 defaults to `catalog/2026-10-02.json`). |
+| `CATALOG_PATH` | no | Local path or HTTPS URL for the catalog JSON. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-29-google-keep-writes.json`, this repository's `overlays/catalog/2026-10-29-google-keep-writes.json` as GitHub Pages publishes it from `main` (0.2.4 defaults to `catalog/2026-10-02.json`). |
 | `DATABASE_URL` | yes | PostgreSQL connection URL. See the TLS note below. |
 | `ENCRYPTION_KEY` | yes | Base64url-encoded, random 32-byte key for sealed provider credentials. Changing it makes every stored connection unreadable. |
 | `REVOKED_SUBJECTS` | no | Comma-separated agent ids (any accepted spelling) the default access policy refuses. |
@@ -380,16 +380,25 @@ scope). The initial integration imports contacts; supply the administration ID
 from the Moneybird account when connecting. OAuth tokens without `expires_in`
 remain usable until revoked; tokens with an expiry use the normal refresh flow.
 
-[`overlays/catalog/2026-10-02-auth-profiles.json`](../overlays/catalog/2026-10-02-auth-profiles.json) in this repository
+[`overlays/catalog/2026-10-29-google-keep-writes.json`](../overlays/catalog/2026-10-29-google-keep-writes.json) in this repository
 (migrated from the former `localthought/overlays` repository) is the source of
 the integration catalog. GitHub Pages publishes `overlays/` from `main` at
 `https://ontola.github.io/atomic-plugins/overlays/`, and the proxy defaults to
-the `catalog/2026-10-02-auth-profiles.json` there; set `CATALOG_PATH` to another HTTPS URL or to a
+the `catalog/2026-10-29-google-keep-writes.json` there; set `CATALOG_PATH` to another HTTPS URL or to a
 local fixture for development. Each platform names one pinned OpenAPI document
 (in `localthought/` or `ontola/openapi-directory`, at a commit) and zero or more Overlay
 Specification documents, each served from that same Pages folder. At startup
 the proxy downloads those HTTPS sources, applies each overlay's `update`
 actions in the listed order, and keeps the resulting YAML in memory.
+
+This source default retains the previous auth-profiles catalog's nine entries
+and adds Google Keep with a refreshed OAD and auth, pagination and CRUD overlays.
+The Keep profile exposes list/get/create/delete notes; Google has no update
+operation. Attachment download and sharing stay outside that profile. Device
+tokens require a separate, explicit `proxy:write` grant for mutations. Existing
+read sessions retain their restrictions. SyncD additionally requires per-collection
+write configuration and explicit sending; see
+[provider writes](../syncables/docs/daemon-writes.md). An explicit deployment `CATALOG_PATH` still wins.
 
 Provider overlay filenames include their kind and full OAD commit SHA under
 `overlays/APIs/`, so adding a newer OAD revision leaves existing catalog

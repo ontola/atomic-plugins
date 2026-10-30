@@ -1,0 +1,7 @@
+{
+  "name": "@atomic-integrations/google-keep-view-app",
+  "version": "0.2.0",
+  "private": true,
+  "description": "A Google Keep style table view of synced notes and checklists. No provider calls.",
+  "type": "module"
+}
