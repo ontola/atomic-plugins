@@ -1,6 +1,6 @@
 // @wc-ignore-file
 /** Invented host resources for unit and browser tests. Never bundled. */
-import { P } from './data.js';
+import { P, TABLE_CLASS } from './data.js';
 import type { Store, Value } from './store.js';
 
 export function fixture() {
@@ -110,7 +110,13 @@ export function fixture() {
       return row;
     },
     query: async ({ property, value }) =>
-      Object.keys(resources).filter(id => resources[id][property] === value),
+      Object.keys(resources).filter(id => {
+        const actual = resources[id][property];
+
+        return (
+          actual === value || (Array.isArray(actual) && actual.includes(value))
+        );
+      }),
     subscribe: (subject, handler) => {
       const set = listeners.get(subject) ?? new Set<() => void>();
       listeners.set(subject, set);
@@ -138,8 +144,82 @@ export function fixture() {
     attach: (table: 'notes' | 'items') => {
       data = { table: 'did:test:' + table };
     },
+    attachTable: (table: string) => {
+      data = { table };
+    },
     grant: (value: boolean) => {
       granted = value;
     },
   };
+}
+
+/** An imported checklist with its own class, unrelated to the sync app. */
+export function importedFixture() {
+  const fake = fixture();
+  const { resources } = fake;
+
+  for (const id of [
+    'notes',
+    'items',
+    'groceries',
+    'thought',
+    'item-0',
+    'item-1',
+    'item-2',
+    'item-3',
+  ]) {
+    delete resources['did:test:' + id];
+  }
+
+  const textProperty = 'did:test:import-text';
+  const checked = 'did:test:import-checked';
+  const position = 'did:test:import-position';
+  const rowClass = 'did:test:import-class';
+  const table = 'did:test:import-table';
+  resources[P.name] = {
+    [P.shortname]: 'name',
+    [P.datatype]: 'https://atomicdata.dev/datatypes/string',
+  };
+
+  for (const [id, name, datatype] of [
+    [textProperty, 'Text', 'string'],
+    [checked, 'Checked', 'boolean'],
+    [position, 'Position*', 'integer'],
+  ]) {
+    resources[id] = {
+      [P.shortname]: 'custom-' + name.toLowerCase(),
+      [P.name]: name,
+      [P.datatype]: 'https://atomicdata.dev/datatypes/' + datatype,
+    };
+  }
+
+  resources[rowClass] = {
+    [P.shortname]: 'imported-list-items',
+    [P.name]: 'List item',
+    [P.recommends]: [P.name, textProperty, checked],
+    [P.requires]: [position],
+  };
+  resources[table] = {
+    [P.isA]: [TABLE_CLASS],
+    [P.name]: 'Invented groceries · List',
+    [P.parent]: 'did:test:imports-folder',
+    [P.classtype]: rowClass,
+  };
+
+  for (const [id, name, done, order] of [
+    ['apples', 'Imaginary apples', true, 0],
+    ['tea', 'Fictional tea', false, 2],
+    ['toast', 'Pretend toast', false, 1],
+  ] as const) {
+    resources['did:test:import-' + id] = {
+      [P.parent]: table,
+      [P.isA]: [rowClass],
+      [P.name]: 'Imported row ' + id,
+      [textProperty]: name,
+      [checked]: done,
+      [position]: order,
+    };
+  }
+
+  return { ...fake, table, rowClass, checked, textProperty, position };
 }

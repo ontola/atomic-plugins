@@ -13,7 +13,9 @@ export const P = {
   recommends: A + 'recommends',
   requires: A + 'requires',
   classes: A + 'classes',
+  datatype: A + 'datatype',
 };
+export const TABLE_CLASS = 'https://atomicdata.dev/classes/Table';
 export const strings = (v: Value): string[] =>
   Array.isArray(v) ? v.filter((s): s is string => typeof s === 'string') : [];
 const text = (v: Value): string => (typeof v === 'string' ? v : '');
@@ -64,6 +66,91 @@ async function fields(
   return out;
 }
 
+interface ChecklistColumns {
+  text: string;
+  done: string;
+  position?: string;
+  under?: string;
+}
+
+/** Imported lists keep their own classes and columns. Match the declared
+ * field meanings and datatypes, rather than requiring the sync app's classes.
+ */
+async function checklistColumns(
+  store: Store,
+  klass: Resource,
+): Promise<ChecklistColumns | undefined> {
+  const properties = await Promise.all(
+    [
+      ...new Set([
+        ...strings(klass.get(P.recommends)),
+        ...strings(klass.get(P.requires)),
+      ]),
+    ].map(id => store.getResource(id)),
+  );
+  const key = (value: Value) =>
+    text(value)
+      .trim()
+      .replace(/\*$/, '')
+      .replace(/[\s_-]+/g, '')
+      .toLowerCase();
+
+  const find = (names: string[], types: string[]) => {
+    for (const name of names) {
+      const property = properties.find(
+        candidate =>
+          types.some(
+            type =>
+              candidate.get(P.datatype) ===
+              `https://atomicdata.dev/datatypes/${type}`,
+          ) &&
+          [candidate.get(P.shortname), candidate.get(P.name)].some(
+            value => key(value) === name,
+          ),
+      );
+      if (property) return property.subject;
+    }
+
+    return undefined;
+  };
+
+  const itemText = find(
+    [
+      'text',
+      'itemtext',
+      'arrayitemtext',
+      'arrayitem',
+      'name',
+      'title',
+      'item',
+      'value',
+    ],
+    ['string', 'markdown'],
+  );
+  const done = find(['checked', 'done', 'completed', 'bought'], ['boolean']);
+  if (!itemText || !done) return undefined;
+
+  return {
+    text: itemText,
+    done,
+    position: find(['position', 'index', 'order'], ['integer', 'float']),
+    under: find(['under', 'parentitem', 'parentlistitem'], ['atomicURL']),
+  };
+}
+
+export async function acceptsClass(
+  store: Store,
+  rowClass: string,
+): Promise<boolean> {
+  const klass = await store.getResource(rowClass);
+
+  return (
+    ['google-keep-note', 'google-keep-item'].includes(
+      text(klass.get(P.shortname)),
+    ) || !!(await checklistColumns(store, klass))
+  );
+}
+
 export async function sources(store: Store): Promise<Source[]> {
   const out: Source[] = [];
 
@@ -83,6 +170,46 @@ export async function sources(store: Store): Promise<Source[]> {
       });
     }
   }
+
+  const known = new Set(out.map(source => source.table));
+  const classes = new Map<string, Promise<boolean>>();
+  const imported = await Promise.all(
+    (await store.query({ property: P.isA, value: TABLE_CLASS })).map(
+      async id => {
+        if (known.has(id)) return undefined;
+
+        try {
+          const table = await store.getResource(id);
+          const rowClass = text(table.get(P.classtype));
+          if (!rowClass) return undefined;
+          let compatible = classes.get(rowClass);
+
+          if (!compatible) {
+            compatible = store.getResource(rowClass).then(
+              async klass =>
+                // The sync app's items are already grouped with its notes above.
+                !['google-keep-note', 'google-keep-item'].includes(
+                  text(klass.get(P.shortname)),
+                ) && !!(await checklistColumns(store, klass)),
+            );
+            classes.set(rowClass, compatible);
+          }
+
+          if (!(await compatible)) return undefined;
+
+          return {
+            table: id,
+            rowClass,
+            name: text(table.get(P.name)) || 'Checklist',
+          };
+        } catch {
+          // An unreadable or incomplete unrelated schema is not a source.
+          return undefined;
+        }
+      },
+    ),
+  );
+  out.push(...imported.filter((source): source is Source => !!source));
 
   return out;
 }
@@ -146,8 +273,52 @@ export function matches(note: Note, query: string): boolean {
 export async function read(store: Store, source: Source): Promise<Snapshot> {
   const klass = await store.getResource(source.rowClass);
   const type = text(klass.get(P.shortname));
-  if (!['google-keep-note', 'google-keep-item'].includes(type))
-    throw new Error('Choose a Google Keep notes or list items table.');
+
+  if (!['google-keep-note', 'google-keep-item'].includes(type)) {
+    const columns = await checklistColumns(store, klass);
+    if (!columns)
+      throw new Error(
+        'Choose a Keep notes table or a checklist with text and a boolean Checked or Done column.',
+      );
+    const [table, items] = await Promise.all([
+      store.getResource(source.table),
+      rows(store, source.table, source.rowClass),
+    ]);
+    await register(store, [source.rowClass]);
+
+    return {
+      notes: [
+        {
+          subject: source.table,
+          title: text(table.get(P.name)) || source.name,
+          kind: 'list',
+          body: '',
+          presence: '',
+          hold: '',
+          items: items.map((item, index) => {
+            const position = columns.position
+              ? item.get(columns.position)
+              : undefined;
+
+            return {
+              subject: item.subject,
+              text: text(item.get(columns.text)),
+              done: item.get(columns.done) === true,
+              under: columns.under ? text(item.get(columns.under)) : '',
+              position:
+                typeof position === 'number' && Number.isFinite(position)
+                  ? position
+                  : index,
+            };
+          }),
+        },
+      ],
+      itemTable: source.table,
+      doneProperty: columns.done,
+      watches: [source.table],
+    };
+  }
+
   const ontology = await store.getResource(text(klass.get(P.parent)));
   const classes = await Promise.all(
     strings(ontology.get(P.classes)).map(id => store.getResource(id)),
