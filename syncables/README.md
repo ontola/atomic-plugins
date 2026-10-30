@@ -2216,17 +2216,152 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **Unreleased**: the webhook inbox consumer speaks Webhook Subscriptions
-  0.2.0-draft's `maxBytes` (ontola/atomic-plugins#369, step 4b plan Unit
-  B). `InboxClient.events()` takes `maxBytes` and refuses one that is not
-  an integer of at least 1 (`RangeError`), and `InboxConsumerOptions`
-  passes `maxBytes` to every fetch. An event whose body alone is over it
-  reaches the journal with `payload.omitted: true` and no `body`, and is
-  acknowledged like any other; `scopedReads` names no reads for it.
-  **Breaking for TypeScript:** `InboxEvent.payload.body` is now optional
-  (`body?: string`), so code that reads it must handle its absence; a
-  receiver sends no omitted event unless the consumer asked for
-  `maxBytes`.
+- **0.26.0**: Experimental SyncD with PostgreSQL history, offline browsing, Git import/export, read-only Braid and explicit provider writes; check migration and API changes before upgrading.
+  - **Behaviour change:** The supported Node range is now 22.11 or newer, with CI on Node 22, 24 and 26;
+    the inherited Node 22-only upper limit is removed. Volta still defaults to
+    Node 22 for development.
+  - **Behaviour change:** The Google Keep daemon example uses the full pinned Keep v1 OAD and the
+    proxy catalog's auth, pagination and CRUD overlays. Reads remain the default;
+    provider writes require separate approval, collection opt-in and explicit
+    sending. Replacing an existing private example changes its document hash
+    and starts a new collection scope; previous snapshot history is retained
+    under the old scope rather than migrated automatically.
+  - **Behaviour change:** Syncs maintain ordinary snapshot folders per collection under
+    `workspaceDirectory` (default `./workspace`). Local edits block automatic
+    updates instead of being overwritten, and never trigger provider writes.
+    Existing snapshots can be exposed offline with `syncables checkout`; source
+    classes and schemas are added while preserving original history and payloads.
+  - **Behaviour change:** Local daemon snapshots, schemas, messages and revision heads now live in
+    PostgreSQL, sharing content-addressed JSON nodes with the response archive.
+    Existing Git installations must run `syncables migrate git --config FILE`
+    before continuing. Original archives and worktrees remain untouched; ordinary
+    snapshot folders use `workspaceDirectory` (default `./workspace`). Use
+    `syncables export git --subtree platform/account/collection --output NEW_DIR`
+    for checked-out Git history, including branches, tags and commit metadata.
+  - **Behaviour change:** the webhook inbox consumer speaks Webhook Subscriptions
+    0.2.0-draft's `maxBytes` (ontola/atomic-plugins#369, step 4b plan Unit
+    B). `InboxClient.events()` takes `maxBytes` and refuses one that is not
+    an integer of at least 1 (`RangeError`), and `InboxConsumerOptions`
+    passes `maxBytes` to every fetch. An event whose body alone is over it
+    reaches the journal with `payload.omitted: true` and no `body`, and is
+    acknowledged like any other; `scopedReads` names no reads for it.
+    **Breaking for TypeScript:** `InboxEvent.payload.body` is now optional
+    (`body?: string`), so code that reads it must handle its absence; a
+    receiver sends no omitted event unless the consumer asked for
+    `maxBytes`.
+  - **Added:** The optional `syncables` CLI tests device login and provider access through
+    Local Thought, saves replication destination definitions, and records reads
+    in a separate local PostgreSQL archive. The `syncables/postgres` entry
+    provides owner-scoped compressed payloads, caching and offline recorded-run
+    replay. Runtime replication and background service installation remain
+    unimplemented. Existing Node and browser library imports are unchanged.
+  - **Added:** SyncD can serve selected PostgreSQL snapshots with the new local-only braid
+    command: authenticated versioned GETs, read-only Braid subscriptions, bounded
+    replay after reconnect and explicit full-snapshot reset. JSON-AD records and
+    bundled schemas travel as text to preserve numeric lexemes. The listener is
+    independent of provider login, Git export and the Atomic adapter; writes and
+    patches are not supported. See docs/braid.md for commands and limits.
+  - **Added:** The standalone daemon guide names the exact config and OpenAPI files to
+    copy, recommends a private data directory outside the source checkout, and
+    shows real GitHub configuration and connection discovery. The full Google
+    Keep profile and trial instructions cover provider setup prerequisites,
+    pagination, account-wide response archival, local title filtering and revision
+    history. Explicit provider writes and recovery have a separate guide. No
+    provider credentials or live note data are included.
+  - **Added:** The mock server deduplicates creates on a declared `Idempotency-Key`
+    header parameter: a POST sent again with a key it has seen gets the
+    record made the first time, and the same key with another body gets a
+    `422` (bodies compare as JSON with sorted keys, or as text when they are
+    not JSON). A test runs the client's retry of a create whose response was
+    lost against it over HTTP, and finds one record at the server.
+  - **Added:** Standalone sync and daemon commands accept `--message` to record intent in
+    local PostgreSQL snapshot revisions alongside generated run provenance.
+    History returns messages, timestamps and parents, supports a pinned `--at`
+    revision, and accepts `--subject` for resource or schema history while
+    preserving the revision-ID list. Explicit storage-layer messages retain
+    intent-only revisions even when their trees are unchanged; Git exports
+    preserve these messages and ancestry.
+  - **Added:** Add experimental standalone sync, foreground daemon, local browse/history
+    and commit/tag resource lookup commands. Archive lossless nested JSON objects
+    by content hash in local PostgreSQL and version the JSON-AD data copy with its
+    bundled schemas in PostgreSQL snapshots, with optional Git import/export.
+    Support configured GET collections, a query-token incremental subset,
+    durable deduplicated webhook hints, periodic polling and macOS Keychain
+    device credentials. See `docs/daemon.md` for setup and limits; remote
+    replication and background service installation remain planned.
+  - **Added:** SyncD adds explicit, opt-in provider creates, replacements and deletes through
+    an independently approved device write grant. Local edits and receipts persist
+    in PostgreSQL; interrupted creates remain uncertain without automatic reposting,
+    and replacement identities are committed before originals are retired. Google
+    Keep uses a revised composed profile with resource-name path bindings. See
+    Provider writes and recovery for configuration, conflict handling, metadata
+    loss, ownership attestation and the remaining non-atomic deletion race.
+  - **Fixed:** `apiKeyAuth` takes `cookie` as well as `header` and `query`, the third
+    place an OpenAPI `apiKey` security scheme can put a key: it adds the
+    cookie to the request's `cookie` header, keeping the others, and refuses
+    a cookie name that is not an RFC 6265 token and a key that is not
+    cookie-octets (a `;` would inject a cookie). It and
+    `bearerAuth` now replace a header of the same name in any case; before,
+    a request with `Authorization` or `X-Api-Key` already set was sent with
+    both that header and the lower-case one the adapter added.
+  - **Fixed:** A create's identity read from its response (CRUD Causality §4.3.2) must
+    be a value `resolveReference` would also accept: a nonempty string that
+    is not `.` or `..`, is not padded with whitespace, and holds no NUL or
+    lone surrogate, or a safe integer. A numeric string past 2^53 is kept,
+    as a string. Before, a `Location` of `/pets/..` (or `%2E%2E`) bound the
+    record to `..`, whose path normalises to another resource; a lone
+    surrogate made every later update or delete of the record throw
+    `URIError`; and a body `id` that was an object or a boolean bound it to
+    `[object Object]` or `true`. Such a create is now unbound, as one
+    without a usable identity already was.
+  - **Fixed:** Device login now prints the server's complete verification link with the
+    matching user code prefilled, and explains continuing to owner approval.
+    Previously it printed the bare instruction page, which has no code-entry
+    field. Complete links are checked against the verification endpoint and user
+    code; servers without a complete link retain the manual-entry flow. The mock
+    approval page also supports a prefilled code.
+  - **Fixed:** A read by the last item's cursor (Pagination Schemes `fromLastItem`)
+    ends with a `PageReadError`, not complete, when that item's cursor value
+    is an empty string. Before, the client sent `?starting_after=`, and a
+    provider that answered it with an empty page made the read end as
+    complete after the items before it.
+  - **Fixed:** `apiKeyAuth(name)` and `apiKeyAuth(name, 'header')` refuse a header name
+    that is not an RFC 7230 token (a space, a colon, CR or LF, a non-ASCII
+    letter) when the adapter is made, as `cookie` placement already refused
+    such a cookie name. A query parameter name is not restricted.
+  - **Fixed:** The mock server answers a paginated list's page size, offset, page
+    number or page token with a `400` when it is not a whole number in range
+    (a page size of at least 1, a page at least the scheme's `start`).
+    Before, `limit=0` answered `hasMore` with the same next offset forever,
+    and a value that is not a number (`limit=abc`, `cursor=abc`) an empty
+    page that ended a read as if it were complete.
+  - **Fixed:** The Node entry's `createApiClient` reads `SYNCABLES_*` credentials from
+    the environment only when an `authenticate` adapter is given; without
+    one they are ignored, silently. Before, a
+    `SYNCABLES_API_KEY` or `SYNCABLES_ACCESS_TOKEN` set for something else
+    made a client without an adapter (a transport that authenticates itself)
+    refuse to start with "Credentials require an authenticate adapter".
+    Explicit credentials without an adapter are still refused.
+  - **Other:** Clarify pagination coverage as an observation of a possibly stale API view,
+    with mixed snapshots across pages. Explain the limits of repeated identical
+    reads and the separate append-only, stable-selection and closed-prefix
+    guarantees needed for stronger cursor-based synchronization.
+  - **Other:** Add an illustrated whole-stack explainer covering OpenAPI extensions, GitHub
+    and Keep profiles, authentication, shared JSON storage, versioned snapshots
+    and contract-derived page coverage. Add a design investigation of ambiguous,
+    delayed cross-collection matches using bank-transfer examples.
+  - **Other:** Lead the illustrated stack explainer with SyncD's elevator pitch: a generic
+    client driven by declarative OpenAPI extensions, running as a daemon that
+    keeps local versioned data available through Git exports and Braid subscriptions.
+  - **Other:** Document SyncD as Michiel's shorthand for the standalone Syncables Daemon,
+    without renaming the syncables package or command. Describe Git and Braid
+    as implemented experimental interfaces over shared PostgreSQL data/history,
+    and AtomicSync as a planned adapter. Git import/export and read-only Braid
+    subscriptions do not imply native Atomic peer replication or writable Braid.
+  - **Other:** Document Versioned Atomic Data resources, schemas, immutable revisions and
+    commit/tag lookup over local PostgreSQL history, with optional Git
+    import/export. Distinguish these versions from native Atomic signed commits
+    and describe publication and missing-schema behavior.
 - **0.25.0**: behaviour changes to know before upgrading come first:
   explicit `x-pagination` entries must have the spec's shape; Throttling
   `blocked`; auto-detection by response headers and fields; `applyOverlay`

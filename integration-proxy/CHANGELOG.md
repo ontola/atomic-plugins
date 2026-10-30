@@ -3,7 +3,20 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
-## Unreleased
+## 0.4.1 (2026-10-29)
+
+- Device sessions support an independently approved `proxy:write` scope for
+  POST, PUT, PATCH and DELETE on explicitly selected connections. Existing
+  sessions and default logins remain read-only; write scope does not imply
+  read or connection-management authority. Catalog restrictions, provider
+  credentials, ownership, access policy and pacing still apply. Owner
+  approval names permanent deletion, and token refresh cannot widen scope.
+- The source-default catalog adds Google Keep to its previous nine entries,
+  with the refreshed full OAD and immutable auth, pagination and CRUD overlays.
+  Resource-name path encoding and explicit checkbox defaults support SyncD's
+  replacement sender. Keep has no update endpoint. An explicit `CATALOG_PATH`
+  remains authoritative; deployment must preserve every existing production
+  catalog selection when updating Keep.
 
 - Webhook inbox (`WEBHOOKS_ENABLED`, off by default): `GET
   /subscriptions/{id}/events` takes `maxBytes` (Webhook Subscriptions
