@@ -449,7 +449,7 @@ test.describe('GitHub issues drive app', () => {
     expect((await mine())[0].delegations).toEqual([]);
     await app.getByRole('button', { name: 'Connect GitHub' }).click();
     await consent
-      .getByRole('button', { name: 'Use existing connection' })
+      .getByRole('button', { name: 'Use this account', exact: true })
       .click();
     await expect(consent).toBeHidden();
     await expect(bar).toHaveAttribute(

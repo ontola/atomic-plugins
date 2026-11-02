@@ -99,7 +99,8 @@ test.describe('GitHub issues webhook inbox', () => {
     await connections
       .getByRole('button', { name: 'Connect Github Issues' })
       .click();
-    const consent = page.getByRole('dialog', { name: /^Connect / });
+    // Installation connections retain their own inline consent bar.
+    const consent = page.getByRole('group', { name: 'Connect an account' });
     await consent.getByRole('button', { name: 'Continue' }).click();
     await expect(
       page.getByRole('heading', { name: 'Mock integration proxy' }),

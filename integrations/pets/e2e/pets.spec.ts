@@ -15,7 +15,7 @@
  * connection) and delegates it to the app's agent; the frame then gets a
  * capability from the page and calls the proxy itself, signing each request
  * with its own key. The mock proxy checks every signature the way the real
- * one does. Revoking the delegation and picking "Use existing connection"
+ * one does. Revoking the delegation and picking "Use this account"
  * gets the app back without a second trip through the proxy.
  *
  * The lane's dev-server stands in for GitHub Pages: it serves the committed
@@ -120,7 +120,7 @@ test.describe('pets integration', () => {
     });
     await app.getByRole('button', { name: 'Connect Pets' }).click();
     await consent
-      .getByRole('button', { name: 'Use existing connection' })
+      .getByRole('button', { name: 'Use this account', exact: true })
       .click();
     await expect(consent).toBeHidden();
     await expect(
