@@ -62,7 +62,7 @@ test.describe('notion drive plugin', () => {
     await app.getByRole('button', { name: 'Connect Notion' }).click();
     // The consent bar is drawn by the host, outside the frame, so the frame
     // cannot click it for the user.
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     await expect(consent).toContainText('Notion');
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(
@@ -553,7 +553,9 @@ async function statesTour(page: Page, testInfo: TestInfo) {
  * Returns the card, for its "Installed <version>" line.
  */
 async function installFromCatalog(page: Page) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });

@@ -1,7 +1,7 @@
 # Google Keep
 
 A drive app that syncs the connected Google account's Keep notes with its
-own table, both ways (only reading until sending is turned on, below),
+account folder, both ways (only reading until sending is turned on, below),
 every minute while the app is open in anyone's browser. It is the Google Tasks app (`../google-tasks/app/`) made two-way:
 the same shape, the same shared sync-status card, the same bounded
 rate-limit handling, in its own folder with nothing imported from it.
@@ -27,6 +27,30 @@ node integrations/tooling/run-lane.mjs google-keep --tier typecheck
 node integrations/tooling/run-lane.mjs google-keep --tier unit
 node integrations/tooling/run-lane.mjs google-keep --tier e2e   # needs the pinned atomic-server binary
 ```
+
+## Account folder and note views
+
+On a host supporting catalog folder destinations, installation creates one
+visible **Google Keep <account>** folder. The account address is added after
+a pass validates the connected account. Each note is one resource in that
+folder, preserving its Keep id, Atomic subject and sync baseline. The
+installer migrates an existing notes table in place: its subject and every
+note's parent stay the same. The sync app, schema, item table and view
+installation are managed outside ordinary drive contents.
+
+The separate **Google Keep View** installation supplies cards on the folder
+and a single note/checklist page on each note. The sync app discovers that
+installation through its drive-local catalog id and sets the host's
+drive-local `app-resource-view` reference on this folder and its note resources. Existing
+explicit renderer choices are retained. This selects a renderer; it does not
+grant the renderer permission to edit notes or list items. No new copy of any
+note or list item is made. A legacy host/table layout continues to sync as
+before, without these folder defaults.
+
+The host must grant the sync app's existing Agent read/write access to its
+account folder before moving that folder outside the app subtree. The app's
+`app-data` reference identifies its destination, but is not an authorization
+rule: writes still require both the signed-in user's and app Agent's rights.
 
 ## Who can connect
 
@@ -148,7 +172,7 @@ looked up by id once: `trashed: true` marks the row trashed, 404 deleted, a
 failure unconfirmed. Edits to such a row are not sent. Restoring the note in
 Keep brings the row back to present. No row is ever removed by a pass.
 
-**One account per table.** The first pass records the account the notes
+**One account per account folder/table.** The first pass records the account the notes
 name (the one address on every note's permissions). A later connection to
 another account stops with "This table syncs with …", writing nothing.
 

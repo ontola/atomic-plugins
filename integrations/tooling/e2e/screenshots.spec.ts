@@ -53,7 +53,9 @@ test.describe('README screenshots', () => {
 
   test('pets', async ({ page }) => {
     test.setTimeout(240_000);
-    await page.goto(new URL('/app/integrations', page.url()).href);
+    await page.goto(
+      new URL('/app/integrations?preview=plugins', page.url()).href,
+    );
     const experimental = page.getByRole('checkbox', {
       name: 'Show experimental plugins',
     });
@@ -66,7 +68,7 @@ test.describe('README screenshots', () => {
       .click();
     const app = await appFrame(page);
     await app.getByRole('button', { name: 'Connect Pets' }).click();
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
     await page
       .getByRole('button', {
@@ -270,7 +272,9 @@ test.describe('README screenshots', () => {
     // Installed from Drive apps, as a person does. The app makes its own
     // Bank transactions table (shared `bank-transaction-v1` class) on first
     // open and writes the imported rows into it itself: no importer.
-    await page.goto(new URL('/app/integrations', page.url()).href);
+    await page.goto(
+      new URL('/app/integrations?preview=plugins', page.url()).href,
+    );
     const experimental = page.getByRole('checkbox', {
       name: 'Show experimental plugins',
     });
@@ -335,7 +339,9 @@ async function installDriveApp(
   id: string,
   title: string,
 ): Promise<FrameLocator> {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });
@@ -352,7 +358,7 @@ async function installDriveApp(
 
 /** Accepts the host's consent bar and the mock proxy's connect page. */
 async function connectThroughMockProxy(page: Page, platform: string) {
-  const consent = page.getByRole('group', { name: 'Connect an account' });
+  const consent = page.getByRole('dialog', { name: /^Connect / });
   await consent.getByRole('button', { name: 'Connect', exact: true }).click();
   await page
     .getByRole('button', {
@@ -373,7 +379,9 @@ async function installSample(
     url => localStorage.setItem('plugin-catalog-url', url),
     SAMPLE_CATALOG_URL!,
   );
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const entry = page
     .getByRole('region', { name: 'Drive apps' })
     .locator(`[data-catalog-app="${id}-sample"]`);

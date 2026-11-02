@@ -4,6 +4,8 @@ import * as synthetic from '../fixtures/google-keep/synthetic.mjs';
 import { createController, type ViewState } from './controller.js';
 import {
   CLASSTYPE,
+  FOLDER_CLASS,
+  IS_A,
   DESCRIPTION,
   NAME,
   PARENT,
@@ -11,7 +13,16 @@ import {
   saveSettings,
   type Drive,
 } from './drive.js';
-import { fakeStore, OTHER_TABLE, TABLE, type FakeStore } from './fakeStore.js';
+import {
+  APP,
+  APP_CLASS,
+  APP_RESOURCE_VIEW,
+  CATALOG_ID,
+  fakeStore,
+  OTHER_TABLE,
+  TABLE,
+  type FakeStore,
+} from './fakeStore.js';
 import { acquire, LEASE_MS } from './lease.js';
 import type { JSONValue } from './store.js';
 import {
@@ -94,6 +105,81 @@ describe('provision', () => {
     const writes = store.writes.length;
     await provision(store);
     expect(store.writes.length).toBe(writes);
+  });
+
+  it('reuses the host-provisioned account folder and existing note identities', async () => {
+    const { store, drive, sync } = await setup({ folder: true });
+    await sync();
+    expect(store.resources.get(TABLE)?.[PARENT]).toBe('did:ad:drive');
+    expect(store.resources.get(TABLE)?.[IS_A]).toEqual([FOLDER_CLASS]);
+    expect(store.resources.get(TABLE)?.[NAME]).toBe(
+      `Google Keep ${synthetic.OWNER}`,
+    );
+    const subject = rowFor(store, drive, 'notes/synthetic-note-2').subject;
+    const baseline = rowFor(store, drive, 'notes/synthetic-note-2').props[
+      drive.properties.list
+    ];
+    const count = store.resources.size;
+    const writes = store.writes.length;
+    const again = await provision(store);
+    expect(again.table).toBe(TABLE);
+    await sync();
+    expect(store.resources.size).toBe(count);
+    expect(store.writes.length).toBe(writes);
+    expect(rowFor(store, drive, 'notes/synthetic-note-2').subject).toBe(
+      subject,
+    );
+    expect(
+      rowFor(store, drive, 'notes/synthetic-note-2').props[
+        drive.properties.list
+      ],
+    ).toBe(baseline);
+    expect(store.resources.get(drive.itemsTable)?.[PARENT]).toBe(APP);
+  });
+
+  it('sets the installed view on the folder and its own notes without duplicating them', async () => {
+    const { store, drive, sync } = await setup({ folder: true });
+    await sync();
+    const note = rowFor(store, drive, 'notes/synthetic-note-2').subject;
+    const other = await store.newResource({
+      parent: TABLE,
+      isA: ['did:ad:other-class'],
+      propVals: { [NAME]: 'Other document' },
+    });
+    store.resources.set('did:ad:keep-view', {
+      [IS_A]: [APP_CLASS],
+      [CATALOG_ID]: 'google-keep-view',
+    });
+    const size = store.resources.size;
+    await provision(store);
+    expect(store.resources.size).toBe(size);
+    expect(store.resources.get(TABLE)?.[APP_RESOURCE_VIEW]).toBe(
+      'did:ad:keep-view',
+    );
+    expect(store.resources.get(note)?.[APP_RESOURCE_VIEW]).toBe(
+      'did:ad:keep-view',
+    );
+    expect(
+      store.resources.get(other.subject)?.[APP_RESOURCE_VIEW],
+    ).toBeUndefined();
+    const writes = store.writes.length;
+    await provision(store);
+    expect(store.writes.length).toBe(writes);
+    await (
+      await store.getResource(note)
+    )
+      .set(APP_RESOURCE_VIEW, 'did:ad:chosen-view')
+      .save();
+    await provision(store);
+    expect(store.resources.get(note)?.[APP_RESOURCE_VIEW]).toBe(
+      'did:ad:chosen-view',
+    );
+  });
+
+  it('does not adopt a different folder passed as a view target', async () => {
+    const store = fakeStore({ table: OTHER_TABLE });
+    store.resources.get(OTHER_TABLE)![IS_A] = [FOLDER_CLASS];
+    await expect(provision(store)).rejects.toThrow(/another table/);
   });
 
   it('refuses another app’s table', async () => {
@@ -489,6 +575,22 @@ describe('syncNotes', () => {
     const before = store.writes.length;
     await expect(sync()).rejects.toBeInstanceOf(AccountMismatch);
     expect(store.writes.length).toBe(before);
+  });
+
+  it('does not rename an account folder or change its notes for a mismatched account', async () => {
+    const { store, drive, sync } = await setup({ folder: true });
+    await sync();
+    await edit(store, drive.app, {
+      [drive.properties.account]: 'someone-else@example.com',
+    });
+    const before = structuredClone([...store.resources]);
+    const writes = store.writes.length;
+    await expect(sync()).rejects.toBeInstanceOf(AccountMismatch);
+    expect(store.writes.length).toBe(writes);
+    expect([...store.resources]).toEqual(before);
+    expect(store.resources.get(TABLE)?.[NAME]).toBe(
+      `Google Keep ${synthetic.OWNER}`,
+    );
   });
 
   it('sends at most maxWrites notes per pass; the rest wait', async () => {

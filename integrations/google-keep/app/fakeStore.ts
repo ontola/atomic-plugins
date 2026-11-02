@@ -9,6 +9,7 @@
 import { googleKeepFixture } from '../fixtures/google-keep/scenario.mjs';
 import {
   CLASSTYPE,
+  FOLDER_CLASS,
   DEFAULT_ONTOLOGY,
   IS_A,
   NAME,
@@ -31,6 +32,9 @@ export const ROW_CLASS = 'did:ad:class-item';
 export const TABLE = 'did:ad:table-items';
 export const APP_CLASS = 'did:ad:plugin-class-app';
 export const RENDERS = 'did:ad:plugin-renders';
+export const APP_DATA = 'did:ad:app-data';
+export const APP_RESOURCE_VIEW = 'did:ad:app-resource-view';
+export const CATALOG_ID = 'did:ad:app-catalog-id';
 export const OTHER_TABLE = 'did:ad:table-theirs';
 
 export interface FakeStore extends PluginStore {
@@ -46,8 +50,10 @@ export function fakeStore({
   existing = false,
   relay = true,
   table = TABLE,
+  folder = false,
 }: {
   table?: string;
+  folder?: boolean;
   connected?: boolean;
   existing?: boolean;
   relay?: boolean;
@@ -60,13 +66,32 @@ export function fakeStore({
         [IS_A]: [APP_CLASS],
         [DEFAULT_ONTOLOGY]: ONTOLOGY,
         [RENDERS]: [ROW_CLASS],
+        [APP_DATA]: TABLE,
+        [CATALOG_ID]: 'google-keep',
       },
     ],
-    [APP_CLASS, { [SHORTNAME]: 'app', [RECOMMENDS]: [RENDERS] }],
+    [
+      APP_CLASS,
+      {
+        [SHORTNAME]: 'app',
+        [RECOMMENDS]: [RENDERS, APP_DATA, APP_RESOURCE_VIEW],
+      },
+    ],
+    [APP_DATA, { [SHORTNAME]: 'app-data' }],
+    [APP_RESOURCE_VIEW, { [SHORTNAME]: 'app-resource-view' }],
+    [CATALOG_ID, { [SHORTNAME]: 'app-catalog-id' }],
     [RENDERS, { [SHORTNAME]: 'renders' }],
     [ONTOLOGY, { [PARENT]: APP, [PROPERTIES]: [] }],
     [ROW_CLASS, { [PARENT]: ONTOLOGY, [NAME]: 'Item', [RECOMMENDS]: [NAME] }],
-    [TABLE, { [PARENT]: APP, [NAME]: 'Items', [CLASSTYPE]: ROW_CLASS }],
+    [
+      TABLE,
+      {
+        [PARENT]: folder ? 'did:ad:drive' : APP,
+        [IS_A]: folder ? [FOLDER_CLASS] : [],
+        [NAME]: 'Items',
+        [CLASSTYPE]: ROW_CLASS,
+      },
+    ],
     [
       OTHER_TABLE,
       { [PARENT]: 'did:ad:someone', [NAME]: 'Theirs', [CLASSTYPE]: ROW_CLASS },

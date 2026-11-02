@@ -14,9 +14,15 @@ export interface Resource {
   set(property: string, value: Value): Resource;
   save(): Promise<Resource>;
 }
+export interface DataRef {
+  /** A resource-page target. It does not confer a table editing grant. */
+  resource?: string;
+  table?: string;
+  rowClass?: string;
+}
 export interface Store {
   getApp(): Promise<string>;
-  getData(): Promise<{ table: string; rowClass?: string } | undefined>;
+  getData(): Promise<DataRef | undefined>;
   getResource(subject: string): Promise<Resource>;
   query(args: { property: string; value: string }): Promise<string[]>;
   subscribe(subject: string, handler: () => void): () => void;

@@ -327,7 +327,10 @@
       "tiers": ["typecheck", "unit", "e2e"],
       "paths": ["integrations/sync-status/**"],
       "note": "Google Keep style view of locally synced notes and checklists. Unit tests cover table and column resolution, unchecked-first ordering, source isolation and host editing grants. Browser tests use synthetic host resources; no provider calls.",
-      "e2e": ["integrations/google-keep-view/e2e/google-keep-view.spec.ts"]
+      "e2e": [
+        "integrations/google-keep-view/e2e/google-keep-view.spec.ts",
+        "integrations/google-keep-view/e2e/keep-account-folder.spec.ts"
+      ]
     }
   ]
 }

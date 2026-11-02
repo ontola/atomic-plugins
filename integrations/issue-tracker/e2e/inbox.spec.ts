@@ -99,6 +99,7 @@ test.describe('GitHub issues webhook inbox', () => {
     await connections
       .getByRole('button', { name: 'Connect Github Issues' })
       .click();
+    // Installation connections retain their own inline consent bar.
     const consent = page.getByRole('group', { name: 'Connect an account' });
     await consent.getByRole('button', { name: 'Continue' }).click();
     await expect(
@@ -487,7 +488,9 @@ async function createDraft(page: Page, code: string) {
  */
 async function installFromCard(page: Page, releaseId: string) {
   await waitForSynced(page);
-  await page.goto(new URL('/app/integrations', SERVER_URL).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', SERVER_URL).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });

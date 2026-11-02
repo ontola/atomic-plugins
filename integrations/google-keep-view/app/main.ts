@@ -5,6 +5,7 @@ import {
   matches,
   partition,
   read,
+  readResource,
   register,
   setDone,
   sources,
@@ -55,7 +56,12 @@ export async function view({
   const header = el('header', '', 'keep-header');
   const logo = el('span', '☑', 'keep-logo');
   logo.setAttribute('aria-hidden', 'true');
-  header.append(logo, el('h1', 'Google Keep'));
+  const heading = el('h1', 'Google Keep');
+  const back = button('Back to notes', () => {
+    if (snapshot.container) open(snapshot.container);
+  });
+  back.hidden = true;
+  header.append(back, logo, heading);
   const search = el('input');
   search.type = 'search';
   search.placeholder = 'Search notes';
@@ -108,6 +114,7 @@ export async function view({
   const expanded = new Set<string>();
 
   const showError = (error: unknown) => {
+    status.hidden = false;
     status.textContent = error instanceof Error ? error.message : String(error);
     status.classList.add('keep-error');
   };
@@ -121,7 +128,25 @@ export async function view({
     article.dataset.subject = note.subject;
     const title = note.title || 'Untitled note';
     article.setAttribute('aria-label', title);
-    article.append(el('h2', title));
+    if (!snapshot.single) article.append(el('h2', title));
+
+    if (!snapshot.single && store.openResource) {
+      article.tabIndex = 0;
+      article.addEventListener('click', event => {
+        const target = event.target as Element;
+        if (!target.closest('button,input,label,details,a')) open(note.subject);
+      });
+      article.addEventListener('keydown', event => {
+        if (
+          event.target === article &&
+          (event.key === 'Enter' || event.key === ' ')
+        ) {
+          event.preventDefault();
+          open(note.subject);
+        }
+      });
+    }
+
     if (note.kind === 'list' || note.items.length) {
       const { unchecked, checked } = partition(note.items);
 
@@ -148,7 +173,7 @@ export async function view({
                 showError(error);
               });
           });
-          label.append(checkbox, el('span', item.text || 'Empty item'));
+          label.append(checkbox, el('span', item.text));
           row.append(label);
           list.append(row);
         }
@@ -192,7 +217,7 @@ export async function view({
         ),
       );
 
-    if (store.openResource) {
+    if (store.openResource && !snapshot.single) {
       const footer = el('footer');
       footer.append(button('Open note', () => open(note.subject)));
       article.append(footer);
@@ -204,6 +229,7 @@ export async function view({
   const render = () => {
     const visible = snapshot.notes.filter(note => matches(note, search.value));
     grid.replaceChildren(...visible.map(card));
+    status.hidden = !!snapshot.single;
     status.classList.remove('keep-error');
     status.textContent = !source
       ? 'No compatible note or checklist tables yet. Import your Keep data, then refresh.'
@@ -239,79 +265,103 @@ export async function view({
 
     try {
       const data = await store.getData();
-      const currentTable = data
-        ? await store.getResource(data.table)
-        : undefined;
-      const rowClass =
-        data?.rowClass ||
-        currentTable?.get('https://atomicdata.dev/properties/classtype');
-      const klass =
-        typeof rowClass === 'string'
-          ? await store.getResource(rowClass)
+      let attached = false;
+
+      if (data?.resource) {
+        snapshot = await readResource(store, data.resource);
+        source = { table: data.resource, rowClass: '', name: snapshot.title! };
+        pickerLabel.hidden = true;
+      } else {
+        const currentTable = data?.table
+          ? await store.getResource(data.table)
           : undefined;
-      const attached =
-        typeof rowClass === 'string' &&
-        !!klass &&
-        (await acceptsClass(store, rowClass));
+        const rowClass =
+          data?.rowClass ||
+          currentTable?.get('https://atomicdata.dev/properties/classtype');
+        const klass =
+          typeof rowClass === 'string'
+            ? await store.getResource(rowClass)
+            : undefined;
+        attached =
+          typeof rowClass === 'string' &&
+          !!klass &&
+          (await acceptsClass(store, rowClass));
 
-      if (
-        data &&
-        currentTable &&
-        !attached &&
-        currentTable.get('https://atomicdata.dev/properties/parent') !==
-          (await store.getApp())
-      )
-        throw new Error(
-          'This table needs a text column and a boolean Checked or Done column to use this view.',
-        );
+        if (
+          data &&
+          currentTable &&
+          !attached &&
+          currentTable.get('https://atomicdata.dev/properties/parent') !==
+            (await store.getApp())
+        )
+          throw new Error(
+            'This table needs a text column and a boolean Checked or Done column to use this view.',
+          );
 
-      if (attached && data && typeof rowClass === 'string')
-        source = { table: data.table, rowClass, name: 'Google Keep' };
-      else {
-        available = await sources(store);
-        if (!available.some(item => item.table === source?.table))
-          source = available[0];
-        picker.replaceChildren(
-          ...available.map(item => {
-            const option = el('option', item.name);
-            option.value = item.table;
+        if (attached && data?.table && typeof rowClass === 'string')
+          source = { table: data.table, rowClass, name: 'Google Keep' };
+        else {
+          available = await sources(store);
+          if (!available.some(item => item.table === source?.table))
+            source = available[0];
+          picker.replaceChildren(
+            ...available.map(item => {
+              const option = el('option', item.name);
+              option.value = item.table;
 
-            return option;
-          }),
-        );
-        picker.value = source?.table ?? '';
-        pickerLabel.hidden = available.length < 2;
-        await register(
-          store,
-          available.map(item => item.rowClass),
-        );
+              return option;
+            }),
+          );
+          picker.value = source?.table ?? '';
+          pickerLabel.hidden = available.length < 2;
+          await register(
+            store,
+            available.map(item => item.rowClass),
+          );
+        }
+
+        snapshot = source
+          ? await read(store, source)
+          : { notes: [], watches: [] };
       }
 
-      snapshot = source
-        ? await read(store, source)
-        : { notes: [], watches: [] };
+      heading.textContent = snapshot.title || 'Google Keep';
+      search.hidden = !!snapshot.single;
+      layout.hidden = !!snapshot.single;
+      back.hidden =
+        !snapshot.single || !snapshot.container || !store.openResource;
+      grid.classList.toggle('keep-single', !!snapshot.single);
+      grid.setAttribute('aria-label', snapshot.single ? 'Note' : 'Notes');
       canEdit = !!(
+        !data?.resource &&
         attached &&
         data?.table === snapshot.itemTable &&
         (await store.rowAccess?.())?.status === 'granted'
       );
       allow.hidden = !(
+        !data?.resource &&
         attached &&
         data?.table === snapshot.itemTable &&
         !canEdit &&
         store.requestRowAccess
       );
       notice.hidden = canEdit || !source;
-      notice.replaceChildren(doc.createTextNode('Read-only. '));
+      notice.replaceChildren(doc.createTextNode('Read-only.'));
       if (
         snapshot.itemTable &&
         data?.table !== snapshot.itemTable &&
-        store.openResource
+        store.openResource &&
+        (!data?.resource ||
+          snapshot.notes.some(
+            note => note.kind === 'list' || note.items.length,
+          ))
       )
         notice.append(
-          button('Open list items to edit', () => open(snapshot.itemTable!)),
+          doc.createTextNode(' '),
+          button('Open editing view', () => open(snapshot.itemTable!)),
         );
-      else notice.append('Allow editing to tick list items.');
+      else if (!data?.resource)
+        notice.append(' Allow editing to tick list items.');
       const watches = new Set(snapshot.watches);
 
       for (const [subject, stop] of subscriptions)

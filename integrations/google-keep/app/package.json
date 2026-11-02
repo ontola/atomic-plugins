@@ -1,7 +1,7 @@
 {
   "name": "@atomic-integrations/google-keep-app",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Google Keep drive app (two-way sync of the connected account's notes with the app's own table, while the view is open). Bundles the npm syncables package (its list merge, replace check and fingerprint) into apps/google-keep/<version>/ui.js; records only the version its catalog entry carries (integrations/tooling/apps.mjs). Not a certified sandbox package (no atomicCertification); it lives in app/ so certify.mjs does not treat google-keep as one.",
   "dependencies": {

@@ -240,7 +240,9 @@ async function createGatedPlugin(page: Page) {
 
 /** The store's review dialog for one published release. */
 async function openReview(page: Page, releaseId: string) {
-  await page.goto(new URL('/app/integrations', SERVER_URL).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', SERVER_URL).href,
+  );
   const card = page.locator(`[data-release="${releaseId}"]`);
   await expect(card).toBeVisible({ timeout: 45_000 });
   await card.getByRole('button', { name: 'Open', exact: true }).click();
