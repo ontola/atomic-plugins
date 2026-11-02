@@ -1,5 +1,6 @@
 // @wc-ignore-file
 import type { Resource, Store, Value } from './store.js';
+import { acceptsRecursiveKeep, readRecursiveKeep } from './recursive.js';
 
 const A = 'https://atomicdata.dev/properties/';
 
@@ -46,6 +47,7 @@ export interface Snapshot {
   watches: string[];
   itemTable?: string;
   doneProperty?: string;
+  readOnlyReason?: string;
 }
 
 /** Resolve the sync app's own terms from its class, never from another install. */
@@ -145,9 +147,11 @@ export async function acceptsClass(
   const klass = await store.getResource(rowClass);
 
   return (
+    acceptsRecursiveKeep(klass) ||
     ['google-keep-note', 'google-keep-item'].includes(
       text(klass.get(P.shortname)),
-    ) || !!(await checklistColumns(store, klass))
+    ) ||
+    !!(await checklistColumns(store, klass))
   );
 }
 
@@ -188,9 +192,11 @@ export async function sources(store: Store): Promise<Source[]> {
             compatible = store.getResource(rowClass).then(
               async klass =>
                 // The sync app's items are already grouped with its notes above.
-                !['google-keep-note', 'google-keep-item'].includes(
+                acceptsRecursiveKeep(klass) ||
+                (!['google-keep-note', 'google-keep-item'].includes(
                   text(klass.get(P.shortname)),
-                ) && !!(await checklistColumns(store, klass)),
+                ) &&
+                  !!(await checklistColumns(store, klass))),
             );
             classes.set(rowClass, compatible);
           }
@@ -273,6 +279,11 @@ export function matches(note: Note, query: string): boolean {
 export async function read(store: Store, source: Source): Promise<Snapshot> {
   const klass = await store.getResource(source.rowClass);
   const type = text(klass.get(P.shortname));
+  if (acceptsRecursiveKeep(klass)) {
+    const snapshot = await readRecursiveKeep(store, source);
+    await register(store, [source.rowClass]);
+    return snapshot;
+  }
 
   if (!['google-keep-note', 'google-keep-item'].includes(type)) {
     const columns = await checklistColumns(store, klass);

@@ -17,3 +17,9 @@ export {
 } from './owned-list.js';
 export { startBraidServer } from './braid.js';
 export type { BraidCollection, BraidOptions, BraidServer } from './braid.js';
+export {
+  recursiveAtomicProjector,
+  atomicSchemaId,
+  RECURSIVE_FORMAT,
+} from './recursive-atomic.js';
+export type { RecursiveAtomicProjection } from './recursive-atomic.js';

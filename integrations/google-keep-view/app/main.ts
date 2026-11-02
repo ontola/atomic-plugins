@@ -311,7 +311,10 @@ export async function view({
         notice.append(
           button('Open list items to edit', () => open(snapshot.itemTable!)),
         );
-      else notice.append('Allow editing to tick list items.');
+      else
+        notice.append(
+          snapshot.readOnlyReason ?? 'Allow editing to tick list items.',
+        );
       const watches = new Set(snapshot.watches);
 
       for (const [subject, stop] of subscriptions)

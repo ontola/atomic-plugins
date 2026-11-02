@@ -325,7 +325,13 @@
       "index": 23,
       "platforms": [],
       "tiers": ["typecheck", "unit", "e2e"],
-      "paths": ["integrations/sync-status/**"],
+      "paths": [
+        "integrations/sync-status/**",
+        "syncables/src/daemon/recursive-atomic.ts",
+        "syncables/src/daemon/sync.ts",
+        "syncables/src/postgres/json-graph.ts",
+        "syncables/examples/daemon/google-keep.json"
+      ],
       "note": "Google Keep style view of locally synced notes and checklists. Unit tests cover table and column resolution, unchecked-first ordering, source isolation and host editing grants. Browser tests use synthetic host resources; no provider calls.",
       "e2e": ["integrations/google-keep-view/e2e/google-keep-view.spec.ts"]
     }

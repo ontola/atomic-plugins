@@ -20,7 +20,7 @@ Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export on
     [--peer-port 9901] [--at REVISION|tag:NAME] [--projection-contract FILE]
   syncables checkout --config FILE [--collections platform/account/name,...]
   syncables braid --config FILE --collections platform/account/name,...
-    [--braid-port 9888] [--braid-origin https://reader.example]
+    [--braid-port 9888] [--braid-origin https://reader.example] [--braid-view raw|atomic]
   syncables migrate git --config FILE [--source LEGACY_ARCHIVE]
   syncables export git --config FILE --subtree platform/account/collection[/ENCODED_ITEM_ID]
     --output NEW_DIRECTORY [--branches all|current] [--at REVISION|tag:NAME]

@@ -1,5 +1,14 @@
 # Google Keep View
 
+Version 0.3.0 also reads SyncD's OpenAPI-derived linked Atomic representation.
+It accepts the generated Note class for pinned Keep OAD
+`a86aba83e63e24592e54491417815ea04c55d865350c338e5326cabb749b6499`,
+then traverses Section, ListContent, ordered array occurrences, ListItem and
+TextContent resources. Availability follows the exact Class identifier and
+contract metadata. This source model is read-only; its schema and rows are
+not converted into the sync app's separate editable ontology. See
+[SyncD's representation](../../syncables/docs/recursive-atomic.md).
+
 A Keep-style table view of imported checklists and the Google Keep sync app's
 notes. Install the separate **Google Keep View** entry from Integrations →
 Drive apps (under **Show experimental plugins**), then open it once. Installing

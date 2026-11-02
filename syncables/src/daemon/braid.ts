@@ -17,6 +17,13 @@ const TOKEN = /^[\x21-\x7e]{32,256}$/;
 export interface BraidCollection {
   alias: string;
   scope: string;
+  /** Alternate, versioned representation; source snapshots remain immutable. */
+  format?: string;
+  projectionKey?: string;
+  project?: (
+    resources: Record<string, string>,
+    revision: HistoryRevision,
+  ) => Record<string, string>;
 }
 export interface BraidOptions {
   store: Pick<PostgresHistoryStore, 'head' | 'revision' | 'render'>;
@@ -52,7 +59,14 @@ class HttpError extends Error {
 
 /** A version namespace covers scope, representation format AND resource URL. */
 function namespace(collection: BraidCollection): string {
-  return nodeHash(JSON.stringify([FORMAT, collection.alias, collection.scope]));
+  return nodeHash(
+    JSON.stringify([
+      collection.format ?? FORMAT,
+      collection.alias,
+      collection.scope,
+      ...(collection.projectionKey ? [collection.projectionKey] : []),
+    ]),
+  );
 }
 function version(collection: BraidCollection, revision: string): string {
   return 'syncd-v1-' + namespace(collection) + '-' + revision;
@@ -177,10 +191,12 @@ export async function startBraidServer(
     // Each JSON-AD resource is TEXT, so a standard JSON parser on the consumer
     // cannot round the source's numeric lexemes. Internal context is not served.
     const parts: string[] = [];
+    const originals: Record<string, string> = {};
     let bytes = 0;
     for (const subject of Object.keys(entry.resources).sort()) {
       if (signal.aborted) throw new Error('Braid client disconnected');
       const raw = await options.store.render(entry.resources[subject]);
+      if (collection.project) originals[subject] = raw;
       const part = JSON.stringify(subject) + ':' + JSON.stringify(raw);
       bytes += Buffer.byteLength(part) + 1;
       if (bytes > MAX_BODY - 1024)
@@ -190,9 +206,25 @@ export async function startBraidServer(
         );
       parts.push(part);
     }
+    if (collection.project) {
+      parts.length = 0;
+      bytes = 0;
+      for (const [subject, raw] of Object.entries(
+        collection.project(originals, entry),
+      )) {
+        const part = JSON.stringify(subject) + ':' + JSON.stringify(raw);
+        bytes += Buffer.byteLength(part) + 1;
+        if (bytes > MAX_BODY - 1024)
+          throw new HttpError(
+            413,
+            'Atomic projection exceeds the 32 MiB Braid representation limit',
+          );
+        parts.push(part);
+      }
+    }
     return (
       '{"format":' +
-      JSON.stringify(FORMAT) +
+      JSON.stringify(collection.format ?? FORMAT) +
       ',"collection":' +
       JSON.stringify(collection.alias) +
       ',"revision":' +
