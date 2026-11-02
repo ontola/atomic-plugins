@@ -50,6 +50,9 @@ CI also exposed a pre-existing same-millisecond collision in the mock proxy's
 explicit replay-identity test. The fixture now mints an unused owner request
 timestamp before sharing it across agents, preserving every replay assertion
 without changing authentication behavior.
+The follow-up CI lint run identified missing statement-padding blank lines in
+the new Keep reader and fixture. Those formatting fixes pass the full shared
+lint and format checks without changing the generated module bytes.
 Specific results and any CI limitations are recorded in the PR descriptions.
 
 Credentials, wallet material, provider connection identifiers, note contents,

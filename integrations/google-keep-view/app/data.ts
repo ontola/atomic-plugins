@@ -279,9 +279,11 @@ export function matches(note: Note, query: string): boolean {
 export async function read(store: Store, source: Source): Promise<Snapshot> {
   const klass = await store.getResource(source.rowClass);
   const type = text(klass.get(P.shortname));
+
   if (acceptsRecursiveKeep(klass)) {
     const snapshot = await readRecursiveKeep(store, source);
     await register(store, [source.rowClass]);
+
     return snapshot;
   }
 

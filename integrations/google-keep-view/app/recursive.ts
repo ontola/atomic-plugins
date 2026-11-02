@@ -12,6 +12,7 @@ const list = (value: Value): string[] =>
     ? value.filter((v): v is string => typeof v === 'string')
     : [];
 const text = (value: Value): string => (typeof value === 'string' ? value : '');
+
 // Exact pinned contracts, independent of table names, source aliases and rows.
 export const keepDocuments = [
   'a86aba83e63e24592e54491417815ea04c55d865350c338e5326cabb749b6499',
@@ -31,20 +32,26 @@ export async function readRecursiveKeep(
   source: Source,
 ): Promise<Snapshot> {
   const cache = new Map<string, Promise<Resource>>();
+
   const get = (subject: string): Promise<Resource> => {
     let result = cache.get(subject);
+
     if (!result) {
       result = store.getResource(subject);
       cache.set(subject, result);
     }
+
     return result;
   };
+
   const watches = new Set<string>([source.table]);
   const properties = new Map<string, Promise<Map<string, string>>>();
+
   const field = async (row: Resource, name: string): Promise<Value> => {
     const klass = list(row.get(P + 'isA'))[0];
     if (!klass) throw Error('Source resource has no Atomic Class');
     let fields = properties.get(klass);
+
     if (!fields) {
       fields = (async () => {
         const definition = await get(klass);
@@ -53,15 +60,19 @@ export async function readRecursiveKeep(
           ...list(definition.get(P + 'recommends')),
         ]);
         const resources = await Promise.all([...ids].map(get));
+
         return new Map(
           resources.map(p => [text(p.get(P + 'name')), p.subject]),
         );
       })();
       properties.set(klass, fields);
     }
+
     const property = (await fields).get(name);
+
     return property ? row.get(property) : undefined;
   };
+
   const linked = async (
     row: Resource,
     name: string,
@@ -73,8 +84,10 @@ export async function readRecursiveKeep(
     const result = await get(subject);
     const parent = text(result.get(P + 'parent'));
     if (parent) watches.add(parent);
+
     return result;
   };
+
   const array = async (row: Resource, name: string): Promise<Resource[]> => {
     const container = await linked(row, name);
     if (!container) return [];
@@ -84,6 +97,7 @@ export async function readRecursiveKeep(
     entries.sort(
       (a, b) => Number(a.get(M + 'index')) - Number(b.get(M + 'index')),
     );
+
     return await Promise.all(
       entries.map(async entry => {
         const parent = text(entry.get(P + 'parent'));
@@ -94,16 +108,19 @@ export async function readRecursiveKeep(
         const item = await get(subject);
         const table = text(item.get(P + 'parent'));
         if (table) watches.add(table);
+
         return item;
       }),
     );
   };
+
   const notes: Note[] = [];
   const rows = await Promise.all(
     (await store.query({ property: P + 'parent', value: source.table })).map(
       get,
     ),
   );
+
   for (const row of rows) {
     if (!list(row.get(P + 'isA')).includes(source.rowClass)) continue;
     const body = await linked(row, 'body');
@@ -117,8 +134,10 @@ export async function readRecursiveKeep(
       hold: '',
       items: [],
     };
+
     if (content) {
       let position = 0;
+
       const append = async (
         items: Resource[],
         under = '',
@@ -126,6 +145,7 @@ export async function readRecursiveKeep(
       ): Promise<void> => {
         if (depth > 32 || note.items.length > 10000)
           throw Error('Keep checklist exceeds view limits');
+
         for (const item of items) {
           const itemText = await linked(item, 'text');
           note.items.push({
@@ -142,13 +162,16 @@ export async function readRecursiveKeep(
           );
         }
       };
+
       await append(await array(content, 'listItems'));
     } else if (body) {
       const section = await linked(body, 'text');
       if (section) note.body = text(await field(section, 'text'));
     }
+
     notes.push(note);
   }
+
   return {
     notes,
     watches: [...watches],

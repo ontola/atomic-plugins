@@ -54,14 +54,17 @@ function fixture() {
   rows['urn:test:view'] = { [P.isA]: ['urn:test:view-class'] };
   rows['urn:test:view-class'] = { [P.recommends]: ['urn:test:renders'] };
   rows['urn:test:renders'] = { [P.shortname]: 'renders' };
+
   const get = (id: string): Resource => {
     const values = rows[id];
     if (!values) throw Error('Missing fixture resource');
+
     return {
       subject: id,
       get: p => values[p],
       set(p, v) {
         values[p] = v;
+
         return this;
       },
       async save() {
@@ -69,6 +72,7 @@ function fixture() {
       },
     };
   };
+
   const store: Store = {
     getApp: async () => 'urn:test:view',
     getData: async () => undefined,
@@ -85,6 +89,7 @@ function fixture() {
     subscribe: () => () => {},
     rowAccess: async () => ({ status: 'none' }),
   };
+
   return { rows, store };
 }
 
