@@ -46,6 +46,10 @@ Syncables' unit/PostgreSQL suite, the Keep view's typecheck/unit/DOM checks,
 ELFA's unit/native-WASM tests, TypeScript checks and production build were run.
 Focused tests cover recursive schema references, ordering/duplicates, nulls,
 numeric precision, schema-based availability and representation version scopes.
+CI also exposed a pre-existing same-millisecond collision in the mock proxy's
+explicit replay-identity test. The fixture now mints an unused owner request
+timestamp before sharing it across agents, preserving every replay assertion
+without changing authentication behavior.
 Specific results and any CI limitations are recorded in the PR descriptions.
 
 Credentials, wallet material, provider connection identifiers, note contents,
