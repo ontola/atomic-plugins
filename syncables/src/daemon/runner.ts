@@ -1,3 +1,4 @@
+import { isSyncAuthError } from './sync-errors.js';
 import type { SnapshotStore } from './snapshot-store.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
@@ -30,6 +31,10 @@ export interface JobStatus {
   state: string;
   revision: string | null;
   last_error: string | null;
+  last_attempt_at?: Date | null;
+  last_success_at?: Date | null;
+  last_failure_at?: Date | null;
+  error_kind?: 'auth' | 'sync' | 'checkout' | null;
   next_due: Date;
   generation: string;
   completed: string;
@@ -42,6 +47,11 @@ CREATE TABLE IF NOT EXISTS syncables_cache.daemon_jobs (
  failures integer NOT NULL DEFAULT 0, next_due timestamptz NOT NULL DEFAULT clock_timestamp(),
  PRIMARY KEY(owner,alias)
 );
+ALTER TABLE syncables_cache.daemon_jobs
+ ADD COLUMN IF NOT EXISTS last_attempt_at timestamptz,
+ ADD COLUMN IF NOT EXISTS last_success_at timestamptz,
+ ADD COLUMN IF NOT EXISTS last_failure_at timestamptz,
+ ADD COLUMN IF NOT EXISTS error_kind text;
 CREATE TABLE IF NOT EXISTS syncables_cache.daemon_inbox (
  owner text NOT NULL, alias text NOT NULL, delivery text NOT NULL,
  body bytea NOT NULL, received_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -55,7 +65,7 @@ export async function jobStatuses(
   await archive.pool.query(JOB_SCHEMA);
   return (
     await archive.pool.query(
-      'SELECT alias,scope,state,revision,last_error,next_due,generation,completed FROM syncables_cache.daemon_jobs WHERE owner=$1 ORDER BY alias',
+      'SELECT alias,scope,state,revision,last_error,last_attempt_at,last_success_at,last_failure_at,error_kind,next_due,generation,completed FROM syncables_cache.daemon_jobs WHERE owner=$1 ORDER BY alias',
       [owner],
     )
   ).rows as JobStatus[];
@@ -83,6 +93,13 @@ export class DaemonRunner {
       await this.archive.pool.query(
         `INSERT INTO syncables_cache.daemon_jobs(owner,alias,scope) VALUES($1,$2,$3)
       ON CONFLICT(owner,alias) DO UPDATE SET scope=EXCLUDED.scope,
+      last_attempt_at=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.last_attempt_at END,
+      last_success_at=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.last_success_at END,
+      last_failure_at=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.last_failure_at END,
+      last_error=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.last_error END,
+      error_kind=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.error_kind END,
+      revision=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.revision END,
+      state=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN 'pending' ELSE daemon_jobs.state END,
       generation=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN daemon_jobs.generation+1 ELSE daemon_jobs.generation END,
       next_due=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN clock_timestamp() ELSE daemon_jobs.next_due END`,
         [this.config.owner, alias(p.source), p.scope],
@@ -174,7 +191,7 @@ export class DaemonRunner {
         ).rows[0];
         if (!job || (dueOnly && !job.due)) continue;
         await client.query(
-          "UPDATE syncables_cache.daemon_jobs SET state='working' WHERE owner=$1 AND alias=$2",
+          "UPDATE syncables_cache.daemon_jobs SET state='working',last_attempt_at=clock_timestamp() WHERE owner=$1 AND alias=$2",
           [this.config.owner, name],
         );
         try {
@@ -225,7 +242,7 @@ export class DaemonRunner {
             ...(this.message === undefined ? {} : { message: this.message }),
           });
           await client.query(
-            `UPDATE syncables_cache.daemon_jobs SET completed=$3,revision=$4,last_error=NULL,failures=0,
+            `UPDATE syncables_cache.daemon_jobs SET completed=$3,revision=$4,last_error=NULL,error_kind=NULL,last_success_at=clock_timestamp(),failures=0,
             state=CASE WHEN generation=$3 THEN 'idle' ELSE 'pending' END,
             next_due=CASE WHEN generation<>$3 THEN clock_timestamp() WHEN $5=0 THEN 'infinity'::timestamptz ELSE clock_timestamp()+$5*interval '1 second' END
             WHERE owner=$1 AND alias=$2`,
@@ -250,7 +267,7 @@ export class DaemonRunner {
                 ? error.message
                 : 'Snapshot saved, but its working folder could not be updated; run checkout to retry';
             await client.query(
-              "UPDATE syncables_cache.daemon_jobs SET state='checkout-blocked',last_error=$3 WHERE owner=$1 AND alias=$2",
+              "UPDATE syncables_cache.daemon_jobs SET state='checkout-blocked',last_error=$3,error_kind='checkout',last_failure_at=clock_timestamp() WHERE owner=$1 AND alias=$2",
               [this.config.owner, name, message],
             );
             results.push({ alias: name, result, error: message });
@@ -259,8 +276,7 @@ export class DaemonRunner {
           const message =
             error instanceof CheckoutBlockedError
               ? error.message
-              : error instanceof Error &&
-                  /login|401|403|connection.*refused/i.test(error.message)
+              : isSyncAuthError(error)
                 ? 'Authorization needs attention; run login or check approved connections'
                 : 'Sync did not finish; next attempt resumes from the published snapshot';
           const retry = Math.min(
@@ -277,8 +293,18 @@ export class DaemonRunner {
                   ),
                 ).toISOString();
           await client.query(
-            "UPDATE syncables_cache.daemon_jobs SET state='failed',last_error=$3,failures=failures+1,next_due=$4::timestamptz WHERE owner=$1 AND alias=$2",
-            [this.config.owner, name, message, nextDue],
+            "UPDATE syncables_cache.daemon_jobs SET state='failed',last_error=$3,failures=failures+1,next_due=$4::timestamptz,last_failure_at=clock_timestamp(),error_kind=$5 WHERE owner=$1 AND alias=$2",
+            [
+              this.config.owner,
+              name,
+              message,
+              nextDue,
+              isSyncAuthError(error)
+                ? 'auth'
+                : error instanceof CheckoutBlockedError
+                  ? 'checkout'
+                  : 'sync',
+            ],
           );
           results.push({ alias: name, error: message });
         }

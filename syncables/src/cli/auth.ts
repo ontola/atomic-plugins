@@ -279,7 +279,10 @@ export async function listConnections(
     },
   );
   if (!response.ok)
-    throw new Error(`Connection discovery refused (HTTP ${response.status})`);
+    throw Object.assign(
+      new Error(`Connection discovery refused (HTTP ${response.status})`),
+      { status: response.status },
+    );
   const result = await json(response);
   if (!Array.isArray(result.connections))
     throw new Error('Missing connections array');
