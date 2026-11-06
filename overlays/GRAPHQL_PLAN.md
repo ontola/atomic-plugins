@@ -130,43 +130,36 @@ meet that criterion.
 
 ## Implementation progress (2026-11-06)
 
-The first contract slice is implemented in
-[GraphQL Integration 0.1.0-draft](../openapi-extensions/spec/graphql-integration/README.md):
-exact-byte SDL/query pins, one named query per document, strict variable
-policy and a parser-backed offline validator. Synthetic Relay and non-Relay
-bundles cover schema/query validation and variable-policy failures. Existing
-spec CI discovers the tests and validates both example manifests.
+**Contract and fixtures:** GraphQL Integration 0.2.0-draft now validates
+exact-byte SDL/query pins and introspection response snapshots, named query
+operations, variable policy, collection/result paths, schema coordinates and
+argument-to-variable pagination bindings. Aliases and fragments are resolved.
+The synthetic Relay/non-Relay bundles cover cursor and explicit empty-page
+offset traversal. Concrete object identities only are supported; polymorphic
+identity, nested independent traversals and runtime parser selection remain
+open. Version 0.1 operation-only manifests remain supported.
 
-Still pending in milestone 1: collection/result-path metadata, schema
-coordinates, introspection normalization and runtime parser selection. The
-proxy executor, connection binding and response/pagination reader are not
-implemented by this initial contract. Milestones 2–5 remain open.
+**Execution reference:** the Python reference executes pinned operation IDs
+through an injected transport and enforces variable policy. It handles
+response errors, cursor/identity failures and page/item/body limits. This
+reference provides no catalog route, credentials or connection authorization.
 
-Validation: ten offline contract tests pass, and both example manifests pass
-the CLI validator. This establishes authoring/variable-policy behavior, not
-provider execution or runtime authorization.
+**Reader adapter:** the browser-safe `syncables/graphql` subpath consumes
+validated collection descriptions through an injected operation-ID executor.
+It preserves inputs and earlier accepted pages, rejects partial GraphQL errors
+and invalid progress, and enforces explicit page sizes and read limits.
+Traversal completion is separate from absence evidence; the result is not
+wired into REST local-replica pruning. See [usage](../syncables/docs/graphql.md).
 
-## Collection and execution reference (0.2.0-draft)
+**Next implementation milestone:** production protocol-discriminated catalog
+loading, pinned-operation execution, connection authorization and raw-proxy
+bypass prevention in integration-proxy. The TypeScript adapter still requires
+an application-supplied executor. These parts must be implemented together
+before exposing a GraphQL connection. Real-provider grants, cost policy,
+polymorphic IDs and the provider pilot remain open. The plan's overall
+completion criterion is not yet met.
 
-Implemented collection/result-path validation through aliases and fragments,
-with schema-coordinate resolution and argument-to-variable binding checks.
-The Python reference executes pinned operation IDs through an injected
-transport and traverses explicit cursor or offset collections with limits.
-Its tests run queries against synthetic GraphQL schemas, exercising two-page
-reads, offset short pages, empty termination, HTTP 200 partial errors, null
-parents, cursor/identity failures and policy bypass attempts. Traversal
-completion is explicitly separate from absence/deletion evidence.
-
-This advances the reference portions of milestones 1 and 3. Production
-protocol-discriminated catalog loading, proxy authorization, raw-proxy bypass
-prevention and the TypeScript reader adapter remain unimplemented. Concrete
-object identities only are supported; introspection normalization,
-polymorphic identity, nested traversal, transport cost policy and the provider
-pilot remain open. The reference's injected transport supplies no credentials
-or network authorization, and does not satisfy the plan's completion criterion.
-
-Version 0.2 also accepts pinned introspection response artifacts, normalized
-to the same in-memory schema as SDL for query/result validation, while hashing
-the exact original bytes. A synthetic introspection round-trip and rejection
-of errored snapshots are covered. Runtime parser selection and production
-proxy/reader integration remain open.
+Validation: 26 Python contract/reference tests and all four example manifests
+pass. The 18 TypeScript reader tests pass, including browser bundling. Full
+Syncables build/lint, formatting and changelog checks pass; 1,955 unit tests
+pass and 67 optional tests skip with no local database/native-peer setup.

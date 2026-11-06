@@ -3122,3 +3122,10 @@ As an NLnet-funded project, it records AI-assisted work with reference to
   [`docs/ai-logs/pending-historical-sessions.md`](docs/ai-logs/pending-historical-sessions.md)).
 - AI-drafted content is identified as assisted work; the disclosure log
   records the maintainer's review or delegation and the validation performed.
+
+## GraphQL collections
+
+The additive browser-safe `syncables/graphql` subpath reads a validated
+GraphQL collection through an injected operation-ID executor. See
+[the reader contract and usage](docs/graphql.md). GraphQL proxy authorization
+and local-replica pruning are not implemented by this adapter.
