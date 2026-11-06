@@ -1820,3 +1820,18 @@ it with its pinned OAD, in either order with each Box pagination overlay a
 dated catalog selects (v3 in the newest, `catalog/2026-10-12-tasks-box-pages.json`;
 v2 and v1 in older ones), checks the buckets and their operations, and classifies
 a synthetic `429`. No provider was called.
+
+## Integration-proxy review and GraphQL direction
+
+See the [2026-11-06 catalog audit](INTEGRATION_PROXY_AUDIT.md) for selected
+overlay gaps and the [GraphQL implementation plan](GRAPHQL_PLAN.md) for
+pinned schemas, operation authorization and collection-reader support.
+
+`catalog/2026-11-06-overlay-fixes.json` is an opt-in candidate based on
+`2026-10-30-production-keep-writes.json`. It preserves all base platforms and
+selections, replacing GitHub Issues CRUD v1 with v2 and Notion pagination v1
+with v3, and adding Notion pages completeness (which requires pagination v3).
+The Notion reader regression demonstrates that capped pages retain their
+records but cannot be marked complete. Existing dated catalogs and the proxy
+source default remain unchanged. Runtime rollout still requires selecting the
+candidate explicitly and using a reader supporting the incomplete marker.

@@ -1,0 +1,6 @@
+"Synthetic Relay-shaped schema; not a provider snapshot."
+type Query { repository(owner: String!, name: String!): Repository }
+type Repository { issues(first: Int!, after: String): IssueConnection! }
+type IssueConnection { nodes: [Issue!]!, pageInfo: PageInfo! }
+type Issue { id: ID!, title: String! }
+type PageInfo { hasNextPage: Boolean!, endCursor: String }

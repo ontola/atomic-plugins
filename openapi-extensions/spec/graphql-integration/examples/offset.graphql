@@ -1,0 +1,3 @@
+"Synthetic non-Relay schema. Offset termination is outside this draft."
+type Query { tasks(offset: Int!, limit: Int!): [Task!]! }
+type Task { id: ID!, title: String! }

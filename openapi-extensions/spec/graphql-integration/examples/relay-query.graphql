@@ -1,0 +1,9 @@
+query RepositoryIssues($owner: String!, $name: String!, $first: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    issues(first: $first, after: $after) {
+      nodes { ...IssueFields }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}
+fragment IssueFields on Issue { id title }

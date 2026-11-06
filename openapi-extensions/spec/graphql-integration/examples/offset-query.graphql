@@ -1,0 +1,3 @@
+query Tasks($offset: Int!, $limit: Int!) {
+  rows: tasks(offset: $offset, limit: $limit) { id title }
+}

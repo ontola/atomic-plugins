@@ -92,15 +92,17 @@ jobs:
           import json, pathlib
           base = "https://ontola.github.io/atomic-plugins/overlays/"
           errors = []
-          for platform in json.loads(pathlib.Path("catalog/2026-10-02.json").read_text())["platforms"]:
-              sources = platform.get("overlays", [])
-              if platform["openapi"].startswith(base):
-                  sources = [platform["openapi"], *sources]
-              for url in sources:
-                  if not url.startswith(base):
-                      errors.append(f"{platform['name']}: {url} is not under {base}")
-                  elif not pathlib.Path(url[len(base):]).is_file():
-                      errors.append(f"{platform['name']}: overlays/{url[len(base):]} does not exist")
+          for catalog in sorted(pathlib.Path("catalog").glob("*.json")):
+              for platform in json.loads(catalog.read_text())["platforms"]:
+                  sources = platform.get("overlays", [])
+                  if platform["openapi"].startswith(base):
+                      sources = [platform["openapi"], *sources]
+                  for url in sources:
+                      context = f"{catalog.name}/{platform['name']}"
+                      if not url.startswith(base):
+                          errors.append(f"{context}: {url} is not under {base}")
+                      elif not pathlib.Path(url[len(base):]).is_file():
+                          errors.append(f"{context}: overlays/{url[len(base):]} does not exist")
           if errors:
               raise SystemExit("\n".join(errors))
           PY
