@@ -82,6 +82,7 @@ async function main(): Promise<void> {
         'signer-file',
         'reader',
         'peer-port',
+        'browser-port',
         'braid-port',
         'braid-origin',
         'projection-contract',
@@ -103,6 +104,12 @@ async function main(): Promise<void> {
     typeof values[key] === 'string' ? (values[key] as string) : undefined;
   if (values.help || !positionals.length) {
     process.stdout.write(HELP + DAEMON_HELP);
+    return;
+  }
+  if (positionals[0] === 'ui') {
+    if (positionals.length !== 1) throw new Error('Unexpected UI arguments');
+    const { browserCommand } = await import('../daemon/browser-command.js');
+    await browserCommand(values);
     return;
   }
   if (positionals[0] === 'braid') {
