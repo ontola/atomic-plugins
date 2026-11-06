@@ -6,7 +6,7 @@ export const BROWSER_HTML = `
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>SyncD · Synced data</title>
+    <title>SyncD · Connections and data</title>
     <link rel="stylesheet" href="/browser.css" />
     <script src="/browser.js" defer></script>
   </head>
@@ -26,12 +26,27 @@ export const BROWSER_HTML = `
       <header>
         <div>
           <div class="eyebrow">DATA BROWSER</div>
-          <h1>Synced data</h1>
-          <p>Explore the records saved by SyncD.</p>
+          <h1>Connections &amp; synced data</h1>
+          <p>Your approved remote connections and saved local records.</p>
         </div>
         <span class="badge">Read only</span>
       </header>
       <div id="error" class="error" role="alert" hidden></div>
+      <section class="connections-panel" aria-label="Remote connections">
+        <div class="section-heading">
+          <h2>Remote connections</h2>
+          <button id="refresh-status" class="secondary">↻ Check status</button>
+        </div>
+        <p class="connections-caption">
+          Connections approved for this SyncD access grant. Checking status does
+          not fetch provider data.
+        </p>
+        <div id="discovery-message" role="status" aria-live="polite">
+          Checking available connections…
+        </div>
+        <div id="remote-connections" class="connection-grid"></div>
+        <p id="status-checked" class="checked"></p>
+      </section>
       <section class="workspace">
         <div class="toolbar">
           <div>
@@ -42,6 +57,7 @@ export const BROWSER_HTML = `
           </div>
           <button id="refresh" class="secondary">↻ Refresh</button>
         </div>
+        <div id="collection-status" class="collection-status" hidden></div>
         <div class="searchbar">
           <label for="search">Search records</label
           ><input
@@ -556,6 +572,135 @@ footer {
     padding-right: 18px;
   }
 }
+
+.connections-panel {
+  margin-bottom: 26px;
+}
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.section-heading h2 {
+  font-size: 17px;
+  text-transform: none;
+}
+.connections-caption {
+  font-size: 12px;
+  color: #728079;
+  line-height: 1.6;
+}
+#discovery-message {
+  font-size: 12px;
+  line-height: 1.7;
+  color: #7b6343;
+  background: #fbf5e9;
+  border: 1px solid #e8ddc7;
+  border-radius: 7px;
+  padding: 12px 15px;
+  margin: 12px 0;
+}
+#discovery-message:empty {
+  display: none;
+}
+.connection-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  gap: 14px;
+}
+.connection-card {
+  background: white;
+  border: 1px solid #dfe7e1;
+  border-radius: 10px;
+  padding: 18px;
+  min-width: 0;
+}
+.connection-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.connection-id {
+  font-family: ui-monospace, monospace;
+  font-size: 10px !important;
+}
+.connection-card h3 {
+  margin: 0;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+.connection-card p {
+  font-size: 11px;
+  color: #738278;
+  line-height: 1.7;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.status-chip {
+  font-size: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  border-radius: 12px;
+  padding: 5px 8px;
+  display: inline-block;
+  background: #edf4ee;
+  color: #52745b;
+}
+.status-chip.attention {
+  color: #99542f;
+  background: #fcf0e4;
+}
+.status-chip.neutral {
+  color: #6e7c74;
+  background: #f0f3f0;
+}
+.connection-items {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid #edf1ec;
+  margin-top: 12px;
+  padding-top: 10px;
+}
+.connection-items button {
+  text-align: left;
+  border: 0;
+  background: none;
+  padding: 5px 0;
+  color: #3b6250;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.connection-items button:hover {
+  text-decoration: underline;
+}
+.connection-items small {
+  display: block;
+  color: #7e8b81;
+  font-size: 10px;
+  margin-top: 3px;
+}
+.checked {
+  text-align: right;
+  color: #8c978e;
+  font-size: 10px;
+}
+.collection-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 0 26px 18px;
+  font-size: 11px;
+  color: #738278;
+}
+.collection-status .status-error {
+  flex-basis: 100%;
+  color: #99542f;
+  margin: 0;
+  line-height: 1.6;
+}
 `;
 
 export const BROWSER_SCRIPT = String.raw`
@@ -720,6 +865,7 @@ async function loadCollections() {
         text = document.createElement('span'),
         name = document.createElement('span'),
         account = document.createElement('small');
+      button.dataset.alias = entry.alias;
       button.classList.toggle('active', state.collection === entry.alias);
       button.setAttribute(
         'aria-pressed',
@@ -743,6 +889,7 @@ async function loadCollections() {
             node.classList.toggle('active', node === button);
             node.setAttribute('aria-pressed', String(node === button));
           });
+        renderCollectionStatus();
         loadRecords(true);
       });
       el('collections').append(button);
@@ -756,6 +903,181 @@ async function loadCollections() {
     message(error.message);
   }
 }
+const statusLabels = {
+  'not-synced': 'Not synced yet',
+  synced: 'Saved data available',
+  pending: 'Scheduled',
+  syncing: 'Syncing',
+  'auth-error': 'Auth needs attention',
+  'sync-error': 'Sync error',
+  'checkout-blocked': 'Working folder blocked',
+};
+let latestStatus = null,
+  checkingStatus = false;
+function when(value, fallback = 'Never') {
+  return value ? new Date(value).toLocaleString() : fallback;
+}
+function chip(state, label) {
+  const node = document.createElement('span');
+  node.className =
+    'status-chip' +
+    (/error|blocked|not-approved/.test(state)
+      ? ' attention'
+      : /not-synced|unknown|unconfigured/.test(state)
+        ? ' neutral'
+        : '');
+  node.textContent = label || statusLabels[state] || state;
+  return node;
+}
+function renderCollectionStatus() {
+  const root = el('collection-status');
+  root.replaceChildren();
+  const entry = latestStatus?.collections.find(
+    (item) => item.alias === state.collection,
+  );
+  root.hidden = !entry;
+  if (!entry) return;
+  root.append(chip(entry.state));
+  for (const text of [
+    'Last successful sync: ' +
+      when(
+        entry.lastSyncedAt,
+        entry.hasSnapshot ? 'Not recorded for older data' : 'Never',
+      ),
+    'Last attempt: ' + when(entry.lastAttemptAt),
+  ]) {
+    const node = document.createElement('span');
+    node.textContent = text;
+    root.append(node);
+  }
+  if (entry.nextAttemptAt) {
+    const next = document.createElement('span');
+    next.textContent = 'Next sync due: ' + when(entry.nextAttemptAt);
+    root.append(next);
+  }
+  if (entry.error) {
+    const error = document.createElement('p');
+    error.className = 'status-error';
+    error.textContent =
+      entry.error +
+      (entry.lastFailureAt
+        ? ' Last failure: ' + when(entry.lastFailureAt)
+        : '');
+    root.append(error);
+  }
+}
+async function loadStatus() {
+  if (checkingStatus) return;
+  checkingStatus = true;
+  el('refresh-status').disabled = true;
+  try {
+    const result = await api('/api/status');
+    latestStatus = result;
+    el('discovery-message').textContent = result.discovery.message || '';
+    el('status-checked').textContent =
+      'Last checked: ' + when(result.checkedAt);
+    const root = el('remote-connections');
+    root.replaceChildren();
+    for (const connection of result.connections) {
+      const card = document.createElement('article');
+      card.className = 'connection-card';
+      const top = document.createElement('div');
+      top.className = 'connection-top';
+      const title = document.createElement('h3');
+      title.textContent = connection.label;
+      const local = connection.collections;
+      const issue = local.find((item) => /error|blocked/.test(item.state));
+      const badge =
+        connection.availability === 'not-approved'
+          ? chip('not-approved', 'Not available to grant')
+          : issue
+            ? chip(issue.state)
+            : local.some((item) => item.state === 'syncing')
+              ? chip('syncing')
+              : !local.length
+                ? chip('unconfigured', 'Not configured here')
+                : chip(
+                    local.some((item) => item.hasSnapshot)
+                      ? 'synced'
+                      : 'not-synced',
+                  );
+      top.append(title, badge);
+      card.append(top);
+      const platform = document.createElement('p');
+      platform.textContent =
+        connection.platform +
+        ' · ' +
+        (connection.availability === 'approved'
+          ? 'Approved for SyncD'
+          : connection.availability === 'unknown'
+            ? 'Remote access not checked'
+            : 'Removed or not approved for this access grant');
+      card.append(platform);
+      const identity = document.createElement('p');
+      identity.className = 'connection-id';
+      identity.textContent = 'Connection: ' + connection.id;
+      card.append(identity);
+      const time = document.createElement('p');
+      time.textContent =
+        'Last successful sync (any collection): ' +
+        when(
+          connection.lastSyncedAt,
+          local.some((item) => item.hasSnapshot)
+            ? 'Not recorded for older data'
+            : 'Never',
+        );
+      card.append(time);
+      const list = document.createElement('div');
+      list.className = 'connection-items';
+      for (const entry of local) {
+        const button = document.createElement('button');
+        button.textContent = entry.alias;
+        const detail = document.createElement('small');
+        detail.textContent =
+          (statusLabels[entry.state] || entry.state) +
+          ' · ' +
+          when(
+            entry.lastSyncedAt,
+            entry.hasSnapshot ? 'Sync time not recorded' : 'Never synced',
+          );
+        button.append(detail);
+        button.addEventListener('click', () => {
+          const buttons = Array.from(
+            el('collections').querySelectorAll('button'),
+          );
+          buttons.find((item) => item.dataset.alias === entry.alias)?.click();
+          el('collection-title').scrollIntoView({
+            block: 'nearest',
+            behavior: 'smooth',
+          });
+        });
+        list.append(button);
+      }
+      if (!local.length) {
+        const note = document.createElement('p');
+        note.textContent =
+          'Available remotely. Add a collection to your SyncD config to sync it here.';
+        list.append(note);
+      }
+      card.append(list);
+      root.append(card);
+    }
+    if (!result.connections.length && result.discovery.state === 'available') {
+      const note = document.createElement('p');
+      note.textContent =
+        'No remote connections are approved for this SyncD grant.';
+      root.append(note);
+    }
+    renderCollectionStatus();
+  } catch {
+    el('discovery-message').textContent =
+      'Could not refresh connection status. Showing the last known results; local data remains available.';
+  } finally {
+    checkingStatus = false;
+    el('refresh-status').disabled = false;
+  }
+}
+el('refresh-status').addEventListener('click', loadStatus);
 let searchTimer;
 el('search').addEventListener('input', () => {
   state.controller?.abort();
@@ -767,6 +1089,7 @@ el('search').addEventListener('input', () => {
 });
 el('refresh').addEventListener('click', () => {
   loadCollections();
+  loadStatus();
   loadRecords(true);
 });
 el('previous').addEventListener('click', () => {
@@ -782,4 +1105,8 @@ el('next').addEventListener('click', () => {
   }
 });
 loadCollections();
+loadStatus();
+setInterval(() => {
+  if (!document.hidden) loadStatus();
+}, 15000);
 `;

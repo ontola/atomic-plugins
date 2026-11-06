@@ -7,6 +7,7 @@ import {
   type BrowserServer,
 } from '../../../src/daemon/browser-server.js';
 import { BROWSER_SCRIPT } from '../../../src/daemon/browser-ui.js';
+import type { BrowserStatus } from '../../../src/daemon/browser-status.js';
 import { SOURCE_ID, SOURCE_JSON } from '../../../src/daemon/sync.js';
 
 const revision = 'a'.repeat(64);
@@ -22,7 +23,7 @@ const servers: BrowserServer[] = [];
 afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => server.close()));
 });
-async function fixture(records = rows) {
+async function fixture(records = rows, status?: () => Promise<BrowserStatus>) {
   let head: string | undefined = revision;
   const store = {
     head: vi.fn(async () => head),
@@ -37,6 +38,7 @@ async function fixture(records = rows) {
     store,
     collections: [{ alias: 'example/work/tasks', scope }],
     port: 0,
+    ...(status ? { status } : {}),
   });
   servers.push(server);
   const url = new URL(server.url);
@@ -63,7 +65,7 @@ describe('local SyncD data browser', () => {
       "frame-ancestors 'none'",
     );
     expect(shell.headers.get('cache-control')).toBe('no-store');
-    expect(await shell.text()).toContain('Synced data');
+    expect(await shell.text()).toContain('Remote connections');
     expect((await fetch(f.origin + '/api/collections')).status).toBe(401);
     const response = await fetch(f.origin + '/api/collections', {
       headers: f.headers,
@@ -209,6 +211,36 @@ describe('local SyncD data browser', () => {
     expect(await response.json()).toEqual({
       error: 'Could not read the local snapshot',
     });
+  });
+
+  it('protects remote status behind the local token and keeps records available if discovery fails', async () => {
+    const status = vi.fn(
+      async (): Promise<BrowserStatus> => ({
+        checkedAt: '2026-11-06T09:30:00Z',
+        discovery: { state: 'available', message: null },
+        connections: [],
+        collections: [],
+      }),
+    );
+    const f = await fixture(rows, status);
+    expect((await fetch(f.origin + '/api/status')).status).toBe(401);
+    expect(status).not.toHaveBeenCalled();
+    expect(
+      (await fetch(f.origin + '/api/status', { headers: f.headers })).status,
+    ).toBe(200);
+    status.mockRejectedValueOnce(new Error('private credential diagnostic'));
+    const failed = await fetch(f.origin + '/api/status', {
+      headers: f.headers,
+    });
+    expect(failed.status).toBe(503);
+    expect(await failed.text()).not.toContain('private credential diagnostic');
+    expect(
+      (
+        await fetch(f.origin + '/api/records?collection=example/work/tasks', {
+          headers: f.headers,
+        })
+      ).status,
+    ).toBe(200);
   });
 
   it('ships valid standalone browser JavaScript', () => {

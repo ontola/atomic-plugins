@@ -3133,5 +3133,6 @@ and local-replica pruning are not implemented by this adapter.
 ## SyncD data browser
 
 The local `syncables ui --config FILE` command shows saved collections,
-searchable records and source JSON in a read-only browser interface. See
+searchable records and source JSON in a read-only browser interface, with
+remote connections approved for SyncD and per-collection sync times/errors. See
 [setup and usage](docs/daemon-browser.md).

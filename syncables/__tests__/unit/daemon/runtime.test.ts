@@ -395,6 +395,78 @@ describe.skipIf(!database)(
       await expect(h.sync(transport)).rejects.toMatchObject({ blocked: true });
       expect(transport).toHaveBeenCalledTimes(1);
     });
+    it('records attempts, unchanged successful syncs and distinct failures, preserving success until scope changes', async () => {
+      const h = await setup();
+      let discoveryStatus = 200;
+      const runner = new DaemonRunner(
+        h.config,
+        archive,
+        h.store,
+        {
+          session: async () => ({
+            issuer: h.config.issuer,
+            accessToken: 'invented',
+          }),
+          authorizationContext: async () => 'invented-grant',
+        },
+        async (input) =>
+          String(input).endsWith('/connections')
+            ? Response.json(
+                {
+                  owner: h.config.owner,
+                  connections: [
+                    { connection_id: 'test-connection', platform: 'example' },
+                  ],
+                },
+                { status: discoveryStatus },
+              )
+            : Response.json({ items: [{ id: 'unchanged' }] }),
+      );
+      await runner.initialize();
+      expect((await runner.sync())[0].result).toBeDefined();
+      const first = (await jobStatuses(archive, h.config.owner))[0];
+      expect(first.last_attempt_at).toBeInstanceOf(Date);
+      expect(first.last_success_at).toBeInstanceOf(Date);
+      await archive.pool.query(
+        "UPDATE syncables_cache.daemon_jobs SET last_success_at='2001-01-01' WHERE owner=$1",
+        [h.config.owner],
+      );
+      expect((await runner.sync())[0].result).toBeDefined();
+      const success = (await jobStatuses(archive, h.config.owner))[0];
+      expect(success.last_success_at!.getTime()).toBeGreaterThan(
+        new Date('2001-01-01').getTime(),
+      );
+      discoveryStatus = 500;
+      await runner.sync();
+      const failed = (await jobStatuses(archive, h.config.owner))[0];
+      expect(failed.error_kind).toBe('sync');
+      expect(failed.last_failure_at).toBeInstanceOf(Date);
+      expect(failed.last_success_at).toEqual(success.last_success_at);
+      discoveryStatus = 401;
+      await runner.sync();
+      expect((await jobStatuses(archive, h.config.owner))[0].error_kind).toBe(
+        'auth',
+      );
+      discoveryStatus = 200;
+      await runner.sync();
+      const recovered = (await jobStatuses(archive, h.config.owner))[0];
+      expect(recovered.error_kind).toBeNull();
+      expect(recovered.last_error).toBeNull();
+      await runner.initialize();
+      expect(
+        (await jobStatuses(archive, h.config.owner))[0].last_success_at,
+      ).toEqual(recovered.last_success_at);
+      h.config.collections[0].query = { filter: 'changed' };
+      await runner.initialize();
+      expect((await jobStatuses(archive, h.config.owner))[0]).toMatchObject({
+        state: 'pending',
+        revision: null,
+        last_attempt_at: null,
+        last_success_at: null,
+        last_failure_at: null,
+        error_kind: null,
+      });
+    });
     it('deduplicates inbox delivery across restart, retains a hint arriving during a fetch, and serializes competing readers', async () => {
       const h = await setup();
       let inject = true;

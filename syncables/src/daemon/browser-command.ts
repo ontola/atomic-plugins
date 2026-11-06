@@ -1,4 +1,6 @@
 // @wc-ignore-file
+import { DaemonAuth, KeychainCredentials } from './auth.js';
+import { loadBrowserStatus, browserJobMatches } from './browser-status.js';
 import { dirname, resolve } from 'node:path';
 import { localArchive } from '../cli/cache.js';
 import { alias, loadDaemonConfig, selectedCollections } from './config.js';
@@ -42,13 +44,23 @@ export async function browserCommand(
   try {
     await archive.initialize();
     await store.initialize();
+    const auth = new DaemonAuth(
+      config,
+      archive,
+      values.interactive ? undefined : new KeychainCredentials(config),
+    );
+    if (values.interactive)
+      await auth.login((message) => process.stderr.write(message + '\n'));
     const jobs = await jobStatuses(archive, config.owner);
     const collections = await Promise.all(
       selected.map(async (source) => ({
         alias: alias(source),
         scope:
-          jobs.find((job) => job.alias === alias(source))?.scope ??
-          (await prepareCollection(config.owner, source)).scope,
+          jobs.find(
+            (job) =>
+              job.alias === alias(source) &&
+              browserJobMatches(job, config.owner, source),
+          )?.scope ?? (await prepareCollection(config.owner, source)).scope,
       })),
     );
     if (controller.signal.aborted) return;
@@ -56,9 +68,39 @@ export async function browserCommand(
       store,
       collections,
       port: Number(port),
+      status: () =>
+        loadBrowserStatus({
+          owner: config.owner,
+          collections: selected,
+          jobs: async () => {
+            const current = await jobStatuses(archive, config.owner);
+            for (const collection of collections) {
+              const job = current.find(
+                (entry) =>
+                  entry.alias === collection.alias &&
+                  browserJobMatches(
+                    entry,
+                    config.owner,
+                    selected.find(
+                      (source) => alias(source) === collection.alias,
+                    )!,
+                  ),
+              );
+              if (job) collection.scope = job.scope;
+            }
+            return current;
+          },
+          hasSnapshot: async (name) => {
+            const collection = collections.find(
+              (entry) => entry.alias === name,
+            );
+            return Boolean(collection && (await store.head(collection.scope)));
+          },
+          session: () => auth.session(),
+        }),
     });
     process.stdout.write(
-      `SyncD data browser: ${server.url}\nRead-only local snapshots. Press Ctrl+C to stop.\n`,
+      `SyncD data browser: ${server.url}\nRead-only snapshots and approved connection status. Press Ctrl+C to stop.\n`,
     );
     await new Promise<void>((resolve) => {
       controller.signal.addEventListener('abort', () => resolve(), {

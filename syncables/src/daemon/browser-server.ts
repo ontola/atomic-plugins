@@ -1,4 +1,5 @@
 // @wc-ignore-file
+import type { BrowserStatus } from './browser-status.js';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { SnapshotStore } from './snapshot-store.js';
@@ -33,6 +34,7 @@ export async function startBrowserServer(options: {
   store: BrowserStore;
   collections: BrowserCollection[];
   port?: number;
+  status?: () => Promise<BrowserStatus>;
 }): Promise<BrowserServer> {
   const collections = new Map(
     options.collections.map((entry) => [entry.alias, entry]),
@@ -91,6 +93,22 @@ export async function startBrowserServer(options: {
         !timingSafeEqual(supplied, expected)
       ) {
         throw new BrowserError(401, 'Open the browser link printed by SyncD');
+      }
+      if (url.pathname === '/api/status') {
+        if (!options.status)
+          throw new BrowserError(
+            503,
+            'Connection status is unavailable in this browser.',
+          );
+        try {
+          send(200, JSON.stringify(await options.status()));
+        } catch {
+          throw new BrowserError(
+            503,
+            'Could not load SyncD status. Local snapshots may still be browsed.',
+          );
+        }
+        return;
       }
       if (url.pathname === '/api/collections') {
         const entries = await Promise.all(

@@ -24,7 +24,7 @@ Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export on
   syncables migrate git --config FILE [--source LEGACY_ARCHIVE]
   syncables export git --config FILE --subtree platform/account/collection[/ENCODED_ITEM_ID]
     --output NEW_DIRECTORY [--branches all|current] [--at REVISION|tag:NAME]
-  syncables ui --config FILE [--collections platform/account/name,...] [--browser-port 9889]
+  syncables ui --config FILE [--collections platform/account/name,...] [--browser-port 9889] [--interactive]
   syncables status --config FILE
   syncables browse [platform[/account[/collection[/item-id]]]] --config FILE
     [--at COMMIT|tag:NAME] [--filter /json/pointer=JSON_SCALAR]
@@ -43,7 +43,8 @@ are held for explicit adoption, never reposted. See docs/daemon-writes.md.
 login stores device tokens in macOS Keychain. --interactive performs a new
 browser-approved login and keeps tokens only in this foreground process.
 ui starts a read-only local data browser and prints its private browser link.
-It shows saved snapshots, search, pagination and record JSON without provider requests.
+It shows saved snapshots, search and record JSON, plus grant-approved connections
+and recorded sync times/errors. Existing login or --interactive enables discovery.
 Owner signing stays in the existing local approval bridge. status, browse,
 history, resource and tag use only local data. checkout exposes existing snapshots
 as ordinary working folders from PostgreSQL without authentication or refetching.
