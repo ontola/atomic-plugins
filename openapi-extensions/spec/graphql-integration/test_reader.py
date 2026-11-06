@@ -1,5 +1,6 @@
 """Executable synthetic GraphQL schemas exercise pinned queries and traversal policy."""
 from copy import deepcopy
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -66,6 +67,18 @@ class CollectionValidationTests(unittest.TestCase):
         for candidate in candidates:
             with self.subTest(candidate=candidate), self.assertRaises(InvalidManifest):
                 validate_manifest(candidate, ROOT)
+
+    def test_polymorphic_items_fail_instead_of_guessing_identity(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate = manifest('offset')
+            source = (ROOT / 'offset.graphql').read_text().replace(
+                'type Task {', 'interface Task {') + '\ntype PersonalTask implements Task { id: ID!, title: String! }\n'
+            (root / 'offset.graphql').write_text(source)
+            (root / 'offset-query.graphql').write_bytes((ROOT / 'offset-query.graphql').read_bytes())
+            candidate['schema']['sha256'] = hashlib.sha256(source.encode()).hexdigest()
+            with self.assertRaisesRegex(InvalidManifest, 'concrete object'):
+                validate_manifest(candidate, root)
 
     def test_alias_path_uses_response_key(self):
         with tempfile.TemporaryDirectory() as directory:
