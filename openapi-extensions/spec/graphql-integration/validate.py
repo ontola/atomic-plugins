@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlsplit
 
 from graphql import (
-    GraphQLError, OperationType, build_schema, get_variable_values,
+    GraphQLError, OperationType, build_client_schema, build_schema, get_variable_values,
     is_non_null_type, parse, type_from_ast, validate as validate_document,
     validate_schema,
 )
@@ -77,9 +77,20 @@ def validate_manifest(manifest, root):
     require(endpoint.scheme == 'https' and endpoint.hostname and not endpoint.username
             and not endpoint.password and not endpoint.fragment and not endpoint.query,
             'endpoint must be an HTTPS URL without credentials, query or fragment')
+    descriptor = manifest['schema']
+    fields(descriptor, ('path', 'sha256'), ('format',) if manifest['version'] == '0.2.0-draft' else ())
+    schema_format = descriptor.get('format', 'sdl')
+    require(schema_format in ('sdl', 'introspection'), 'unsupported schema format')
+    raw_schema = artifact(root, {key: value for key, value in descriptor.items() if key != 'format'})
     try:
-        schema = build_schema(artifact(root, manifest['schema']))
-    except (TypeError, GraphQLError) as error:
+        if schema_format == 'sdl':
+            schema = build_schema(raw_schema)
+        else:
+            snapshot = json.loads(raw_schema)
+            require(isinstance(snapshot, dict) and 'errors' not in snapshot and
+                    isinstance(snapshot.get('data'), dict), 'invalid introspection response')
+            schema = build_client_schema(snapshot['data'])
+    except (TypeError, GraphQLError, ValueError) as error:
         raise InvalidManifest(f'invalid schema: {error}') from error
     errors = validate_schema(schema)
     require(not errors, '; '.join(str(error) for error in errors))

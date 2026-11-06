@@ -26,8 +26,7 @@ schemas, not provider snapshots or live-provider certifications.
 
 A JSON manifest contains `version`, `endpoint`, `schema` and `operations`.
 `collections` is the only additional root field in 0.2. All objects reject unknown fields so unsupported capabilities cannot silently
-be ignored. Both versions accept SDL only, not introspection JSON. Version 0.1.0-draft
-remains supported for operation-only manifests. Version 0.2.0-draft requires
+be ignored. Version 0.1.0-draft accepts SDL only and remains supported for operation-only manifests. Version 0.2.0-draft requires
 a nonempty `collections` array; version 0.1 rejects that field.
 
 ## 3. Conventions
@@ -42,7 +41,7 @@ assumed by this version.
 | Object | Fields and constraints |
 | --- | --- |
 | Manifest | `version`: `0.1.0-draft` or `0.2.0-draft`; `endpoint`: absolute HTTPS URL without userinfo, query or fragment; `schema`: Artifact; `operations`: nonempty array of Operation. |
-| Artifact | `path`: relative local file path; `sha256`: exact content digest. Resolving the path, including symlinks, MUST stay inside the manifest directory. No remote fetching. |
+| Artifact | `path`: relative local file path; `sha256`: exact content digest. Schema artifacts in 0.2 may additionally declare `format` (section 10). Resolving the path, including symlinks, MUST stay inside the manifest directory. No remote fetching. |
 | Operation | `id`: unique GraphQL name; `document`: Artifact; `variables`: map from every declared variable name to its Policy. |
 | Policy | Empty object allows a caller value subject to GraphQL input coercion. `fixed` supplies a trusted JSON value and forbids caller input for that variable, even if equal. Alternatively, `min` and/or `max` constrain an Int variable; endpoints are inclusive GraphQL Ints and `min` MUST NOT exceed `max`. |
 
@@ -186,3 +185,16 @@ Callers may choose positive page/item limits. Checkpoints, retries, cost
 scheduling, provider OAuth and connection authorization remain outside this
 reference. The tests execute the pinned documents against synthetic GraphQL
 schemas as well as testing response/error fixtures.
+
+## 10. Pinned introspection snapshots (0.2.0-draft)
+
+A schema artifact MAY add `format: introspection` in version 0.2. The default
+is `format: sdl`; query-document artifacts still accept only path and digest.
+An introspection artifact MUST contain a full JSON response object with
+`data.__schema` and no `errors` member. The validator builds and validates the
+same in-memory GraphQLSchema used for SDL, so operation/result-path validation
+does not depend on the snapshot format. Its digest remains over the original
+bytes, not normalized or reprinted schema text. Invalid/partial snapshots,
+unsupported formats and hash mismatches MUST fail. Version 0.1 rejects the
+format field. The validator does not fetch introspection or require that a
+provider expose it.

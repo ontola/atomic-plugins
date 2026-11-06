@@ -164,3 +164,9 @@ object identities only are supported; introspection normalization,
 polymorphic identity, nested traversal, transport cost policy and the provider
 pilot remain open. The reference's injected transport supplies no credentials
 or network authorization, and does not satisfy the plan's completion criterion.
+
+Version 0.2 also accepts pinned introspection response artifacts, normalized
+to the same in-memory schema as SDL for query/result validation, while hashing
+the exact original bytes. A synthetic introspection round-trip and rejection
+of errored snapshots are covered. Runtime parser selection and production
+proxy/reader integration remain open.

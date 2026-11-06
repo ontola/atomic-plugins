@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from graphql import graphql_sync
+from graphql import get_introspection_query, graphql_sync
 from collection_contract import at_path
 from reader import execute, load_bundle, read_collection
 from validate import InvalidManifest, validate_manifest
@@ -78,6 +78,26 @@ class CollectionValidationTests(unittest.TestCase):
             (root / 'offset-query.graphql').write_bytes((ROOT / 'offset-query.graphql').read_bytes())
             candidate['schema']['sha256'] = hashlib.sha256(source.encode()).hexdigest()
             with self.assertRaisesRegex(InvalidManifest, 'concrete object'):
+                validate_manifest(candidate, root)
+
+    def test_pinned_introspection_normalizes_to_the_same_schema(self):
+        operations = validate_manifest(manifest('offset'), ROOT)
+        snapshot = graphql_sync(operations['Tasks']['schema'], get_introspection_query()).formatted
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidate = manifest('offset')
+            (root / 'offset-query.graphql').write_bytes((ROOT / 'offset-query.graphql').read_bytes())
+            raw = json.dumps(snapshot).encode()
+            (root / 'schema.introspection').write_bytes(raw)
+            candidate['schema'] = {'path': 'schema.introspection', 'sha256': hashlib.sha256(raw).hexdigest(),
+                                   'format': 'introspection'}
+            loaded = validate_manifest(candidate, root)
+            self.assertEqual(str(loaded['Tasks']['schema'].query_type.fields['tasks'].type), '[Task!]!')
+            # An errored snapshot must not become an authoritative schema.
+            raw = json.dumps({**snapshot, 'errors': [{'message': 'incomplete snapshot'}]}).encode()
+            (root / 'schema.introspection').write_bytes(raw)
+            candidate['schema']['sha256'] = hashlib.sha256(raw).hexdigest()
+            with self.assertRaises(InvalidManifest):
                 validate_manifest(candidate, root)
 
     def test_alias_path_uses_response_key(self):
