@@ -1,4 +1,4 @@
-"""Offline validator for GraphQL Integration 0.1.0-draft operation bundles.
+"""Offline validator for GraphQL Integration operation bundles.
 
 No network requests or provider execution. Paths resolve within the manifest's
 bundle directory. This is an authoring reference, not proxy authorization.
@@ -59,7 +59,7 @@ def artifact(root, descriptor):
 
 class NoDirectives(Visitor):
     def enter_directive(self, node, *_):
-        raise InvalidManifest(f'directives unsupported in version 0.1: @{node.name.value}')
+        raise InvalidManifest(f'executable directives unsupported: @{node.name.value}')
 
 
 def validate_manifest(manifest, root):
@@ -68,8 +68,10 @@ def validate_manifest(manifest, root):
     A descriptor contains the parsed document, variable definitions and policy,
     suitable for the variable-policy reference below. Nothing is executed.
     """
-    fields(manifest, ('version', 'endpoint', 'schema', 'operations'))
-    require(manifest['version'] == '0.1.0-draft', 'unsupported manifest version')
+    fields(manifest, ('version', 'endpoint', 'schema', 'operations'), ('collections',))
+    require(manifest['version'] in ('0.1.0-draft', '0.2.0-draft'), 'unsupported manifest version')
+    require(('collections' in manifest) == (manifest['version'] == '0.2.0-draft'),
+            'collections require version 0.2.0-draft')
     require(text(manifest['endpoint']), 'endpoint must be a string')
     endpoint = urlsplit(manifest['endpoint'])
     require(endpoint.scheme == 'https' and endpoint.hostname and not endpoint.username
@@ -133,6 +135,9 @@ def validate_manifest(manifest, root):
             'schema': schema, 'document': document, 'source': source,
             'definitions': list(definitions.values()), 'variables': policies,
         }
+    if 'collections' in manifest:
+        from collection_contract import validate_collections
+        validate_collections(manifest['collections'], loaded)
     return loaded
 
 

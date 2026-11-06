@@ -145,3 +145,22 @@ implemented by this initial contract. Milestones 2–5 remain open.
 Validation: ten offline contract tests pass, and both example manifests pass
 the CLI validator. This establishes authoring/variable-policy behavior, not
 provider execution or runtime authorization.
+
+## Collection and execution reference (0.2.0-draft)
+
+Implemented collection/result-path validation through aliases and fragments,
+with schema-coordinate resolution and argument-to-variable binding checks.
+The Python reference executes pinned operation IDs through an injected
+transport and traverses explicit cursor or offset collections with limits.
+Its tests run queries against synthetic GraphQL schemas, exercising two-page
+reads, offset short pages, empty termination, HTTP 200 partial errors, null
+parents, cursor/identity failures and policy bypass attempts. Traversal
+completion is explicitly separate from absence/deletion evidence.
+
+This advances the reference portions of milestones 1 and 3. Production
+protocol-discriminated catalog loading, proxy authorization, raw-proxy bypass
+prevention and the TypeScript reader adapter remain unimplemented. Concrete
+object identities only are supported; introspection normalization,
+polymorphic identity, nested traversal, transport cost policy and the provider
+pilot remain open. The reference's injected transport supplies no credentials
+or network authorization, and does not satisfy the plan's completion criterion.

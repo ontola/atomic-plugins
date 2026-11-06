@@ -1,0 +1,49 @@
+{
+  "version": "0.2.0-draft",
+  "endpoint": "https://api.example.com/graphql",
+  "schema": {
+    "path": "offset.graphql",
+    "sha256": "76dee8d540382eee054b7bec688f1875c67de7a07f2ed5aafb9bc84164c384fe"
+  },
+  "operations": [
+    {
+      "id": "Tasks",
+      "document": {
+        "path": "offset-query.graphql",
+        "sha256": "c23636f06c86e173dc10884cfd5709483a0dbb3fca0770a790249b27741f2fb6"
+      },
+      "variables": {
+        "offset": {
+          "min": 0
+        },
+        "limit": {
+          "min": 1,
+          "max": 50
+        }
+      }
+    }
+  ],
+  "collections": [
+    {
+      "id": "tasks",
+      "operation": "Tasks",
+      "items": [
+        "rows"
+      ],
+      "identity": [
+        "id"
+      ],
+      "pagination": {
+        "type": "offset",
+        "field": [
+          "rows"
+        ],
+        "pageSizeArgument": "limit",
+        "pageSizeVariable": "limit",
+        "offsetArgument": "offset",
+        "offsetVariable": "offset",
+        "termination": "emptyPage"
+      }
+    }
+  ]
+}
