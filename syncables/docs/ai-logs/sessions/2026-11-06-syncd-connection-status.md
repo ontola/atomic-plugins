@@ -56,3 +56,7 @@ Completion validation: full suite against isolated PostgreSQL passed with
 changelog validation pass. The temporary database uses invented data only
 and is removed after validation. No live provider grants or account data
 were used in tests or screenshots.
+
+Review correction: filtered UI views label connection history outside selected
+collections as not tracked, rather than claiming those connections never
+synced. Connection-card aggregate timestamps are explicitly scoped to the view.

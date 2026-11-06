@@ -103,3 +103,7 @@ refresh only when selected/refreshed, preserving stable pagination.
 Use the same config file you already use to start SyncD. `syncd.json` is not
 a generated/default filename. The laptop setup guide's example is
 `~/.local/share/syncables-live/config.json`.
+
+Connection-card timestamps aggregate only the collections selected in this UI.
+A connection with none selected is “not tracked in this view,” not “never
+synced”; excluded collections may have their own sync history.

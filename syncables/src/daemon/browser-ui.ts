@@ -995,7 +995,7 @@ async function loadStatus() {
             : local.some((item) => item.state === 'syncing')
               ? chip('syncing')
               : !local.length
-                ? chip('unconfigured', 'Not configured here')
+                ? chip('unconfigured', 'No local collection')
                 : chip(
                     local.some((item) => item.hasSnapshot)
                       ? 'synced'
@@ -1019,10 +1019,10 @@ async function loadStatus() {
       card.append(identity);
       const time = document.createElement('p');
       time.textContent =
-        'Last successful sync (any collection): ' +
+        'Last successful sync (this view): ' +
         when(
           connection.lastSyncedAt,
-          local.some((item) => item.hasSnapshot)
+          !local.length ? 'Not tracked in this view' : local.some((item) => item.hasSnapshot)
             ? 'Not recorded for older data'
             : 'Never',
         );
@@ -1056,7 +1056,7 @@ async function loadStatus() {
       if (!local.length) {
         const note = document.createElement('p');
         note.textContent =
-          'Available remotely. Add a collection to your SyncD config to sync it here.';
+          'Available remotely. Add a collection to your config, or include it in this view with --collections.';
         list.append(note);
       }
       card.append(list);
