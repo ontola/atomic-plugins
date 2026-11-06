@@ -26,6 +26,10 @@
     "./daemon": {
       "types": "./build/src/daemon/index.d.ts",
       "default": "./build/src/daemon/index.js"
+    },
+    "./graphql": {
+      "types": "./build/src/graphql/reader.d.ts",
+      "default": "./build/src/graphql/reader.js"
     }
   },
   "files": [

@@ -1,4 +1,4 @@
-"""Offline validator for GraphQL Integration 0.1.0-draft operation bundles.
+"""Offline validator for GraphQL Integration operation bundles.
 
 No network requests or provider execution. Paths resolve within the manifest's
 bundle directory. This is an authoring reference, not proxy authorization.
@@ -11,7 +11,7 @@ import re
 from urllib.parse import urlsplit
 
 from graphql import (
-    GraphQLError, OperationType, build_schema, get_variable_values,
+    GraphQLError, OperationType, build_client_schema, build_schema, get_variable_values,
     is_non_null_type, parse, type_from_ast, validate as validate_document,
     validate_schema,
 )
@@ -59,7 +59,7 @@ def artifact(root, descriptor):
 
 class NoDirectives(Visitor):
     def enter_directive(self, node, *_):
-        raise InvalidManifest(f'directives unsupported in version 0.1: @{node.name.value}')
+        raise InvalidManifest(f'executable directives unsupported: @{node.name.value}')
 
 
 def validate_manifest(manifest, root):
@@ -68,16 +68,29 @@ def validate_manifest(manifest, root):
     A descriptor contains the parsed document, variable definitions and policy,
     suitable for the variable-policy reference below. Nothing is executed.
     """
-    fields(manifest, ('version', 'endpoint', 'schema', 'operations'))
-    require(manifest['version'] == '0.1.0-draft', 'unsupported manifest version')
+    fields(manifest, ('version', 'endpoint', 'schema', 'operations'), ('collections',))
+    require(manifest['version'] in ('0.1.0-draft', '0.2.0-draft'), 'unsupported manifest version')
+    require(('collections' in manifest) == (manifest['version'] == '0.2.0-draft'),
+            'collections require version 0.2.0-draft')
     require(text(manifest['endpoint']), 'endpoint must be a string')
     endpoint = urlsplit(manifest['endpoint'])
     require(endpoint.scheme == 'https' and endpoint.hostname and not endpoint.username
             and not endpoint.password and not endpoint.fragment and not endpoint.query,
             'endpoint must be an HTTPS URL without credentials, query or fragment')
+    descriptor = manifest['schema']
+    fields(descriptor, ('path', 'sha256'), ('format',) if manifest['version'] == '0.2.0-draft' else ())
+    schema_format = descriptor.get('format', 'sdl')
+    require(schema_format in ('sdl', 'introspection'), 'unsupported schema format')
+    raw_schema = artifact(root, {key: value for key, value in descriptor.items() if key != 'format'})
     try:
-        schema = build_schema(artifact(root, manifest['schema']))
-    except (TypeError, GraphQLError) as error:
+        if schema_format == 'sdl':
+            schema = build_schema(raw_schema)
+        else:
+            snapshot = json.loads(raw_schema)
+            require(isinstance(snapshot, dict) and 'errors' not in snapshot and
+                    isinstance(snapshot.get('data'), dict), 'invalid introspection response')
+            schema = build_client_schema(snapshot['data'])
+    except (TypeError, GraphQLError, ValueError) as error:
         raise InvalidManifest(f'invalid schema: {error}') from error
     errors = validate_schema(schema)
     require(not errors, '; '.join(str(error) for error in errors))
@@ -133,6 +146,9 @@ def validate_manifest(manifest, root):
             'schema': schema, 'document': document, 'source': source,
             'definitions': list(definitions.values()), 'variables': policies,
         }
+    if 'collections' in manifest:
+        from collection_contract import validate_collections
+        validate_collections(manifest['collections'], loaded)
     return loaded
 
 
