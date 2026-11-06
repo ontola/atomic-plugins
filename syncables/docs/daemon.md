@@ -678,3 +678,10 @@ owner signing authority and readers. Direct target-drive mirrors,
 remoteStorage, NextGraph, Jazz and atproto destinations remain planned, as do
 outgoing writes/outbox and promotion of the local copy to an authoritative
 source. The existing replication destination commands save configuration only.
+
+## Local data browser
+
+Run `syncables ui --config FILE` to inspect accepted local snapshots in your
+browser, with collection navigation, search, paginated records and source JSON.
+See [setup, usage and limits](daemon-browser.md). The browser never fetches
+provider data or sends edits.

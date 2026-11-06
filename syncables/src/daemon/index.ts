@@ -17,3 +17,6 @@ export {
 } from './owned-list.js';
 export { startBraidServer } from './braid.js';
 export type { BraidCollection, BraidOptions, BraidServer } from './braid.js';
+
+export { startBrowserServer } from './browser-server.js';
+export type { BrowserCollection, BrowserServer } from './browser-server.js';

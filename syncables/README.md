@@ -3129,3 +3129,9 @@ The additive browser-safe `syncables/graphql` subpath reads a validated
 GraphQL collection through an injected operation-ID executor. See
 [the reader contract and usage](docs/graphql.md). GraphQL proxy authorization
 and local-replica pruning are not implemented by this adapter.
+
+## SyncD data browser
+
+The local `syncables ui --config FILE` command shows saved collections,
+searchable records and source JSON in a read-only browser interface. See
+[setup and usage](docs/daemon-browser.md).
