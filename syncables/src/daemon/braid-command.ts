@@ -1,4 +1,13 @@
 import { resolve, dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { load as parseYaml } from 'js-yaml';
+import { nodeHash } from '../postgres/json-graph.js';
+import { discoverReadModel } from '../read/model.js';
+import type { OpenApiDocument } from '../openapi/types.js';
+import {
+  RECURSIVE_FORMAT,
+  recursiveAtomicProjector,
+} from './recursive-atomic.js';
 import { localArchive } from '../cli/cache.js';
 import { alias, loadDaemonConfig, selectedCollections } from './config.js';
 import { PostgresHistoryStore } from './history-store.js';
@@ -17,6 +26,9 @@ export async function braidCommand(
     throw new Error('Supply --config and --collections for Braid');
   const config = await loadDaemonConfig(file);
   const selected = selectedCollections(config, selectors.split(','));
+  const view = string('braid-view') ?? 'raw';
+  if (!['raw', 'atomic'].includes(view))
+    throw new Error('Braid view must be raw or atomic');
   const portText = string('braid-port') ?? '9888';
   if (
     !/^\d+$/.test(portText) ||
@@ -40,10 +52,44 @@ export async function braidCommand(
     await archive.initialize();
     await store.initialize();
     const collections = await Promise.all(
-      selected.map(async (source) => ({
-        alias: alias(source),
-        scope: (await prepareCollection(config.owner, source)).scope,
-      })),
+      selected.map(async (source) => {
+        const prepared = await prepareCollection(config.owner, source);
+        if (view === 'raw')
+          return { alias: alias(source), scope: prepared.scope };
+        const original = await readFile(source.document, 'utf8');
+        if (nodeHash(original) !== prepared.documentHash)
+          throw new Error('OpenAPI document changed during Braid startup');
+        const resource = discoverReadModel(prepared.document).collections.find(
+          (c) => c.name === source.collection,
+        )!.resource;
+        const projector = recursiveAtomicProjector({
+          document: parseYaml(original) as OpenApiDocument,
+          documentHash: prepared.documentHash,
+          resource,
+          namespace: prepared.scope,
+        });
+        return {
+          alias: alias(source),
+          scope: prepared.scope,
+          format: RECURSIVE_FORMAT,
+          projectionKey: nodeHash(
+            JSON.stringify(projector.project({}).resources),
+          ),
+          project: (
+            resources: Record<string, string>,
+            revision: import('./history-store.js').HistoryRevision,
+          ) => {
+            const context = JSON.parse(revision.context_text) as {
+              context?: { documentHash?: string };
+            };
+            if (context.context?.documentHash !== prepared.documentHash)
+              throw new Error(
+                'Accepted snapshot OpenAPI document does not match the projection',
+              );
+            return projector.project(resources).resources;
+          },
+        };
+      }),
     );
     const allowedOrigin = string('braid-origin');
     if (controller.signal.aborted) return;

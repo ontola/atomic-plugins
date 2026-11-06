@@ -12,9 +12,9 @@ describe('Keep view bundle', async () => {
     expect(Object.keys(module)).toEqual(['view']);
     expect(text).toContain('.keep-card{');
     expect(text).not.toMatch(/^\s*import\s|\bimport\(|require\(/m);
-    // Measured 13,669 bytes minified on 2026-10-30 with imported checklist
-    // recognition; approximately 10% headroom.
-    expect(bytes).toBeLessThan(15_100);
+    // Measured 16,268 bytes minified on 2026-11-02 with recursive OpenAPI
+    // source resources; approximately 10% headroom.
+    expect(bytes).toBeLessThan(17_800);
   });
   it('has no provider calls, credentials, persistent browser state or test fixture', () => {
     expect(text).not.toMatch(

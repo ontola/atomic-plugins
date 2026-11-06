@@ -17,6 +17,11 @@ This feature is in current source, not the published npm release. Follow the
 
 ## Start the listener
 
+For OpenAPI-derived typed tables and linked nested objects/arrays, use
+`--braid-view atomic`. See [linked Atomic resources](recursive-atomic.md) for
+its schema profile and distinct representation/version namespace. The default
+raw view described below preserves accepted source resource strings.
+
 Use the same `SYNCABLES_DATABASE_URL` and daemon config as your stored data.
 Explicitly select the collection aliases this listener may serve. Generate
 a dedicated reader token, and keep it out of source control and URLs:

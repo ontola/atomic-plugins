@@ -84,6 +84,7 @@ async function main(): Promise<void> {
         'peer-port',
         'braid-port',
         'braid-origin',
+        'braid-view',
         'projection-contract',
         'input',
         'edit-id',
