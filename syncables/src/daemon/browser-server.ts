@@ -35,6 +35,10 @@ export async function startBrowserServer(options: {
   collections: BrowserCollection[];
   port?: number;
   status?: () => Promise<BrowserStatus>;
+  management?: {
+    issuer: string;
+    request: (action: unknown) => Promise<unknown>;
+  };
 }): Promise<BrowserServer> {
   const collections = new Map(
     options.collections.map((entry) => [entry.alias, entry]),
@@ -44,6 +48,9 @@ export async function startBrowserServer(options: {
   const port = options.port ?? 9889;
   if (!Number.isInteger(port) || port < 0 || port > 65535)
     throw new Error('Invalid browser port');
+  const managementOrigin = options.management
+    ? new URL(options.management.issuer).origin
+    : undefined;
   const token = randomBytes(32).toString('hex');
   let origin = '';
   const server = createServer(async (req, res) => {
@@ -57,8 +64,7 @@ export async function startBrowserServer(options: {
         'Cache-Control': 'no-store',
         'X-Content-Type-Options': 'nosniff',
         'Referrer-Policy': 'no-referrer',
-        'Content-Security-Policy':
-          "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+        'Content-Security-Policy': `default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-src ${managementOrigin ?? "'none'"}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
       });
       res.end(body);
     };
@@ -69,7 +75,11 @@ export async function startBrowserServer(options: {
       ) {
         throw new BrowserError(403, 'Use the local browser URL');
       }
-      if (req.method !== 'GET')
+      const isManagement =
+        req.url === '/api/management' &&
+        req.method === 'POST' &&
+        options.management;
+      if (req.method !== 'GET' && !isManagement)
         throw new BrowserError(405, 'Read-only browser');
       const url = new URL(req.url ?? '/', origin);
       if (url.pathname === '/') {
@@ -93,6 +103,49 @@ export async function startBrowserServer(options: {
         !timingSafeEqual(supplied, expected)
       ) {
         throw new BrowserError(401, 'Open the browser link printed by SyncD');
+      }
+      if (url.pathname === '/api/management/config') {
+        send(
+          200,
+          JSON.stringify({
+            url: managementOrigin
+              ? managementOrigin +
+                '/manage?parent_origin=' +
+                encodeURIComponent(origin)
+              : null,
+          }),
+        );
+        return;
+      }
+      if (isManagement) {
+        if (
+          req.headers['content-type'] !== 'application/json' ||
+          req.headers.origin !== origin
+        )
+          throw new BrowserError(
+            403,
+            'Management requires a same-origin JSON request',
+          );
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        for await (const chunk of req) {
+          bytes += Buffer.byteLength(chunk);
+          if (bytes > 8192)
+            throw new BrowserError(413, 'Management request too large');
+          chunks.push(Buffer.from(chunk));
+        }
+        try {
+          const result = await options.management!.request(
+            JSON.parse(Buffer.concat(chunks).toString('utf8')),
+          );
+          send(200, JSON.stringify(result));
+        } catch {
+          throw new BrowserError(
+            403,
+            'IAP management access unavailable or refused',
+          );
+        }
+        return;
       }
       if (url.pathname === '/api/status') {
         if (!options.status)

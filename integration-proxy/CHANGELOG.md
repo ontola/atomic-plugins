@@ -3,6 +3,19 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
+## Unreleased: SyncD / IAP management
+
+- Explicit device permissions for selected-connection delegation/disconnection,
+  account-wide owner session management, and selected-connection notification
+  consumption. Existing/default device grants remain read-only and refresh
+  cannot widen authority.
+- Reusable credential-free `/manage` iframe and `/management.mjs` renderer,
+  integrated with SyncD's local control panel. See MANAGEMENT.md.
+- Opt-in `WEBHOOK_NOTIFICATIONS_ONLY=true` discards verified provider bodies
+  before retention. The receiver stores routing metadata and fixed change hints;
+  its database is bound to that retention mode. Use a fresh inbox for cutover
+  and never run older binaries that ignore this policy against it.
+
 ## 0.4.1 (2026-10-29)
 
 - Device sessions support an independently approved `proxy:write` scope for

@@ -19,12 +19,16 @@ include = [
     "/static/index.html",
     "/static/logo.png",
     "/static/device-approval.mjs",
+    "/static/management.html",
+    "/static/management.mjs",
+    "/static/management.css",
     "/Cargo.toml",
     "/Cargo.lock",
     "/README.md",
     "/CHANGELOG.md",
     "/SECURITY.md",
     "/DEVICE_AUTH.md",
+    "/MANAGEMENT.md",
     "/LICENSE",
 ]
 

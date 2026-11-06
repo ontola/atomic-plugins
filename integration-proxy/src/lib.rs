@@ -384,6 +384,32 @@ fn browser_cors() -> tower_http::cors::CorsLayer {
         .expose_headers(proxy::forwarded_response_headers().collect::<Vec<_>>())
 }
 
+async fn management_asset(
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (body, kind) = match uri.path().trim_start_matches('/') {
+        "manage" => (
+            include_str!("../static/management.html"),
+            "text/html; charset=utf-8",
+        ),
+        "management.mjs" => (
+            include_str!("../static/management.mjs"),
+            "text/javascript; charset=utf-8",
+        ),
+        "management.css" => (
+            include_str!("../static/management.css"),
+            "text/css; charset=utf-8",
+        ),
+        _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
+    };
+    ([
+        ("Content-Type", kind), ("Cache-Control", "no-store"),
+        ("Referrer-Policy", "no-referrer"), ("X-Content-Type-Options", "nosniff"),
+        ("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; frame-ancestors https: http://127.0.0.1:* http://localhost:*; base-uri 'none'; form-action 'none'"),
+    ], body).into_response()
+}
+
 fn router(state: AppState) -> Router {
     // The webhook routes exist only while the inbox is on.
     let webhook_routes = match &state.webhooks {
@@ -391,6 +417,9 @@ fn router(state: AppState) -> Router {
         None => Router::new(),
     };
     Router::new()
+        .route("/manage", get(management_asset))
+        .route("/management.mjs", get(management_asset))
+        .route("/management.css", get(management_asset))
         .merge(webhook_routes)
         .merge(device::router())
         .route("/", get(home))

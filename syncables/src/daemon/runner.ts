@@ -1,3 +1,5 @@
+import { notificationConsumer, NOTIFICATION_SCHEMA } from './notifications.js';
+import type { InboxConsumer } from '../inbox/consumer.js';
 import { isSyncAuthError } from './sync-errors.js';
 import type { SnapshotStore } from './snapshot-store.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
@@ -72,6 +74,11 @@ export async function jobStatuses(
 }
 export class DaemonRunner {
   private prepared: PreparedCollection[] = [];
+  private notifications: {
+    alias: string;
+    consumer: InboxConsumer;
+    next: number;
+  }[] = [];
   constructor(
     readonly config: DaemonConfig,
     readonly archive: PostgresArchive,
@@ -104,6 +111,45 @@ export class DaemonRunner {
       next_due=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN clock_timestamp() ELSE daemon_jobs.next_due END`,
         [this.config.owner, alias(p.source), p.scope],
       );
+    await this.archive.pool.query(NOTIFICATION_SCHEMA);
+    this.notifications = this.config.collections
+      .filter((c) => c.notifications)
+      .map((collection) => ({
+        alias: alias(collection),
+        next: 0,
+        consumer: notificationConsumer({
+          archive: this.archive,
+          owner: this.config.owner,
+          issuer: this.config.issuer,
+          collection,
+          session: () => this.auth.session(),
+          fetch: this.fetchImpl,
+          trigger: (delivery) =>
+            this.trigger(
+              alias(collection),
+              delivery,
+              Buffer.from('{"notification":true}'),
+            ),
+          reconcile: async () => {
+            const results = await this.sync(
+              [alias(collection)],
+              undefined,
+              false,
+              true,
+            );
+            if (
+              !results.some(
+                (result) =>
+                  result.alias === alias(collection) &&
+                  result.result &&
+                  !result.error,
+              )
+            )
+              return 'pending';
+            return undefined;
+          },
+        }),
+      }));
   }
   async trigger(
     name: string,
@@ -144,6 +190,7 @@ export class DaemonRunner {
     selectors: string[] = [],
     signal?: AbortSignal,
     dueOnly = false,
+    forceFull = false,
   ): Promise<
     {
       alias: string;
@@ -215,6 +262,7 @@ export class DaemonRunner {
           const upstream = upstreamOf(p.document);
           const result = await syncCollection({
             prepared: p,
+            forceFull,
             archive: this.archive,
             store: this.store,
             auth: {
@@ -408,6 +456,31 @@ export class DaemonRunner {
       });
       while (!controller.signal.aborted) {
         try {
+          const names = new Set(
+            selectedCollections(this.config, selectors).map(alias),
+          );
+          for (const notification of this.notifications) {
+            if (
+              !names.has(notification.alias) ||
+              notification.next > Date.now() ||
+              controller.signal.aborted
+            )
+              continue;
+            notification.next = Date.now() + 5000;
+            try {
+              const result = await notification.consumer.step();
+              if (result.kind === 'backoff')
+                notification.next =
+                  Date.now() + Math.max(5, result.seconds) * 1000;
+            } catch {
+              report({
+                notifications: notification.alias,
+                state: 'unavailable',
+                error:
+                  'Could not receive IAP change notifications; check approval and receiver configuration.',
+              });
+            }
+          }
           for (const result of await this.sync(
             selectors,
             controller.signal,

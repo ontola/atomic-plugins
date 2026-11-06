@@ -25,11 +25,11 @@ export const BROWSER_HTML = `
     <main>
       <header>
         <div>
-          <div class="eyebrow">DATA BROWSER</div>
+          <div class="eyebrow">CONTROL PANEL</div>
           <h1>Connections &amp; synced data</h1>
           <p>Your approved remote connections and saved local records.</p>
         </div>
-        <span class="badge">Read only</span>
+        <span class="badge">Local snapshots</span>
       </header>
       <div id="error" class="error" role="alert" hidden></div>
       <section class="connections-panel" aria-label="Remote connections">
@@ -46,6 +46,11 @@ export const BROWSER_HTML = `
         </div>
         <div id="remote-connections" class="connection-grid"></div>
         <p id="status-checked" class="checked"></p>
+      </section>
+      <section class="connections-panel" aria-label="IAP access management">
+        <div class="section-heading"><h2>Manage access</h2><button id="open-management" class="secondary">Connections &amp; sessions</button></div>
+        <p id="management-help">Manage provider connections, app grants and IAP sessions here. Management requires separate owner approval.</p>
+        <iframe id="iap-management" title="IAP access management" sandbox="allow-scripts allow-same-origin allow-modals" referrerpolicy="no-referrer" hidden></iframe>
       </section>
       <section class="workspace">
         <div class="toolbar">
@@ -113,6 +118,7 @@ export const BROWSER_HTML = `
 `;
 
 export const BROWSER_STYLE = `
+#iap-management { width:100%;height:650px;border:1px solid #dce5df;border-radius:10px; }
 :root {
   font-family:
     Inter,
@@ -1077,6 +1083,37 @@ async function loadStatus() {
     el('refresh-status').disabled = false;
   }
 }
+let managementOrigin;
+const managementFrame = el('iap-management');
+el('open-management').addEventListener('click', async () => {
+  try {
+    const response = await fetch('/api/management/config', { headers: { Authorization: 'Bearer ' + (token || '') }, credentials: 'omit' });
+    const config = await response.json();
+    if (!response.ok || !config.url) throw new Error();
+    managementOrigin = new URL(config.url).origin;
+    managementFrame.hidden = false;
+    managementFrame.src = config.url;
+  } catch { el('management-help').textContent = 'Access management is unavailable. Restart SyncD with ui --manage to approve management access.'; }
+});
+let managementBusy = false;
+window.addEventListener('message', async event => {
+  if (!managementOrigin || event.origin !== managementOrigin || event.source !== managementFrame.contentWindow || event.data?.channel !== 'iap-management-v1') return;
+  if (event.data.event === 'resize' && Number.isFinite(event.data.height)) { managementFrame.style.height = Math.min(2400, Math.max(320, event.data.height + 12)) + 'px'; return; }
+  const id = event.data.id;
+  if (typeof id !== 'string' || id.length > 80 || managementBusy) return;
+  managementBusy = true;
+  try {
+    const response = await fetch('/api/management', {
+      method: 'POST', credentials: 'omit', redirect: 'error',
+      headers: { Authorization: 'Bearer ' + (token || ''), 'Content-Type': 'application/json' },
+      body: JSON.stringify(event.data.request), signal: AbortSignal.timeout(15000),
+    });
+    const result = await response.json();
+    managementFrame.contentWindow.postMessage({ channel: 'iap-management-v1', id, ok: response.ok, result }, managementOrigin);
+    if (response.ok && event.data.request?.action !== 'overview') void loadStatus();
+  } catch { managementFrame.contentWindow.postMessage({ channel: 'iap-management-v1', id, ok: false }, managementOrigin); }
+  finally { managementBusy = false; }
+});
 el('refresh-status').addEventListener('click', loadStatus);
 let searchTimer;
 el('search').addEventListener('input', () => {

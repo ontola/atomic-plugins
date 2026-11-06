@@ -787,6 +787,8 @@ async fn oversized_deliveries() {
 #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
 async fn a_database_failure_before_commit_is_never_acknowledged() {
     let env = env(small()).await;
+    env.store.check_payload_mode(true).await.unwrap();
+    assert!(env.store.check_payload_mode(false).await.is_err());
     let alice = Agent::new(91);
     let connection = env.connection("tracker", &alice, "key-a", &["p-100"]).await;
     env.subscribe_project(&alice, &connection, "p-100").await;
@@ -1806,4 +1808,137 @@ async fn eventually(what: &str, condition: impl Fn() -> bool) {
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn notification_only_receiver_discards_provider_body_before_persistence() {
+    let mut env = env(small()).await;
+    Arc::get_mut(env.state.webhooks.as_mut().unwrap())
+        .unwrap()
+        .notifications_only = true;
+    env.store.check_payload_mode(true).await.unwrap();
+    assert!(env.store.check_payload_mode(false).await.is_err());
+    let alice = Agent::new(91);
+    let connection = env
+        .connection("tracker", &alice, "key-notice", &["p-notice"])
+        .await;
+    let _subscription = env.subscribe_project(&alice, &connection, "p-notice").await;
+    let endpoint = env.endpoint("tracker").await;
+    let body = task("p-notice", "private-provider-record");
+    assert_eq!(
+        env.send(env.signed_delivery(&endpoint, "notice-1", &body))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let row = env
+        .security
+        .client()
+        .await
+        .query_one(
+            "SELECT body FROM webhook_payloads WHERE delivery_id='notice-1'",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(row.get::<_, Vec<u8>>(0), br#"{"notification":true}"#);
+    env.drop_schema().await;
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn device_notifications_require_selected_connection_and_notification_only_storage() {
+    let mut env = env(small()).await;
+    assert_eq!(
+        env.send(
+            Request::builder()
+                .uri("/manage")
+                .body(Body::empty())
+                .unwrap()
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    env.state
+        .device
+        .clients
+        .insert("notification-client".into(), "Notification client".into());
+    env.state.device.approval_url = Some("http://localhost/approve".into());
+    let alice = Agent::new(92);
+    let connection = env
+        .connection("tracker", &alice, "key-device-notice", &["p-one", "p-two"])
+        .await;
+    let subscription = env.subscribe_project(&alice, &connection, "p-one").await;
+    let other_connection = env
+        .connection("tracker", &alice, "key-device-other", &["p-two"])
+        .await;
+    let other = env
+        .subscribe_project(&alice, &other_connection, "p-two")
+        .await;
+    let (device, code) = crate::device::store::create(
+        &env.security,
+        "notification-client",
+        &env.state.base_url,
+        "notifications:consume",
+    )
+    .await
+    .unwrap();
+    let challenge = crate::device::store::challenge(
+        &env.security,
+        &code.replace('-', ""),
+        &alice.id(),
+        &env.state.base_url,
+    )
+    .await
+    .unwrap();
+    crate::device::store::approve(
+        &env.security,
+        challenge["challenge"].as_str().unwrap(),
+        &alice.id(),
+        &env.state.base_url,
+        &[connection],
+        true,
+    )
+    .await
+    .unwrap();
+    env.security
+        .client()
+        .await
+        .execute(
+            "UPDATE device_grants SET next_poll=NOW()-INTERVAL '1 second'",
+            &[],
+        )
+        .await
+        .unwrap();
+    let grant = crate::device::store::poll(
+        &env.security,
+        &device,
+        "notification-client",
+        &env.state.base_url,
+    )
+    .await
+    .unwrap();
+    let get = |sub: &Value| {
+        Request::builder()
+            .uri(format!("/subscriptions/{}", id(sub)))
+            .header(
+                "authorization",
+                format!("Bearer {}", grant["access_token"].as_str().unwrap()),
+            )
+            .body(Body::empty())
+            .unwrap()
+    };
+    // A notification grant cannot expose a raw-payload inbox, even with standing.
+    assert_eq!(
+        env.send(get(&subscription)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    Arc::get_mut(env.state.webhooks.as_mut().unwrap())
+        .unwrap()
+        .notifications_only = true;
+    assert_eq!(env.send(get(&subscription)).await.status(), StatusCode::OK);
+    assert_eq!(env.send(get(&other)).await.status(), StatusCode::FORBIDDEN);
+    env.drop_schema().await;
 }
