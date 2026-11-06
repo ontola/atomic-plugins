@@ -1,6 +1,6 @@
 # SyncD local data browser
 
-The read-only browser shows the records saved in SyncD's accepted PostgreSQL
+The local data view shows the records saved in SyncD's accepted PostgreSQL
 snapshots. Select a collection, search its saved JSON, page through records,
 and select a record to inspect its source JSON. Local browsing requires no provider login and never starts a sync or sends
 edits. The dashboard also lists grant-approved remote connections and the
@@ -65,8 +65,12 @@ The UI server calls integration-proxy's `GET /connections` using SyncD's
 existing device session. Tokens remain in the server process/Keychain and
 never enter the page. This API lists only connections approved for that
 particular SyncD access grant, not all of the owner's connections. The
-owner-wide `/device/sessions` management API requires an owner signature;
-the UI does not impersonate the owner or add/revoke grants.
+owner-wide `/device/sessions` management API requires an owner signature or
+an explicitly approved `sessions:manage` device grant. Default UI sessions
+do not gain that permission. Use the separate foreground `ui --manage` flow
+to embed IAP access management; see
+[SyncD with IAP](daemon.md#syncd-with-integrations-atomic-place-iap).
+It does not replace or widen the daemon's saved Keychain grant.
 
 On macOS, the UI reuses the session stored by `syncables login --config FILE`.
 For an explicit foreground login (including platforms without Keychain):

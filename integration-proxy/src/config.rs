@@ -59,6 +59,9 @@ pub struct Config {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct WebhookConfig {
+    /// Discard verified provider bodies after extracting routing metadata.
+    /// WEBHOOK_NOTIFICATIONS_ONLY=true stores only a fixed change hint.
+    pub notifications_only: bool,
     /// `WEBHOOKS_ENABLED`: `true` turns the inbox on; unset, empty or
     /// `false` leaves it off. Anything else stops the proxy at startup.
     pub enabled: bool,
@@ -86,6 +89,7 @@ pub struct WebhookConfig {
 impl Default for WebhookConfig {
     fn default() -> Self {
         Self {
+            notifications_only: false,
             enabled: false,
             inbox_max_bytes: DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
             ingress_per_endpoint_per_minute: 600,
@@ -161,7 +165,16 @@ pub(crate) fn webhook_config_with(
             Ok(default)
         }
     };
+    let notifications_only = match variable("WEBHOOK_NOTIFICATIONS_ONLY")
+        .as_deref()
+        .map(str::trim)
+    {
+        None | Some("") | Some("false") => false,
+        Some("true") => true,
+        Some(_) => return Err("WEBHOOK_NOTIFICATIONS_ONLY must be true or false".into()),
+    };
     Ok(WebhookConfig {
+        notifications_only,
         enabled,
         inbox_max_bytes,
         ingress_per_endpoint_per_minute: limit(

@@ -116,13 +116,23 @@ export class DaemonAuth {
     private readonly credentials?: CredentialStore,
     private readonly fetchImpl: typeof fetch = globalThis.fetch,
   ) {}
-  async login(report: (message: string) => void, write = false): Promise<void> {
+  async login(
+    report: (message: string) => void,
+    write = false,
+    manage = false,
+  ): Promise<void> {
     let grant: Omit<DeviceCredentials, 'owner'> | undefined;
     const session = await deviceLogin(
       {
         issuer: this.config.issuer,
         clientId: this.config.clientId,
-        scope: 'connections:read proxy:read' + (write ? ' proxy:write' : ''),
+        scope:
+          'connections:read proxy:read' +
+          (write ? ' proxy:write' : '') +
+          (manage ? ' connections:manage sessions:manage' : '') +
+          (this.config.collections.some((c) => c.notifications)
+            ? ' notifications:consume'
+            : ''),
       },
       {
         fetch: this.fetchImpl,
@@ -134,6 +144,13 @@ export class DaemonAuth {
     );
     if (write && !session.scope?.split(' ').includes('proxy:write'))
       throw new Error('Server did not approve proxy:write');
+    if (
+      manage &&
+      !['connections:manage', 'sessions:manage'].every((scope) =>
+        session.scope?.split(' ').includes(scope),
+      )
+    )
+      throw new Error('Server did not approve management permissions');
     const discovered = await listConnections(session, this.fetchImpl);
     if (discovered.owner !== this.config.owner)
       throw new Error(

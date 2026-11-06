@@ -341,6 +341,32 @@ describe.skipIf(!database)(
       ).rejects.toThrow('unsafe numeric');
       expect(await h.store.head(h.prepared.scope)).toBe(first.revision);
     });
+    it('reconciles a notification gap with a full bootstrap instead of its saved delta token', async () => {
+      const h = await setup(true);
+      await h.sync(async () =>
+        response('{"items":[{"id":"old"}],"checkpoint":"old-token"}'),
+      );
+      const fresh = await syncCollection({
+        prepared: h.prepared,
+        archive,
+        store: h.store,
+        auth: {
+          owner: h.config.owner,
+          connection: 'test-connection',
+          authorizationContext: 'grant-1',
+        },
+        forceFull: true,
+        upstream: async ({ url }) => {
+          expect(url.searchParams.has('since')).toBe(false);
+          return response('{"items":[{"id":"new"}],"checkpoint":"new-token"}');
+        },
+      });
+      expect(fresh.strategy).toBe('bootstrap');
+      expect(fresh.records).toBe(1);
+      expect(await h.store.context(h.prepared.scope)).toMatchObject({
+        syncToken: 'new-token',
+      });
+    });
     it('publishes terminal incremental tokens with data, applies tombstones, and bootstraps after 410 or a new grant', async () => {
       const h = await setup(true);
       const initial = await h.sync(async () =>

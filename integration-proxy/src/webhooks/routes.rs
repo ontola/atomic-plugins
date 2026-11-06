@@ -87,6 +87,37 @@ fn webhooks(state: &AppState) -> Result<Arc<Webhooks>, Box<Response>> {
         .ok_or_else(|| Box::new(no_store(StatusCode::NOT_FOUND.into_response())))
 }
 
+/// Device grants can only consume fixed change hints, never retained provider
+/// bodies. Selection is checked for every subscription operation.
+async fn notification_signer(
+    state: &AppState,
+    security: &crate::security::Security,
+    method: &Method,
+    uri: &axum::http::Uri,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(crate::agent_id::AgentId, Option<Vec<String>>), ApiError> {
+    if let Some(token) = crate::device::bearer(headers)? {
+        let principal = crate::device::principal(state, token).await?;
+        if !state
+            .webhooks
+            .as_ref()
+            .is_some_and(|w| w.notifications_only)
+            || !principal
+                .scope
+                .split_ascii_whitespace()
+                .any(|s| s == crate::device::NOTIFICATION_SCOPE)
+        {
+            return Err(ApiError::TokenScope);
+        }
+        return Ok((principal.owner, Some(principal.connections)));
+    }
+    Ok((
+        crate::signature::authenticate(state, security, method, uri, headers, body).await?,
+        None,
+    ))
+}
+
 /// Authenticates the request and checks the signer is still the
 /// subscription's consumer with standing on its connection.
 async fn consumer(
@@ -102,7 +133,7 @@ async fn consumer(
         .security
         .as_ref()
         .ok_or_else(|| Box::new(no_store(ApiError::Unavailable.into_response())))?;
-    let signer = crate::signature::authenticate(state, security, method, uri, headers, body)
+    let (signer, selected) = notification_signer(state, security, method, uri, headers, body)
         .await
         .map_err(|e| Box::new(no_store(e.into_response())))?;
     let binding = match webhooks.store.binding(id).await {
@@ -110,6 +141,12 @@ async fn consumer(
         Ok(_) => return Err(Box::new(inbox_error(InboxError::UnknownSubscription))),
         Err(error) => return Err(Box::new(inbox_error(error))),
     };
+    if selected
+        .as_ref()
+        .is_some_and(|ids| !ids.contains(&binding.connection_id))
+    {
+        return Err(Box::new(no_store(ApiError::TokenScope.into_response())));
+    }
     // Standing is checked whatever the subscription's state, so a former
     // consumer reads nothing, not even a closed subscription's tombstone.
     let standing = security
@@ -176,14 +213,17 @@ pub async fn subscribe(
     let Some(security) = state.security.as_ref() else {
         return no_store(ApiError::Unavailable.into_response());
     };
-    let signer = match crate::signature::authenticate(
-        &state, security, &method, &uri, &headers, &body,
-    )
-    .await
+    let (signer, selected) =
+        match notification_signer(&state, security, &method, &uri, &headers, &body).await {
+            Ok(signer) => signer,
+            Err(error) => return no_store(error.into_response()),
+        };
+    if selected
+        .as_ref()
+        .is_some_and(|ids| !ids.contains(&connection_id))
     {
-        Ok(signer) => signer,
-        Err(error) => return no_store(error.into_response()),
-    };
+        return no_store(ApiError::TokenScope.into_response());
+    }
     if connection_id.len() != 43 {
         return no_store(ApiError::UnknownConnection.into_response());
     }

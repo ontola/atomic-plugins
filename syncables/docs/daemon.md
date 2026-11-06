@@ -685,3 +685,82 @@ Run `syncables ui --config FILE` to inspect accepted local snapshots in your
 browser, with collection navigation, search, paginated records and source JSON.
 See [setup, usage and limits](daemon-browser.md). The browser never fetches
 provider data or sends edits.
+
+## SyncD with Integrations Atomic Place (IAP)
+
+SyncD keeps collection selections, imported records, history and work items on
+this device. IAP holds provider credentials and grants. The control panel uses
+IAP's grant API without receiving provider credentials. These additions require
+the matching proxy source from the SyncD/IAP management change; the published
+0.4.1 proxy does not implement management device scopes or `/manage`.
+
+Start the local control panel with a fresh, explicit management approval:
+
+```sh
+node build/src/cli/main.js ui --config YOUR-CONFIG.json --manage
+```
+
+`--manage` always uses a foreground, in-memory session, including on macOS.
+It leaves the daemon's ordinary Keychain session alone. Approve
+`connections:manage` for selected connections and `sessions:manage` for
+account-wide IAP session visibility/revocation. Neither grants provider data
+reads or writes. SyncD also requests its normal connection-discovery/read
+permissions. Existing sync sessions never acquire management authority on
+refresh. Without `--manage`, the panel can display read-only connection status;
+management actions require an appropriately approved session.
+
+Open the printed private localhost link, then **Connections & sessions**.
+The embedded IAP page lists selected provider connections, app delegations
+and IAP client sessions. You can revoke an app, grant access to an app agent,
+disconnect a provider connection or revoke a client session. Disconnecting
+provider access keeps previously saved local snapshots. Revoking the panel's
+own session requires another login. New provider connections still use the
+existing provider consent/owner-hub flow and require fresh selection approval.
+This panel does not implement an Ontola account login or replace that owner hub.
+
+The iframe holds no credential. It sends structured actions to the parent;
+SyncD verifies the frame origin/window and calls an allowlisted local API using
+the private localhost token. The local API requires the exact browser Origin
+and a JSON body, rejects arbitrary URLs/methods, and keeps IAP tokens in the
+Node process. IAP checks permissions, selected connections and ownership again.
+Other clients can use the same API over CORS or embed the same `/manage` page;
+see `integration-proxy/MANAGEMENT.md`.
+
+### Change notifications while the laptop sleeps
+
+For IAP, enable `WEBHOOKS_ENABLED=true` and
+`WEBHOOK_NOTIFICATIONS_ONLY=true`. A verified delivery is routed using catalog
+metadata, then its provider body is discarded before persistence. IAP retains
+only routing metadata, delivery identity and a fixed `{"notification":true}`
+hint, with the existing bounded leases, retention and gap reporting. This is
+not an archive of provider changes. The operator must configure the platform's
+shared hook and secret, and the catalog must declare its delivery/access rules.
+No new public endpoint is opened on the laptop.
+
+A collection can opt into a notification source declared by its composed
+OpenAPI document, for example these **invented** metadata names:
+
+```json
+"notifications": {
+  "source": "project",
+  "parameters": { "project": "example-project" },
+  "events": ["changed"]
+}
+```
+
+Run `syncables login --config FILE` again after adding notifications, so the
+owner can explicitly approve `notifications:consume` for those connections.
+Then run `syncables daemon --config FILE`. The daemon subscribes and polls
+IAP outbound, remembers its subscription locally, and records a durable work
+item before acknowledging a hint. Startup, expiry and gaps cause a complete
+reconciliation, ignoring an existing incremental sync token; failed reads do
+not acknowledge reconciliation. Normal provider requests still need
+`proxy:read`. Polling can remain enabled as a fallback. Restart the daemon
+after changing configuration. Subscription settings remain in the local config;
+this version does not offer a browser form for editing them.
+
+Notification-only mode is bound to its inbox database. Switching retention
+mode is refused, and a new notification-only database must not contain old raw
+payloads. Use a fresh inbox for the cutover, as agreed for IAP; do not run old
+proxy binaries against it, because they do not enforce this policy. Sessions,
+provider applications, DNS and production rollout are separate deployment work.

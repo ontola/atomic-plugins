@@ -95,8 +95,9 @@ connections currently owned by the authenticated owner. This pilot does not
 issue device grants for connections merely delegated to an app. Connections
 retain their existing canonical Atomic owner identity. A device client is a
 restricted session of that owner, not a new owner/account/cache namespace.
-The bearer path does not grant connection deletion, delegation/runtime
-changes, webhook administration or provider connect/redeem authority.
+The default bearer scopes do not grant connection deletion, delegation/runtime
+changes, webhook administration or provider connect/redeem authority. Additional
+explicit management/notification scopes in the current source are described below.
 
 ### Device grant and polling
 
@@ -308,3 +309,15 @@ test harness and its Chromium browser, then set `DEVICE_BROWSER_TEST=1`,
 needed, `PLAYWRIGHT_BROWSERS_PATH` before the same `cargo test device::` command.
 This test starts the actual loopback proxy, an invented provider and the owner
 bridge, and approves through Chromium before probing and revoking the session.
+
+### Additional opt-in management and notification scopes
+
+The source adds `connections:manage`, `sessions:manage`, and
+`notifications:consume`, described in [MANAGEMENT.md](MANAGEMENT.md).
+`connections:manage` permits selected-connection delegation/disconnection,
+`sessions:manage` permits listing/revoking this owner's client sessions, and
+`notifications:consume` permits selected-connection webhook consumer routes
+only on notification-only deployments. These are not granted by default or by
+refresh. None implies provider read/write authority. The standalone/reusable
+management view never receives credentials. A source change does not establish
+that a published or deployed proxy supports these additions.
