@@ -3,7 +3,7 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
-## Unreleased: SyncD / IAP management
+## 0.4.2 (2026-11-09)
 
 - Explicit device permissions for selected-connection delegation/disconnection,
   account-wide owner session management, and selected-connection notification
