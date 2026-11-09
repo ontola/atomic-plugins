@@ -1,4 +1,5 @@
 // @wc-ignore-file
+import { manageAccess } from './management.js';
 import { DaemonAuth, KeychainCredentials } from './auth.js';
 import { loadBrowserStatus, browserJobMatches } from './browser-status.js';
 import { dirname, resolve } from 'node:path';
@@ -47,10 +48,16 @@ export async function browserCommand(
     const auth = new DaemonAuth(
       config,
       archive,
-      values.interactive ? undefined : new KeychainCredentials(config),
+      values.interactive || values.manage
+        ? undefined
+        : new KeychainCredentials(config),
     );
-    if (values.interactive)
-      await auth.login((message) => process.stderr.write(message + '\n'));
+    if (values.interactive || values.manage)
+      await auth.login(
+        (message) => process.stderr.write(message + '\n'),
+        false,
+        values.manage === true,
+      );
     const jobs = await jobStatuses(archive, config.owner);
     const collections = await Promise.all(
       selected.map(async (source) => ({
@@ -68,6 +75,11 @@ export async function browserCommand(
       store,
       collections,
       port: Number(port),
+      management: {
+        issuer: config.issuer,
+        request: async (action) =>
+          manageAccess(await auth.session(), config.owner, action),
+      },
       status: () =>
         loadBrowserStatus({
           owner: config.owner,
@@ -100,7 +112,7 @@ export async function browserCommand(
         }),
     });
     process.stdout.write(
-      `SyncD data browser: ${server.url}\nRead-only snapshots and approved connection status. Press Ctrl+C to stop.\n`,
+      `SyncD data browser: ${server.url}\nLocal snapshots, connection status and IAP access management. Press Ctrl+C to stop.\n`,
     );
     await new Promise<void>((resolve) => {
       controller.signal.addEventListener('abort', () => resolve(), {

@@ -1,5 +1,6 @@
 //! Managing connections, delegations and runtimes (issue #54, sections 2
-//! and 6). Every call is signed (Atomic v2) by the owner.
+//! and 6). Owner Atomic v2 signatures or explicitly approved, selected-connection
+//! device management grants authorize connection operations. Runtimes remain owner-signed.
 //!
 //! | route | effect |
 //! |---|---|
@@ -29,6 +30,7 @@ const MAX_LABEL: usize = 200;
 struct Signed<'a> {
     security: &'a Security,
     signer: agent_id::AgentId,
+    permitted_connections: Option<Vec<String>>,
 }
 
 async fn signed<'a>(
@@ -38,6 +40,22 @@ async fn signed<'a>(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<Signed<'a>, ApiError> {
+    if let Some(token) = crate::device::bearer(headers)? {
+        let principal = crate::device::principal(state, token).await?;
+        if !principal
+            .scope
+            .split_ascii_whitespace()
+            .any(|s| s == crate::device::CONNECTION_MANAGE_SCOPE)
+            || uri.path().starts_with("/runtimes")
+        {
+            return Err(ApiError::TokenScope);
+        }
+        return Ok(Signed {
+            security: state.security.as_ref().ok_or(ApiError::Unavailable)?,
+            signer: principal.owner,
+            permitted_connections: Some(principal.connections),
+        });
+    }
     if headers.contains_key(axum::http::header::AUTHORIZATION) {
         return Err(ApiError::UnsupportedAuthorization);
     }
@@ -45,11 +63,22 @@ async fn signed<'a>(
     let signer =
         crate::signature::authenticate(state, security, method, uri, headers, body).await?;
     crate::check_access(state, &signer).await?;
-    Ok(Signed { security, signer })
+    Ok(Signed {
+        security,
+        signer,
+        permitted_connections: None,
+    })
 }
 
 /// Loads a connection and checks the signer owns it.
 async fn owned(signed: &Signed<'_>, connection_id: &str) -> Result<(), ApiError> {
+    if signed
+        .permitted_connections
+        .as_ref()
+        .is_some_and(|ids| !ids.iter().any(|id| id == connection_id))
+    {
+        return Err(ApiError::TokenScope);
+    }
     if connection_id.len() != 43 {
         return Err(ApiError::UnknownConnection);
     }

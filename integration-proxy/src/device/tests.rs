@@ -529,7 +529,7 @@ async fn tokens_are_read_only_connection_scoped_and_never_forwarded_to_the_provi
     ] {
         assert_eq!(
             f.bearer(token, method, &path).await.status(),
-            StatusCode::UNAUTHORIZED
+            StatusCode::FORBIDDEN
         );
     }
     let extra = f
@@ -1169,7 +1169,7 @@ async fn explicit_write_grant_reaches_only_approved_catalog_operations() {
         f.bearer(token, "DELETE", &format!("/connections/{}", f.connection))
             .await
             .status(),
-        StatusCode::UNAUTHORIZED
+        StatusCode::FORBIDDEN
     );
     assert_eq!(
         f.bearer(
@@ -1182,4 +1182,116 @@ async fn explicit_write_grant_reaches_only_approved_catalog_operations() {
         StatusCode::NOT_FOUND
     );
     server.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL"]
+async fn management_grants_are_explicit_connection_scoped_and_owner_scoped() {
+    let f = Fixture::new(218).await;
+    let read = f.grant("connections:read proxy:read").await;
+    let read_token = read["access_token"].as_str().unwrap();
+    assert_eq!(
+        f.bearer(
+            read_token,
+            "DELETE",
+            &format!("/connections/{}", f.connection)
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        f.bearer(read_token, "GET", "/device/sessions")
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let manage = f.grant("connections:manage sessions:manage").await;
+    let token = manage["access_token"].as_str().unwrap();
+    let other_connection = f
+        .security
+        .create_connection("service", &f.owner.id(), b"sealed-fixture")
+        .await
+        .unwrap();
+    assert_eq!(
+        f.bearer(token, "DELETE", &format!("/connections/{other_connection}"))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    // Management does not imply provider read/write or owner-only enrollment.
+    assert_eq!(
+        f.bearer(token, "POST", "/runtimes").await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert!(!store::may_request(
+        &principal(&f.state, token).await.unwrap(),
+        &f.connection,
+        &Method::GET
+    ));
+    let list = body_json(f.bearer(token, "GET", "/connections").await).await;
+    assert_eq!(list["connections"].as_array().unwrap().len(), 1);
+    assert!(list["connections"][0]["delegations"].is_array());
+    assert!(!list.to_string().contains("invented-provider-value"));
+    let sessions = body_json(f.bearer(token, "GET", "/device/sessions").await).await;
+    assert!(sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|row| row["session_id"] == read["session_id"]));
+    let other = Fixture::new(219).await;
+    let foreign = other.grant("connections:read").await;
+    assert_ne!(
+        f.bearer(
+            token,
+            "DELETE",
+            &format!(
+                "/device/sessions/{}",
+                foreign["session_id"].as_str().unwrap()
+            )
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        f.bearer(
+            token,
+            "DELETE",
+            &format!("/device/sessions/{}", read["session_id"].as_str().unwrap())
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        f.bearer(read_token, "GET", "/connections").await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        f.bearer(token, "DELETE", &format!("/connections/{}", f.connection))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[tokio::test]
+async fn management_assets_are_embeddable_without_credentials() {
+    let app = crate::test_support::router_without_database();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/manage")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .contains("connect-src 'none'"));
+    assert_eq!(response.headers()["cache-control"], "no-store");
 }

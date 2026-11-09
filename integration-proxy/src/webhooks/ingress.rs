@@ -374,7 +374,7 @@ async fn receive_checked(
         source_kind: event.source.clone(),
         source_key,
         context,
-        body: body.to_vec(),
+        body: retained_body(webhooks.notifications_only, &body),
     };
     match webhooks.store.ingest(&delivery, super::store::now()).await {
         // Retained, recorded as a gap, a duplicate, or wanted by nobody:
@@ -419,4 +419,27 @@ async fn revoke(
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     }
     Ok(())
+}
+
+/// Routing and signature verification happen before this boundary. Only routing
+/// metadata and a fixed change hint cross it in notification-only deployments.
+fn retained_body(notifications_only: bool, body: &[u8]) -> Vec<u8> {
+    if notifications_only {
+        br#"{"notification":true}"#.to_vec()
+    } else {
+        body.to_vec()
+    }
+}
+
+#[cfg(test)]
+mod notification_tests {
+    #[test]
+    fn provider_content_never_crosses_the_notification_storage_boundary() {
+        let body = br#"{"title":"private note","content":"provider data"}"#;
+        assert_eq!(
+            super::retained_body(true, body),
+            br#"{"notification":true}"#
+        );
+        assert_eq!(super::retained_body(false, body), body);
+    }
 }

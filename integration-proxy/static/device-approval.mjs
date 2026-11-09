@@ -38,16 +38,16 @@ export function mountDeviceApproval({ root, proxyUrl, signRequest, userCode = ''
     try {
       const request = await call('/device/challenge', { user_code: input.value });
       details.append(make('h2', request.client_name), make('p', `Owner: ${request.owner}`));
-      const descriptions = { 'connections:read': 'Discover only the selected connections.', 'proxy:read': 'Read through the selected connections using GET and HEAD.', 'proxy:write': 'Create, change and permanently delete data through the selected connections using POST, PUT, PATCH and DELETE, where the provider permits it.' };
+      const descriptions = { 'notifications:consume': 'Subscribe to, receive and acknowledge change notifications for the selected connections. Provider data must be fetched separately.', 'connections:manage': 'Manage app access to the selected connections, including disconnecting them for every app. This does not grant access to provider data.', 'sessions:manage': 'List and revoke ALL of your IAP client sessions, including sessions belonging to other clients. This does not grant access to provider data.', 'connections:read': 'Discover only the selected connections.', 'proxy:read': 'Read through the selected connections using GET and HEAD.', 'proxy:write': 'Create, change and permanently delete data through the selected connections using POST, PUT, PATCH and DELETE, where the provider permits it.' };
       details.append(make('p', request.scope.split(' ').map(s => descriptions[s] || s).join(' ')));
-      details.append(make('p', 'Select connections explicitly. New connections will require a new approval. This CLI cannot manage connections or delegations.'));
+      details.append(make('p', 'Select connections explicitly. New connections will require a new approval. Management is permitted only when explicitly listed above.'));
       const boxes = request.connections.map(connection => {
         const label = make('label'); const box = make('input'); box.type = 'checkbox';
         label.append(box, document.createTextNode(` ${connection.platform}${connection.label ? ` (${connection.label})` : ''} · ${connection.connection_id}`));
         details.append(label, make('br'));
         return { box, id: connection.connection_id };
       });
-      const approve = make('button', request.scope.split(' ').includes('proxy:write') ? 'Allow changes in selected connections' : 'Approve selected connections');
+      const approve = make('button', request.scope.split(' ').some(s => s === 'connections:manage' || s === 'sessions:manage') ? 'Approve access management' : request.scope.split(' ').includes('proxy:write') ? 'Allow changes in selected connections' : 'Approve selected connections');
       const deny = make('button', 'Deny');
       details.append(approve, deny);
       const finish = async approved => {

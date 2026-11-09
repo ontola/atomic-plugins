@@ -24,7 +24,7 @@ Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export on
   syncables migrate git --config FILE [--source LEGACY_ARCHIVE]
   syncables export git --config FILE --subtree platform/account/collection[/ENCODED_ITEM_ID]
     --output NEW_DIRECTORY [--branches all|current] [--at REVISION|tag:NAME]
-  syncables ui --config FILE [--collections platform/account/name,...] [--browser-port 9889] [--interactive]
+  syncables ui --config FILE [--manage] [--collections platform/account/name,...] [--browser-port 9889] [--interactive]
   syncables status --config FILE
   syncables browse [platform[/account[/collection[/item-id]]]] --config FILE
     [--at COMMIT|tag:NAME] [--filter /json/pointer=JSON_SCALAR]

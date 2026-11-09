@@ -20,6 +20,9 @@ use std::{collections::BTreeMap, net::SocketAddr, time::Duration};
 pub const DISCOVERY_SCOPE: &str = "connections:read";
 pub const READ_SCOPE: &str = "proxy:read";
 pub const WRITE_SCOPE: &str = "proxy:write";
+pub const CONNECTION_MANAGE_SCOPE: &str = "connections:manage";
+pub const SESSION_MANAGE_SCOPE: &str = "sessions:manage";
+pub const NOTIFICATION_SCOPE: &str = "notifications:consume";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 
 /// Public clients have display names fixed by the operator, never provided
@@ -205,9 +208,17 @@ fn scopes(value: Option<&str>) -> Result<String, Error> {
         .split_ascii_whitespace()
         .collect();
     if scopes.is_empty()
-        || scopes
-            .iter()
-            .any(|s| *s != DISCOVERY_SCOPE && *s != READ_SCOPE && *s != WRITE_SCOPE)
+        || scopes.iter().any(|s| {
+            ![
+                DISCOVERY_SCOPE,
+                READ_SCOPE,
+                WRITE_SCOPE,
+                CONNECTION_MANAGE_SCOPE,
+                SESSION_MANAGE_SCOPE,
+                NOTIFICATION_SCOPE,
+            ]
+            .contains(s)
+        })
     {
         return Err(Error::oauth("invalid_scope"));
     }
@@ -278,7 +289,7 @@ async fn discovery(State(state): State<AppState>) -> Response {
     }
     let base = &state.base_url;
     protected(Json(
-        json!({"issuer":base,"device_authorization_endpoint":format!("{base}/oauth/device/code"),"token_endpoint":format!("{base}/oauth/device/token"),"revocation_endpoint":format!("{base}/oauth/device/revoke"),"grant_types_supported":[DEVICE_GRANT,"refresh_token"],"token_endpoint_auth_methods_supported":["none"],"revocation_endpoint_auth_methods_supported":["none"],"scopes_supported":[DISCOVERY_SCOPE,READ_SCOPE,WRITE_SCOPE],"device_approval_challenge_endpoint":format!("{base}/device/challenge"),"device_approval_endpoint":format!("{base}/device/approve")}),
+        json!({"issuer":base,"device_authorization_endpoint":format!("{base}/oauth/device/code"),"token_endpoint":format!("{base}/oauth/device/token"),"revocation_endpoint":format!("{base}/oauth/device/revoke"),"grant_types_supported":[DEVICE_GRANT,"refresh_token"],"token_endpoint_auth_methods_supported":["none"],"revocation_endpoint_auth_methods_supported":["none"],"scopes_supported":[DISCOVERY_SCOPE,READ_SCOPE,WRITE_SCOPE,CONNECTION_MANAGE_SCOPE,SESSION_MANAGE_SCOPE,NOTIFICATION_SCOPE],"device_approval_challenge_endpoint":format!("{base}/device/challenge"),"device_approval_endpoint":format!("{base}/device/approve")}),
     ))
 }
 async fn authorize(
@@ -491,6 +502,29 @@ async fn approve(
     .await;
     result.unwrap_or_else(|r| r)
 }
+/// Management is a separate, explicit device permission. It never authorizes
+/// owner approval, creating provider connections or registering runtimes.
+async fn management_owner(
+    state: &AppState,
+    method: &Method,
+    uri: &axum::http::Uri,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<crate::agent_id::AgentId, ApiError> {
+    if let Some(token) = bearer(headers)? {
+        let principal = principal(state, token).await?;
+        if !principal
+            .scope
+            .split_ascii_whitespace()
+            .any(|s| s == SESSION_MANAGE_SCOPE)
+        {
+            return Err(ApiError::TokenScope);
+        }
+        return Ok(principal.owner);
+    }
+    owner(state, method, uri, headers, body).await
+}
+
 async fn sessions(
     State(state): State<AppState>,
     method: Method,
@@ -500,7 +534,7 @@ async fn sessions(
 ) -> Response {
     let result = async {
         let security = enabled(&state).map_err(IntoResponse::into_response)?;
-        let owner = owner(&state, &method, &uri, &headers, &body)
+        let owner = management_owner(&state, &method, &uri, &headers, &body)
             .await
             .map_err(IntoResponse::into_response)?;
         Ok::<_, Response>(protected(Json(
@@ -522,7 +556,7 @@ async fn revoke_session(
 ) -> Response {
     let result = async {
         let security = enabled(&state).map_err(IntoResponse::into_response)?;
-        let owner = owner(&state, &method, &uri, &headers, &body)
+        let owner = management_owner(&state, &method, &uri, &headers, &body)
             .await
             .map_err(IntoResponse::into_response)?;
         store::revoke_owned(security, owner.as_str(), &session, &state.base_url)
@@ -627,7 +661,7 @@ pub(crate) async fn connections(state: &AppState, token: &str) -> Result<Respons
     if !principal
         .scope
         .split_ascii_whitespace()
-        .any(|s| s == DISCOVERY_SCOPE)
+        .any(|s| s == DISCOVERY_SCOPE || s == CONNECTION_MANAGE_SCOPE)
     {
         return Err(ApiError::TokenScope);
     }
@@ -636,8 +670,12 @@ pub(crate) async fn connections(state: &AppState, token: &str) -> Result<Respons
         .list_for_owner(principal.owner.as_str())
         .await
         .map_err(|_| ApiError::Unavailable)?;
-    let connections:Vec<_>=connections.into_iter().filter(|c|principal.connections.contains(&c.connection_id)).map(|c|json!({"connection_id":c.connection_id,"platform":c.platform,"owner":c.owner,"label":c.label})).collect();
+    let manages = principal
+        .scope
+        .split_ascii_whitespace()
+        .any(|s| s == CONNECTION_MANAGE_SCOPE);
+    let connections:Vec<_>=connections.into_iter().filter(|c|principal.connections.contains(&c.connection_id)).map(|c| if manages { json!(c) } else { json!({"connection_id":c.connection_id,"platform":c.platform,"owner":c.owner,"label":c.label}) }).collect();
     Ok(protected(Json(
-        json!({"owner":principal.owner.as_str(),"client_id":principal.client_id,"session_id":principal.session_id,"connections":connections}),
+        json!({"owner":principal.owner.as_str(),"client_id":principal.client_id,"session_id":principal.session_id,"scope":principal.scope,"connections":connections}),
     )))
 }

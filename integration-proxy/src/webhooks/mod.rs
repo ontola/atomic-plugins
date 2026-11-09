@@ -95,6 +95,7 @@ pub const MAX_WAITERS_PER_CONSUMER: usize = 4;
 
 /// The inbox and the operator-configured shared-hook secrets.
 pub struct Webhooks {
+    pub notifications_only: bool,
     pub store: Arc<Store>,
     shared_secrets: BTreeMap<String, Vec<u8>>,
     pub gate: IngressGate,
@@ -120,6 +121,7 @@ impl Webhooks {
         limits: limits::Limits,
     ) -> Self {
         Self {
+            notifications_only: false,
             store,
             shared_secrets,
             gate: IngressGate::default(),
@@ -166,6 +168,7 @@ pub async fn start(
         )
         .await?,
     );
+    store.check_payload_mode(config.notifications_only).await?;
     let mut secrets = BTreeMap::new();
     for platform in catalog.names() {
         if catalog.webhook_document(&platform).is_none() {
@@ -183,9 +186,7 @@ pub async fn start(
         }
     }
     tracing::info!("webhook inbox enabled");
-    Ok(Some(Arc::new(Webhooks::with_limits(
-        store,
-        secrets,
-        limits::Limits::from_config(config),
-    ))))
+    let mut webhooks = Webhooks::with_limits(store, secrets, limits::Limits::from_config(config));
+    webhooks.notifications_only = config.notifications_only;
+    Ok(Some(Arc::new(webhooks)))
 }

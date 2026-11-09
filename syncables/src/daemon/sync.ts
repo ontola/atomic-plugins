@@ -249,6 +249,7 @@ export interface SyncCollectionOptions {
   signal?: AbortSignal;
   message?: string;
   trigger?: 'manual' | 'scheduled';
+  forceFull?: boolean;
 }
 export interface CollectionSyncResult {
   revision: string;
@@ -349,7 +350,7 @@ export async function syncCollection(
     typeof previous.syncToken === 'string'
       ? previous.syncToken
       : undefined;
-  let token = incremental ? priorToken : undefined;
+  let token = incremental && !options.forceFull ? priorToken : undefined;
   for (let bootstrap = 0; bootstrap < 2; bootstrap++) {
     const strategy = incremental ? (token ? 'delta' : 'bootstrap') : 'full';
     const run = await archive.createRun(

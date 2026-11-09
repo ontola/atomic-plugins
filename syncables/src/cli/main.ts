@@ -92,6 +92,7 @@ async function main(): Promise<void> {
       ].map((key) => [key, { type: 'string' as const }]),
     );
   options.write = { type: 'boolean' };
+  options.manage = { type: 'boolean' };
   options.owned = { type: 'boolean' };
   options.help = { type: 'boolean' };
   options.archive = { type: 'boolean' };

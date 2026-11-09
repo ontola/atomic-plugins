@@ -13,6 +13,11 @@ export interface CollectionConfig {
   bindings: Record<string, string>;
   query: Record<string, string>;
   pollSeconds: number;
+  notifications?: {
+    source: string;
+    parameters: Record<string, string>;
+    events: string[];
+  };
   /** Explicit provider writes; replacement also permits permanent retirement. */
   writes?: { enabled: true; allowReplacement?: boolean };
 }
@@ -87,6 +92,23 @@ export async function loadDaemonConfig(file: string): Promise<DaemonConfig> {
       collection.pollSeconds > 86400
     )
       throw new Error('pollSeconds must be 0 (webhooks only), or 5 to 86400');
+    if (c.notifications !== undefined) {
+      const notice = object(c.notifications);
+      const source = label(notice.source, 'notification source');
+      if (
+        !Array.isArray(notice.events) ||
+        !notice.events.length ||
+        notice.events.length > 32
+      )
+        throw new Error('Notifications require 1–32 event names');
+      collection.notifications = {
+        source,
+        parameters: strings(notice.parameters),
+        events: notice.events.map((value) =>
+          label(value, 'notification event'),
+        ),
+      };
+    }
     if (c.writes !== undefined) {
       const writes = object(c.writes);
       if (
