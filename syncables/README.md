@@ -2239,6 +2239,100 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **0.27.0**: SyncD control panel for IAP grants and change notifications.
+  - **Behaviour change:** Align the experimental native Atomic companion with the Atomic plugins
+    candidate23 host and browser pin, including batched SYNC_PUSH persistence.
+    The peer advertises the full-sync protocol supported by that candidate;
+    sparse-sync is not advertised. Use a fresh peer directory when upgrading
+    from the recursive prototype, as required by projection version 2.
+  - **Behaviour change:** Experimental Atomic table schema keys now follow the pinned OAD's declared
+    CRUD resource, so several collections or operations can share one Class.
+    Existing row and table keys remain stable. Consumers that saved references
+    to the earlier operation-scoped experimental Classes should migrate those
+    references explicitly; relation Properties use new identities when their
+    datatype changes from JSON to a resource link.
+  - **Behaviour change:** Generated Atomic schemas now use the pinned OAD and response operation,
+    rather than the account/collection alias. Accounts using the same operation
+    share declared Classes and Properties; observed records do not change the
+    declared Class. Tables and rows retain their account-specific identities.
+    Existing native peers retain superseded schema resources as previous members
+    when their import keys change.
+  - **Behaviour change:** The experimental Atomic peer now generates one owner-scoped drive with account
+    folders and a native table for each selected API collection. All configured
+    collections are selected by default; use --collections or --collection for a
+    subset. Typed fields and linked nested resources replace JSON wrappers;
+    original responses and history stay in PostgreSQL. Preserve unsafe numbers as
+    exact text and use a new projection directory when upgrading from the original
+    single-collection wrapper prototype.
+  - **Behaviour change:** The experimental Atomic table projection uses one resource per API record,
+    with nested objects, arrays and comments kept as inline native JSON. Use a new
+    projection directory when upgrading from the recursive-resource format. API
+    identity columns have distinct labels, imported permissions remain source
+    metadata, and declared compound-field schemas stay on their Properties. The
+    Keep daemon example retains the complete pinned upstream OAD. Prepare the full
+    GitHub example with examples/daemon/prepare-github-issues.mjs before using the
+    demo config; generated large contracts stay outside Git. The daemon still
+    selects read-only GET collections.
+  - **Added:** Atomic table projections can turn explicitly declared embedded API objects
+    into named resource links and resource lists, with account-scoped referenced
+    tables. Source-hash-bound projection overlays support offline reprojection
+    without changing accepted snapshot provenance or making provider requests.
+    Unresolved fields retain their complete JSON value with diagnostics.
+  - **Added:** Project a selected accepted API record into typed owned Note, List and ListItem
+    resources through a separate consumer profile, preserving its complete original
+    body JSON and other typed fields. Ordered links, explicit parentage, optional
+    checked state and snapshot-bound item identities make the result queryable
+    without changing the API contract or inferring item identity across refreshes.
+  - **Added:** Experimental `atomic-peer` serves one accepted PostgreSQL collection as a
+    read-only native Atomic drive through an optional Rust companion. Persistent
+    signed Loro documents retain record/schema identities across updates,
+    absence/reappearance and restart; a durable projection journal gates
+    publication and recovery. Source JSON and numbers remain lossless text.
+    Explicit owner signing authority and reader agents are required; see
+    `docs/atomic-peer.md`. Replication destination definitions remain configuration
+    only, and no provider writes, service installation or public listener is added.
+  - **Added:** CRUD Causality 0.8.0 `committedErrors` (§4.3.3): a create answered with a
+    `5xx` that a Committed Error Object matches (a listed status and a usable
+    id at its `identity` path in the JSON error body, as Notion's `503` with
+    `additional_data.committed_resource_id`) is applied, bound to that id and
+    never sent again. Before, a `503` took the ordinary retry path, so such a
+    create was sent twice. A listed status whose body names no usable id is
+    an unknown outcome (uncertain without an idempotency key). A match that
+    does not name the record's id leaves the create applied but unbound,
+    which `matchUnboundCreates` can bind. Documents without
+    `committedErrors` read as before. `committedIdentity` ports the
+    reference `committed_identity()`, sharing the path-segment validation used
+    by other identity bindings, including rejection of malformed Unicode.
+  - **Added:** The browser-safe `syncables/graphql` subpath reads a validated GraphQL
+    collection description through an injected operation-ID executor. Cursor
+    and explicit empty-page offset traversals enforce identity, progress and
+    read limits; partial GraphQL errors leave the read incomplete. A finished
+    traversal supplies no absence/deletion evidence. This does not add GraphQL
+    support to the REST replica or integration-proxy authorization routes.
+  - **Added:** The SyncD UI now lists remote connections approved for its device grant,
+    including connections not configured for local syncing. It shows per-collection
+    sync state, last successful sync and attempt times, next due time, and distinct
+    auth, sync and working-folder errors. Local snapshots remain browsable when
+    login or remote discovery fails. Existing records without timestamp tracking
+    are shown as unknown; new successful unchanged reads update the sync time.
+  - **Added:** SyncD now has a local read-only data browser: `syncables ui --config FILE`
+    prints a browser link for configured collections, searchable paginated records
+    and exact source JSON details. It reads accepted PostgreSQL snapshots without
+    provider requests and keeps paging on one saved revision until refreshed.
+  - **Added:** SyncD can embed IAP's reusable access-management page in its local control
+    panel. Start ui with --manage for a separate, foreground-only approval to
+    manage selected provider connections and account-wide client sessions.
+    Optional collection notifications subscribe to IAP's notification-only
+    webhook inbox, schedule durable local work before acknowledgement, and
+    perform full bootstrap reconciliation after a gap. Provider credentials
+    remain in IAP and imported data remains in local PostgreSQL.
+  - **Fixed:** The mock server's next link and `currentPage` count page numbers from
+    the scheme's `start` (Pagination Schemes §4.3.1, default 1). Before,
+    they used `+ 1` whatever the start: with `start: 0` the next link
+    skipped a page, and with `start: 2` it pointed back at the first page.
+  - **Other:** Document the native Atomic companion's certified-genesis and read-only session
+    boundaries and its independent Cargo lockfile compatibility procedure. The
+    validated core pin and replication permissions are unchanged.
 - **0.26.0**: Experimental SyncD with PostgreSQL history, offline browsing, Git import/export, read-only Braid and explicit provider writes; check migration and API changes before upgrading.
   - **Behaviour change:** The supported Node range is now 22.11 or newer, with CI on Node 22, 24 and 26;
     the inherited Node 22-only upper limit is removed. Volta still defaults to
