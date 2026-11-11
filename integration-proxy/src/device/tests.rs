@@ -157,6 +157,11 @@ impl Fixture {
                 .method(method)
                 .uri(path)
                 .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                // A device presents the connection's key like every caller.
+                .header(
+                    crate::connection_key::HEADER,
+                    crate::test_support::test_connection_key(),
+                )
                 .body(Body::empty())
                 .unwrap(),
         )

@@ -26,6 +26,17 @@
 //! capabilities it signed stop verifying at once, because the connections'
 //! owner key changed.
 //!
+//! The body may also carry `"connection_keys": {"<connection id>": {"from":
+//! "k1.<key>", "to": "k1.<key>"}}`. Each named connection, which must be
+//! the old agent's and open with `from`, is sealed again under `to` in the
+//! same transaction; otherwise nothing moves (`403 invalid_connection_key`,
+//! or `409 refresh_in_progress` while a token refresh holds that
+//! connection, which a retry a few seconds later resolves).
+//! A client that derives connection keys from its agent key needs this,
+//! because the derived keys change with the agent. A connection that is
+//! not named keeps its key. The keys are in the signed body and are not
+//! kept.
+//!
 //! Scope: planned rotation, where the user still holds the old key. A lost
 //! or compromised key is not handled here (SECURITY.md, "Key rotation").
 
@@ -52,7 +63,23 @@ pub fn proof_message(from: &str, to: &str, origin: &str, timestamp: &str) -> Str
 struct TransferBody {
     to: String,
     proof: String,
+    /// Connections to re-seal under a new key in the same transaction, by
+    /// connection id. Optional: a connection not named keeps its key.
+    #[serde(default)]
+    connection_keys: std::collections::BTreeMap<String, KeyChange>,
 }
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyChange {
+    /// `k1.<key>`: the key the connection is sealed under now.
+    from: String,
+    /// `k1.<key>`: the key to seal it under.
+    to: String,
+}
+
+/// The most connections one transfer re-seals.
+const MAX_REKEYED: usize = 1000;
 
 /// `POST /agents/transfer`
 pub async fn transfer(
@@ -83,7 +110,30 @@ async fn transfer_inner(
     let from = crate::signature::authenticate(state, security, method, uri, headers, body).await?;
     crate::check_access(state, &from).await?;
     let request: TransferBody = serde_json::from_slice(body)
-        .map_err(|_| ApiError::BadRequest("body must be {\"to\", \"proof\"}"))?;
+        .map_err(|_| {
+            ApiError::BadRequest(
+                "body must be {\"to\", \"proof\"}, optionally with \"connection_keys\": {\"<connection id>\": {\"from\", \"to\"}}",
+            )
+        })?;
+    if request.connection_keys.len() > MAX_REKEYED {
+        return Err(ApiError::BadRequest(
+            "connection_keys names more than 1000 connections",
+        ));
+    }
+    let rekey = request
+        .connection_keys
+        .iter()
+        .map(|(connection_id, change)| {
+            Some(crate::security::Rekey {
+                connection_id: connection_id.clone(),
+                from: crate::connection_key::parse_raw(&change.from)?,
+                to: crate::connection_key::parse_raw(&change.to)?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()
+        .ok_or(ApiError::BadRequest(
+            "connection_keys values must be {\"from\": \"k1.<key>\", \"to\": \"k1.<key>\"}",
+        ))?;
     let to = agent_id::parse(&request.to)
         .ok_or(ApiError::BadRequest("to must be an atomic:agent id"))?;
     if to == from {
@@ -101,12 +151,14 @@ async fn transfer_inner(
     }
     crate::check_access(state, &to).await?;
     let moved = security
-        .transfer_owner(from.as_str(), to.as_str())
+        .transfer_owner(from.as_str(), to.as_str(), &rekey)
         .await
         .map_err(|error| match error {
             TransferError::Retired => ApiError::AgentRetired,
             TransferError::Blocked => ApiError::TransferBlocked,
             TransferError::Conflict => ApiError::TransferConflict,
+            TransferError::Key => ApiError::InvalidConnectionKey,
+            TransferError::Refreshing => ApiError::RefreshInProgress,
             TransferError::Database(error) => {
                 tracing::warn!(%error, "agent transfer failed");
                 ApiError::Unavailable
@@ -122,6 +174,7 @@ async fn transfer_inner(
         "to": to.as_str(),
         "connections": moved.connections,
         "runtimes": moved.runtimes,
+        "rekeyed": rekey.len(),
     }))
     .into_response())
 }
@@ -165,6 +218,66 @@ mod tests {
         );
         let body = serde_json::to_vec(&serde_json::json!({"to": to.id(), "proof": proof})).unwrap();
         signed_request_at(s, from, "POST", "/agents/transfer", body, request_timestamp)
+    }
+
+    /// Keys derived from an agent key change with it, so a transfer can
+    /// re-seal connections in the same transaction; a wrong old key moves
+    /// nothing.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_transfer_reseals_named_connections_under_new_keys() {
+        use crate::security::ConnectionKey;
+        let security = security().await;
+        let s = state(Some(security.clone()));
+        let (old, new) = (fresh(), fresh());
+        let rekeyed = security
+            .create_connection("github-issues", &old.id(), b"{\"kept\":1}")
+            .await
+            .unwrap();
+        let untouched = security
+            .create_connection("github-issues", &old.id(), b"{\"kept\":2}")
+            .await
+            .unwrap();
+        let raw = |key: &ConnectionKey| format!("k1.{}", key.to_base64_for_tests());
+        let (old_key, new_key) = (
+            ConnectionKey::for_tests(),
+            ConnectionKey::from_bytes([8; 32]),
+        );
+        let request = |from_key: &ConnectionKey| {
+            let now = unique_now_ms();
+            let proof = new.sign(
+                proof_message(&old.id(), &new.id(), PUBLIC_ORIGIN, &now.to_string()).as_bytes(),
+            );
+            let body = serde_json::to_vec(&serde_json::json!({
+                "to": new.id(),
+                "proof": proof,
+                "connection_keys": {rekeyed.clone(): {"from": raw(from_key), "to": raw(&new_key)}},
+            }))
+            .unwrap();
+            signed_request_at(&s, &old, "POST", "/agents/transfer", body, now)
+        };
+        // The wrong old key: refused, and nothing moved.
+        let response = send(&s, request(&ConnectionKey::from_bytes([9; 32]))).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(body_json(response).await["error"], "invalid_connection_key");
+        let record = security.load_connection(&rekeyed).await.unwrap().unwrap();
+        assert_eq!(record.owner, old.id());
+        assert!(security.open_credential(&record, &old_key).is_some());
+
+        let response = send(&s, request(&old_key)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["rekeyed"], 1);
+        let record = security.load_connection(&rekeyed).await.unwrap().unwrap();
+        assert_eq!(record.owner, new.id());
+        assert_eq!(
+            security.open_credential(&record, &new_key).unwrap(),
+            b"{\"kept\":1}"
+        );
+        assert!(security.open_credential(&record, &old_key).is_none());
+        // A connection not named keeps its key.
+        let record = security.load_connection(&untouched).await.unwrap().unwrap();
+        assert_eq!(record.owner, new.id());
+        assert!(security.open_credential(&record, &old_key).is_some());
     }
 
     async fn send(s: &AppState, request: axum::http::Request<axum::body::Body>) -> Response {
@@ -531,8 +644,10 @@ mod tests {
                         .unwrap(),
                 );
             }
-            let (first, second) =
-                tokio::join!(one.transfer_owner(&a, &b), two.transfer_owner(&b, &c));
+            let (first, second) = tokio::join!(
+                one.transfer_owner(&a, &b, &[]),
+                two.transfer_owner(&b, &c, &[])
+            );
             assert!(first.is_ok() || second.is_ok());
             if first.is_err() {
                 assert!(matches!(
@@ -559,7 +674,7 @@ mod tests {
                 .await
                 .unwrap();
             let (moved, created, runtime, delegated) = tokio::join!(
-                one.transfer_owner(&old, &new),
+                one.transfer_owner(&old, &new, &[]),
                 two.create_connection("github-issues", &old, b"{}"),
                 two.put_runtime(&old, &node, &app, None),
                 two.put_delegation(&existing, &old, &app, None),

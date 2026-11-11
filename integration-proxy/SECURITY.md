@@ -26,9 +26,9 @@ spend another's record in advance.
 ## Connections, delegations and runtimes
 
 A connection row holds one provider credential sealed with
-XChaCha20-Poly1305 under `ENCRYPTION_KEY`, with associated data binding the
-envelope to its row id, so an envelope copied into another row does not
-open. The row records its platform and owner. Only the owner (the agent that
+XChaCha20-Poly1305 under that connection's **client-held key** (below), with
+associated data binding the envelope to its row id, so an envelope copied
+into another row does not open. The row records its platform and owner. Only the owner (the agent that
 signed `/connect/redeem`) may delete it or delegate it. Device sessions may
 list only the connections the owner explicitly approved. A delegation
 names an app agent; a runtime registered by the owner names a node's agent
@@ -41,6 +41,69 @@ before any signature check.
 
 Concurrent requests that find an OAuth token about to expire take a
 per-connection refresh lease, so a rotating refresh token is spent once.
+
+## Client-held connection keys (unreleased)
+
+The proxy does not keep the keys that open stored credentials. Each
+connection's key is 256 random-looking bits the client chooses at
+`/connect/redeem` and presents in `x-connection-key` with every request that
+needs the credential, either as the key (`k1.`) or as a key grant (`s1.`)
+encrypted to the proxy's grant public key (README, "Connection keys").
+
+What this protects, and what it does not:
+
+- **A copy of the database and the server configuration** (including
+  `ENCRYPTION_KEY`) opens no connection credential: no key is stored, and
+  grants are never stored either. It does reveal connection metadata
+  (platforms, owners, delegations, labels, which stay under
+  `ENCRYPTION_KEY`), and with `ENCRYPTION_KEY` it opens any key grant the
+  thief captured somewhere else, because the grant private key is derived
+  from it. Keep `x-connection-key` out of logs for that reason.
+- **A proxy that is compromised while in use** sees the keys and
+  credentials of every request it serves meanwhile. Client-held keys
+  protect dormant connections from bulk recovery; they do not make an
+  untrusted proxy safe to use.
+- **A stolen key alone** grants nothing: authentication, standing
+  (ownership, delegation, runtime, capability, device scope) and the access
+  policy are checked first, and the proxy opens the credential only for a
+  request that passes them. There is no route that returns a sealed
+  credential, so a key and a database copy are needed together. Do not add
+  one without revisiting this.
+- **A grant** names the agent that may present it (`sub`) and its
+  connection, and may expire. A frame's grant names the installation's app
+  agent, never the frame's temporary key, so the capability (15 minutes)
+  remains what limits a frame in time; the grant can be longer-lived. A
+  delegate or runtime holds a grant, not the key. Revoking a delegation
+  stops its grant at once, because standing is checked first; the grant
+  itself cannot be revoked short of re-keying the connection.
+- **Order and binding.** The key header is bound into the v2 signature (a
+  sixth line), so it cannot be swapped or stripped in transit by anyone
+  without the signer's key. A missing key is `401 connection_key_required`,
+  any unusable one `403 invalid_connection_key`, both only after
+  authentication: an unauthenticated caller learns nothing about keys.
+- **Memory.** The key and the opened credential live for the request, and
+  for its token refresh. They are not zeroized: the crates used (reqwest,
+  serde_json, the AEAD) do not guarantee it, so only "not stored, not
+  logged" is claimed.
+- **Refresh.** A refreshed OAuth token is sealed again under the key of the
+  request that refreshed it. A refresh first re-reads the row with that key
+  under the refresh lease; if the row no longer opens (it was re-keyed by a
+  transfer meanwhile) it stores nothing.
+- **Loss.** A client that loses a connection's key must connect again; the
+  proxy cannot help. The 90-day idle sweep removes the orphaned row.
+- **Webhooks.** The receiver makes provider calls of its own: source access
+  checks and deleting dedicated hooks. Access checks run inside signed
+  consumer requests (subscribe, renew, events, reconciled), which now
+  present the key. Deleting a hook is deferred: a cleanup job waits until an
+  authorised request for its managing connection arrives with the key, then
+  runs in the background (at most one look per connection per minute per
+  instance). A job whose key does not arrive within 7 days fails visibly,
+  and the hook is left at the provider for the person to remove. Hook
+  signing secrets stay sealed under `ENCRYPTION_KEY`, because deliveries
+  arrive without a client; they are not provider credentials.
+- **Not migrated.** Connections stored before this change were sealed
+  under `ENCRYPTION_KEY`; they no longer open, answer
+  `403 invalid_connection_key`, and their owners connect again.
 
 ## Frame capabilities
 
@@ -136,8 +199,8 @@ Risks that remain, and what the proxy does about them:
   one token can act as the person on their whole account, including
   operations the catalog does not list. The catalog allowlist (methods and
   paths, and a profile's coverage) limits what *this proxy* sends, not what
-  the token could do elsewhere if it leaked from the proxy's database and
-  `ENCRYPTION_KEY` together. The consent page says the token is stored
+  the token could do elsewhere if it leaked from the proxy's database
+  together with its connection key (see "Client-held connection keys"). The consent page says the token is stored
   encrypted on this proxy; it does not say how much the token can do,
   because the proxy cannot know. Revoking it is the person's job, at the
   provider; deleting the connection deletes the proxy's copy only.
@@ -284,6 +347,13 @@ implemented here.
 
 - No real client has signed against this proxy yet; the wire format is
   aligned with the atomic-server v2 work in progress, not tested against it.
+- No client presents connection keys yet: atomic-server's host code
+  (`helpers/proxyConnections.ts`) and the data browser need to generate or
+  derive keys, send them at redeem and with each request, and make grants
+  for frames, runtimes and devices. Until then every proxied request from
+  them answers `401 connection_key_required`. The HPKE grant format was
+  tested only against the Rust `hpke` crate, not against a browser
+  implementation.
 - WebCrypto Ed25519 in plugin frames was tested by hand in Chromium only
   (issue #54); Safari's engine and Firefox are unconfirmed.
 - Other programs on the same machine can reach a loopback proxy; the
@@ -609,8 +679,9 @@ What the store guarantees (`src/webhooks/store.rs`, PostgreSQL tests in
   new cleanup. Not covered: an answer that arrives after the closed record
   was purged by the sweeper (30 days after closing at the earliest) finds
   no record and is refused; that hook is left at the provider for the
-  person or operator to remove. Cleanup: backoff up to a day, a 30-day
-  deadline, then a visible failure. New dedicated hooks are refused while
+  person or operator to remove. Cleanup waits for a client to present the
+  managing connection's key (see "Client-held connection keys"), then backs
+  off up to a day; a 7-day deadline, then a visible failure. New dedicated hooks are refused while
   the owner holds 20, or the deployment 10,000, that are not closed. Each
   such hook has at most one cleanup job, so these bound the jobs too,
   except in two cases: when management of a hook moves to another owner,

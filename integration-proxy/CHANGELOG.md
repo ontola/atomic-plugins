@@ -3,6 +3,28 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
+## Unreleased
+
+Breaking: every client must change, and existing connections must be made
+again.
+
+- Provider credentials are sealed under a key the client holds, not under
+  `ENCRYPTION_KEY`. A copy of the database and the server configuration no
+  longer opens them. See SECURITY.md, "Client-held connection keys".
+- `/connect/redeem` takes `connection_id` (chosen by the client) and
+  `connection_key` (`k1.<key>`); a taken id is `409 connection_exists`.
+- Requests that use a credential send `x-connection-key`: the key (`k1.`),
+  or a key grant (`s1.`, HPKE-encrypted to the key from the new
+  `GET /connection-key-grants/key`) naming the caller. The header is bound
+  into the v2 signature as a sixth line. New errors:
+  `401 connection_key_required`, `403 invalid_connection_key`.
+- `/agents/transfer` can re-seal connections under new keys
+  (`connection_keys`); `409 refresh_in_progress` while one is refreshing.
+- Webhook hook cleanup waits for a request that presents the managing
+  connection's key, and fails visibly after 7 days (was 30).
+- No migration: connections stored before this release answer
+  `403 invalid_connection_key`; their owners connect again.
+
 ## 0.4.2 (2026-11-09)
 
 - Explicit device permissions for selected-connection delegation/disconnection,

@@ -971,11 +971,28 @@ async fn labelled_handoff(
 struct Redemption {
     code: String,
     code_verifier: String,
+    /// Chosen by the client: 32 random bytes, base64url, unpadded.
+    connection_id: String,
+    /// `k1.<key>`: the key the credential is sealed under. Not kept.
+    connection_key: String,
+}
+
+/// Whether `value` is a well-formed connection id: 32 bytes as unpadded
+/// base64url, in its one canonical spelling.
+pub(crate) fn valid_connection_id(value: &str) -> bool {
+    value.len() == 43
+        && URL_SAFE_NO_PAD
+            .decode(value)
+            .is_ok_and(|bytes| bytes.len() == 32 && URL_SAFE_NO_PAD.encode(bytes) == value)
 }
 
 /// `POST /connect/redeem`, signed (Atomic v2) by the key that will own the
-/// connection. Body `{"code", "code_verifier"}`; answers
-/// `{"connection_id", "platform", "owner"}`.
+/// connection. Body `{"code", "code_verifier", "connection_id",
+/// "connection_key"}`; answers `{"connection_id", "platform", "owner"}`.
+///
+/// The client chooses the connection id (it needs the id to derive the
+/// key) and supplies the key the credential is sealed under. The proxy
+/// keeps the sealed credential and forgets the key.
 pub async fn redeem(
     State(state): State<AppState>,
     method: Method,
@@ -1009,11 +1026,31 @@ async fn redeem_inner(
     let security = state.security.as_ref().ok_or(ApiError::Unavailable)?;
     let owner = crate::signature::authenticate(state, security, method, uri, headers, body).await?;
     crate::check_access(state, &owner).await?;
-    let request: Redemption = serde_json::from_slice(body)
-        .map_err(|_| ApiError::BadRequest("body must be {\"code\", \"code_verifier\"}"))?;
+    let request: Redemption = serde_json::from_slice(body).map_err(|_| {
+        ApiError::BadRequest(
+            "body must be {\"code\", \"code_verifier\", \"connection_id\", \"connection_key\"}",
+        )
+    })?;
+    // Everything the client chose is checked before the handoff is spent,
+    // so a malformed or taken id costs nothing.
+    if !valid_connection_id(&request.connection_id) {
+        return Err(ApiError::BadRequest(
+            "connection_id must be 32 random bytes as unpadded base64url (43 characters)",
+        ));
+    }
+    let key = crate::connection_key::parse_raw(&request.connection_key).ok_or(
+        ApiError::BadRequest("connection_key must be k1.<32 bytes as unpadded base64url>"),
+    )?;
     let challenge = pkce_challenge(&request.code_verifier).ok_or(ApiError::InvalidHandoff)?;
     if request.code.len() != 43 {
         return Err(ApiError::InvalidHandoff);
+    }
+    if security
+        .connection_exists(&request.connection_id)
+        .await
+        .map_err(|_| ApiError::Unavailable)?
+    {
+        return Err(ApiError::ConnectionExists);
     }
     let envelope = security
         .take_handoff(&request.code, &challenge)
@@ -1025,18 +1062,22 @@ async fn redeem_inner(
         .and_then(|plaintext| serde_json::from_slice(&plaintext).ok())
         .ok_or(ApiError::InvalidHandoff)?;
     let credential = serde_json::to_vec(&handoff.credential).map_err(|_| ApiError::Internal)?;
-    let connection_id = security
+    security
         .create_labelled_connection(
+            &request.connection_id,
             &handoff.platform,
             owner.as_str(),
             &credential,
-            &security.server_connection_key(),
+            &key,
             handoff.label.as_deref(),
         )
         .await
-        .map_err(owner_write_error)?;
+        .map_err(|error| match error {
+            crate::security::CreateError::Exists => ApiError::ConnectionExists,
+            crate::security::CreateError::Other(error) => owner_write_error(error),
+        })?;
     let mut answer = serde_json::json!({
-        "connection_id": connection_id,
+        "connection_id": request.connection_id,
         "platform": handoff.platform,
         "owner": owner.as_str(),
     });
@@ -1464,13 +1505,25 @@ mod tests {
         }
     }
 
+    /// A redeem body as a client sends it: a fresh random connection id and
+    /// the key the tests' signed requests present.
+    fn redeem_body(code: &str, verifier: &str) -> String {
+        serde_json::json!({
+            "code": code,
+            "code_verifier": verifier,
+            "connection_id": random(),
+            "connection_key": crate::test_support::test_connection_key(),
+        })
+        .to_string()
+    }
+
     async fn redeem_as(
         s: &AppState,
         agent: &Agent,
         code: &str,
         verifier: &str,
     ) -> axum::response::Response {
-        let body = serde_json::json!({"code": code, "code_verifier": verifier}).to_string();
+        let body = redeem_body(code, verifier);
         crate::router(s.clone())
             .oneshot(signed_request(
                 s,
@@ -3178,10 +3231,7 @@ mod tests {
                 axum::http::Request::builder()
                     .method("POST")
                     .uri("/connect/redeem")
-                    .body(axum::body::Body::from(
-                        serde_json::json!({"code": code, "code_verifier": "a".repeat(43)})
-                            .to_string(),
-                    ))
+                    .body(axum::body::Body::from(redeem_body(&code, &"a".repeat(43))))
                     .unwrap(),
             )
             .await
@@ -3190,7 +3240,7 @@ mod tests {
         assert_eq!(body_json(unsigned).await["error"], "missing_signature");
 
         // Signed with the legacy did:ad:agent spelling: owner is canonical.
-        let body = serde_json::json!({"code": code, "code_verifier": "a".repeat(43)}).to_string();
+        let body = redeem_body(&code, &"a".repeat(43));
         let mut legacy = signed_request(&s, &owner, "POST", "/connect/redeem", body.into_bytes());
         legacy.headers_mut().insert(
             crate::signature::AGENT_HEADER,
@@ -3225,6 +3275,83 @@ mod tests {
             .unwrap();
         let response = redeem_as(&s, &owner, &code, &"a".repeat(43)).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_redeem_uses_the_clients_id_and_key_and_keeps_neither_key() {
+        use crate::security::ConnectionKey;
+        let security = crate::test_support::security().await;
+        let s = state(Some(security.clone()));
+        let code = handoff(
+            &security,
+            &request(),
+            crate::proxy::StoredCredential::ApiKey {
+                placement: None,
+                scheme: None,
+                provider: "github-issues".into(),
+                key: "redeem-secret".into(),
+            },
+        )
+        .await
+        .unwrap();
+        let owner = Agent::new(25);
+        let verifier = "a".repeat(43);
+        let key = ConnectionKey::from_bytes([7; 32]);
+        let raw = format!("k1.{}", key.to_base64_for_tests());
+        let send = |id: String, connection_key: String| {
+            let body = serde_json::json!({
+                "code": code,
+                "code_verifier": verifier,
+                "connection_id": id,
+                "connection_key": connection_key,
+            })
+            .to_string();
+            crate::router(s.clone()).oneshot(signed_request(
+                &s,
+                &owner,
+                "POST",
+                "/connect/redeem",
+                body.into_bytes(),
+            ))
+        };
+        // Malformed ids and keys, and a taken id, are refused before the
+        // handoff is spent.
+        let taken = security
+            .create_connection("github-issues", &owner.id(), b"{}")
+            .await
+            .unwrap();
+        let padded = format!("{}=", random());
+        for (id, connection_key, status, error) in [
+            ("short".to_owned(), raw.clone(), 400, "bad_request"),
+            (padded, raw.clone(), 400, "bad_request"),
+            (random(), "k2.x".to_owned(), 400, "bad_request"),
+            (random(), key.to_base64_for_tests(), 400, "bad_request"),
+            (taken, raw.clone(), 409, "connection_exists"),
+        ] {
+            let response = send(id, connection_key).await.unwrap();
+            assert_eq!(response.status().as_u16(), status);
+            assert_eq!(body_json(response).await["error"], error);
+        }
+        let id = random();
+        let response = send(id.clone(), raw).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["connection_id"], id);
+        let record = security.load_connection(&id).await.unwrap().unwrap();
+        assert!(security.open_credential(&record, &key).is_some());
+        assert!(security
+            .open_credential(&record, &ConnectionKey::for_tests())
+            .is_none());
+        let stored: String = crate::security::tests::admin()
+            .await
+            .query_one(
+                "SELECT envelope FROM agent_connections WHERE connection_id = $1",
+                &[&id],
+            )
+            .await
+            .unwrap()
+            .get(0);
+        assert!(!stored.contains("redeem-secret"));
     }
 
     #[tokio::test]

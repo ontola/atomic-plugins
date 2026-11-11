@@ -642,11 +642,12 @@ mod tests {
         let agent = Agent::new(60);
         let url = crate::signature::signed_url(&s.base_url, "/connections");
         let legacy_key = |timestamp_ms: u64| {
-            crate::signature::legacy_replay_key(&crate::signature::message(
+            crate::signature::legacy_replay_key(&crate::signature::message_with_key(
                 "GET",
                 &url,
                 &timestamp_ms.to_string(),
                 b"",
+                Some(&crate::test_support::test_connection_key()),
             ))
         };
         let now = crate::now_ms();

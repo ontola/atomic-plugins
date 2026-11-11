@@ -81,6 +81,28 @@ pub fn signed_request_for_url(
     build(agent, method, path, url, body, unique_now_ms())
 }
 
+/// A signed request presenting `connection_key` (any `x-connection-key`
+/// value, or none) instead of the test connections' key.
+pub fn signed_request_with_key(
+    state: &AppState,
+    agent: &Agent,
+    method: &str,
+    path: &str,
+    body: Vec<u8>,
+    connection_key: Option<&str>,
+) -> axum::http::Request<axum::body::Body> {
+    let url = crate::signature::signed_url(&state.base_url, path);
+    build_with_key(
+        agent,
+        method,
+        path,
+        &url,
+        body,
+        unique_now_ms(),
+        connection_key,
+    )
+}
+
 fn build(
     agent: &Agent,
     method: &str,
@@ -89,15 +111,54 @@ fn build(
     body: Vec<u8>,
     timestamp_ms: u64,
 ) -> axum::http::Request<axum::body::Body> {
+    build_with_key(
+        agent,
+        method,
+        path,
+        url,
+        body,
+        timestamp_ms,
+        Some(&test_connection_key()),
+    )
+}
+
+fn build_with_key(
+    agent: &Agent,
+    method: &str,
+    path: &str,
+    url: &str,
+    body: Vec<u8>,
+    timestamp_ms: u64,
+    connection_key: Option<&str>,
+) -> axum::http::Request<axum::body::Body> {
     let mut builder = axum::http::Request::builder()
         .method(method)
         .uri(path)
         .header("content-type", "application/json")
         .extension(BodyCopy(body.clone()));
-    for (name, value) in crate::signature::test_headers(agent, method, url, timestamp_ms, &body) {
+    // By default every signed test request presents the key test
+    // connections are sealed under, as a client that holds it would;
+    // routes that need no key ignore it.
+    for (name, value) in crate::signature::test_headers_with_key(
+        agent,
+        method,
+        url,
+        timestamp_ms,
+        &body,
+        connection_key,
+    ) {
         builder = builder.header(name, value);
     }
     builder.body(axum::body::Body::from(body)).unwrap()
+}
+
+/// The `x-connection-key` value (`k1.` form) for connections made by
+/// `Security::create_connection`.
+pub fn test_connection_key() -> String {
+    format!(
+        "k1.{}",
+        crate::security::ConnectionKey::for_tests().to_base64_for_tests()
+    )
 }
 
 /// Distinct per call, so two otherwise identical requests signed in the same

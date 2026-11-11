@@ -43,6 +43,15 @@ pub enum ApiError {
     TransferConflict,
     // 404
     UnknownConnection,
+    /// The client-chosen connection id is taken (409).
+    ConnectionExists,
+    /// A transfer would re-key a connection whose token is being refreshed
+    /// (409).
+    RefreshInProgress,
+    /// No `x-connection-key` on a request that needs the credential (401).
+    ConnectionKeyRequired,
+    /// The presented key or key grant is not usable here (403).
+    InvalidConnectionKey,
     // 400
     BadRequest(&'static str),
     InvalidHandoff,
@@ -73,10 +82,13 @@ impl ApiError {
             | InvalidToken
             | UnsupportedAuthorization
             | CredentialRefreshFailed
-            | InvalidTransferProof => StatusCode::UNAUTHORIZED,
+            | InvalidTransferProof
+            | ConnectionKeyRequired => StatusCode::UNAUTHORIZED,
             NotOwner | NotDelegated | CapabilityScope | TokenScope | AccessDenied(_)
-            | PlatformMismatch | AgentRetired => StatusCode::FORBIDDEN,
-            TransferBlocked | TransferConflict => StatusCode::CONFLICT,
+            | PlatformMismatch | AgentRetired | InvalidConnectionKey => StatusCode::FORBIDDEN,
+            TransferBlocked | TransferConflict | ConnectionExists | RefreshInProgress => {
+                StatusCode::CONFLICT
+            }
             UnknownConnection => StatusCode::NOT_FOUND,
             BadRequest(_) | InvalidHandoff => StatusCode::BAD_REQUEST,
             ProviderQuota(_) => StatusCode::TOO_MANY_REQUESTS,
@@ -114,6 +126,10 @@ impl ApiError {
             AccessDenied(_) => "access_denied",
             PlatformMismatch => "platform_mismatch",
             UnknownConnection => "unknown_connection",
+            ConnectionExists => "connection_exists",
+            RefreshInProgress => "refresh_in_progress",
+            ConnectionKeyRequired => "connection_key_required",
+            InvalidConnectionKey => "invalid_connection_key",
             BadRequest(_) => "bad_request",
             InvalidHandoff => "invalid_handoff",
             ProviderQuota(_) => "provider_quota",
@@ -151,6 +167,10 @@ impl ApiError {
             AccessDenied(reason) => format!("this agent may not use the proxy: {reason}"),
             PlatformMismatch => "the connection is for a different platform".into(),
             UnknownConnection => "no such connection; it was deleted, expired after 90 idle days, or never existed".into(),
+            ConnectionExists => "a connection with this id already exists; choose another random id".into(),
+            RefreshInProgress => "a token refresh is in progress for a connection this transfer would re-key; nothing was moved, retry in a few seconds".into(),
+            ConnectionKeyRequired => "this request needs the connection's key in x-connection-key (k1.<key>, or an s1.<key grant> encrypted to this proxy); the proxy does not keep it".into(),
+            InvalidConnectionKey => "x-connection-key is malformed, is a grant for another connection, caller or proxy, has expired, or is not this connection's key".into(),
             BadRequest(message) => (*message).into(),
             InvalidHandoff => "invalid or expired connection code".into(),
             ProviderQuota(_) => "the proxy's requests to this platform are at the provider's announced quota for the proxy's address; retry after Retry-After seconds".into(),

@@ -1104,6 +1104,8 @@ async fn hook_cleanup_rechecks_access_before_deleting() {
         .await;
     let deleter = ProviderHookDeleter {
         state: env.state.clone(),
+        connection_id: connection.clone(),
+        key: crate::security::ConnectionKey::for_tests(),
     };
     let hook = |key: &str, provider: &str| super::store::HookToDelete {
         hook_id: "fixture-hook".into(),

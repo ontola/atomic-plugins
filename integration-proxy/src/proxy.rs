@@ -265,10 +265,15 @@ async fn refresh_connection(
         {
             // Another caller may have finished a refresh between our read
             // and our claim; start from the row as it is now.
-            if let Ok(current) =
-                reload(security.load_connection(connection_id).await.ok().flatten())
-            {
-                *credential = current;
+            // The row must still open with this request's key: if it was
+            // re-keyed meanwhile (an agent transfer), refreshing from the
+            // credential in hand would store it under a key nobody uses.
+            match reload(security.load_connection(connection_id).await.ok().flatten()) {
+                Ok(current) => *credential = current,
+                Err(failure) => {
+                    let _ = security.release_refresh_lease(connection_id).await;
+                    return Err(failure);
+                }
             }
             if !needs_refresh(credential) {
                 let _ = security.release_refresh_lease(connection_id).await;
@@ -489,13 +494,29 @@ async fn forward_inner(
     };
     let _ = security.touch(connection_id, delegate, runtime).await;
 
-    // The credential is opened only here, after the caller is authorised. A
-    // row that does not open (altered, or moved from another row) is still
-    // answered as unknown, as it was when loading opened it.
-    let key = security.server_connection_key();
+    // The credential is opened only here, after the caller is authorised,
+    // with the key this request presents; the proxy has no other. A key
+    // grant must name this caller: the signer, or the app a runtime or
+    // frame acts for. A device session acts as its owner.
+    let principals: Vec<&str> = match &caller {
+        Caller::Owner | Caller::Device => vec![record.owner.as_str()],
+        Caller::Delegate(agent) => vec![agent.as_str()],
+        Caller::Runtime { agent, app } => vec![agent.as_str(), app.as_str()],
+        Caller::Frame { app } => vec![app.as_str()],
+    };
+    let key = crate::connection_key::resolve(
+        headers,
+        security.grant_key(),
+        connection_id,
+        &principals,
+        crate::now_secs(),
+    )?;
+    // A key that does not open the row is the wrong key, or the envelope
+    // was altered or moved from another row; the two cannot be told apart.
     let opened = security
         .open_credential(&record, &key)
-        .ok_or(ApiError::UnknownConnection)?;
+        .ok_or(ApiError::InvalidConnectionKey)?;
+    crate::webhooks::run_deferred_cleanup(state, connection_id, &key);
     let mut credential =
         serde_json::from_slice::<StoredCredential>(&opened).map_err(|_| ApiError::Internal)?;
     if credential.provider() != platform {
@@ -809,6 +830,7 @@ pub(crate) async fn receiver_call(
     state: &AppState,
     security: &Security,
     connection_id: &str,
+    key: &ConnectionKey,
     platform: &str,
     method: Method,
     relative_path: &str,
@@ -821,12 +843,10 @@ pub(crate) async fn receiver_call(
         Ok(None) => return ReceiverReply::Refused("unknown-connection"),
         Err(_) => return ReceiverReply::Unreachable,
     };
-    // The receiver acts without a client, so only the server's key is at
-    // hand. A row that does not open is refused like an unknown connection,
-    // as it was when loading opened it.
-    let key = security.server_connection_key();
-    let Some(opened) = security.open_credential(&record, &key) else {
-        return ReceiverReply::Refused("unknown-connection");
+    // The receiver has no key of its own: `key` is the one a client
+    // presented with the request this call belongs to.
+    let Some(opened) = security.open_credential(&record, key) else {
+        return ReceiverReply::Refused("connection-key");
     };
     let Ok(mut credential) = serde_json::from_slice::<StoredCredential>(&opened) else {
         return ReceiverReply::Refused("unreadable-credential");
@@ -860,7 +880,7 @@ pub(crate) async fn receiver_call(
     }
     target.set_path(&request_path);
     target.set_query(None);
-    match refresh_connection(state, security, connection_id, &key, &mut credential).await {
+    match refresh_connection(state, security, connection_id, key, &mut credential).await {
         Ok(()) => {}
         Err(RefreshFailure::Refused) => return ReceiverReply::RefreshRefused,
         Err(RefreshFailure::Unavailable) => return ReceiverReply::Unreachable,
@@ -899,7 +919,7 @@ pub(crate) async fn receiver_call(
                     .await
                     .ok()
                     .flatten()
-                    .and_then(|record| stored_credential(security, &record, &key));
+                    .and_then(|record| stored_credential(security, &record, key));
                 match stored {
                     Some(stored) if access_token(&stored) != access_token(&credential) => {
                         credential = stored;
@@ -908,7 +928,7 @@ pub(crate) async fn receiver_call(
                     _ => return ReceiverReply::Unreachable,
                 }
             }
-            match force_refresh(state, security, connection_id, &key, &mut credential).await {
+            match force_refresh(state, security, connection_id, key, &mut credential).await {
                 Ok(()) => mark_refreshed(connection_id),
                 Err(RefreshFailure::Refused) => return ReceiverReply::RefreshRefused,
                 Err(RefreshFailure::Unavailable) => return ReceiverReply::Unreachable,
@@ -961,9 +981,12 @@ async fn force_refresh(
         .ok()
         .flatten()
         .and_then(|record| stored_credential(security, &record, key));
-    if let Some(current) = current {
-        *credential = current;
-    }
+    // As in `refresh_connection`: the row must still open with this key.
+    let Some(current) = current else {
+        let _ = security.release_refresh_lease(connection_id).await;
+        return Err(RefreshFailure::Unavailable);
+    };
+    *credential = current;
     if matches!(credential, StoredCredential::OAuth { access_token, .. } if *access_token != used) {
         let _ = security.release_refresh_lease(connection_id).await;
         return Ok(());
@@ -1190,7 +1213,7 @@ mod tests {
                                 .store_refreshed_connection(
                                     &connection,
                                     &newer,
-                                    &store.server_connection_key(),
+                                    &ConnectionKey::for_tests(),
                                 )
                                 .await
                                 .unwrap();
@@ -1224,7 +1247,16 @@ mod tests {
     }
 
     async fn check(s: &AppState, security: &Security, id: &str) -> ReceiverReply {
-        receiver_call(s, security, id, "github-issues", Method::GET, "/items").await
+        receiver_call(
+            s,
+            security,
+            id,
+            &ConnectionKey::for_tests(),
+            "github-issues",
+            Method::GET,
+            "/items",
+        )
+        .await
     }
 
     /// Review of #394, N2: a refresh that fails for a passing reason does
@@ -2414,6 +2446,137 @@ mod tests {
             );
             self.send(request).await
         }
+    }
+
+    /// Client-held keys: the proxy opens a credential only with the key the
+    /// request presents, bound into its signature; a key grant works only
+    /// for the caller, connection and proxy it names.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_a_credential_opens_only_with_the_presented_key() {
+        use crate::connection_key::seal_for_tests;
+        use crate::test_support::{signed_request_with_key, test_connection_key};
+        let f = fixture(41).await;
+        let get = |agent: &Agent, key: Option<&str>| {
+            signed_request_with_key(&f.state, agent, "GET", &f.path(), vec![], key)
+        };
+        // The owner, with the key: the provider is reached.
+        let response = f.send(get(&f.owner, Some(&test_connection_key()))).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(body_json(response).await["x_api_key"], "clockify-secret");
+        // No key, or another one: refused after authentication.
+        expect_error(
+            f.send(get(&f.owner, None)).await,
+            StatusCode::UNAUTHORIZED,
+            "connection_key_required",
+        )
+        .await;
+        let wrong = format!(
+            "k1.{}",
+            ConnectionKey::from_bytes([1; 32]).to_base64_for_tests()
+        );
+        expect_error(
+            f.send(get(&f.owner, Some(&wrong))).await,
+            StatusCode::FORBIDDEN,
+            "invalid_connection_key",
+        )
+        .await;
+        // The key is checked only for an authorised caller: a stranger with
+        // the right key is refused for standing, not for the key.
+        expect_error(
+            f.send(get(&Agent::new(42), Some(&test_connection_key())))
+                .await,
+            StatusCode::FORBIDDEN,
+            "not_delegated",
+        )
+        .await;
+        // The header is signed: swapping it after signing breaks the
+        // signature.
+        let mut swapped = get(&f.owner, Some(&wrong));
+        swapped.headers_mut().insert(
+            crate::connection_key::HEADER,
+            HeaderValue::from_str(&test_connection_key()).unwrap(),
+        );
+        expect_error(
+            f.send(swapped).await,
+            StatusCode::UNAUTHORIZED,
+            "bad_signature",
+        )
+        .await;
+
+        // A delegated app with a grant naming it.
+        let app = Agent::new(43);
+        f.security
+            .put_delegation(&f.id, &f.owner.id(), &app.id(), None)
+            .await
+            .unwrap();
+        let public = f.security.grant_key().public_key();
+        let key = ConnectionKey::for_tests();
+        let for_app = seal_for_tests(&public, &f.id, &app.id(), &key, None);
+        assert_eq!(
+            f.send(get(&app, Some(&for_app))).await.status(),
+            StatusCode::OK
+        );
+        // A grant naming someone else, or another connection.
+        let for_owner = seal_for_tests(&public, &f.id, &f.owner.id(), &key, None);
+        expect_error(
+            f.send(get(&app, Some(&for_owner))).await,
+            StatusCode::FORBIDDEN,
+            "invalid_connection_key",
+        )
+        .await;
+        let elsewhere = seal_for_tests(&public, &crate::connect::random(), &app.id(), &key, None);
+        expect_error(
+            f.send(get(&app, Some(&elsewhere))).await,
+            StatusCode::FORBIDDEN,
+            "invalid_connection_key",
+        )
+        .await;
+        // A grant does not stand in for a delegation.
+        f.security
+            .delete_delegation(&f.id, &f.owner.id(), &app.id())
+            .await
+            .unwrap();
+        expect_error(
+            f.send(get(&app, Some(&for_app))).await,
+            StatusCode::FORBIDDEN,
+            "not_delegated",
+        )
+        .await;
+
+        // A frame: the capability authorises, a grant naming its app
+        // brings the key, and the frame never sees the key itself.
+        f.security
+            .put_delegation(&f.id, &f.owner.id(), &app.id(), None)
+            .await
+            .unwrap();
+        let frame = Agent::new(44);
+        let token = mint(&f.owner, &f.claims(&app, &frame));
+        let framed = |grant: Option<&str>| {
+            let mut request = get(&frame, grant);
+            request.headers_mut().insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Capability {token}")).unwrap(),
+            );
+            request
+        };
+        assert_eq!(
+            f.send(framed(Some(&for_app))).await.status(),
+            StatusCode::OK
+        );
+        let for_frame = seal_for_tests(&public, &f.id, &frame.id(), &key, None);
+        expect_error(
+            f.send(framed(Some(&for_frame))).await,
+            StatusCode::FORBIDDEN,
+            "invalid_connection_key",
+        )
+        .await;
+        expect_error(
+            f.send(framed(None)).await,
+            StatusCode::UNAUTHORIZED,
+            "connection_key_required",
+        )
+        .await;
     }
 
     async fn expect_error(response: Response, status: StatusCode, code: &str) {

@@ -156,7 +156,20 @@ pub enum TransferError {
     /// The move would collide with something the new id already holds (a
     /// runtime with the same agent); the whole statement was undone.
     Conflict,
+    /// A connection named for re-keying is not the old id's, or its old
+    /// key does not open it; nothing was moved.
+    Key,
+    /// A connection named for re-keying has a token refresh in flight.
+    Refreshing,
     Database(String),
+}
+
+/// One connection to re-seal during a transfer: opened with `from`, sealed
+/// again under `to`.
+pub struct Rekey {
+    pub connection_id: String,
+    pub from: ConnectionKey,
+    pub to: ConnectionKey,
 }
 
 /// What a transfer moved.
@@ -187,15 +200,47 @@ pub struct ConnectionRecord {
     envelope: String,
 }
 
-/// The key one connection's credential is sealed under. Today the only one
-/// is the server's ([`Security::server_connection_key`]); every use of that
-/// function is a place that will take a key the client supplies instead.
+/// The key one connection's credential is sealed under. The client holds it
+/// and presents it with each request that needs the credential
+/// ([`crate::connection_key`]); the proxy keeps no copy.
 #[derive(Clone)]
 pub struct ConnectionKey([u8; 32]);
+
+impl ConnectionKey {
+    pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Test-only: the key every test connection is sealed under unless a
+    /// test chooses another.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        Self([0x5a; 32])
+    }
+
+    #[cfg(test)]
+    pub(crate) fn to_base64_for_tests(&self) -> String {
+        URL_SAFE_NO_PAD.encode(self.0)
+    }
+}
 
 impl std::fmt::Debug for ConnectionKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("ConnectionKey(..)")
+    }
+}
+
+/// Why a connection was not created.
+#[derive(Debug)]
+pub enum CreateError {
+    /// The client-chosen id is taken.
+    Exists,
+    Other(String),
+}
+
+impl From<String> for CreateError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
     }
 }
 
@@ -325,6 +370,9 @@ pub struct Security {
     /// `HMAC-SHA256(ENCRYPTION_KEY, IDEMPOTENCY_SUBKEY_LABEL)`, the key of
     /// [`Security::connection_idempotency_key`], derived once.
     idempotency_key: [u8; 32],
+    /// The key pair connection-key grants are encrypted to, derived from
+    /// `HMAC-SHA256(ENCRYPTION_KEY, GRANT_SUBKEY_LABEL)`.
+    grant_key: crate::connection_key::GrantKey,
 }
 
 const KEY_CHECK_SUBKEY_LABEL: &[u8] = b"integration-proxy-key-check-limit-v1";
@@ -370,6 +418,8 @@ async fn retired_in(tx: &tokio_postgres::Transaction<'_>, agents: &[&str]) -> Re
     .map_err(db_error)
 }
 const IDEMPOTENCY_SUBKEY_LABEL: &[u8] = b"integration-proxy-idempotency-key-v1";
+/// The label of the key material the key-grant key pair is derived from.
+const GRANT_SUBKEY_LABEL: &[u8] = b"integration-proxy-connection-key-grant-v1";
 
 fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     use hmac::{Hmac, Mac};
@@ -423,6 +473,10 @@ impl Security {
             owner_writes: Arc::new(crate::webhooks::pool::Pool::new(database_url, 4)),
             key_check_key: hmac_sha256(&encryption_key, &[KEY_CHECK_SUBKEY_LABEL]),
             idempotency_key: hmac_sha256(&encryption_key, &[IDEMPOTENCY_SUBKEY_LABEL]),
+            grant_key: crate::connection_key::GrantKey::derive(&hmac_sha256(
+                &encryption_key,
+                &[GRANT_SUBKEY_LABEL],
+            )),
             encryption_key,
         })
     }
@@ -597,17 +651,17 @@ impl Security {
         open_with(&self.encryption_key, envelope, associated_data)
     }
 
-    /// The server's own key as a connection key: what every connection is
-    /// sealed under until clients supply theirs.
-    pub fn server_connection_key(&self) -> ConnectionKey {
-        ConnectionKey(self.encryption_key)
+    /// The key pair key grants are encrypted to ([`crate::connection_key`]),
+    /// derived from `ENCRYPTION_KEY` like the other subkeys.
+    pub fn grant_key(&self) -> &crate::connection_key::GrantKey {
+        &self.grant_key
     }
 
-    /// Test-only: a loaded row's credential, opened with the server's key.
+    /// Test-only: a loaded row's credential, opened with the test key.
     #[cfg(test)]
     pub(crate) fn credential_for_tests(&self, record: &ConnectionRecord) -> Vec<u8> {
-        self.open_credential(record, &self.server_connection_key())
-            .expect("the row opens with the server's key")
+        self.open_credential(record, &ConnectionKey::for_tests())
+            .expect("the row opens with the test connection key")
     }
 
     /// Opens a loaded row's credential (a serialized `StoredCredential`).
@@ -700,48 +754,75 @@ impl Security {
         owner: &str,
         credential: &[u8],
     ) -> Result<String, String> {
+        let connection_id = crate::connect::random();
         self.create_labelled_connection(
+            &connection_id,
             platform,
             owner,
             credential,
-            &self.server_connection_key(),
+            &ConnectionKey::for_tests(),
             None,
         )
         .await
+        .map_err(|error| match error {
+            CreateError::Exists => "connection exists".to_owned(),
+            CreateError::Other(error) => error,
+        })?;
+        Ok(connection_id)
     }
 
-    /// [`Self::create_connection`] with the key to seal the credential under
-    /// and a display label. The label is sealed under the server's key (it
-    /// can be personal data, such as an email address), because listing
-    /// connections shows it without any connection key.
+    /// Creates the connection `connection_id` (chosen by the client, which
+    /// needs it to derive `key`) owned by `owner`, holding `credential` (a
+    /// serialized `StoredCredential`) sealed under `key`. The row is the
+    /// credential's only server-side copy, and the proxy keeps no copy of
+    /// `key`. The label is sealed under the server's key (it can be personal
+    /// data, such as an email address), because listing connections shows
+    /// it without any connection key.
     pub async fn create_labelled_connection(
         &self,
+        connection_id: &str,
         platform: &str,
         owner: &str,
         credential: &[u8],
         key: &ConnectionKey,
         label: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<(), CreateError> {
         self.sweep_idle_connections().await?;
-        let connection_id = crate::connect::random();
-        let envelope = seal_with(&key.0, credential, &connection_aad(&connection_id))?;
+        let envelope = seal_with(&key.0, credential, &connection_aad(connection_id))?;
         let label_envelope = label
-            .map(|label| self.seal(label.as_bytes(), &connection_label_aad(&connection_id)))
+            .map(|label| self.seal(label.as_bytes(), &connection_label_aad(connection_id)))
             .transpose()?;
         let mut client = self.owner_writes.get().await?;
         let tx = client.transaction().await.map_err(db_error)?;
         lock_owners(&tx, &[owner]).await?;
         if retired_in(&tx, &[owner]).await? {
-            return Err(OWNER_RETIRED.into());
+            return Err(OWNER_RETIRED.to_owned().into());
         }
-        tx.execute(
-            "INSERT INTO agent_connections (connection_id, platform, owner, envelope, label_envelope) VALUES ($1,$2,$3,$4,$5)",
-            &[&connection_id, &platform, &owner, &envelope, &label_envelope],
-        )
-        .await
-        .map_err(db_error)?;
+        let inserted = tx
+            .execute(
+                "INSERT INTO agent_connections (connection_id, platform, owner, envelope, label_envelope) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (connection_id) DO NOTHING",
+                &[&connection_id, &platform, &owner, &envelope, &label_envelope],
+            )
+            .await
+            .map_err(db_error)?;
+        if inserted == 0 {
+            return Err(CreateError::Exists);
+        }
         tx.commit().await.map_err(db_error)?;
-        Ok(connection_id)
+        Ok(())
+    }
+
+    /// Whether a row with this id exists, live or idle-expired.
+    pub async fn connection_exists(&self, connection_id: &str) -> Result<bool, String> {
+        self.client()
+            .await
+            .query_opt(
+                "SELECT 1 FROM agent_connections WHERE connection_id = $1",
+                &[&connection_id],
+            )
+            .await
+            .map(|row| row.is_some())
+            .map_err(db_error)
     }
 
     /// Test-only: points a connection at `owner` directly, as a row stranded
@@ -796,7 +877,12 @@ impl Security {
     /// committed before the open-subscriptions check, which then refuses
     /// the transfer, or finds the connection moved. The subscriptions table
     /// is checked whenever it exists, also with the webhook inbox off.
-    pub async fn transfer_owner(&self, from: &str, to: &str) -> Result<Transferred, TransferError> {
+    pub async fn transfer_owner(
+        &self,
+        from: &str,
+        to: &str,
+        rekey: &[Rekey],
+    ) -> Result<Transferred, TransferError> {
         let database = |error: tokio_postgres::Error| {
             if error.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
                 TransferError::Conflict
@@ -851,6 +937,38 @@ impl Security {
         )
         .await
         .map_err(database)?;
+        // Re-seal the named connections under their new keys, in the same
+        // transaction as the move: a client that derives each key from its
+        // agent key needs new keys once the agent changes. A token refresh
+        // in flight holds the old key and would store an old-key envelope
+        // after this commits, so a connection whose refresh lease is held
+        // is not re-keyed (the client retries). The rows are locked above:
+        // a refresh that starts later claims its lease only after this
+        // commits, and then finds a row its key no longer opens.
+        for item in rekey {
+            let row = tx
+                .query_opt(
+                    "SELECT envelope, coalesce(refresh_lease_until > NOW(), false) FROM agent_connections WHERE connection_id = $1 AND owner = $2",
+                    &[&item.connection_id, &from],
+                )
+                .await
+                .map_err(database)?
+                .ok_or(TransferError::Key)?;
+            if row.get::<_, bool>(1) {
+                return Err(TransferError::Refreshing);
+            }
+            let aad = connection_aad(&item.connection_id);
+            let credential = open_with(&item.from.0, &row.get::<_, String>(0), &aad)
+                .ok_or(TransferError::Key)?;
+            let envelope =
+                seal_with(&item.to.0, &credential, &aad).map_err(TransferError::Database)?;
+            tx.execute(
+                "UPDATE agent_connections SET envelope = $2 WHERE connection_id = $1",
+                &[&item.connection_id, &envelope],
+            )
+            .await
+            .map_err(database)?;
+        }
         let connections = tx
             .execute(
                 "UPDATE agent_connections SET owner = $2 WHERE owner = $1",
@@ -1550,7 +1668,7 @@ pub(crate) mod tests {
         // not open: the envelope is bound to the other row.
         let moved = security.load_connection(&b).await.unwrap().unwrap();
         assert!(security
-            .open_credential(&moved, &security.server_connection_key())
+            .open_credential(&moved, &ConnectionKey::for_tests())
             .is_none());
 
         // 89 idle days: still there. 90: gone, and swept with its delegations.
@@ -1705,7 +1823,7 @@ pub(crate) mod tests {
         );
         assert_ne!(a.unwrap(), b.unwrap());
         security
-            .store_refreshed_connection(&id, b"new", &security.server_connection_key())
+            .store_refreshed_connection(&id, b"new", &ConnectionKey::for_tests())
             .await
             .unwrap();
         assert_eq!(

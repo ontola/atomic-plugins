@@ -47,6 +47,16 @@ are accepted only in `Authorization: Bearer <access_token>`, never in a cookie,
 query parameter, or request body. Retired bearer connection codes remain
 unsupported. No JWT introspection or ID token is supplied.
 
+**Connection keys (unreleased).** A device session authorises a request; it
+does not open the connection's credential, whose key the proxy does not keep
+(SECURITY.md, "Client-held connection keys"). A device request through
+`/proxy/…`, and a notification consumer request that runs an access check,
+also sends `x-connection-key`: the key itself (`k1.`) or a grant (`s1.`)
+whose `sub` is the session's **owner**. The owner's browser hands the CLI
+these during approval, outside this protocol; this repository does not yet
+define how. A bearer request has no signature, so for it the header is not
+bound to anything: TLS is what protects it, as it protects the bearer token.
+
 The machine-readable fixture is [device-contract.json](tests/fixtures/device-contract.json).
 It contains schema/contract information, not reusable device or token secrets.
 The companion mock's proposed discovery + form POST + bearer GET protocol is
