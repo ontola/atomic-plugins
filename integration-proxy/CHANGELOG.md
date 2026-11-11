@@ -3,6 +3,11 @@
 Releases of the `atomic-integration-proxy` crate. Earlier releases are
 described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
+## 0.4.3 (2026-11-11)
+
+- Use the official Atomic mark on the landing and consent pages and as the
+  favicon.
+
 ## 0.4.2 (2026-11-09)
 
 - Explicit device permissions for selected-connection delegation/disconnection,
