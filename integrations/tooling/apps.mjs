@@ -7,7 +7,8 @@
  * module, refuses it unless the hash matches, and stores it as a new app's
  * entry point (atomic-server `browser/lib/src/catalog-app.ts`). The module is
  * `integrations/<shortname>/app/build.mjs`'s output (or, for an app listed in
- * `APP_FOLDERS`, that folder's `build.mjs`), committed to this
+ * `APP_FOLDERS`, that folder's `build.mjs`; or, for one in `EXTERNAL_APPS`,
+ * the output of its own repository's release script), committed to this
  * repository at `apps/<shortname>/<version>/ui.js`. GitHub Pages publishes
  * `main` from the repository root (with the root `.nojekyll`, byte for byte),
  * so the catalog points at:
@@ -129,6 +130,20 @@ export const APP_FOLDERS = Object.freeze({
   todoist: 'integrations/issue-tracker/todoist-app',
 });
 
+/**
+ * Drive apps whose source lives in another repository, by catalog shortname:
+ * the source repository. Their built module is still committed here at
+ * `apps/<id>/<version>/ui.js` (the source repository may be private, so it
+ * cannot serve it), written by that repository's release script. `check`
+ * verifies the committed module and its URL against `app-module-integrity`,
+ * but does not rebuild; `write` does not touch them.
+ */
+export const EXTERNAL_APPS = Object.freeze({
+  learning: 'ontola/atomic-education',
+});
+
+export const isExternal = id => Object.hasOwn(EXTERNAL_APPS, id);
+
 /** The repository-relative folder holding an app's `build.mjs`. */
 export const appFolder = id =>
   Object.hasOwn(APP_FOLDERS, id) ? APP_FOLDERS[id] : `integrations/${id}/app`;
@@ -157,7 +172,8 @@ export function versionFile(id, base = root) {
  * there, the version matches the folder's version file (`versionFile`), the
  * URL is the Pages one for that version, the committed module exists and its
  * hash is the pinned integrity, and the app's folder (`appFolder`) has a
- * `build.mjs`.
+ * `build.mjs`. An `EXTERNAL_APPS` entry has no folder here: only the version,
+ * URL and hash checks apply.
  */
 export function staticProblems(entry, base = root) {
   const id = entry[terms.shortname];
@@ -191,6 +207,8 @@ export function staticProblems(entry, base = root) {
         `${id}: ${modulePath(id, version)} is ${actual}, the catalog pins ${entry[terms.integrity]}`,
       );
   }
+
+  if (isExternal(id)) return problems;
 
   const file = versionFile(id, base);
 
@@ -418,6 +436,7 @@ export async function check({ base = root, published, install = true } = {}) {
     problems.push(...found);
     if (found.length) continue;
     const id = entry[terms.shortname];
+    if (isExternal(id)) continue;
     const path = modulePath(id, entry[terms.version]);
     const { integrity } = await buildApp(id, base, { install });
     if (integrity !== entry[terms.integrity])
@@ -457,6 +476,16 @@ export async function write({
   for (const entry of appEntries(catalog)) {
     const id = entry[terms.shortname];
     if (only && id !== only) continue;
+
+    if (isExternal(id)) {
+      if (only)
+        throw new Error(
+          `${id}: its source is in ${EXTERNAL_APPS[id]}; release it from there (see integrations/${id}/README.md)`,
+        );
+
+      continue;
+    }
+
     const version = entry[terms.version];
     const path = modulePath(id, version);
     if (!MODULE_PATH.test(path))

@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   APP_FOLDERS,
+  EXTERNAL_APPS,
   appDependencyDirs,
   appEntries,
   appFolder,
@@ -339,6 +340,65 @@ test('write builds a mapped app from its own folder', () =>
       'mapped',
     );
     assert.deepEqual(await check({ base }), []);
+  }));
+
+/** The fixture's gamma app as an external app: no folder here, only the module. */
+function asExternal(base, version = '1.2.3') {
+  rmSync(join(base, 'integrations/gamma'), { recursive: true });
+  const catalog = readCatalog(base);
+  catalog[1][terms.shortname] = 'learning';
+  catalog[1][terms.module] = moduleUrl('learning', version);
+  writeFileSync(
+    join(base, 'integrations/catalog.json'),
+    JSON.stringify(catalog, null, 2),
+  );
+  mkdirSync(join(base, `apps/learning/${version}`), { recursive: true });
+  writeFileSync(join(base, modulePath('learning', version)), TEXT);
+  rmSync(join(base, 'apps/gamma'), { recursive: true });
+}
+
+test('an external app is checked against its pinned module, never rebuilt', () =>
+  using({}, async base => {
+    assert.ok(Object.isFrozen(EXTERNAL_APPS));
+    asExternal(base);
+    const entry = appEntries(readCatalog(base))[0];
+    // No build.mjs and no package.json here, and the check still passes.
+    assert.deepEqual(staticProblems(entry, base), []);
+    assert.deepEqual(await check({ base }), []);
+
+    // A changed module no longer matches the pinned integrity.
+    writeFileSync(join(base, 'apps/learning/1.2.3/ui.js'), 'changed');
+    assert.match(
+      (await check({ base })).join('\n'),
+      /learning: apps\/learning\/1\.2\.3\/ui\.js is sha384-.*, the catalog pins/,
+    );
+
+    // A missing module and a wrong URL are reported.
+    rmSync(join(base, 'apps/learning/1.2.3/ui.js'));
+    const catalog = readCatalog(base);
+    catalog[1][terms.module] = 'https://example.com/ui.js';
+    writeFileSync(
+      join(base, 'integrations/catalog.json'),
+      JSON.stringify(catalog, null, 2),
+    );
+    const problems = staticProblems(appEntries(readCatalog(base))[0], base);
+    assert.equal(problems.length, 2);
+    assert.match(problems[0], /app-module is https:\/\/example\.com\/ui\.js/);
+    assert.match(problems[1], /is not committed/);
+  }));
+
+test('write leaves an external app alone and refuses to build it by name', () =>
+  using({}, async base => {
+    asExternal(base);
+    assert.deepEqual(await write({ base }), []);
+    await assert.rejects(
+      write({ only: 'learning', base }),
+      /ontola\/atomic-education/,
+    );
+    assert.equal(
+      readFileSync(join(base, 'apps/learning/1.2.3/ui.js'), 'utf8'),
+      TEXT,
+    );
   }));
 
 test('apps/ holds only <id>/<version>/ui.js', () =>
