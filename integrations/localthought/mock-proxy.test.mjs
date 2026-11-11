@@ -17,6 +17,7 @@ import {
   agentFromPublicKey,
   mintCapability,
   parseAgent,
+  sealGrant,
   parseCapability,
   testSigner,
   verifyCapability,
@@ -553,6 +554,108 @@ test('connect: consent without login, signed redeem makes the owner, delegation,
       404,
       'unknown_connection',
     ]);
+  } finally {
+    await close();
+  }
+});
+
+test('client-held keys: a keyed redeem needs the key, as k1 or a grant naming the caller (#730)', async () => {
+  const { base, close } = await start();
+
+  try {
+    const { submit } = await consent(base, 'pets');
+    const back = new URL((await submit()).headers.get('location'));
+    const code = back.searchParams.get('connection_code');
+    const id = Buffer.alloc(32, 7).toString('base64url');
+    const key = Buffer.alloc(32, 9).toString('base64url');
+    const redeem = body =>
+      signed(owner, 'POST', `${base}/connect/redeem`, {
+        body: JSON.stringify({ code, code_verifier: verifier, ...body }),
+      });
+    // Half a pair, or a malformed id, is refused without spending the code.
+    assert.deepEqual(await errorOf(await redeem({ connection_id: id })), [
+      400,
+      'bad_request',
+    ]);
+    assert.deepEqual(
+      await errorOf(
+        await redeem({ connection_id: 'short', connection_key: `k1.${key}` }),
+      ),
+      [400, 'bad_request'],
+    );
+    const redeemed = await redeem({
+      connection_id: id,
+      connection_key: `k1.${key}`,
+    });
+    assert.equal(redeemed.status, 200);
+    assert.equal((await redeemed.json()).connection_id, id);
+    await signed(owner, 'POST', `${base}/connections/${id}/agents`, {
+      body: JSON.stringify({ agent: app.agent }),
+    });
+
+    const url = `${base}/proxy/${id}/pets/pets`;
+    const ownerGet = connectionKey =>
+      fetch(url, {
+        headers: owner.headers('GET', url, '', undefined, connectionKey),
+      });
+    assert.deepEqual(await errorOf(await ownerGet()), [
+      401,
+      'connection_key_required',
+    ]);
+    assert.deepEqual(
+      await errorOf(
+        await ownerGet(`k1.${Buffer.alloc(32, 1).toString('base64url')}`),
+      ),
+      [403, 'invalid_connection_key'],
+    );
+    assert.equal((await ownerGet(`k1.${key}`)).status, 200);
+    // The header is signed: swapping it breaks the signature.
+    const swapped = owner.headers('GET', url, '', undefined, 'k1.other');
+    swapped['x-connection-key'] = `k1.${key}`;
+    assert.deepEqual(await errorOf(await fetch(url, { headers: swapped })), [
+      401,
+      'bad_signature',
+    ]);
+
+    // A frame presents a grant naming its app, sealed to the published key.
+    const published = await (
+      await fetch(`${base}/connection-key-grants/key`)
+    ).json();
+    assert.equal(published.info, 'integration-proxy-connection-key-grant-v1');
+    const grant = (sub, extra = {}) =>
+      sealGrant(published.public_key, {
+        connection_id: id,
+        sub,
+        key,
+        exp: Math.floor(Date.now() / 1000) + 600,
+        ...extra,
+      });
+    const capability = mintCapability(owner, {
+      connection_id: id,
+      platform: 'pets',
+      aud: base,
+      app: app.agent,
+      cnf: frame.agent,
+      exp: Math.floor(Date.now() / 1000) + 600,
+    });
+    const frameGet = connectionKey =>
+      fetch(url, {
+        headers: {
+          Authorization: `Capability ${capability}`,
+          ...frame.headers('GET', url, '', undefined, connectionKey),
+        },
+      });
+    assert.equal((await frameGet(grant(app.agent))).status, 200);
+    for (const bad of [
+      grant(frame.agent),
+      grant(app.agent, { connection_id: 'x'.repeat(43) }),
+      grant(app.agent, { exp: 1 }),
+      grant(app.agent, { key: Buffer.alloc(32, 1).toString('base64url') }),
+    ])
+      assert.deepEqual(await errorOf(await frameGet(bad)), [
+        403,
+        'invalid_connection_key',
+      ]);
   } finally {
     await close();
   }

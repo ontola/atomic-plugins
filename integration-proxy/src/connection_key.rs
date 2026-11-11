@@ -316,6 +316,44 @@ mod tests {
         assert!(resolve(&headers(&spelled), &grant_key, CONNECTION, &[&app_id], 0).is_ok());
     }
 
+    /// A grant sealed by atomic-server's data browser
+    /// (`browser/data-browser/src/helpers/connectionKeys.ts`, `hpkeSeal` with
+    /// a fixed ephemeral key of 32 bytes of 0x02) to the grant key derived
+    /// from 32 bytes of 0x01, so both implementations agree on the wire.
+    #[test]
+    fn a_grant_sealed_by_the_data_browser_opens_here() {
+        const FROM_TYPESCRIPT: &str = "s1.zo060cy2M-x7cMF4FKXHbs0CloUFDTRHRboFhw5YfVloOPsbna7DHyyDtYO13PMaCbQtL-3wYlFWuoVuIC5gf55v1-wPBoVE4Wq5TxeODz5PoFsFf-0qg5BzSzHAsLs9Hoa30M_jY1m8tV-5ywob-LkaKRQ2Kb_MYwJOcKFZTzK_K7P8czU99FadadyQ-C1EOLk3HGFMOyN4-kWw-RxYg6EFx9FHsM2_SFbKj4aVWLf04M1xZry83Prmc-v1N-7dzhpWSXaBYyH4XTlqNDUA2I8udjMkvluVChUjO8TvV1lYTXayANe_dv25ygQbm6xTAqDwECJ8Clvsc7g";
+        let grant_key = GrantKey::derive(&[1; 32]);
+        assert_eq!(
+            grant_key.public_key(),
+            "QYUjIP82dJX6UiyUy4OvOR5OiQGDknJbvyCY3ZMbxCQ"
+        );
+        let sub = "atomic:agent:O2onvM62pC1io6jQKm8Nc2UyFXcd4kOmOsBIoYtZ2ik";
+        let key = resolve(
+            &headers(FROM_TYPESCRIPT),
+            &grant_key,
+            CONNECTION,
+            &[sub],
+            1_790_000_599,
+        )
+        .unwrap();
+        assert_eq!(
+            key.to_base64_for_tests(),
+            ConnectionKey::from_bytes([9; 32]).to_base64_for_tests()
+        );
+        assert_eq!(
+            resolve(
+                &headers(FROM_TYPESCRIPT),
+                &grant_key,
+                CONNECTION,
+                &[sub],
+                1_790_000_600
+            )
+            .unwrap_err(),
+            ApiError::InvalidConnectionKey
+        );
+    }
+
     #[test]
     fn the_grant_key_pair_is_stable_for_one_secret_and_differs_between_secrets() {
         assert_eq!(

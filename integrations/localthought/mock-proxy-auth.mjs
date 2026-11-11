@@ -26,9 +26,14 @@
  * the e2e the data browser page and the plugin frame sign for real.
  */
 import {
+  createCipheriv,
+  createDecipheriv,
   createHash,
+  createHmac,
   createPrivateKey,
   createPublicKey,
+  diffieHellman,
+  generateKeyPairSync,
   sign as edSign,
   verify as edVerify,
 } from 'node:crypto';
@@ -102,6 +107,18 @@ export const ERRORS = {
     'no such connection; it was deleted, expired after 90 idle days, or never existed',
   ],
   invalid_handoff: [400, 'invalid or expired connection code'],
+  connection_exists: [
+    409,
+    'a connection with this id already exists; choose another random id',
+  ],
+  connection_key_required: [
+    401,
+    "this request needs the connection's key in x-connection-key (k1.<key>, or an s1.<key grant> encrypted to this proxy); the proxy does not keep it",
+  ],
+  invalid_connection_key: [
+    403,
+    "x-connection-key is malformed, is a grant for another connection, caller or proxy, has expired, or is not this connection's key",
+  ],
 };
 
 /** A refusal with one of the codes above; `message` overrides for `bad_request`. */
@@ -177,15 +194,30 @@ export function verifyBy(agent, message, signature) {
 export const sha256Hex = bytes =>
   createHash('sha256').update(bytes).digest('hex');
 
-/** `signature::message`. */
-export function requestMessage(method, url, timestamp, body = '') {
-  return [
+export const CONNECTION_KEY_HEADER = 'x-connection-key';
+
+/**
+ * `signature::message_with_key`: Atomic's five lines, plus the SHA-256 of
+ * the `x-connection-key` header when the request carries one.
+ */
+export function requestMessage(
+  method,
+  url,
+  timestamp,
+  body = '',
+  connectionKey = undefined,
+) {
+  const lines = [
     REQUEST_DOMAIN,
     method.toUpperCase(),
     url,
     String(timestamp),
     sha256Hex(Buffer.from(body)),
-  ].join('\n');
+  ];
+  if (connectionKey !== undefined)
+    lines.push(sha256Hex(Buffer.from(connectionKey)));
+
+  return lines.join('\n');
 }
 
 /**
@@ -214,7 +246,13 @@ export function verifyRequest(headers, method, url, body, nowMs = Date.now()) {
   if (!/^\d{1,16}$/.test(timestamp)) throw new ProxyRefusal('stale_timestamp');
   if (Math.abs(Number(timestamp) - nowMs) > MAX_SKEW_MS)
     throw new ProxyRefusal('stale_timestamp');
-  const message = requestMessage(method, url, timestamp, body);
+  const message = requestMessage(
+    method,
+    url,
+    timestamp,
+    body,
+    header(CONNECTION_KEY_HEADER),
+  );
   if (!verifyBy(agent, message, signature))
     throw new ProxyRefusal('bad_signature');
 
@@ -320,14 +358,28 @@ export function testSigner(seed) {
     agent,
     publicKey,
     sign,
-    /** v2 headers for one request; `timestamp` defaults to now, never repeating. */
-    headers(method, url, body = '', timestamp = nextTimestamp()) {
+    /**
+     * v2 headers for one request; `timestamp` defaults to now, never
+     * repeating. With `connectionKey`, it is sent and signed too.
+     */
+    headers(
+      method,
+      url,
+      body = '',
+      timestamp = nextTimestamp(),
+      connectionKey = undefined,
+    ) {
       return {
         [AGENT_HEADER]: agent,
         [PUBLIC_KEY_HEADER]: publicKey,
         [TIMESTAMP_HEADER]: String(timestamp),
-        [SIGNATURE_HEADER]: sign(requestMessage(method, url, timestamp, body)),
+        [SIGNATURE_HEADER]: sign(
+          requestMessage(method, url, timestamp, body, connectionKey),
+        ),
         [VERSION_HEADER]: '2',
+        ...(connectionKey === undefined
+          ? {}
+          : { [CONNECTION_KEY_HEADER]: connectionKey }),
       };
     },
   };
@@ -338,4 +390,154 @@ export function mintCapability(owner, claims) {
   const json = Buffer.from(JSON.stringify({ v: 2, ...claims }));
 
   return `${b64url(json)}.${owner.sign(Buffer.concat([Buffer.from(`${CAPABILITY_DOMAIN}\n`), json]))}`;
+}
+
+/** `connection_key::GRANT_INFO`. */
+export const GRANT_INFO = 'integration-proxy-connection-key-grant-v1';
+
+// RFC 9180 base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-256-GCM:
+// what `connection_key::GrantKey::open` does, with node:crypto.
+const KEM_SUITE = Buffer.concat([Buffer.from('KEM'), Buffer.from([0, 0x20])]);
+const HPKE_SUITE = Buffer.concat([
+  Buffer.from('HPKE'),
+  Buffer.from([0, 0x20, 0, 1, 0, 2]),
+]);
+const hkdfExtract = (salt, ikm) =>
+  createHmac('sha256', salt.length ? salt : Buffer.alloc(32))
+    .update(ikm)
+    .digest();
+const hkdfExpand = (prk, info, length) =>
+  createHmac('sha256', prk)
+    .update(Buffer.concat([info, Buffer.from([1])]))
+    .digest()
+    .subarray(0, length);
+const labeledExtract = (suite, salt, label, ikm) =>
+  hkdfExtract(
+    salt,
+    Buffer.concat([Buffer.from('HPKE-v1'), suite, Buffer.from(label), ikm]),
+  );
+const labeledExpand = (suite, prk, label, info, length) =>
+  hkdfExpand(
+    prk,
+    Buffer.concat([
+      Buffer.from([length >> 8, length & 0xff]),
+      Buffer.from('HPKE-v1'),
+      suite,
+      Buffer.from(label),
+      info,
+    ]),
+    length,
+  );
+
+/**
+ * A key pair for key grants. `publicKey` is what
+ * `GET /connection-key-grants/key` publishes; `open(sealed)` returns the
+ * grant's plaintext JSON, or `undefined`.
+ */
+export function grantKeyPair() {
+  const { privateKey, publicKey } = generateKeyPairSync('x25519');
+  const pkR = Buffer.from(publicKey.export({ format: 'jwk' }).x, 'base64url');
+
+  return {
+    publicKey: pkR.toString('base64url'),
+    open(sealed) {
+      if (sealed.length <= 32 + 16) return undefined;
+      const enc = sealed.subarray(0, 32);
+      const ciphertext = sealed.subarray(32);
+
+      try {
+        const dh = diffieHellman({
+          privateKey,
+          publicKey: createPublicKey({
+            key: { kty: 'OKP', crv: 'X25519', x: enc.toString('base64url') },
+            format: 'jwk',
+          }),
+        });
+        const empty = Buffer.alloc(0);
+        const eaePrk = labeledExtract(KEM_SUITE, empty, 'eae_prk', dh);
+        const shared = labeledExpand(
+          KEM_SUITE,
+          eaePrk,
+          'shared_secret',
+          Buffer.concat([enc, pkR]),
+          32,
+        );
+        const context = Buffer.concat([
+          Buffer.from([0]),
+          labeledExtract(HPKE_SUITE, empty, 'psk_id_hash', empty),
+          labeledExtract(
+            HPKE_SUITE,
+            empty,
+            'info_hash',
+            Buffer.from(GRANT_INFO),
+          ),
+        ]);
+        const secret = labeledExtract(HPKE_SUITE, shared, 'secret', empty);
+        const key = labeledExpand(HPKE_SUITE, secret, 'key', context, 32);
+        const nonce = labeledExpand(
+          HPKE_SUITE,
+          secret,
+          'base_nonce',
+          context,
+          12,
+        );
+        const decipher = createDecipheriv('aes-256-gcm', key, nonce);
+        decipher.setAuthTag(ciphertext.subarray(-16));
+
+        return JSON.parse(
+          Buffer.concat([
+            decipher.update(ciphertext.subarray(0, -16)),
+            decipher.final(),
+          ]).toString('utf8'),
+        );
+      } catch {
+        return undefined;
+      }
+    },
+  };
+}
+
+/**
+ * What the data browser does (`connectionKeys.ts`, `sealGrant`): a key grant
+ * for `publicKey` (base64url). For this module's tests and lane drivers.
+ */
+export function sealGrant(publicKey, grant) {
+  const pkR = Buffer.from(publicKey, 'base64url');
+  const ephemeral = generateKeyPairSync('x25519');
+  const enc = Buffer.from(
+    ephemeral.publicKey.export({ format: 'jwk' }).x,
+    'base64url',
+  );
+  const dh = diffieHellman({
+    privateKey: ephemeral.privateKey,
+    publicKey: createPublicKey({
+      key: { kty: 'OKP', crv: 'X25519', x: publicKey },
+      format: 'jwk',
+    }),
+  });
+  const empty = Buffer.alloc(0);
+  const eaePrk = labeledExtract(KEM_SUITE, empty, 'eae_prk', dh);
+  const shared = labeledExpand(
+    KEM_SUITE,
+    eaePrk,
+    'shared_secret',
+    Buffer.concat([enc, pkR]),
+    32,
+  );
+  const context = Buffer.concat([
+    Buffer.from([0]),
+    labeledExtract(HPKE_SUITE, empty, 'psk_id_hash', empty),
+    labeledExtract(HPKE_SUITE, empty, 'info_hash', Buffer.from(GRANT_INFO)),
+  ]);
+  const secret = labeledExtract(HPKE_SUITE, shared, 'secret', empty);
+  const key = labeledExpand(HPKE_SUITE, secret, 'key', context, 32);
+  const nonce = labeledExpand(HPKE_SUITE, secret, 'base_nonce', context, 12);
+  const cipher = createCipheriv('aes-256-gcm', key, nonce);
+  const ciphertext = Buffer.concat([
+    cipher.update(Buffer.from(JSON.stringify({ v: 1, ...grant }))),
+    cipher.final(),
+    cipher.getAuthTag(),
+  ]);
+
+  return `s1.${Buffer.concat([enc, ciphertext]).toString('base64url')}`;
 }
