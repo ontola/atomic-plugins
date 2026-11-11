@@ -210,6 +210,7 @@ export function mockProxy({
     }
 
     if (row.platform !== platform) throw new ProxyRefusal('platform_mismatch');
+
     if (row.key !== undefined) {
       // `connection_key::resolve`, after authentication as the real proxy.
       const value = req.headers[CONNECTION_KEY_HEADER];
@@ -236,6 +237,7 @@ export function mockProxy({
 
       if (key !== row.key) throw new ProxyRefusal('invalid_connection_key');
     }
+
     row.last_used_at = stamp();
     if (caller.app) row.delegations.get(caller.app).last_used_at = stamp();
     if (caller.runtime) caller.runtime.last_used_at = stamp();
