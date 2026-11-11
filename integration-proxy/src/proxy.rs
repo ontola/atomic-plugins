@@ -32,7 +32,7 @@ use crate::{
     agent_id,
     api_error::ApiError,
     capability,
-    security::{ConnectionRecord, Security, Standing},
+    security::{ConnectionKey, ConnectionRecord, Security, Standing},
     AppState,
 };
 
@@ -227,6 +227,15 @@ async fn refresh_token(
     Ok(())
 }
 
+/// Opens and parses a loaded row's credential with the caller's key.
+fn stored_credential(
+    security: &Security,
+    record: &ConnectionRecord,
+    key: &ConnectionKey,
+) -> Option<StoredCredential> {
+    serde_json::from_slice(&security.open_credential(record, key)?).ok()
+}
+
 /// Refreshes a connection's OAuth token if it is about to expire, with at
 /// most one refresh in flight per connection (see
 /// `Security::claim_refresh_lease`). A caller that loses the race waits for
@@ -235,13 +244,15 @@ async fn refresh_connection(
     state: &AppState,
     security: &Security,
     connection_id: &str,
+    key: &ConnectionKey,
     credential: &mut StoredCredential,
 ) -> Result<(), RefreshFailure> {
     const ATTEMPTS: usize = 50;
     const WAIT: std::time::Duration = std::time::Duration::from_millis(200);
     let reload = |record: Option<ConnectionRecord>| -> Result<StoredCredential, RefreshFailure> {
-        serde_json::from_slice(&record.ok_or(RefreshFailure::Unavailable)?.credential)
-            .map_err(|_| RefreshFailure::Unavailable)
+        record
+            .and_then(|record| stored_credential(security, &record, key))
+            .ok_or(RefreshFailure::Unavailable)
     };
     for _ in 0..ATTEMPTS {
         if !needs_refresh(credential) {
@@ -270,7 +281,7 @@ async fn refresh_connection(
             let serialized =
                 serde_json::to_vec(&*credential).map_err(|_| RefreshFailure::Unavailable)?;
             return security
-                .store_refreshed_connection(connection_id, &serialized)
+                .store_refreshed_connection(connection_id, &serialized, key)
                 .await
                 .map_err(|_| RefreshFailure::Unavailable);
         }
@@ -478,12 +489,19 @@ async fn forward_inner(
     };
     let _ = security.touch(connection_id, delegate, runtime).await;
 
-    let mut credential = serde_json::from_slice::<StoredCredential>(&record.credential)
-        .map_err(|_| ApiError::Internal)?;
+    // The credential is opened only here, after the caller is authorised. A
+    // row that does not open (altered, or moved from another row) is still
+    // answered as unknown, as it was when loading opened it.
+    let key = security.server_connection_key();
+    let opened = security
+        .open_credential(&record, &key)
+        .ok_or(ApiError::UnknownConnection)?;
+    let mut credential =
+        serde_json::from_slice::<StoredCredential>(&opened).map_err(|_| ApiError::Internal)?;
     if credential.provider() != platform {
         return Err(ApiError::PlatformMismatch);
     }
-    if refresh_connection(state, security, connection_id, &mut credential)
+    if refresh_connection(state, security, connection_id, &key, &mut credential)
         .await
         .is_err()
     {
@@ -803,7 +821,14 @@ pub(crate) async fn receiver_call(
         Ok(None) => return ReceiverReply::Refused("unknown-connection"),
         Err(_) => return ReceiverReply::Unreachable,
     };
-    let Ok(mut credential) = serde_json::from_slice::<StoredCredential>(&record.credential) else {
+    // The receiver acts without a client, so only the server's key is at
+    // hand. A row that does not open is refused like an unknown connection,
+    // as it was when loading opened it.
+    let key = security.server_connection_key();
+    let Some(opened) = security.open_credential(&record, &key) else {
+        return ReceiverReply::Refused("unknown-connection");
+    };
+    let Ok(mut credential) = serde_json::from_slice::<StoredCredential>(&opened) else {
         return ReceiverReply::Refused("unreadable-credential");
     };
     if record.platform != platform || credential.provider() != platform {
@@ -835,7 +860,7 @@ pub(crate) async fn receiver_call(
     }
     target.set_path(&request_path);
     target.set_query(None);
-    match refresh_connection(state, security, connection_id, &mut credential).await {
+    match refresh_connection(state, security, connection_id, &key, &mut credential).await {
         Ok(()) => {}
         Err(RefreshFailure::Refused) => return ReceiverReply::RefreshRefused,
         Err(RefreshFailure::Unavailable) => return ReceiverReply::Unreachable,
@@ -874,9 +899,7 @@ pub(crate) async fn receiver_call(
                     .await
                     .ok()
                     .flatten()
-                    .and_then(|record| {
-                        serde_json::from_slice::<StoredCredential>(&record.credential).ok()
-                    });
+                    .and_then(|record| stored_credential(security, &record, &key));
                 match stored {
                     Some(stored) if access_token(&stored) != access_token(&credential) => {
                         credential = stored;
@@ -885,7 +908,7 @@ pub(crate) async fn receiver_call(
                     _ => return ReceiverReply::Unreachable,
                 }
             }
-            match force_refresh(state, security, connection_id, &mut credential).await {
+            match force_refresh(state, security, connection_id, &key, &mut credential).await {
                 Ok(()) => mark_refreshed(connection_id),
                 Err(RefreshFailure::Refused) => return ReceiverReply::RefreshRefused,
                 Err(RefreshFailure::Unavailable) => return ReceiverReply::Unreachable,
@@ -916,6 +939,7 @@ async fn force_refresh(
     state: &AppState,
     security: &Security,
     connection_id: &str,
+    key: &ConnectionKey,
     credential: &mut StoredCredential,
 ) -> Result<(), RefreshFailure> {
     let StoredCredential::OAuth {
@@ -936,7 +960,7 @@ async fn force_refresh(
         .await
         .ok()
         .flatten()
-        .and_then(|record| serde_json::from_slice::<StoredCredential>(&record.credential).ok());
+        .and_then(|record| stored_credential(security, &record, key));
     if let Some(current) = current {
         *credential = current;
     }
@@ -950,7 +974,7 @@ async fn force_refresh(
     }
     let serialized = serde_json::to_vec(&*credential).map_err(|_| RefreshFailure::Unavailable)?;
     security
-        .store_refreshed_connection(connection_id, &serialized)
+        .store_refreshed_connection(connection_id, &serialized, key)
         .await
         .map_err(|_| RefreshFailure::Unavailable)
 }
@@ -1163,7 +1187,11 @@ mod tests {
                         }
                         if let Some(newer) = pending.lock().await.take() {
                             store
-                                .store_refreshed_connection(&connection, &newer)
+                                .store_refreshed_connection(
+                                    &connection,
+                                    &newer,
+                                    &store.server_connection_key(),
+                                )
                                 .await
                                 .unwrap();
                         }
@@ -3339,12 +3367,7 @@ mod tests {
         assert!(a.headers().get(header::LINK).is_some());
         assert_eq!(token_requests.load(Ordering::SeqCst), 1);
         let stored: StoredCredential = serde_json::from_slice(
-            &security
-                .load_connection(&id)
-                .await
-                .unwrap()
-                .unwrap()
-                .credential,
+            &security.credential_for_tests(&security.load_connection(&id).await.unwrap().unwrap()),
         )
         .unwrap();
         match stored {

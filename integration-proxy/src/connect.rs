@@ -1030,6 +1030,7 @@ async fn redeem_inner(
             &handoff.platform,
             owner.as_str(),
             &credential,
+            &security.server_connection_key(),
             handoff.label.as_deref(),
         )
         .await
@@ -1574,7 +1575,7 @@ mod tests {
             .unwrap();
         assert_eq!(record.owner, owner.id());
         let credential: crate::proxy::StoredCredential =
-            serde_json::from_slice(&record.credential).unwrap();
+            serde_json::from_slice(&security.credential_for_tests(&record)).unwrap();
         let crate::proxy::StoredCredential::ApiKey {
             key,
             scheme,
@@ -2321,7 +2322,7 @@ mod tests {
                 .unwrap()
                 .unwrap();
             let credential: crate::proxy::StoredCredential =
-                serde_json::from_slice(&record.credential).unwrap();
+                serde_json::from_slice(&security.credential_for_tests(&record)).unwrap();
             match (username, credential) {
                 (None, crate::proxy::StoredCredential::HttpBearer { token, scheme, .. }) => {
                     assert_eq!(token, "good-token");
@@ -3144,12 +3145,15 @@ mod tests {
             .unwrap();
         assert_eq!(record.owner, owner.id());
         let credential: crate::proxy::StoredCredential =
-            serde_json::from_slice(&record.credential).unwrap();
+            serde_json::from_slice(&security.credential_for_tests(&record)).unwrap();
         assert!(matches!(
             credential,
             crate::proxy::StoredCredential::NoCredential { ref provider } if provider == "pets"
         ));
-        assert!(!String::from_utf8_lossy(&record.credential).contains("unexpected-secret"));
+        assert!(
+            !String::from_utf8_lossy(&security.credential_for_tests(&record))
+                .contains("unexpected-secret")
+        );
     }
 
     #[tokio::test]

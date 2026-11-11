@@ -175,14 +175,28 @@ pub struct ConnectState {
     pub context: String,
 }
 
-/// A connection row, with its credential opened.
+/// A connection row. Its credential is still sealed: loading a row needs no
+/// key, and [`Security::open_credential`] opens it with a [`ConnectionKey`]
+/// once the caller is authorised.
 pub struct ConnectionRecord {
     pub connection_id: String,
     pub platform: String,
     /// Canonical `atomic:agent:` id.
     pub owner: String,
-    /// The serialized `StoredCredential`; interpreted by `proxy.rs`.
-    pub credential: Vec<u8>,
+    /// The sealed, serialized `StoredCredential`.
+    envelope: String,
+}
+
+/// The key one connection's credential is sealed under. Today the only one
+/// is the server's ([`Security::server_connection_key`]); every use of that
+/// function is a place that will take a key the client supplies instead.
+#[derive(Clone)]
+pub struct ConnectionKey([u8; 32]);
+
+impl std::fmt::Debug for ConnectionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ConnectionKey(..)")
+    }
 }
 
 /// How the signer of a request is related to a connection.
@@ -232,6 +246,48 @@ pub struct ConnectionInfo {
 fn connection_aad(connection_id: &str) -> Vec<u8> {
     // Bound to the row, so one row's envelope cannot be pasted into another.
     format!("agent-connection-v1:{connection_id}").into_bytes()
+}
+
+fn seal_with(key: &[u8; 32], plaintext: &[u8], associated_data: &[u8]) -> Result<String, String> {
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let mut nonce = [0u8; 24];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    let ciphertext = cipher
+        .encrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: plaintext,
+                aad: associated_data,
+            },
+        )
+        .map_err(|_| "encryption failed")?;
+    Ok(format!(
+        "v1.{}.{}",
+        URL_SAFE_NO_PAD.encode(nonce),
+        URL_SAFE_NO_PAD.encode(ciphertext)
+    ))
+}
+
+fn open_with(key: &[u8; 32], envelope: &str, associated_data: &[u8]) -> Option<Vec<u8>> {
+    let (version, value) = envelope.split_once('.')?;
+    if version != "v1" {
+        return None;
+    }
+    let (nonce, ciphertext) = value.split_once('.')?;
+    let nonce = URL_SAFE_NO_PAD.decode(nonce).ok()?;
+    let ciphertext = URL_SAFE_NO_PAD.decode(ciphertext).ok()?;
+    if nonce.len() != 24 {
+        return None;
+    }
+    XChaCha20Poly1305::new(key.into())
+        .decrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: &ciphertext,
+                aad: associated_data,
+            },
+        )
+        .ok()
 }
 
 fn connection_label_aad(connection_id: &str) -> Vec<u8> {
@@ -531,48 +587,43 @@ impl Security {
         Ok(Some(1))
     }
 
+    /// Seals under the server's `ENCRYPTION_KEY`.
     pub fn seal(&self, plaintext: &[u8], associated_data: &[u8]) -> Result<String, String> {
-        let cipher = XChaCha20Poly1305::new((&self.encryption_key).into());
-        let mut nonce = [0u8; 24];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        let ciphertext = cipher
-            .encrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: plaintext,
-                    aad: associated_data,
-                },
-            )
-            .map_err(|_| "encryption failed")?;
-        Ok(format!(
-            "v1.{}.{}",
-            URL_SAFE_NO_PAD.encode(nonce),
-            URL_SAFE_NO_PAD.encode(ciphertext)
-        ))
+        seal_with(&self.encryption_key, plaintext, associated_data)
     }
 
+    /// Opens an envelope sealed under the server's `ENCRYPTION_KEY`.
     pub fn open(&self, envelope: &str, associated_data: &[u8]) -> Option<Vec<u8>> {
-        let (version, value) = envelope.split_once('.')?;
-        if version != "v1" {
-            return None;
-        }
-        let (nonce, ciphertext) = value.split_once('.')?;
-        let nonce = URL_SAFE_NO_PAD.decode(nonce).ok()?;
-        let ciphertext = URL_SAFE_NO_PAD.decode(ciphertext).ok()?;
-        if nonce.len() != 24 {
-            return None;
-        }
-        XChaCha20Poly1305::new((&self.encryption_key).into())
-            .decrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: &ciphertext,
-                    aad: associated_data,
-                },
-            )
-            .ok()
+        open_with(&self.encryption_key, envelope, associated_data)
     }
 
+    /// The server's own key as a connection key: what every connection is
+    /// sealed under until clients supply theirs.
+    pub fn server_connection_key(&self) -> ConnectionKey {
+        ConnectionKey(self.encryption_key)
+    }
+
+    /// Test-only: a loaded row's credential, opened with the server's key.
+    #[cfg(test)]
+    pub(crate) fn credential_for_tests(&self, record: &ConnectionRecord) -> Vec<u8> {
+        self.open_credential(record, &self.server_connection_key())
+            .expect("the row opens with the server's key")
+    }
+
+    /// Opens a loaded row's credential (a serialized `StoredCredential`).
+    /// `None` when `key` is not the row's key or the envelope was altered or
+    /// moved from another row. Call it only after the caller is authorised.
+    pub fn open_credential(
+        &self,
+        record: &ConnectionRecord,
+        key: &ConnectionKey,
+    ) -> Option<Vec<u8>> {
+        open_with(
+            &key.0,
+            &record.envelope,
+            &connection_aad(&record.connection_id),
+        )
+    }
     pub async fn store_connect_state(
         &self,
         state: &str,
@@ -649,22 +700,31 @@ impl Security {
         owner: &str,
         credential: &[u8],
     ) -> Result<String, String> {
-        self.create_labelled_connection(platform, owner, credential, None)
-            .await
+        self.create_labelled_connection(
+            platform,
+            owner,
+            credential,
+            &self.server_connection_key(),
+            None,
+        )
+        .await
     }
 
-    /// [`Self::create_connection`] with a display label, sealed like the
-    /// credential (it can be personal data, such as an email address).
+    /// [`Self::create_connection`] with the key to seal the credential under
+    /// and a display label. The label is sealed under the server's key (it
+    /// can be personal data, such as an email address), because listing
+    /// connections shows it without any connection key.
     pub async fn create_labelled_connection(
         &self,
         platform: &str,
         owner: &str,
         credential: &[u8],
+        key: &ConnectionKey,
         label: Option<&str>,
     ) -> Result<String, String> {
         self.sweep_idle_connections().await?;
         let connection_id = crate::connect::random();
-        let envelope = self.seal(credential, &connection_aad(&connection_id))?;
+        let envelope = seal_with(&key.0, credential, &connection_aad(&connection_id))?;
         let label_envelope = label
             .map(|label| self.seal(label.as_bytes(), &connection_label_aad(&connection_id)))
             .transpose()?;
@@ -812,8 +872,9 @@ impl Security {
         })
     }
 
-    /// Reads a live connection without marking it used; the caller has not
-    /// authenticated yet. `None` for an unknown, idle-expired or tampered row.
+    /// Reads a live connection without marking it used and without opening
+    /// its credential; the caller has not authenticated yet. `None` for an
+    /// unknown or idle-expired row.
     pub async fn load_connection(
         &self,
         connection_id: &str,
@@ -827,14 +888,11 @@ impl Security {
             )
             .await
             .map_err(db_error)?;
-        Ok(row.and_then(|row| {
-            let envelope: String = row.get(2);
-            Some(ConnectionRecord {
-                connection_id: connection_id.to_owned(),
-                platform: row.get(0),
-                owner: row.get(1),
-                credential: self.open(&envelope, &connection_aad(connection_id))?,
-            })
+        Ok(row.map(|row| ConnectionRecord {
+            connection_id: connection_id.to_owned(),
+            platform: row.get(0),
+            owner: row.get(1),
+            envelope: row.get(2),
         }))
     }
 
@@ -1119,13 +1177,15 @@ impl Security {
             .map_err(db_error)
     }
 
-    /// Stores a refreshed credential and releases the refresh lease.
+    /// Stores a refreshed credential, sealed under the same key the
+    /// connection was opened with, and releases the refresh lease.
     pub async fn store_refreshed_connection(
         &self,
         connection_id: &str,
         credential: &[u8],
+        key: &ConnectionKey,
     ) -> Result<(), String> {
-        let envelope = self.seal(credential, &connection_aad(connection_id))?;
+        let envelope = seal_with(&key.0, credential, &connection_aad(connection_id))?;
         self.client()
             .await
             .execute(
@@ -1468,14 +1528,16 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(
-            security
-                .load_connection(&a)
-                .await
-                .unwrap()
-                .unwrap()
-                .credential,
+            security.credential_for_tests(&security.load_connection(&a).await.unwrap().unwrap()),
             b"credential-a"
         );
+        // Another key does not open a row, and the right key still does.
+        let own = security.load_connection(&a).await.unwrap().unwrap();
+        assert!(security
+            .open_credential(&own, &ConnectionKey([7; 32]))
+            .is_none());
+        assert_eq!(security.credential_for_tests(&own), b"credential-a");
+        assert_eq!(format!("{:?}", ConnectionKey([7; 32])), "ConnectionKey(..)");
         // One row's envelope pasted into another does not open.
         admin
             .execute(
@@ -1484,7 +1546,12 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-        assert!(security.load_connection(&b).await.unwrap().is_none());
+        // The row still loads (that needs no key), but its credential does
+        // not open: the envelope is bound to the other row.
+        let moved = security.load_connection(&b).await.unwrap().unwrap();
+        assert!(security
+            .open_credential(&moved, &security.server_connection_key())
+            .is_none());
 
         // 89 idle days: still there. 90: gone, and swept with its delegations.
         security
@@ -1638,16 +1705,11 @@ pub(crate) mod tests {
         );
         assert_ne!(a.unwrap(), b.unwrap());
         security
-            .store_refreshed_connection(&id, b"new")
+            .store_refreshed_connection(&id, b"new", &security.server_connection_key())
             .await
             .unwrap();
         assert_eq!(
-            security
-                .load_connection(&id)
-                .await
-                .unwrap()
-                .unwrap()
-                .credential,
+            security.credential_for_tests(&security.load_connection(&id).await.unwrap().unwrap()),
             b"new"
         );
         assert!(security.claim_refresh_lease(&id).await.unwrap());
