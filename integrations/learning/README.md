@@ -6,10 +6,16 @@ out from the learner's own mastery rows. Phases 1 and 2 of the design in
 `leerboom/proposal.md`. Nothing here lives in `ontola/atomic-server`: the
 classes are in the shared ontology, the code is a drive app.
 
-Status: **declared, not verified.** Unit-tested against a fake host store and
-jsdom. The host E2E (`e2e/learning.spec.ts`) is written but has not been run:
-it needs an atomic-server build and network access to `ontola.github.io`. The
-catalog entry is `enabled: false` and `experimental: true`.
+Status: **verified on a real host, experimental.** Unit-tested against a fake
+host store and jsdom, and the host E2E (`e2e/learning.spec.ts`) passes against
+an atomic-server built from the pinned commit, with network access to
+`ontola.github.io`: install from the catalog's Drive apps section, load the
+starter tree (30 skills), open a locked skill, mark one mastered and see the
+tree update, and the same after a reload. Checked by eye at desktop and 390px
+width. The catalog entry is `enabled: true` and `experimental: true`, so it
+shows only under "Show experimental plugins". Not verified: other browsers,
+real learners, a skill table the app did not make (the host's "Allow
+editing" path).
 
 ## The layers
 
