@@ -12,6 +12,11 @@ import {
   type Session,
 } from '../cli/auth.js';
 import { upstreamOf } from '../read/model.js';
+import { syncFileInventory } from './file-inventory.js';
+import {
+  InventoryCredentialError,
+  InventoryReadError,
+} from './file-inventory-sources.js';
 import {
   syncCollection,
   prepareCollection,
@@ -195,6 +200,7 @@ export class DaemonRunner {
     {
       alias: string;
       result?: CollectionSyncResult;
+      pending?: true;
       error?: string;
       checkout?: CheckoutResult;
     }[]
@@ -205,6 +211,7 @@ export class DaemonRunner {
     const results: {
       alias: string;
       result?: CollectionSyncResult;
+      pending?: true;
       error?: string;
       checkout?: CheckoutResult;
     }[] = [];
@@ -242,53 +249,34 @@ export class DaemonRunner {
           [this.config.owner, name],
         );
         try {
-          await this.store.checkout(p.scope, name);
-          if (await upgradeSourceClasses(p, this.store))
+          if (!p.source.fileInventory) {
             await this.store.checkout(p.scope, name);
-          const session = await this.auth.session();
-          const connections = await listConnections(session, this.fetchImpl);
-          if (connections.owner !== this.config.owner)
-            throw new Error('Login required: owner mismatch');
-          const connection = connections.connections.find(
-            (c) =>
-              c.connection_id === p.source.connection &&
-              c.platform === p.source.platform,
-          );
-          if (!connection)
-            throw new Error(
-              'Login required: collection connection is not approved',
+            if (await upgradeSourceClasses(p, this.store))
+              await this.store.checkout(p.scope, name);
+          }
+          const result = p.source.fileInventory
+            ? await syncFileInventory({
+                prepared: p,
+                owner: this.config.owner,
+                archive: this.archive,
+                store: this.store,
+                fetch: this.fetchImpl,
+                signal: controller.signal,
+                trigger: dueOnly ? 'scheduled' : 'manual',
+                ...(this.message === undefined
+                  ? {}
+                  : { message: this.message }),
+              })
+            : await this.syncOpenApi(p, controller.signal, dueOnly, forceFull);
+          if (!result) {
+            await client.query(
+              `UPDATE syncables_cache.daemon_jobs SET state='pending',last_error=NULL,error_kind=NULL,failures=0,
+               next_due=clock_timestamp()+interval '1 second' WHERE owner=$1 AND alias=$2`,
+              [this.config.owner, name],
             );
-          const authorizationContext = await this.auth.authorizationContext();
-          const upstream = upstreamOf(p.document);
-          const result = await syncCollection({
-            prepared: p,
-            forceFull,
-            archive: this.archive,
-            store: this.store,
-            auth: {
-              owner: this.config.owner,
-              connection: connection.connection_id,
-              authorizationContext,
-            },
-            upstream: async (input) => {
-              if (input.url.origin !== upstream.origin)
-                throw new Error('Source request escaped its declared API');
-              const fresh = await this.auth.session();
-              const request = proxyRequest(
-                fresh,
-                connection,
-                input.url.pathname + input.url.search,
-              );
-              return proxyReadTransport(
-                fresh,
-                connection,
-                this.fetchImpl,
-              )({ ...request, headers: input.headers });
-            },
-            signal: controller.signal,
-            trigger: dueOnly ? 'scheduled' : 'manual',
-            ...(this.message === undefined ? {} : { message: this.message }),
-          });
+            results.push({ alias: name, pending: true });
+            continue;
+          }
           await client.query(
             `UPDATE syncables_cache.daemon_jobs SET completed=$3,revision=$4,last_error=NULL,error_kind=NULL,last_success_at=clock_timestamp(),failures=0,
             state=CASE WHEN generation=$3 THEN 'idle' ELSE 'pending' END,
@@ -303,7 +291,9 @@ export class DaemonRunner {
             ],
           );
           try {
-            const checkout = await this.store.checkout(p.scope, name);
+            const checkout = p.source.fileInventory
+              ? undefined
+              : await this.store.checkout(p.scope, name);
             results.push({
               alias: name,
               result,
@@ -322,11 +312,15 @@ export class DaemonRunner {
           }
         } catch (error) {
           const message =
-            error instanceof CheckoutBlockedError
+            error instanceof CheckoutBlockedError ||
+            error instanceof InventoryReadError ||
+            error instanceof InventoryCredentialError
               ? error.message
               : isSyncAuthError(error)
                 ? 'Authorization needs attention; run login or check approved connections'
-                : 'Sync did not finish; next attempt resumes from the published snapshot';
+                : p.source.fileInventory
+                  ? 'File inventory did not finish. The next attempt resumes from its last saved page.'
+                  : 'Sync did not finish; next attempt resumes from the published snapshot';
           const retry = Math.min(
             300,
             5 * 2 ** Math.min(Number(job.failures), 6),
@@ -347,7 +341,8 @@ export class DaemonRunner {
               name,
               message,
               nextDue,
-              isSyncAuthError(error)
+              isSyncAuthError(error) ||
+              error instanceof InventoryCredentialError
                 ? 'auth'
                 : error instanceof CheckoutBlockedError
                   ? 'checkout'
@@ -370,6 +365,55 @@ export class DaemonRunner {
       }
     }
     return results;
+  }
+  private async syncOpenApi(
+    p: PreparedCollection,
+    signal: AbortSignal,
+    dueOnly: boolean,
+    forceFull: boolean,
+  ): Promise<CollectionSyncResult> {
+    const session = await this.auth.session();
+    const connections = await listConnections(session, this.fetchImpl);
+    if (connections.owner !== this.config.owner)
+      throw new Error('Login required: owner mismatch');
+    const connection = connections.connections.find(
+      (c) =>
+        c.connection_id === p.source.connection &&
+        c.platform === p.source.platform,
+    );
+    if (!connection)
+      throw new Error('Login required: collection connection is not approved');
+    const authorizationContext = await this.auth.authorizationContext();
+    const upstream = upstreamOf(p.document);
+    return syncCollection({
+      prepared: p,
+      forceFull,
+      archive: this.archive,
+      store: this.store,
+      auth: {
+        owner: this.config.owner,
+        connection: connection.connection_id,
+        authorizationContext,
+      },
+      upstream: async (input) => {
+        if (input.url.origin !== upstream.origin)
+          throw new Error('Source request escaped its declared API');
+        const fresh = await this.auth.session();
+        const request = proxyRequest(
+          fresh,
+          connection,
+          input.url.pathname + input.url.search,
+        );
+        return proxyReadTransport(
+          fresh,
+          connection,
+          this.fetchImpl,
+        )({ ...request, headers: input.headers });
+      },
+      signal,
+      trigger: dueOnly ? 'scheduled' : 'manual',
+      ...(this.message === undefined ? {} : { message: this.message }),
+    });
   }
   private async webhook(token: string): Promise<Server | undefined> {
     if (!this.config.webhookPort) return undefined;

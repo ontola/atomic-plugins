@@ -94,10 +94,12 @@ Git is an optional subtree export with messages, branches and ancestry; existing
 Git histories can be migrated without changing their original repositories. See the
 [daemon guide](docs/daemon.md) for setup, supported incremental reads, queued
 webhook hints and limits, and [Versioned Atomic Data](../docs/design/versioned-atomic-data.md)
-for snapshot resolution. The [CLI guide](docs/cli.md) covers device login and
-read-only API probes. Replication definitions remain configuration only.
+for snapshot resolution. The [file inventory guide](docs/file-inventory.md)
+covers metadata-only Dropbox, Google Drive and iCloud Drive sync. The
+[CLI guide](docs/cli.md) covers device login and read-only API probes.
+Replication definitions remain configuration only.
 Root/browser library imports do not start the daemon or load its storage.
-Successful syncs expose normal working folders for each collection;
+Successful OpenAPI syncs expose normal working folders for each collection.
 `syncables checkout` exposes existing snapshots without fetching again.
 Items and bundled schemas have document-scoped API resource classes.
 

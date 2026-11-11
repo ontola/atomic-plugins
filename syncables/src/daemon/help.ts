@@ -29,6 +29,7 @@ Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export on
   syncables browse [platform[/account[/collection[/item-id]]]] --config FILE
     [--at COMMIT|tag:NAME] [--filter /json/pointer=JSON_SCALAR]
     [--order-by /json/pointer[:asc|:desc]] [--page 1 --page-size 50]
+  syncables file-duplicates --config FILE [--collections platform/account/name,...]
   syncables history [ITEM_ID] --collection platform/account/name --config FILE
     [--subject RESOURCE_OR_SCHEMA_IRI] [--at COMMIT|tag:NAME]
   syncables resource IRI --collection platform/account/name --config FILE [--at COMMIT|tag:NAME]
@@ -52,8 +53,10 @@ Existing Git users must run migrate git first; original repos remain untouched.
 Folders use workspaceDirectory (default ./workspace), separate from old Git worktrees.
 Exports are normal Git repos, preserve ancestry/messages/branches/tags, and require a new destination.
 Subtrees currently select one collection or item; cross-collection composed histories are future work.
-Successful syncs update these folders automatically; local edits block updates. browse returns a commit to pin
+Successful OpenAPI syncs update these folders automatically. Local edits block updates. browse returns a commit to pin
 subsequent pages; resource resolves schemas through the same command at --at.
+File inventory collections list metadata for Dropbox, Google Drive and iCloud Drive.
+file-duplicates compares their published inventories. See docs/file-inventory.md.
 history returns commit messages, timestamps and parents; use either ITEM_ID
 or --subject IRI. --message is stored permanently in PostgreSQL history and Git exports; keep secrets out.
 atomic-peer serves all configured collections by default as one native drive,
