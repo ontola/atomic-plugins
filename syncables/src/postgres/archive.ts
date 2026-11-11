@@ -7,6 +7,7 @@ import {
   cleanHeaders,
   requestIdentity,
   scopeValues,
+  type ArchivedRequest,
   type ArchiveScope,
 } from './identity.js';
 import { SCHEMA } from './schema.js';
@@ -439,7 +440,7 @@ export class PostgresArchive {
     run: string,
     sequence: number,
   ): Promise<{
-    request: { url: string; method: 'GET'; headers: Record<string, string> };
+    request: ArchivedRequest;
     key: string;
     origin: string;
     outcome: string;

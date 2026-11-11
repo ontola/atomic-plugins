@@ -17,6 +17,8 @@ import {
 import { validateCommitMessage } from './git-store.js';
 import { DaemonAuth, KeychainCredentials } from './auth.js';
 import { DaemonRunner, jobStatuses } from './runner.js';
+import { inventoryFiles } from './file-inventory.js';
+import { findFileDuplicates, type FileLocation } from './file-duplicates.js';
 import {
   SOURCE_ID,
   SOURCE_JSON,
@@ -184,6 +186,41 @@ export async function daemonCommand(
         values,
         controller.signal,
       );
+      return;
+    }
+    if (command === 'file-duplicates') {
+      if (positionals.length !== 1)
+        throw new Error('Unexpected command arguments');
+      const selectors = string('collections')?.split(',') ?? [];
+      const locations: FileLocation[] = [];
+      const inventories: { collection: string; revision: string | null }[] = [];
+      for (const source of selectedCollections(config, selectors)) {
+        if (!source.fileInventory) {
+          if (selectors.length)
+            throw new Error(
+              'Select fileInventory collections for file-duplicates',
+            );
+          continue;
+        }
+        const { scope } = await prepareCollection(config.owner, source);
+        const revision = await store.head(scope);
+        inventories.push({
+          collection: alias(source),
+          revision: revision ?? null,
+        });
+        if (!revision) continue;
+        for (const file of inventoryFiles(
+          await store.list(scope, revision),
+        ).values())
+          locations.push({
+            collection: alias(source),
+            provider: source.fileInventory.provider,
+            file,
+          });
+      }
+      if (!inventories.length)
+        throw new Error('No fileInventory collections configured');
+      write({ inventories, ...findFileDuplicates(locations) });
       return;
     }
     if (command === 'atomic-peer') {

@@ -37,6 +37,7 @@ import {
 import type { Transport, TransportResponse } from '../read/transport.js';
 import type { OpenApiDocument } from '../openapi/types.js';
 import { validateCommitMessage } from './git-store.js';
+import { inventoryDocument } from './file-inventory-sources.js';
 import {
   alias,
   collectionScope,
@@ -229,10 +230,16 @@ export async function prepareCollection(
   owner: string,
   source: CollectionConfig,
 ): Promise<PreparedCollection> {
-  const original = await readFile(source.document, 'utf8');
-  const document = adaptIncremental(
-    await loadOpenApiDocument(parseYaml(original) as Record<string, unknown>),
-  );
+  const builtin =
+    source.fileInventory && inventoryDocument(source.fileInventory.provider);
+  const original = builtin
+    ? JSON.stringify(builtin)
+    : await readFile(source.document, 'utf8');
+  const document =
+    builtin ??
+    adaptIncremental(
+      await loadOpenApiDocument(parseYaml(original) as Record<string, unknown>),
+    );
   return {
     source,
     document,
@@ -240,15 +247,17 @@ export async function prepareCollection(
     scope: collectionScope(owner, source, nodeHash(original)),
   };
 }
-export interface SyncCollectionOptions {
+export interface CollectionPublicationOptions {
   prepared: PreparedCollection;
   archive: PostgresArchive;
   store: SnapshotStore;
   auth: ArchiveScope;
-  upstream: Transport;
   signal?: AbortSignal;
   message?: string;
   trigger?: 'manual' | 'scheduled';
+}
+export interface SyncCollectionOptions extends CollectionPublicationOptions {
+  upstream: Transport;
   forceFull?: boolean;
 }
 export interface CollectionSyncResult {
@@ -265,13 +274,103 @@ export class SyncRetryError extends Error {
     super(blocked ? 'Source blocked automatic reads' : 'Source deferred reads');
   }
 }
-/** Each successful read publishes one complete Git tree after raw archival. */
+export function sourceRecord(
+  subject: string,
+  id: string,
+  apiClass: string,
+  raw: string,
+): string {
+  const prefix = JSON.stringify({
+    '@id': subject,
+    [IS_A]: [apiClass, SOURCE_CLASS],
+    [SOURCE_ID]: id,
+  });
+  return (
+    prefix.slice(0, -1) + ',' + JSON.stringify(SOURCE_JSON) + ':' + raw + '}'
+  );
+}
+
+export const DAEMON_READ_LIMITS = {
+  maxRecords: 5000,
+  maxRequests: 1000,
+  timeoutMs: 120_000,
+};
+
+export async function publishCollection(
+  options: CollectionPublicationOptions,
+  snapshot: {
+    expected: string | undefined;
+    resources: Map<string, string>;
+    resource: string;
+    strategy: CollectionSyncResult['strategy'];
+    records: number;
+    run: string;
+    nextToken: string | undefined;
+  },
+): Promise<CollectionSyncResult> {
+  const { store, prepared, auth } = options;
+  const { scope, source } = prepared;
+  const { expected, resources, resource, strategy, records, run, nextToken } =
+    snapshot;
+  const revision = await store.commit(
+    {
+      scope,
+      resources,
+      message: [
+        `Sync ${alias(source)}: ${strategy} (${options.trigger ?? 'direct'})`,
+        '',
+        ...(options.message === undefined
+          ? []
+          : [
+              'Intent (user supplied):',
+              ...options.message
+                .trim()
+                .split('\n')
+                .map((line) => '  ' + line),
+              '',
+            ]),
+        'Syncables-Intent-Version: 1',
+        `Syncables-Trigger: ${options.trigger ?? 'direct'}`,
+        `Syncables-Collection: ${alias(source)}`,
+        `Syncables-Run: ${run}`,
+        `Syncables-Strategy: ${strategy}`,
+        `Syncables-Records: ${records}`,
+      ].join('\n'),
+      context: {
+        owner: auth.owner,
+        connection: auth.connection,
+        authorizationContext: auth.authorizationContext,
+        collection: source.name,
+        resource,
+        platform: source.platform,
+        account: source.account,
+        run,
+        strategy,
+        mapping: 'source-json-ad-v1',
+        classMapping: 'oad-resource-class-v1',
+        itemClass: sourceClass(prepared),
+        documentHash: prepared.documentHash,
+        ...(nextToken ? { syncToken: nextToken } : {}),
+        ...(source.fileInventory
+          ? { profile: 'file-inventory-v1', records }
+          : {}),
+      },
+    },
+    expected,
+    options.signal,
+  );
+  return { revision, run, records, strategy };
+}
+
+/** Each successful read publishes one complete snapshot after raw archival. */
 export async function syncCollection(
   options: SyncCollectionOptions,
 ): Promise<CollectionSyncResult> {
   const { prepared, archive, store, auth } = options;
   if (options.message !== undefined) validateCommitMessage(options.message);
   const { document, source, scope } = prepared;
+  if (source.fileInventory)
+    throw new Error('Use the file inventory reader for this collection');
   if (source.connection !== auth.connection)
     throw new Error('Collection does not match the authenticated connection');
   const model = discoverReadModel(document);
@@ -387,7 +486,7 @@ export async function syncCollection(
       });
       const budget = new Budget(
         live,
-        { maxRecords: 5000, maxRequests: 1000, timeoutMs: 120_000 },
+        { ...DAEMON_READ_LIMITS, ...source.readLimits },
         async (ms) => {
           if (options.signal?.aborted) throw new Error('Sync stopped');
           await new Promise<void>((done, reject) => {
@@ -444,7 +543,7 @@ export async function syncCollection(
           )
             throw new Error('Missing or unsafe numeric record identity');
           const id = String(idValue);
-          if (seen.has(id) || ++count > 5000)
+          if (seen.has(id) || ++count > budget.limits.maxRecords)
             throw new Error(
               'Repeated identity or collection exceeds record limit',
             );
@@ -469,20 +568,7 @@ export async function syncCollection(
             root,
             async (hash) => currentGraph.nodes.get(hash)!,
           );
-          const prefix = JSON.stringify({
-            '@id': subject,
-            [IS_A]: [apiClass, SOURCE_CLASS],
-            [SOURCE_ID]: id,
-          });
-          resources.set(
-            subject,
-            prefix.slice(0, -1) +
-              ',' +
-              JSON.stringify(SOURCE_JSON) +
-              ':' +
-              raw +
-              '}',
-          );
+          resources.set(subject, sourceRecord(subject, id, apiClass, raw));
         }
       }
       if (!outcome.complete || options.signal?.aborted)
@@ -519,51 +605,15 @@ export async function syncCollection(
       ).length;
       await archive.finishRun(auth.owner, run);
       finished = true;
-      const revision = await store.commit(
-        {
-          scope,
-          resources,
-          message: [
-            `Sync ${alias(source)}: ${strategy} (${options.trigger ?? 'direct'})`,
-            '',
-            ...(options.message === undefined
-              ? []
-              : [
-                  'Intent (user supplied):',
-                  ...options.message
-                    .trim()
-                    .split('\n')
-                    .map((line) => '  ' + line),
-                  '',
-                ]),
-            'Syncables-Intent-Version: 1',
-            `Syncables-Trigger: ${options.trigger ?? 'direct'}`,
-            `Syncables-Collection: ${alias(source)}`,
-            `Syncables-Run: ${run}`,
-            `Syncables-Strategy: ${strategy}`,
-            `Syncables-Records: ${records}`,
-          ].join('\n'),
-          context: {
-            owner: auth.owner,
-            connection: auth.connection,
-            authorizationContext: auth.authorizationContext,
-            collection: source.name,
-            resource: collection.resource,
-            platform: source.platform,
-            account: source.account,
-            run,
-            strategy,
-            mapping: 'source-json-ad-v1',
-            classMapping: 'oad-resource-class-v1',
-            itemClass: sourceClass(prepared),
-            documentHash: prepared.documentHash,
-            ...(nextToken ? { syncToken: nextToken } : {}),
-          },
-        },
+      return await publishCollection(options, {
         expected,
-        options.signal,
-      );
-      return { revision, run, records, strategy };
+        resources,
+        resource: collection.resource,
+        strategy,
+        records,
+        run,
+        nextToken,
+      });
     } catch (error) {
       if (!finished)
         await archive.finishRun(auth.owner, run, false).catch(() => {});

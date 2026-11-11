@@ -2,6 +2,11 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { nodeHash } from '../postgres/json-graph.js';
 import { safeUrl } from '../cli/auth.js';
+import type { ReadLimits } from '../read/pages.js';
+
+export type FileInventorySource =
+  | { provider: 'dropbox' | 'google-drive'; tokenFile: string }
+  | { provider: 'icloud-drive'; directory: string };
 
 export interface CollectionConfig {
   platform: string;
@@ -13,6 +18,10 @@ export interface CollectionConfig {
   bindings: Record<string, string>;
   query: Record<string, string>;
   pollSeconds: number;
+  readLimits?: Partial<
+    Pick<ReadLimits, 'maxRecords' | 'maxRequests' | 'timeoutMs'>
+  >;
+  fileInventory?: FileInventorySource;
   notifications?: {
     source: string;
     parameters: Record<string, string>;
@@ -63,6 +72,41 @@ function strings(value: unknown): Record<string, string> {
       throw new Error('Bindings and query values must be strings');
   return result as Record<string, string>;
 }
+function readLimits(
+  value: unknown,
+): NonNullable<CollectionConfig['readLimits']> {
+  const limits: NonNullable<CollectionConfig['readLimits']> = {};
+  for (const [key, limit] of Object.entries(object(value))) {
+    if (
+      (key !== 'maxRecords' && key !== 'maxRequests' && key !== 'timeoutMs') ||
+      typeof limit !== 'number' ||
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 2_147_483_647
+    )
+      throw new Error('Invalid collection readLimits');
+    limits[key] = limit;
+  }
+  return limits;
+}
+function fileInventory(value: unknown, base: string): FileInventorySource {
+  const settings = object(value);
+  switch (settings.provider) {
+    case 'dropbox':
+    case 'google-drive':
+      return {
+        provider: settings.provider,
+        tokenFile: resolve(base, text(settings.tokenFile, 'tokenFile')),
+      };
+    case 'icloud-drive':
+      return {
+        provider: settings.provider,
+        directory: resolve(base, text(settings.directory, 'directory')),
+      };
+    default:
+      throw new Error('Invalid fileInventory provider');
+  }
+}
 export async function loadDaemonConfig(file: string): Promise<DaemonConfig> {
   const data = object(JSON.parse(await readFile(file, 'utf8')));
   if (
@@ -75,16 +119,49 @@ export async function loadDaemonConfig(file: string): Promise<DaemonConfig> {
   const seen = new Set<string>();
   const collections = data.collections.map((item: unknown) => {
     const c = object(item);
+    const files =
+      c.fileInventory === undefined
+        ? undefined
+        : fileInventory(c.fileInventory, base);
+    if (
+      files &&
+      [
+        'platform',
+        'connection',
+        'document',
+        'collection',
+        'bindings',
+        'query',
+        'notifications',
+        'writes',
+      ].some((key) => Object.hasOwn(c, key))
+    )
+      throw new Error(
+        'fileInventory defines a read-only collection with its own provider and source',
+      );
+    const account = label(c.account, 'account');
+    const name = label(c.name, 'collection name');
     const collection: CollectionConfig = {
-      platform: label(c.platform, 'platform'),
-      account: label(c.account, 'account'),
-      name: label(c.name, 'collection name'),
-      connection: text(c.connection, 'connection'),
-      document: resolve(base, text(c.document, 'document')),
-      collection: text(c.collection, 'metadata collection'),
-      bindings: strings(c.bindings),
+      platform: files?.provider ?? label(c.platform, 'platform'),
+      account,
+      name,
+      connection: files
+        ? 'file-inventory:' + files.provider + ':' + account + ':' + name
+        : text(c.connection, 'connection'),
+      document: files
+        ? 'builtin:file-inventory'
+        : resolve(base, text(c.document, 'document')),
+      collection: files ? 'files' : text(c.collection, 'metadata collection'),
+      bindings:
+        files?.provider === 'icloud-drive'
+          ? { root: files.directory }
+          : strings(c.bindings),
       query: strings(c.query),
       pollSeconds: Number(c.pollSeconds ?? 300),
+      ...(files ? { fileInventory: files } : {}),
+      ...(c.readLimits === undefined
+        ? {}
+        : { readLimits: readLimits(c.readLimits) }),
     };
     if (
       !Number.isSafeInteger(collection.pollSeconds) ||
