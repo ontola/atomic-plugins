@@ -17,7 +17,7 @@ categories = ["web-programming::http-server", "authentication"]
 include = [
     "/src/**/*.rs",
     "/static/index.html",
-    "/static/logo.png",
+    "/static/logo.svg",
     "/static/device-approval.mjs",
     "/static/management.html",
     "/static/management.mjs",
