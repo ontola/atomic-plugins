@@ -41,3 +41,17 @@ The package smoke test exercised existing daemon and browser entry points.
 Full validation on a fresh local PostgreSQL database passed with 2,055
 tests and three optional skips. Build, lint, formatting and changelog
 checks passed.
+
+## CI follow-up
+
+The maintainer asked, “can you make sure CI passes and merge PR #728?”
+The Syncables Node 22, 24 and 26 jobs and the native peer check passed.
+Both browser jobs stalled while APT attempted to resolve the Ubuntu
+mirrors. The first run logged failures fetching fonts. A retry stalled
+at the same step.
+
+CI now verifies that the pinned Chromium can launch on the runner
+before fetching system dependencies. If the initial launch fails,
+CI installs the Playwright dependencies and checks launch again.
+Both existing Playwright suites still run. The workflow contract tests,
+shell syntax check, and smoke tests of both installer paths passed locally.

@@ -977,7 +977,7 @@ jobs:
       - name: Install Playwright (chromium)
         if: contains(matrix.tiers, 'e2e')
         working-directory: atomic-plugins
-        run: browser/e2e/node_modules/.bin/playwright install --with-deps chromium
+        run: bash integrations/tooling/install-ci-chromium.sh
 
       # The same command a developer runs locally. run-lane.mjs starts
       # atomic-server, the mock proxy and the dev-server on this lane's own
@@ -1215,7 +1215,7 @@ jobs:
 
       - name: Install Playwright (chromium)
         working-directory: atomic-plugins
-        run: browser/e2e/node_modules/.bin/playwright install --with-deps chromium
+        run: bash integrations/tooling/install-ci-chromium.sh
 
       - name: Start atomic-server, the mock proxy and the dev-server
         working-directory: atomic-plugins
