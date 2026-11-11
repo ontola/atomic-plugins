@@ -713,7 +713,7 @@ self-hosting fits your needs:
   `OPERATOR_NAME` (linked to `OPERATOR_URL`), and the consent page shows the
   host of `BASE_URL`, so users can see whose proxy they are granting access
   to. Before 0.2.1 both pages said "LocalThought" whoever ran the proxy. The
-  logo (`/logo.png`, LocalThought's) and the page layout are still compiled
+  Atomic mark (`/logo.svg`) and the page layout are still compiled
   into the binary and are not configurable, and the `User-Agent` sent to
   providers is still `LocalThought-integration-proxy`.
 - **Binds `0.0.0.0` only**, with no graceful drain on shutdown.

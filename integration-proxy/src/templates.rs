@@ -368,7 +368,7 @@ fn page(operator: &Operator, heading: &str, head: &str, body: &str) -> String {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   {head}
   <title>{heading} · {host}</title>
-  <link rel="icon" type="image/png" href="/logo.png" />
+  <link rel="icon" type="image/svg+xml" href="/logo.svg" />
   <style>
     :root {{ color-scheme: light dark; }}
     body {{
@@ -424,7 +424,7 @@ fn page(operator: &Operator, heading: &str, head: &str, body: &str) -> String {
 </head>
 <body>
   <main>
-    <a href="/" aria-label="{title} home" style="display:block;text-align:center;margin-bottom:1rem"><img src="/logo.png" alt="" width="80" height="80" style="border-radius:8px" /></a>
+    <a href="/" aria-label="{title} home" style="display:block;text-align:center;margin-bottom:1rem"><img src="/logo.svg" alt="" width="80" height="80" /></a>
     {body}
   </main>
 </body>

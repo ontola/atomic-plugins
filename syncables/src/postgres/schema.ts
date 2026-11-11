@@ -61,4 +61,17 @@ CREATE TABLE IF NOT EXISTS syncables_cache.json_responses (
   FOREIGN KEY(owner,root_hash) REFERENCES syncables_cache.json_nodes(owner,hash),
   CHECK((root_hash IS NULL) <> (indexing_error IS NULL))
 );
+CREATE TABLE IF NOT EXISTS syncables_cache.file_inventory_stages (
+  id uuid PRIMARY KEY, owner text NOT NULL, scope text NOT NULL,
+  base_revision text, authorization_context text NOT NULL,
+  strategy text NOT NULL, cursor jsonb NOT NULL,
+  sequence integer NOT NULL DEFAULT 0,
+  UNIQUE(owner,scope)
+);
+CREATE TABLE IF NOT EXISTS syncables_cache.file_inventory_pages (
+  stage uuid NOT NULL REFERENCES syncables_cache.file_inventory_stages(id)
+    ON DELETE CASCADE,
+  sequence integer NOT NULL, cursor_key text NOT NULL, changes jsonb NOT NULL,
+  PRIMARY KEY(stage,sequence), UNIQUE(stage,cursor_key)
+);
 `;

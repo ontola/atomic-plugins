@@ -441,7 +441,7 @@ fn router(state: AppState) -> Router {
         .merge(device::router())
         .route("/", get(home))
         .route("/healthz", get(healthz))
-        .route("/logo.png", get(logo))
+        .route("/logo.svg", get(logo))
         .route("/connect", get(connect::page))
         .route("/connect/authorize", post(connect::authorize))
         .route("/connect/redeem", post(connect::redeem))
@@ -489,10 +489,10 @@ async fn healthz(State(state): State<AppState>) -> impl axum::response::IntoResp
 async fn logo() -> impl axum::response::IntoResponse {
     (
         [
-            (axum::http::header::CONTENT_TYPE, "image/png"),
+            (axum::http::header::CONTENT_TYPE, "image/svg+xml"),
             (axum::http::header::CACHE_CONTROL, "public, max-age=3600"),
         ],
-        include_bytes!("../static/logo.png").as_slice(),
+        include_bytes!("../static/logo.svg").as_slice(),
     )
 }
 

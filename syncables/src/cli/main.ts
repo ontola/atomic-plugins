@@ -139,6 +139,7 @@ async function main(): Promise<void> {
       'atomic-peer',
       'status',
       'browse',
+      'file-duplicates',
       'resource',
       'history',
       'tag',

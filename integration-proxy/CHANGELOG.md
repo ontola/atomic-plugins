@@ -25,6 +25,11 @@ again.
 - No migration: connections stored before this release answer
   `403 invalid_connection_key`; their owners connect again.
 
+## 0.4.3 (2026-11-11)
+
+- Use the official Atomic mark on the landing and consent pages and as the
+  favicon.
+
 ## 0.4.2 (2026-11-09)
 
 - Explicit device permissions for selected-connection delegation/disconnection,

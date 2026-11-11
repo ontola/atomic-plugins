@@ -1,5 +1,11 @@
 import type { Pool, PoolClient } from 'pg';
-import { indexJson, renderJson, nodeHash } from '../postgres/json-graph.js';
+import {
+  indexJson,
+  renderJson,
+  nodeHash,
+  type GraphNode,
+  type GraphValue,
+} from '../postgres/json-graph.js';
 import { encode, decode } from '../postgres/codec.js';
 import {
   validateCommitMessage,
@@ -72,6 +78,10 @@ export interface ImportRef {
   tagHeaders?: string;
 }
 const LIMIT = 16 * 1024 * 1024;
+const INVENTORY_LIMIT = 192 * 1024 * 1024;
+const INVENTORY_RECORD_LIMIT = 250_006; // Up to 250,000 files and six schema resources.
+const MEMBER_BATCH = 500;
+
 export function scopeRef(scope: string): string {
   return 'refs/heads/s-' + nodeHash(scope);
 }
@@ -141,10 +151,11 @@ export class PostgresHistoryStore implements SnapshotStore {
     parents: string[],
     metadata?: Omit<ImportRevision, 'snapshot' | 'parents' | 'gitId'>,
   ): Promise<string> {
+    const inventory = snapshot.context.profile === 'file-inventory-v1';
     if (
       !snapshot.scope ||
       snapshot.scope.length > 8192 ||
-      snapshot.resources.size > 50_000
+      snapshot.resources.size > (inventory ? INVENTORY_RECORD_LIMIT : 50_000)
     )
       throw new Error('Invalid snapshot scope or size');
     if (snapshot.context.owner !== this.owner)
@@ -156,8 +167,12 @@ export class PostgresHistoryStore implements SnapshotStore {
       a < b ? -1 : a > b ? 1 : 0,
     )) {
       total += Buffer.byteLength(text);
-      if (total > LIMIT)
-        throw new Error('Data snapshot exceeds the 16 MiB stage limit');
+      if (total > (inventory ? INVENTORY_LIMIT : LIMIT))
+        throw new Error(
+          inventory
+            ? 'File inventory exceeds the 192 MiB snapshot limit'
+            : 'Data snapshot exceeds the 16 MiB stage limit',
+        );
       const graph = indexJson(text, { maxBytes: LIMIT });
       const data = JSON.parse(text) as Record<string, unknown>;
       if (
@@ -184,25 +199,27 @@ export class PostgresHistoryStore implements SnapshotStore {
     const context = indexJson(contextText);
     for (const [hash, bytes] of context.nodes) nodes.set(hash, bytes);
     // Same owner/hash namespace as archived HTTP JSON, including nested item nodes.
-    const packed = await Promise.all(
-      [...nodes]
-        .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-        .map(async ([hash, bytes]) => ({
+    // Raw response archival shares this table. Both writers acquire node locks
+    // in hash order, even when a large inventory must be encoded in batches.
+    const hashes = [...nodes.keys()].sort();
+    for (let offset = 0; offset < hashes.length; offset += MEMBER_BATCH) {
+      const batch = await Promise.all(
+        hashes.slice(offset, offset + MEMBER_BATCH).map(async (hash) => ({
           hash,
-          value: await encode(bytes, LIMIT),
+          value: await encode(nodes.get(hash)!, LIMIT),
         })),
-    );
-    for (let offset = 0; offset < packed.length; offset += 500) {
-      const batch = packed.slice(offset, offset + 500);
+      );
       await client.query(
-        `INSERT INTO syncables_cache.json_nodes(owner,hash,codec,raw_bytes,data) VALUES ${batch.map((_, i) => `($${i * 5 + 1},$${i * 5 + 2},$${i * 5 + 3},$${i * 5 + 4},$${i * 5 + 5})`).join(',')} ON CONFLICT DO NOTHING`,
-        batch.flatMap(({ hash, value }) => [
+        `INSERT INTO syncables_cache.json_nodes(owner,hash,codec,raw_bytes,data)
+         SELECT $1,* FROM unnest($2::text[],$3::text[],$4::integer[],$5::bytea[])
+         ON CONFLICT DO NOTHING`,
+        [
           this.owner,
-          hash,
-          value.codec,
-          value.rawBytes,
-          value.bytes,
-        ]),
+          batch.map(({ hash }) => hash),
+          batch.map(({ value }) => value.codec),
+          batch.map(({ value }) => value.rawBytes),
+          batch.map(({ value }) => value.bytes),
+        ],
       );
     }
     const now = Math.floor(Date.now() / 1000);
@@ -380,10 +397,73 @@ export class PostgresHistoryStore implements SnapshotStore {
   }
   async list(scope: string, at?: string): Promise<string[]> {
     const r = await this.revision(await this.resolveRevision(scope, at));
-    return Promise.all(
-      Object.values(r.resources).map((root) => this.render(root)),
-    );
+    const roots = Object.values(r.resources);
+    const results: string[] = [];
+    for (let offset = 0; offset < roots.length; offset += MEMBER_BATCH) {
+      const batch = roots.slice(offset, offset + MEMBER_BATCH);
+      const nodes = await this.loadGraphBatch(batch);
+      results.push(
+        ...(await Promise.all(
+          batch.map((root) =>
+            renderJson(
+              root,
+              async (hash) => {
+                const bytes = nodes.get(hash);
+                if (bytes === undefined)
+                  throw new Error('Missing snapshot object');
+                return bytes;
+              },
+              { maxBytes: LIMIT },
+            ),
+          ),
+        )),
+      );
+    }
+    return results;
   }
+
+  private async loadGraphBatch(roots: string[]): Promise<Map<string, string>> {
+    const nodes = new Map<string, string>();
+    let pending = new Set(roots);
+    while (pending.size) {
+      const frontier = [...pending];
+      pending = new Set();
+      for (let offset = 0; offset < frontier.length; offset += MEMBER_BATCH) {
+        const ids = frontier.slice(offset, offset + MEMBER_BATCH);
+        const result = await this.pool.query(
+          'SELECT hash,codec,raw_bytes,data FROM syncables_cache.json_nodes WHERE owner=$1 AND hash=ANY($2::text[])',
+          [this.owner, ids],
+        );
+        if (result.rows.length !== ids.length)
+          throw new Error('Missing snapshot object');
+        for (const row of result.rows) {
+          const bytes = await decode(
+            {
+              hash: row.hash,
+              codec: row.codec,
+              rawBytes: row.raw_bytes,
+              bytes: row.data,
+            },
+            LIMIT,
+          );
+          const node = JSON.parse(bytes) as GraphNode;
+          nodes.set(row.hash, bytes);
+          const values =
+            node[2] === 'object'
+              ? (node[3] as [string, GraphValue][]).map(([, value]) => value)
+              : node[2] === 'array'
+                ? (node[3] as GraphValue[])
+                : [node[3] as GraphValue];
+          for (const value of values)
+            if (value[0] === 'ref' && !nodes.has(value[1]))
+              pending.add(value[1]);
+        }
+      }
+      for (const hash of pending) if (nodes.has(hash)) pending.delete(hash);
+    }
+    return nodes;
+  }
+
   async context(scope: string, at?: string): Promise<Record<string, unknown>> {
     const r = await this.revision(await this.resolveRevision(scope, at));
     return (JSON.parse(r.context_text) as { context: Record<string, unknown> })

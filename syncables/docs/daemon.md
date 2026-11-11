@@ -267,7 +267,9 @@ first successful read, use `cli login` to save a separately approved session in
 macOS Keychain and run `cli sync`/`cli daemon` without `--interactive`.
 
 Paths in the config resolve relative to the config file. Restart the foreground
-daemon after editing its config or composed documents. Each collection has:
+daemon after editing its config or composed documents. For Dropbox, Google Drive
+and iCloud Drive, see [File inventories](file-inventory.md). Each OpenAPI
+collection has:
 
 | Field                   | Meaning                                                                                               |
 | ----------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -278,6 +280,7 @@ daemon after editing its config or composed documents. Each collection has:
 | `bindings`              | Explicit parent path variables; this pilot does not recursively discover accounts/parents.            |
 | `query`                 | Declared query parameters. Fixed collection values and paging/checkpoint controls cannot be replaced. |
 | `pollSeconds`           | Default 300; 5–86400 for polling, 0 for initial fetch plus webhook/manual triggers.                   |
+| `readLimits`            | Optional `maxRecords`, `maxRequests` and `timeoutMs` overrides.                                         |
 
 `workspaceDirectory` selects the ordinary working-folder root, defaulting to
 `./workspace` relative to the config. For example, Keep notes appear at
@@ -289,9 +292,9 @@ Existing repositories and their worktrees are not modified by migration.
 Config changes to owner, connection, collection definition, bindings or query
 create a separate
 data scope and bootstrap it. Changing a local label or poll interval does not
-change source identity. This pilot caps config at 100 collections, each read
-at 5,000 records/1,000 requests/120 seconds, each response at 8 MiB and a
-snapshot at 16 MiB. Incomplete reads retain the previous published snapshot.
+change source identity. Config supports up to 100 collections. OpenAPI reads default to 5,000
+records, 1,000 requests and 120 seconds. Each response is capped at 8 MiB
+and each OpenAPI snapshot at 16 MiB. Incomplete reads retain the previous published snapshot.
 
 On macOS, with the existing approval bridge running:
 

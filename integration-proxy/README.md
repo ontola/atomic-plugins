@@ -668,7 +668,7 @@ cd integration-proxy && cargo publish --dry-run
 git tag integration-proxy-v0.1.1 && git push origin integration-proxy-v0.1.1
 ```
 
-Only `src/`, `static/index.html`, `static/logo.png`, `Cargo.toml`,
+Only `src/`, `static/index.html`, `static/logo.svg`, `Cargo.toml`,
 `Cargo.lock`, `README.md`, `CHANGELOG.md`, `SECURITY.md` and `LICENSE` are packaged
 (`cargo package --list` shows the exact list). `tests/` fixtures are not, so
 `cargo test` only works from a checkout of this repository.
