@@ -1,0 +1,9 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/values/question-type-choice",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Tag"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/properties/question-type",
+  "https://atomicdata.dev/properties/shortname": "choice",
+  "https://atomicdata.dev/properties/name": "Choice"
+}

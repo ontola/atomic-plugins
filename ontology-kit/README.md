@@ -65,8 +65,86 @@ it and says so in its description:
 | `skill-equivalent-to` | `sameAs`-like, merged when trees are combined     |
 
 `lesson-format` and `mastery-source` are plain strings with a documented list
-of values, because the kit has no enum constraint yet; a view shows an unknown
-value as text. Declared, not verified: no host E2E has used these classes yet.
+of values, because the kit had no enum constraint when v2 was published (v3 adds
+select properties, v2 terms stay as they are); a view shows an unknown value as
+text. Declared, not verified: no host E2E has used these classes yet.
+
+## Release v3: teaching with learning trees
+
+Eight classes for the teacher side of Leerboom, all `-v1`, in
+[`terms-v3.mjs`](terms-v3.mjs): `deck-v1` (ordered `deck-slides`, `deck-teaches`),
+`cohort-v1` (`cohort-members`, `cohort-teachers`, `cohort-goals`),
+`assignment-v1` (`assignment-cohort`, `skill`, optional `assignment-lesson`,
+task/v1 `due-date`), `submission-v1` (`assignment`, `learner`,
+`submission-work`, `submission-submitted-at`, `submission-status`), `grade-v1`
+(`learner`, `assignment` or `assessment`, `grade-value`, `grade-scale`,
+`grade-weight`, `description`, `grade-evidence`, `createdAt`), `question-v1`
+(`question-prompt`, `question-type`, `question-options`, `question-answer`,
+`question-explanation`, `skill`), `assessment-v1` (`assessment-assesses`,
+`assessment-questions`, `assessment-pass-score`, `assessment-kind`,
+`assessment-draw`: how many questions each attempt draws from the bank, so a
+learner can retest without the same questions; `assessment-app`: a drive app
+that generates and checks questions itself) and `attempt-v1` (`assessment`,
+`attempt-score`, `learner`, `attempt-answers`, `createdAt`, `attempt-seed`).
+Two plain properties, `license` and `generated-with`, belong to no class yet and
+fit any creative work: `lesson-v1` is published and immutable, so a future
+`lesson-v2` will recommend them.
+
+Choices worth knowing:
+
+- **One property per relation, not per class.** `learner`, `assessment`,
+  `assignment` and `skill` are shared by every class that points at that kind
+  of thing, and take no class prefix. A property that belongs to one class
+  keeps its prefix (`deck-slides`, `grade-value`), as in v2. `skill` is new and
+  does not replace the published `mastery-skill` or `lesson-teaches`.
+  `deck-teaches` still repeats `lesson-teaches` instead of reusing it, because
+  that name says what it is on.
+- **Core properties are reused**, not copied: `https://atomicdata.dev/properties/createdAt`
+  (grade and attempt), `.../description` (a grade's comment) and
+  `https://atomicdata.dev/task/v1/due-date` (an assignment's due date, a
+  calendar date). An assignment is **not** a task (`isA`): the kit has no
+  `isA`/parent-class support for a class, and a task's status is one person's,
+  where an assignment has a status per learner (in its submissions).
+- **Enums are select properties.** `submission-status`, `grade-scale`,
+  `question-type` and `assessment-kind` are `atomicURL` properties with
+  classtype `Tag` and `allowsOnly`, as task/v1 `status` is. Each value is a
+  `Tag` resource under `ontology/values/<property>-<value>`, with the property
+  as its parent. In `source.json` a property lists them as `allowsOnly`: slugs,
+  or `{ "id", "name" }` where the name is not the capitalised slug. `terms-v3.mjs`
+  carries them as `properties[name].allowsOnly` (value id to subject). The
+  kit's `values/` files are generated like the others and immutable once on
+  `main`: a new value is a new property.
+- A release may only point at classes it lists itself, so a property that
+  targets `skill-v1` or `lesson-v1` (an earlier release) has no `classtype`
+  and says in its description which class it points at.
+- Timestamps are `timestamp` (milliseconds), as `mastery-updated-at` is. Scores,
+  weights and pass scores are `float`.
+- `grade-value` is a string so that 7.5, B and pass all fit.
+- `question-options` is a JSON array of strings: core has no string-array
+  datatype (the datatypes are string, markdown, slug, date, timestamp, boolean,
+  integer, float, json, atomicURL, resourceArray, uri), and a tag resource per
+  option would need a resource per answer text. The answer key sits on the
+  question, which suits practice; an attested assessment needs a key the
+  learner cannot read, which is a later class.
+
+Mapping to standards:
+
+| Ours                               | Standard                                                     |
+| ---------------------------------- | ------------------------------------------------------------ |
+| `assessment-assesses`              | LRMI `assesses`                                              |
+| `deck-teaches`                     | LRMI `teaches`                                               |
+| `license`                          | schema.org `license`                                         |
+| `createdAt` on `attempt-v1`        | xAPI statement `timestamp`                                   |
+| `attempt-v1`                       | the result of an xAPI statement (score, response, timestamp) |
+| `attempt-answers`, `attempt-score` | xAPI `result.response` and `result.score.scaled`             |
+| `learner`                          | xAPI `actor`                                                 |
+| `assessment`                       | xAPI `object` (the activity attempted)                       |
+| `grade-v1`                         | no standard; a school's own judgment, not a credential       |
+
+A grade is **not** an Open Badge. A badge or other credential is a signed claim
+a third party can verify, and will be a later class that may point at a grade
+or an attempt as its evidence. Declared, not verified: no host E2E has used
+these classes yet.
 
 `name` is `https://atomicdata.dev/properties/name`. Provider data (ids, ETags,
 baselines, import bookkeeping such as `work-source-id` or `bank-source-id`) is

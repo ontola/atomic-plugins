@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/question-answer",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "question-answer",
+  "https://atomicdata.dev/properties/name": "Answer",
+  "https://atomicdata.dev/properties/description": "The correct answer: for a choice question the text of the right option, for numeric a number written as text, for short-text the accepted text. Used for practice with direct feedback; an attested assessment keeps its key elsewhere.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
+}

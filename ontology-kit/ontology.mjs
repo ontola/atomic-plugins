@@ -83,6 +83,9 @@ export const atomic = {
   properties: `${A}properties/properties`,
   Class: `${A}classes/Class`,
   Property: `${A}classes/Property`,
+  SelectProperty: `${A}classes/SelectProperty`,
+  Tag: `${A}classes/Tag`,
+  allowsOnly: `${A}properties/allowsOnly`,
   Ontology: `${A}class/ontology`,
 };
 
@@ -158,7 +161,24 @@ export const subjects = ontologyBase => ({
   release: name => `${ontologyBase}/${name}`,
   klass: name => `${ontologyBase}/classes/${name}`,
   property: shortname => `${ontologyBase}/properties/${shortname}`,
+  value: (shortname, id) => `${ontologyBase}/values/${shortname}-${id}`,
 });
+
+/**
+ * The fixed values of a property with `allowsOnly`, as `{ id, name }`. An
+ * entry is a slug (its name is the slug with dashes as spaces and a capital)
+ * or `{ "id": slug, "name": "Name" }`.
+ */
+export const valueEntries = property =>
+  (property.allowsOnly ?? []).map(entry => {
+    const id = typeof entry === 'string' ? entry : entry?.id;
+    const name =
+      typeof entry === 'object' && entry?.name
+        ? entry.name
+        : `${String(id).charAt(0).toUpperCase()}${String(id).slice(1).replaceAll('-', ' ')}`;
+
+    return { id, name };
+  });
 
 /** Problems with source.json, independent of the base. */
 export function sourceProblems(source) {
@@ -207,6 +227,30 @@ export function sourceProblems(source) {
           `${at}: classtype needs an atomicURL or resourceArray datatype`,
         );
       classRef(`${at}: classtype`, p.classtype);
+    }
+
+    if (p.allowsOnly !== undefined) {
+      const entries = Array.isArray(p.allowsOnly) ? valueEntries(p) : [];
+      if (!entries.length)
+        problems.push(`${at}: allowsOnly needs a non-empty array of values`);
+      if (!LINK_DATATYPES.includes(p.datatype))
+        problems.push(
+          `${at}: allowsOnly needs an atomicURL or resourceArray datatype`,
+        );
+      if (p.classtype !== `${A}classes/Tag`)
+        problems.push(`${at}: allowsOnly needs classtype ${A}classes/Tag`);
+
+      for (const { id } of entries)
+        if (typeof id !== 'string' || !SLUG.test(id))
+          problems.push(
+            `${at}: allowsOnly value ${JSON.stringify(id)} must be lowercase letters, digits and dashes`,
+          );
+      const ids = entries.map(e => e.id);
+      const dup = ids.filter((id, i) => ids.indexOf(id) !== i);
+      if (dup.length)
+        problems.push(
+          `${at}: allowsOnly lists twice: ${[...new Set(dup)].join(', ')}`,
+        );
     }
   }
 
@@ -362,6 +406,27 @@ export function generate(source, ontologyBase, lensSource, repo = root) {
       [atomic.datatype]: p.datatype,
     };
     if (p.classtype) doc[atomic.classtype] = ref('class', p.classtype);
+
+    if (p.allowsOnly) {
+      // A fixed set of value resources, as task/v1 `status` does: a select
+      // property, `allowsOnly` its values, each a Tag whose parent it is.
+      doc[atomic.isA] = [atomic.Property, atomic.SelectProperty];
+      const values = valueEntries(p);
+      doc[atomic.allowsOnly] = values.map(v => s.value(shortname, v.id));
+
+      for (const v of values)
+        files.set(
+          `${TERMS_DIR}/values/${shortname}-${v.id}`,
+          render({
+            '@id': s.value(shortname, v.id),
+            [atomic.isA]: [atomic.Tag],
+            [atomic.parent]: s.property(shortname),
+            [atomic.shortname]: v.id,
+            [atomic.name]: v.name,
+          }),
+        );
+    }
+
     files.set(`${TERMS_DIR}/properties/${shortname}`, render(doc));
   }
 
@@ -499,7 +564,8 @@ const WIDTH = 80;
 const field = (indent, name, value) => {
   const line = `${' '.repeat(indent)}${name}: ${value},`;
 
-  return line.length <= WIDTH
+  // oxfmt keeps a key of up to four characters on the line of its value.
+  return line.length <= WIDTH || name.length <= 4
     ? line
     : `${' '.repeat(indent)}${name}:\n${' '.repeat(indent + 2)}${value},`;
 };
@@ -547,6 +613,15 @@ function termsModule(source, ontologyBase, release) {
           q(ABSOLUTE.test(p.classtype) ? p.classtype : s.klass(p.classtype)),
         ),
       );
+
+    if (p.allowsOnly) {
+      lines.push('    allowsOnly: Object.freeze({');
+      for (const v of valueEntries(p))
+        lines.push(field(6, key(v.id), q(s.value(shortname, v.id))));
+
+      lines.push('    }),');
+    }
+
     lines.push('  }),');
   }
 
@@ -591,6 +666,14 @@ function termsTypes(source, release) {
     '  readonly subject: string;',
     '  readonly datatype: string;',
     '  readonly classtype?: string;',
+    ...(ownTerms(source, 'properties', release).some(
+      p => source.properties[p].allowsOnly,
+    )
+      ? [
+          '  /** Value id to value subject, for a property with fixed values. */',
+          '  readonly allowsOnly?: Readonly<Record<string, string>>;',
+        ]
+      : []),
     '}',
     '',
     '/** The ontology base URL, from base.json at build time. */',
@@ -680,7 +763,7 @@ export function freshnessProblems(base = root) {
   for (const path of filesUnder(resolve(base, TERMS_DIR), base))
     if (!files.has(path))
       problems.push(
-        `${path}: ${TERMS_DIR}/ holds only the build's files (term files v<N>, classes/, properties/, and the lens catalog lenses/)`,
+        `${path}: ${TERMS_DIR}/ holds only the build's files (term files v<N>, classes/, properties/, values/, and the lens catalog lenses/)`,
       );
 
   return problems;

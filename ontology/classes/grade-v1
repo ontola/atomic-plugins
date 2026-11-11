@@ -1,0 +1,23 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/grade-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "grade-v1",
+  "https://atomicdata.dev/properties/name": "Grade",
+  "https://atomicdata.dev/properties/description": "A teacher's judgment of one learner on an assignment or assessment, with scale and weight. Not mastery (what a learner can do) and not an Open Badge or other credential.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/learner",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/grade-value",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/grade-scale"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assignment",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assessment",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/grade-weight",
+    "https://atomicdata.dev/properties/description",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/grade-evidence",
+    "https://atomicdata.dev/properties/createdAt"
+  ]
+}
