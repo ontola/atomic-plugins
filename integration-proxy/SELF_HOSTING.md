@@ -60,10 +60,12 @@ The proxy does not:
 In short (the full list is in [SECURITY.md](SECURITY.md)):
 
 - **Sealed credentials.** Each provider credential is encrypted with
-  XChaCha20-Poly1305 under `ENCRYPTION_KEY`, with the connection id as
-  associated data, so a sealed value copied into another row does not
-  decrypt. Anyone with the database but not the key cannot read credentials.
-  Anyone with both can.
+  XChaCha20-Poly1305 under a key only the client holds and presents with
+  each request, with the connection id as associated data, so a sealed
+  value copied into another row does not decrypt. The proxy keeps no such
+  key: the database together with `ENCRYPTION_KEY` does not open stored
+  credentials. A proxy compromised while running sees the keys of the
+  requests it serves.
 - **Catalog allowlist.** The upstream host is the `servers` URL of the
   platform's composed OpenAPI document. A request is forwarded only if its
   method and path match an operation in that document. Paths with `.` or
@@ -258,14 +260,17 @@ openssl rand -base64 32 | tr '+/' '-_' | tr -d '='
 The value must be unpadded base64url (a trailing `=` is refused) that decodes
 to exactly 32 bytes. Otherwise the proxy refuses to start.
 
-**There is no key rotation.** Sealed values carry a format version but no key
-id, and the proxy holds one key. If `ENCRYPTION_KEY` changes, the proxy can
-no longer open any stored connection. Each one then answers
-`404 unknown_connection`, as if it had been deleted, and every user has to
-connect again. Those rows stay until the 90-day idle sweep removes them. If
-the key leaks, the only remedy is to set a new key and have everyone
-reconnect (and delete the old rows:
-`DELETE FROM agent_connections;` also removes their delegations).
+It no longer opens provider credentials, which are sealed under keys the
+clients hold. It seals connection labels, OAuth and handoff state, webhook
+hook secrets, and derives the HMAC subkeys and the key-grant key pair
+(`GET /connection-key-grants/key`).
+
+**There is no key rotation.** If `ENCRYPTION_KEY` changes, connection labels
+and webhook hook secrets no longer open, the key-grant public key changes
+(grants made for the old one are refused, so clients must fetch the new
+key), and in-flight connects fail. Stored credentials are unaffected. If it
+leaks, set a new one; the leaked value also opens any key grant an attacker
+captured, so treat leaked grants as leaked keys.
 
 ### `SESSION_SECRET`
 
@@ -644,9 +649,9 @@ different proxy does not move them: users connect again on the new one.
 ## Backups
 
 Back up the database and `ENCRYPTION_KEY` together, but store them
-**separately**. The dump alone does not reveal credentials, the key alone is
-useless, and a dump restored without its key is a set of connections that
-all answer `404 unknown_connection`.
+**separately**. Neither the dump nor both together reveal provider
+credentials, which only open with keys the clients hold; together they
+reveal connection labels and webhook hook secrets.
 
 ```sh
 pg_dump --format=custom --file=integration-proxy-$(date +%F).dump \

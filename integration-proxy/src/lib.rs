@@ -46,6 +46,7 @@ mod catalog;
 mod client_addr;
 mod config;
 mod connect;
+mod connection_key;
 mod connections;
 mod device;
 #[cfg(test)]
@@ -289,12 +290,7 @@ pub async fn build_app_with_access(
         test_upstream: None,
     };
     if let Some(webhooks) = &state.webhooks {
-        webhooks::sweeper::spawn(
-            webhooks.store.clone(),
-            webhooks::provider::ProviderHookDeleter {
-                state: state.clone(),
-            },
-        );
+        webhooks::sweeper::spawn(webhooks.store.clone());
     }
 
     Ok(router(state))
@@ -370,6 +366,7 @@ fn browser_cors() -> tower_http::cors::CorsLayer {
             [
                 header::AUTHORIZATION,
                 HeaderName::from_static(proxy::IDEMPOTENCY_KEY),
+                HeaderName::from_static(connection_key::HEADER),
                 HeaderName::from_static(signature::AGENT_HEADER),
                 HeaderName::from_static(signature::PUBLIC_KEY_HEADER),
                 HeaderName::from_static(signature::TIMESTAMP_HEADER),
@@ -382,6 +379,26 @@ fn browser_cors() -> tower_http::cors::CorsLayer {
         )
         // The same list the proxy forwards from, so they cannot drift.
         .expose_headers(proxy::forwarded_response_headers().collect::<Vec<_>>())
+}
+
+/// `GET /connection-key-grants/key`: the public key a client encrypts a
+/// connection-key grant to (see [`connection_key`]). Public, and stable for
+/// one `ENCRYPTION_KEY`.
+async fn connection_key_grant_key(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let Some(security) = state.security.as_ref() else {
+        return api_error::ApiError::Unavailable.into_response();
+    };
+    axum::Json(serde_json::json!({
+        "kem": "DHKEM(X25519, HKDF-SHA256)",
+        "kdf": "HKDF-SHA256",
+        "aead": "AES-256-GCM",
+        "info": String::from_utf8_lossy(connection_key::GRANT_INFO),
+        "public_key": security.grant_key().public_key(),
+    }))
+    .into_response()
 }
 
 async fn management_asset(
@@ -428,6 +445,7 @@ fn router(state: AppState) -> Router {
         .route("/connect", get(connect::page))
         .route("/connect/authorize", post(connect::authorize))
         .route("/connect/redeem", post(connect::redeem))
+        .route("/connection-key-grants/key", get(connection_key_grant_key))
         .route("/connections", get(connections::list))
         .route("/connections/:connection_id", delete(connections::delete))
         .route(

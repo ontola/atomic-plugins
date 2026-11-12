@@ -1,6 +1,14 @@
 //! Cleanup jobs for dedicated hooks the receiver created (Webhook
 //! Deliveries §4.5.2): bounded retries with backoff, a deadline, and a
-//! visible failure. The provider calls are behind [`HookDeleter`]; step 3
+//! visible failure.
+//!
+//! Deleting a hook at the provider needs the managing connection's
+//! credential, and the proxy cannot open one without the key a client
+//! presents ([`crate::connection_key`]). So a job waits until an authorised
+//! request for its managing connection arrives with the key
+//! ([`Store::run_cleanup_for_connection`], started by
+//! [`super::run_deferred_cleanup`]); the sweeper only fails the jobs whose
+//! deadline passed ([`Store::expire_cleanup`]). The provider calls are behind [`HookDeleter`]; step 3
 //! implements it, re-running the managing connection's access check with the
 //! hook's recorded parameters before each `list` or `delete`.
 
@@ -42,9 +50,70 @@ fn backoff(attempts: i32) -> Duration {
 }
 
 impl Store {
+    /// Fails the jobs whose deadline passed, without calling any provider.
+    /// The sweeper runs this: it has no connection key.
+    pub async fn expire_cleanup(&self, now: SystemTime) -> Result<u64, InboxError> {
+        let expired: Vec<String> = {
+            let client = self.transaction_client().await?;
+            client
+                .query(
+                    "SELECT hook_id FROM webhook_cleanup_jobs
+                     WHERE deadline_at <= $1 AND next_attempt_at <= $1
+                     ORDER BY deadline_at LIMIT $2",
+                    &[&now, &self.policy().sweep_batch],
+                )
+                .await?
+                .iter()
+                .map(|row| row.get(0))
+                .collect()
+        };
+        for hook_id in &expired {
+            tracing::warn!(hook = %hook_id, "webhook hook cleanup expired before a client presented the managing connection's key; manual removal needed");
+            self.finish_cleanup(hook_id, true, now).await?;
+        }
+        Ok(expired.len() as u64)
+    }
+
+    /// Runs the due jobs of the hooks `connection_id` manages, with a
+    /// deleter that holds that connection's key.
+    pub async fn run_cleanup_for_connection<D: HookDeleter>(
+        &self,
+        deleter: &D,
+        connection_id: &str,
+        now: SystemTime,
+    ) -> Result<CleanupReport, InboxError> {
+        self.run_cleanup_where(deleter, Some(connection_id), now)
+            .await
+    }
+
+    /// Whether any cleanup job waits for `connection_id`'s key.
+    pub async fn cleanup_waits_for(&self, connection_id: &str) -> Result<bool, InboxError> {
+        let client = self.transaction_client().await?;
+        Ok(client
+            .query_opt(
+                "SELECT 1 FROM webhook_cleanup_jobs j JOIN webhook_hooks h USING (hook_id)
+                 WHERE h.management_connection_id = $1 LIMIT 1",
+                &[&connection_id],
+            )
+            .await?
+            .is_some())
+    }
+
+    /// Runs every due job, whatever its managing connection. Only for a
+    /// deleter that needs no connection key (tests).
+    #[cfg(test)]
     pub async fn run_cleanup<D: HookDeleter>(
         &self,
         deleter: &D,
+        now: SystemTime,
+    ) -> Result<CleanupReport, InboxError> {
+        self.run_cleanup_where(deleter, None, now).await
+    }
+
+    async fn run_cleanup_where<D: HookDeleter>(
+        &self,
+        deleter: &D,
+        connection_id: Option<&str>,
         now: SystemTime,
     ) -> Result<CleanupReport, InboxError> {
         let mut report = CleanupReport::default();
@@ -55,11 +124,19 @@ impl Store {
                     // Claimed by pushing the next attempt out, so two
                     // runners never call the provider for one job at once.
                     "UPDATE webhook_cleanup_jobs SET next_attempt_at = $2
-                     WHERE hook_id IN (SELECT hook_id FROM webhook_cleanup_jobs
-                                       WHERE next_attempt_at <= $1 ORDER BY next_attempt_at LIMIT $3
-                                       FOR UPDATE SKIP LOCKED)
+                     WHERE hook_id IN (SELECT j.hook_id FROM webhook_cleanup_jobs j
+                                       JOIN webhook_hooks h USING (hook_id)
+                                       WHERE j.next_attempt_at <= $1
+                                         AND ($4::text IS NULL OR h.management_connection_id = $4)
+                                       ORDER BY j.next_attempt_at LIMIT $3
+                                       FOR UPDATE OF j SKIP LOCKED)
                      RETURNING hook_id, attempts, deadline_at",
-                    &[&now, &(now + CLAIM), &self.policy().sweep_batch],
+                    &[
+                        &now,
+                        &(now + CLAIM),
+                        &self.policy().sweep_batch,
+                        &connection_id,
+                    ],
                 )
                 .await?
                 .iter()

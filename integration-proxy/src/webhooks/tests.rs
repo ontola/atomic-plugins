@@ -330,14 +330,14 @@ async fn a_key_transfer_waits_for_the_owners_subscriptions_to_close() {
         .await
         .unwrap();
     assert!(matches!(
-        env.security.transfer_owner(&owner, &successor).await,
+        env.security.transfer_owner(&owner, &successor, &[]).await,
         Err(crate::security::TransferError::Blocked)
     ));
     assert!(!env.security.is_retired(&owner).await.unwrap());
     env.store.close(&sub.id, "test", at(60)).await.unwrap();
     let moved = env
         .security
-        .transfer_owner(&owner, &successor)
+        .transfer_owner(&owner, &successor, &[])
         .await
         .unwrap();
     assert_eq!(moved.connections, 1);
@@ -1646,8 +1646,28 @@ async fn a_dedicated_hook_is_handed_over_and_cleaned_up() {
     );
     env.check_invariants().await;
 
+    // The job waits for its managing connection's key: a request that
+    // presents another connection's key does not run it, and neither does
+    // the sweeper's expiry before the deadline.
+    assert!(env.store.cleanup_waits_for(&hc).await.unwrap());
+    assert!(!env.store.cleanup_waits_for(&cc).await.unwrap());
+    let untouched = ScriptedDeleter::new(vec![]);
+    assert_eq!(
+        env.store
+            .run_cleanup_for_connection(&untouched, &cc, at(6))
+            .await
+            .unwrap(),
+        Default::default()
+    );
+    assert!(untouched.calls.lock().unwrap().is_empty());
+    assert_eq!(env.store.expire_cleanup(at(6)).await.unwrap(), 0);
+
     let deleter = ScriptedDeleter::new(vec![Err(CleanupError::Retry("unavailable")), Ok(())]);
-    let report = env.store.run_cleanup(&deleter, at(6)).await.unwrap();
+    let report = env
+        .store
+        .run_cleanup_for_connection(&deleter, &hc, at(6))
+        .await
+        .unwrap();
     assert_eq!(report.retried, 1);
     // Not due again until the backoff has passed.
     assert_eq!(
@@ -1685,6 +1705,39 @@ async fn a_dedicated_hook_is_handed_over_and_cleaned_up() {
     env.check_invariants().await;
     env.store.sweep(at(40 * DAY)).await.unwrap();
     assert_eq!(env.count("SELECT count(*) FROM webhook_hooks").await, 0);
+    env.drop_schema().await;
+}
+
+/// A cleanup job whose managing connection's key never arrives fails
+/// visibly once its deadline (a week) passes; the sweeper does that without
+/// calling the provider.
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn a_cleanup_that_never_gets_its_key_expires_after_a_week() {
+    let env = env(small()).await;
+    let alice = agent("alice-expiry");
+    let connection = env.connection(&alice).await;
+    let hook = dedicated(&env, &alice, &connection, "p", at(0)).await;
+    env.store
+        .hook_provisioned(&hook.hook_id, "provider-hook-exp", at(1))
+        .await
+        .unwrap();
+    let sub = env
+        .subscribe(&alice, &connection, &hook.hook_id, "p", at(1))
+        .await
+        .unwrap();
+    env.store.delete(&sub.id, &alice, at(2)).await.unwrap();
+    assert_eq!(env.state(&sub.id).await.0, "cleanup-pending");
+    // The job was created at 2 with a deadline a week later.
+    assert_eq!(env.store.expire_cleanup(at(1 + 7 * DAY)).await.unwrap(), 0);
+    assert_eq!(env.store.expire_cleanup(at(2 + 7 * DAY)).await.unwrap(), 1);
+    assert_eq!(env.state(&sub.id).await.0, "closed");
+    assert_eq!(
+        env.count("SELECT count(*) FROM webhook_hooks WHERE cleanup_failed")
+            .await,
+        1
+    );
+    env.check_invariants().await;
     env.drop_schema().await;
 }
 

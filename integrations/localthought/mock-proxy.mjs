@@ -8,7 +8,14 @@
  * {platform}/…` itself, with a capability the owner signed and a request
  * signature by the frame's own key. Every signature is checked exactly as
  * the real proxy checks it (`mock-proxy-auth.mjs`), so a host that signs
- * wrongly fails here too. What it does not have: Postgres, OAuth with a real
+ * wrongly fails here too.
+ *
+ * Client-held connection keys (ontola/atomic-plugins#730): a redeem that
+ * sends `connection_id` and `connection_key` makes a connection whose
+ * proxied requests must present that key in `x-connection-key`, as `k1.` or
+ * as a key grant (`s1.`, opened with this mock's own grant key pair). A
+ * redeem without them (an older host) makes a connection that needs no key,
+ * so hosts on either protocol work here. What it does not have: Postgres, OAuth with a real
  * provider, sealed credentials, the 90-day idle sweep, the SaaS access policy.
  *
  * Providers are per-platform fixtures (fixtures/index.mjs). Test-side drivers
@@ -17,7 +24,10 @@
  */
 import { fixtures, selectPlatforms } from './fixtures/index.mjs';
 import {
+  CONNECTION_KEY_HEADER,
+  GRANT_INFO,
   ProxyRefusal,
+  grantKeyPair,
   parseAgent,
   parseCapability,
   verifyCapability,
@@ -91,6 +101,8 @@ export function mockProxy({
   const runtimes = new Map();
   /** single-use record of signed requests: replay key -> expiry. */
   const used = new Map();
+  /** `GET /connection-key-grants/key`, fresh per mock. */
+  const grantKey = grantKeyPair();
 
   const origin = () =>
     (baseUrl ?? `http://127.0.0.1:${server.address().port}`).replace(/\/$/, '');
@@ -198,6 +210,34 @@ export function mockProxy({
     }
 
     if (row.platform !== platform) throw new ProxyRefusal('platform_mismatch');
+
+    if (row.key !== undefined) {
+      // `connection_key::resolve`, after authentication as the real proxy.
+      const value = req.headers[CONNECTION_KEY_HEADER];
+      if (value === undefined)
+        throw new ProxyRefusal('connection_key_required');
+      const principals =
+        caller.kind === 'owner'
+          ? [row.owner]
+          : caller.kind === 'runtime'
+            ? [caller.runtime.agent, caller.app]
+            : [caller.app];
+      let key;
+
+      if (value.startsWith('s1.')) {
+        const grant = grantKey.open(Buffer.from(value.slice(3), 'base64url'));
+        if (
+          grant?.v === 1 &&
+          grant.connection_id === row.connection_id &&
+          principals.includes(parseAgent(grant.sub)) &&
+          (grant.exp === undefined || grant.exp > Math.floor(now() / 1000))
+        )
+          key = grant.key;
+      } else if (value.startsWith('k1.')) key = value.slice(3);
+
+      if (key !== row.key) throw new ProxyRefusal('invalid_connection_key');
+    }
+
     row.last_used_at = stamp();
     if (caller.app) row.delegations.get(caller.app).last_used_at = stamp();
     if (caller.runtime) caller.runtime.last_used_at = stamp();
@@ -237,7 +277,7 @@ export function mockProxy({
     // content-type anyway).
     res.setHeader(
       'Access-Control-Allow-Headers',
-      'Authorization, Content-Type, If-Match, x-atomic-agent, x-atomic-public-key, x-atomic-timestamp, x-atomic-signature, x-atomic-signature-version',
+      'Authorization, Content-Type, If-Match, x-atomic-agent, x-atomic-public-key, x-atomic-timestamp, x-atomic-signature, x-atomic-signature-version, x-connection-key',
     );
     res.setHeader(
       'Access-Control-Expose-Headers',
@@ -399,6 +439,16 @@ export function mockProxy({
       return res.end();
     }
 
+    // GET /connection-key-grants/key: where key grants are encrypted to.
+    if (url.pathname === '/connection-key-grants/key')
+      return json(200, {
+        kem: 'DHKEM(X25519, HKDF-SHA256)',
+        kdf: 'HKDF-SHA256',
+        aead: 'AES-256-GCM',
+        info: GRANT_INFO,
+        public_key: grantKey.publicKey,
+      });
+
     // POST /connect/redeem, signed: the signer becomes the owner.
     if (url.pathname === '/connect/redeem') {
       if (req.method !== 'POST') return json(405, {});
@@ -409,10 +459,28 @@ export function mockProxy({
         const owner = authenticate(req, body);
         const request = strictBody(
           body,
+          ['code', 'code_verifier', 'connection_id', 'connection_key'],
           ['code', 'code_verifier'],
-          ['code', 'code_verifier'],
-          'body must be {"code", "code_verifier"}',
+          'body must be {"code", "code_verifier", "connection_id"?, "connection_key"?}',
         );
+        // Client-held keys come as a pair; an older host sends neither.
+        const keyed = request.connection_id !== undefined;
+        if (keyed !== (request.connection_key !== undefined))
+          throw new ProxyRefusal(
+            'bad_request',
+            'connection_id and connection_key come together',
+          );
+        if (
+          keyed &&
+          (!/^[A-Za-z0-9_-]{43}$/.test(request.connection_id) ||
+            !/^k1\.[A-Za-z0-9_-]{43}$/.test(request.connection_key))
+        )
+          throw new ProxyRefusal(
+            'bad_request',
+            'connection_id must be 43 base64url characters and connection_key k1.<key>',
+          );
+        if (keyed && connections.has(request.connection_id))
+          throw new ProxyRefusal('connection_exists');
         const handoff = handoffs.get(request.code);
         if (
           !handoff ||
@@ -422,7 +490,7 @@ export function mockProxy({
         )
           throw new ProxyRefusal('invalid_handoff');
         handoffs.delete(request.code);
-        const connectionId = random();
+        const connectionId = keyed ? request.connection_id : random();
         connections.set(connectionId, {
           connection_id: connectionId,
           platform: handoff.platform,
@@ -430,6 +498,8 @@ export function mockProxy({
           created_at: stamp(),
           last_used_at: null,
           delegations: new Map(),
+          // Kept by the mock only, to check what requests present.
+          ...(keyed ? { key: request.connection_key.slice(3) } : {}),
         });
 
         return json(

@@ -30,7 +30,11 @@ use serde::Deserialize;
 use super::provider::{check_access, deliveries, parameters, Checked};
 use super::store::{ended, now, AccessCheck, Binding, InboxError, NewSubscription};
 use super::Webhooks;
-use crate::{api_error::ApiError, security::Standing, AppState};
+use crate::{
+    api_error::ApiError,
+    security::{ConnectionKey, Standing},
+    AppState,
+};
 
 /// Longest long-poll wait (`fetch.maxWaitSeconds`).
 pub const MAX_WAIT: Duration = Duration::from_secs(25);
@@ -168,24 +172,64 @@ async fn consumer(
     Ok((webhooks, binding))
 }
 
-/// Re-runs the binding's access check with its recorded parameters.
-async fn recheck(state: &AppState, binding: &Binding) -> AccessCheck {
+/// The connection key a webhook request presents, checked against the
+/// connection before any access check is made with it: a missing or wrong
+/// key is the request's error, never a failed access check (which would
+/// suspend the subscription). A key grant must name `principal`, the
+/// request's signer. A connection that is gone is left to the access check,
+/// which reports it as a failure.
+async fn presented_key(
+    state: &AppState,
+    headers: &HeaderMap,
+    connection_id: &str,
+    principal: &str,
+) -> Result<ConnectionKey, ApiError> {
+    let security = state.security.as_ref().ok_or(ApiError::Unavailable)?;
+    let key = crate::connection_key::resolve(
+        headers,
+        security.grant_key(),
+        connection_id,
+        &[principal],
+        crate::now_secs(),
+    )?;
+    if let Some(record) = security
+        .load_connection(connection_id)
+        .await
+        .map_err(|_| ApiError::Unavailable)?
+    {
+        security
+            .open_credential(&record, &key)
+            .ok_or(ApiError::InvalidConnectionKey)?;
+    }
+    crate::webhooks::run_deferred_cleanup(state, connection_id, &key);
+    Ok(key)
+}
+
+/// Re-runs the binding's access check with its recorded parameters and the
+/// key the request presents.
+async fn recheck(
+    state: &AppState,
+    headers: &HeaderMap,
+    binding: &Binding,
+) -> Result<AccessCheck, ApiError> {
+    let key = presented_key(state, headers, &binding.connection_id, &binding.consumer).await?;
     let (Some(deliveries), Some(values)) = (
         deliveries(state, &binding.platform),
         parameters(&binding.access_parameters),
     ) else {
-        return AccessCheck::Failed;
+        return Ok(AccessCheck::Failed);
     };
-    check_access(
+    Ok(check_access(
         state,
         &binding.connection_id,
+        &key,
         &binding.platform,
         &deliveries,
         &binding.source_kind,
         &values,
     )
     .await
-    .against(&binding.source_key)
+    .against(&binding.source_key))
 }
 
 #[derive(Deserialize)]
@@ -287,9 +331,16 @@ pub async fn subscribe(
     if webhooks.shared_secret(&record.platform).is_none() {
         return inbox_error(InboxError::CapacityUnavailable);
     }
+    // The key is needed only now, for the access check at the provider.
+    let connection_key =
+        match presented_key(&state, &headers, &connection_id, signer.as_str()).await {
+            Ok(key) => key,
+            Err(error) => return no_store(error.into_response()),
+        };
     let key = match check_access(
         &state,
         &connection_id,
+        &connection_key,
         &record.platform,
         &deliveries,
         &request.source,
@@ -388,7 +439,10 @@ pub async fn renew(
         Ok(found) => found,
         Err(response) => return *response,
     };
-    let access = recheck(&state, &binding).await;
+    let access = match recheck(&state, &headers, &binding).await {
+        Ok(access) => access,
+        Err(error) => return no_store(error.into_response()),
+    };
     match webhooks
         .store
         .renew(&id, &binding.consumer, access, now())
@@ -488,7 +542,12 @@ pub async fn events(
                 // The receiver runs the check itself rather than serve
                 // events on a stale one (Webhook Deliveries §4.4.1).
                 checked = true;
-                let access = recheck(&state, &binding).await;
+                let access = match recheck(&state, &headers, &binding).await {
+                    Ok(access) => access,
+                    // The stale check needs the connection's key: the
+                    // consumer asks again with x-connection-key.
+                    Err(error) => break no_store(error.into_response()),
+                };
                 if let Err(error) = webhooks
                     .store
                     .record_access_check(&id, &binding.consumer, access, now())
@@ -635,7 +694,10 @@ pub async fn reconciled(
     let Ok(request) = serde_json::from_slice::<ReconciledBody>(&body) else {
         return bad_request("expected {generation, barrier}");
     };
-    let access = recheck(&state, &binding).await;
+    let access = match recheck(&state, &headers, &binding).await {
+        Ok(access) => access,
+        Err(error) => return no_store(error.into_response()),
+    };
     match webhooks
         .store
         .complete_reconciliation(

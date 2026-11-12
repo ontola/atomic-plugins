@@ -102,6 +102,71 @@ pub struct Webhooks {
     /// Long polls waiting, per consumer.
     pub waiting: std::sync::Mutex<std::collections::HashMap<String, usize>>,
     pub limits: limits::Limits,
+    /// When this instance last looked for cleanup jobs waiting on each
+    /// connection's key ([`run_deferred_cleanup`]).
+    cleanup_looked: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+}
+
+/// How often one instance looks for cleanup jobs waiting on one connection.
+const CLEANUP_LOOK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+/// The most connections remembered for [`CLEANUP_LOOK_INTERVAL`]; past it
+/// the memory is dropped, which only means looking again sooner.
+const CLEANUP_LOOK_MEMORY: usize = 10_000;
+
+/// Starts the hook cleanup jobs that were waiting for `connection_id`'s key,
+/// now that an authorised request has presented it (see [`cleanup`]). Runs
+/// in the background and never delays or fails the request. The key lives
+/// in that task until its provider calls end, each bounded by the proxy's
+/// upstream timeouts.
+pub fn run_deferred_cleanup(
+    state: &crate::AppState,
+    connection_id: &str,
+    key: &crate::security::ConnectionKey,
+) {
+    let Some(webhooks) = state.webhooks.clone() else {
+        return;
+    };
+    {
+        let mut looked = webhooks
+            .cleanup_looked
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let now = std::time::Instant::now();
+        if looked
+            .get(connection_id)
+            .is_some_and(|at| now.duration_since(*at) < CLEANUP_LOOK_INTERVAL)
+        {
+            return;
+        }
+        if looked.len() >= CLEANUP_LOOK_MEMORY {
+            looked.clear();
+        }
+        looked.insert(connection_id.to_owned(), now);
+    }
+    let deleter = provider::ProviderHookDeleter {
+        state: state.clone(),
+        connection_id: connection_id.to_owned(),
+        key: key.clone(),
+    };
+    tokio::spawn(async move {
+        let connection_id = deleter.connection_id.clone();
+        match webhooks.store.cleanup_waits_for(&connection_id).await {
+            Ok(false) => return,
+            Ok(true) => {}
+            Err(error) => {
+                tracing::error!(%error, "looking for deferred webhook hook cleanup failed");
+                return;
+            }
+        }
+        match webhooks
+            .store
+            .run_cleanup_for_connection(&deleter, &connection_id, std::time::SystemTime::now())
+            .await
+        {
+            Ok(report) => tracing::debug!(?report, "deferred webhook hook cleanup ran"),
+            Err(error) => tracing::error!(%error, "deferred webhook hook cleanup failed"),
+        }
+    });
 }
 
 impl Webhooks {
@@ -127,6 +192,7 @@ impl Webhooks {
             gate: IngressGate::default(),
             waiting: Default::default(),
             limits,
+            cleanup_looked: Default::default(),
         }
     }
 
