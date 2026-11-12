@@ -481,7 +481,7 @@ mod tests {
         assert!(html.contains(
             r#"<a class="brand" href="https://atomic.place/" rel="noopener noreferrer">Atomic Data</a>"#
         ));
-        assert!(html.contains("Integrations · integrations.atomic.place"));
+        assert!(html.contains("class=\"eyebrow\">integrations.atomic.place</p>"));
         assert!(html.contains(
             r#"It is run by <a href="https://atomic.place/" rel="noopener noreferrer">Atomic Data</a>."#
         ));
