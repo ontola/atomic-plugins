@@ -100,7 +100,7 @@ test.describe('Todoist drive app', () => {
     await expect(card).toContainText('Read-only: edits here stay in Atomic.');
     await app.getByRole('button', { name: 'Connect Todoist' }).click();
 
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     await expect(consent).toContainText('Todoist');
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(
@@ -346,7 +346,9 @@ async function fixture(name: string, args: unknown[]): Promise<unknown> {
  * `app-module-integrity`, then opens the new app.
  */
 async function installFromCatalog(page: Page) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });

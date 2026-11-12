@@ -49,6 +49,7 @@ export const CLASSES = `${A}/properties/classes`;
 export const CLASSTYPE = `${A}/properties/classtype`;
 export const PROPERTY_CLASS = `${A}/classes/Property`;
 export const TABLE_CLASS = `${A}/classes/Table`;
+export const FOLDER_CLASS = `${A}/classes/Folder`;
 export const CLASS_CLASS = `${A}/classes/Class`;
 export const DEFAULT_ONTOLOGY = `${A}/ontology/server/property/default-ontology`;
 
@@ -474,11 +475,25 @@ export async function provision(store: PluginStore): Promise<Drive> {
   }
 
   const table = await store.getResource(data.table);
-  if (table.get(PARENT) !== app) throw new OtherTable();
+  const folder = asList(table.get(IS_A)).includes(FOLDER_CLASS);
+  // The host provisions the external folder and grants our existing Agent
+  // native rights before moving it. This pointer is a destination identity
+  // check, never authority: the host checks both the user and app key on save.
+  const ownData = await appProperty(store, resource, 'app-data');
+  if (
+    table.get(PARENT) !== app &&
+    !(folder && ownData && resource.get(ownData) === table.subject)
+  )
+    throw new OtherTable();
+  const account = resource.get(properties.account);
+  const name =
+    folder && typeof account === 'string' && account
+      ? `${TABLE_NAME} ${account}`
+      : TABLE_NAME;
   const retype = table.get(CLASSTYPE) !== rowClass;
-  const rename = table.get(NAME) !== TABLE_NAME;
+  const rename = table.get(NAME) !== name;
   if (retype) table.set(CLASSTYPE, rowClass);
-  if (rename) table.set(NAME, TABLE_NAME);
+  if (rename) table.set(NAME, name);
   if (retype || rename) await table.save();
   const itemsTable = await ensureTable(
     store,
@@ -488,7 +503,7 @@ export async function provision(store: PluginStore): Promise<Drive> {
     'The items of the Google Keep list notes, one row per item, synced item by item by the Google Keep app.',
   );
 
-  return {
+  const drive = {
     app,
     table: data.table,
     rowClass,
@@ -496,6 +511,80 @@ export async function provision(store: PluginStore): Promise<Drive> {
     itemClass,
     properties,
   };
+  await configureResourceViews(store, drive);
+
+  return drive;
+}
+
+/** Rename only a host-provisioned Folder after a pass validates its account. */
+async function nameAccountFolder(
+  store: PluginStore,
+  drive: Drive,
+  account: string,
+): Promise<void> {
+  const folder = await store.getResource(drive.table);
+  if (!asList(folder.get(IS_A)).includes(FOLDER_CLASS)) return;
+  const name = `${TABLE_NAME} ${account}`;
+  if (folder.get(NAME) !== name) await folder.set(NAME, name).save();
+}
+
+/**
+ * Find the view installation through the same drive-local catalog property
+ * that identifies this sync app. Merely finding another app's schema is not
+ * enough: it must identify our own installation too. No provider data is copied.
+ */
+async function installedKeepView(store: PluginStore, app: PluginResource) {
+  for (const property of await store.query({
+    property: SHORTNAME,
+    value: 'app-catalog-id',
+  })) {
+    if (app.get(property) !== 'google-keep') continue;
+
+    for (const subject of await store.query({
+      property,
+      value: 'google-keep-view',
+    })) {
+      const view = await store.getResource(subject);
+      if (
+        asList(view.get(IS_A)).some(klass =>
+          asList(app.get(IS_A)).includes(klass),
+        )
+      )
+        return subject;
+    }
+  }
+
+  return undefined;
+}
+
+/**
+ * Point this account folder and its existing notes at the installed renderer.
+ * Keep an explicit choice somebody already made. The view obtains read context,
+ * not authority to edit, from this property; the host independently validates it.
+ */
+export async function configureResourceViews(store: PluginStore, drive: Drive) {
+  const folder = await store.getResource(drive.table);
+  if (!asList(folder.get(IS_A)).includes(FOLDER_CLASS)) return;
+  const app = await store.getResource(drive.app);
+  const viewProperty = await appProperty(store, app, 'app-resource-view');
+  if (!viewProperty) return;
+  const view = await installedKeepView(store, app);
+  if (!view) return;
+
+  const setDefault = async (resource: PluginResource) => {
+    if (!resource.get(viewProperty))
+      await resource.set(viewProperty, view).save();
+  };
+
+  await setDefault(folder);
+
+  for (const subject of await store.query({
+    property: PARENT,
+    value: drive.table,
+  })) {
+    const note = await store.getResource(subject);
+    if (asList(note.get(IS_A)).includes(drive.rowClass)) await setDefault(note);
+  }
 }
 
 const SYNC_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
@@ -573,6 +662,8 @@ export async function recordPass(
     }
 
   if (changed) await app.save();
+  if (values.account) await nameAccountFolder(store, drive, values.account);
+  await configureResourceViews(store, drive);
 }
 
 /** What the person chose in the view's settings, kept on the App. */

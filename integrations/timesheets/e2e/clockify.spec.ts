@@ -155,7 +155,7 @@ test.describe('timesheets drive app', () => {
     await app.getByRole('button', { name: 'Connect Clockify' }).click();
 
     // Drawn by the host page, outside the frame: only a click here navigates.
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     await expect(consent).toContainText('Clockify');
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
     await expect(
@@ -459,7 +459,7 @@ test.describe('timesheets drive app', () => {
     const status = app.getByRole('status');
     await expect(status).toContainText('Not connected');
     await app.getByRole('button', { name: 'Connect Clockify' }).click();
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
     await page.getByLabel('API key').fill('synthetic-clockify-key');
     await page
@@ -591,7 +591,7 @@ test.describe('timesheets drive app', () => {
     const app = page.frameLocator(APP_FRAME);
     const status = app.getByRole('status');
     await app.getByRole('button', { name: 'Connect Clockify' }).click();
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
     await page.getByLabel('API key').fill('synthetic-clockify-key');
     await page
@@ -1098,7 +1098,7 @@ test.describe('timesheets drive app: any time-entry-v1 table (#177)', () => {
       app.getByText('Syncing “Team hours” with Clockify.'),
     ).toBeVisible({ timeout: 45_000 });
     await app.getByRole('button', { name: 'Connect Clockify' }).click();
-    const consent = page.getByRole('group', { name: 'Connect an account' });
+    const consent = page.getByRole('dialog', { name: /^Connect / });
     await consent.getByRole('button', { name: 'Connect', exact: true }).click();
     await page.getByLabel('API key').fill('synthetic-clockify-key');
     await page
@@ -1387,7 +1387,9 @@ async function previewScript(): Promise<string> {
  * Returns the card, for its "Installed <version>" line.
  */
 async function installFromCatalog(page: Page) {
-  await page.goto(new URL('/app/integrations', page.url()).href);
+  await page.goto(
+    new URL('/app/integrations?preview=plugins', page.url()).href,
+  );
   const experimental = page.getByRole('checkbox', {
     name: 'Show experimental plugins',
   });

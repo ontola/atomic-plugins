@@ -1,7 +1,7 @@
 // @wc-ignore-file
 /** Invented host resources for unit and browser tests. Never bundled. */
 import { P, TABLE_CLASS } from './data.js';
-import type { Store, Value } from './store.js';
+import type { DataRef, Store, Value } from './store.js';
 
 export function fixture() {
   const resources: Record<string, Record<string, Value>> = {};
@@ -21,9 +21,13 @@ export function fixture() {
   const under = prop('google-keep-under');
   const position = prop('google-keep-position');
   const renders = prop('renders');
-  resources['did:test:app-class'] = { [P.recommends]: [renders] };
+  const resourceRenders = prop('resource-renders');
+  resources['did:test:app-class'] = {
+    [P.recommends]: [renders, resourceRenders],
+  };
   resources['did:test:view-app'] = { [P.isA]: ['did:test:app-class'] };
   resources['did:test:ontology'] = {
+    [P.parent]: 'did:test:sync-app',
     [P.classes]: ['did:test:note-class', 'did:test:item-class'],
   };
   resources['did:test:note-class'] = {
@@ -77,7 +81,7 @@ export function fixture() {
     };
   }
 
-  let data: { table: string; rowClass?: string } | undefined;
+  let data: DataRef | undefined;
   let granted = false;
   const writes: string[] = [];
   const listeners = new Map<string, Set<() => void>>();
@@ -146,6 +150,9 @@ export function fixture() {
     },
     attachTable: (table: string) => {
       data = { table };
+    },
+    attachResource: (resource: string) => {
+      data = { resource };
     },
     grant: (value: boolean) => {
       granted = value;
@@ -222,4 +229,27 @@ export function importedFixture() {
   }
 
   return { ...fake, table, rowClass, checked, textProperty, position };
+}
+
+/** The host migrates the original notes container in place into an account folder. */
+export function folderFixture() {
+  const fake = fixture();
+  fake.resources['did:test:notes'][P.parent] = 'did:test:drive';
+  fake.resources['did:test:notes'][P.isA] = [
+    'https://atomicdata.dev/classes/Folder',
+  ];
+  fake.resources['did:test:notes'][P.name] =
+    'Google Keep fictional@example.test';
+  fake.resources['did:test:app-data'] = { [P.shortname]: 'app-data' };
+  fake.resources['did:test:app-class'][P.recommends] = [
+    'did:test:renders',
+    'did:test:resource-renders',
+    'did:test:app-data',
+  ];
+  fake.resources['did:test:sync-app'] = {
+    [P.isA]: ['did:test:app-class'],
+    ['did:test:app-data']: 'did:test:notes',
+  };
+
+  return fake;
 }
