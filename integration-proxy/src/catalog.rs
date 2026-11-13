@@ -1992,6 +1992,29 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert!(!names.is_empty());
+
+        let index = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/catalog/apps")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(index.status(), StatusCode::OK);
+        let index: Value =
+            serde_json::from_slice(&to_bytes(index.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(index["version"], 1);
+        assert_eq!(index["platforms"].as_array().unwrap().len(), names.len());
+        assert!(index["platforms"].as_array().unwrap().iter().any(|entry| {
+            entry["id"] == "github-issues"
+                && entry["name"] == "Test"
+                && entry["document"] == "/catalog/github-issues.yaml"
+        }));
+
         for name in names {
             let response = app
                 .clone()
