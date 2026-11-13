@@ -844,6 +844,67 @@ pub async fn list(State(state): State<AppState>) -> Json<Vec<String>> {
     Json(state.catalog.names())
 }
 
+/// Public metadata for data-browser app discovery. This is not a source of
+/// executable code: `/catalog` keeps its existing platform-ID array contract.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppIndex {
+    version: u8,
+    platforms: Vec<AppEntry>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppEntry {
+    id: String,
+    name: String,
+    description: Option<String>,
+    document: String,
+}
+
+/// Versioned catalog metadata for user-facing Apps discovery.
+///
+/// The proxy's composed OpenAPI `info` is already loaded and validated at
+/// startup. Catalog metadata is never evaluated as HTML or JavaScript.
+pub async fn apps(State(state): State<AppState>) -> Json<AppIndex> {
+    let platforms = state
+        .catalog
+        .names()
+        .into_iter()
+        .map(|id| {
+            let parsed: Value = state
+                .catalog
+                .get(&id)
+                .and_then(|source| serde_yaml::from_str(source).ok())
+                .unwrap_or(Value::Null);
+            let info = parsed.get("info");
+            let name = info
+                .and_then(|value| value.get("title"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(&id)
+                .to_owned();
+            let description = info
+                .and_then(|value| value.get("description"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned);
+
+            AppEntry {
+                document: format!("/catalog/{id}.yaml"),
+                id,
+                name,
+                description,
+            }
+        })
+        .collect();
+
+    Json(AppIndex {
+        version: 1,
+        platforms,
+    })
+}
+
 pub async fn document(Path(file): Path<String>, State(state): State<AppState>) -> Response {
     if let Some(platform) = file.strip_suffix(".selection.json") {
         if state.catalog.get(platform).is_none() {
@@ -1930,6 +1991,29 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert!(!names.is_empty());
+
+        let index = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/catalog/apps")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(index.status(), StatusCode::OK);
+        let index: Value =
+            serde_json::from_slice(&to_bytes(index.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(index["version"], 1);
+        assert_eq!(index["platforms"].as_array().unwrap().len(), names.len());
+        assert!(index["platforms"].as_array().unwrap().iter().any(|entry| {
+            entry["id"] == "github-issues"
+                && entry["name"] == "Test"
+                && entry["document"] == "/catalog/github-issues.yaml"
+        }));
+
         for name in names {
             let response = app
                 .clone()
