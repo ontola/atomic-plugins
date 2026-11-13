@@ -225,7 +225,9 @@ function selectCollections(
   requested: string[],
   constants: Record<string, string>,
 ): void {
-  const byName = new Map(model.collections.map((collection) => [collection.name, collection]));
+  const byName = new Map(
+    model.collections.map((collection) => [collection.name, collection]),
+  );
   const needed = new Set<string>();
 
   const include = (name: string): void => {
@@ -242,7 +244,9 @@ function selectCollections(
   };
 
   for (const name of requested) include(name);
-  model.collections = model.collections.filter((collection) => needed.has(collection.name));
+  model.collections = model.collections.filter((collection) =>
+    needed.has(collection.name),
+  );
 }
 
 /** Raw provider collections, using the same traversal as the typed reader and local replica. */
