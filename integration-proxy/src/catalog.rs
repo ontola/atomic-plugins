@@ -905,7 +905,6 @@ pub async fn apps(State(state): State<AppState>) -> Json<AppIndex> {
     })
 }
 
-
 pub async fn document(Path(file): Path<String>, State(state): State<AppState>) -> Response {
     if let Some(platform) = file.strip_suffix(".selection.json") {
         if state.catalog.get(platform).is_none() {
