@@ -239,7 +239,8 @@ function selectCollections(
     for (const param of collection.contextParams) {
       if (constants[param]) continue;
       const provider = model.providers.get(param);
-      if (provider && provider.collection !== name) include(provider.collection);
+      if (provider && provider.collection !== name)
+        include(provider.collection);
     }
   };
 
