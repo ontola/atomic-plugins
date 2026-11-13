@@ -30,12 +30,12 @@ describe('selected Syncables collections', () => {
       collectionNames: ['searchedPages'],
     });
     expect(result.errors).toEqual([]);
-    expect(result.collections.map((snapshot) => snapshot.collection.name)).toEqual([
-      'searchedPages',
-    ]);
-    expect(fetch.mock.calls.every(([request]) => request.method === 'POST')).toBe(
-      true,
-    );
+    expect(
+      result.collections.map((snapshot) => snapshot.collection.name),
+    ).toEqual(['searchedPages']);
+    expect(
+      fetch.mock.calls.every(([request]) => request.method === 'POST'),
+    ).toBe(true);
   });
 
   it('uses bound path parameters and never fetches other collections', async () => {
@@ -46,12 +46,12 @@ describe('selected Syncables collections', () => {
       constants: { listId: 'selected-list' },
     });
     expect(result.errors).toEqual([]);
-    expect(result.collections.map((snapshot) => snapshot.collection.name)).toEqual([
-      'allTasks',
-    ]);
-    expect(fetch.mock.calls.every(([request]) => request.method === 'GET')).toBe(
-      true,
-    );
+    expect(
+      result.collections.map((snapshot) => snapshot.collection.name),
+    ).toEqual(['allTasks']);
+    expect(
+      fetch.mock.calls.every(([request]) => request.method === 'GET'),
+    ).toBe(true);
     expect(fetch.mock.calls[0]?.[0].url.pathname).toBe(
       '/lists/selected-list/tasks',
     );
