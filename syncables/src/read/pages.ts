@@ -401,6 +401,8 @@ export interface PageWalk {
   /** The requests' `purpose`: `list` (the default) or `feed`. */
   purpose?: Extract<RequestPurpose, 'list' | 'feed'>;
   pageSize?: number;
+  /** Saved cursor for the same listing scope. */
+  checkpoint?: string;
   /**
    * Dot-path to the items array in each body, `''` for the body itself.
    * Without it, the pagination scheme's own `response.envelope` applies,
@@ -457,6 +459,8 @@ export interface WindowRange {
 
 export interface WalkOutcome {
   complete: boolean;
+  /** Terminal cursor of a successfully completed continuation walk. */
+  checkpoint?: string;
   reason?: string;
   /**
    * Pagination Schemes 0.8.0 §4.4.6: set when a response of the walk was
@@ -546,6 +550,7 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
   if (outcome) {
     outcome.complete = false;
     delete outcome.reason;
+    delete outcome.checkpoint;
     // An outcome passed again: an earlier walk's mark is not this one's.
     delete outcome.marked;
   }
@@ -559,15 +564,84 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
   }
   if (outcome) {
     outcome.complete = result.complete;
+    if (result.complete && result.checkpoint !== undefined)
+      outcome.checkpoint = result.checkpoint;
     if (result.reason !== undefined) outcome.reason = result.reason;
     if (result.marked !== undefined) outcome.marked = result.marked;
   }
+}
+
+function continuationOperation(
+  document: OpenApiDocument,
+  continuation: NonNullable<PaginationSchemeObject['continuation']>,
+) {
+  const matches = Object.entries(document.paths).flatMap(([path, item]) =>
+    [
+      'get',
+      'post',
+      'put',
+      'patch',
+      'delete',
+      'head',
+      'options',
+      'trace',
+    ].flatMap((method) => {
+      const operation = item[method];
+      return isRecord(operation) &&
+        operation.operationId === continuation.operationId
+        ? [{ path, method }]
+        : [];
+    }),
+  );
+  const [match] = matches;
+  if (
+    matches.length !== 1 ||
+    !match ||
+    (match.method !== 'get' && match.method !== 'post') ||
+    !match.path.startsWith('/') ||
+    /[{}?#\\]/.test(match.path) ||
+    match.path.split('/').some((segment) => /^(?:\.|%2e){1,2}$/i.test(segment))
+  )
+    throw new PageReadError(
+      'Continuation must name a unique GET or POST operation with a fixed path',
+    );
+  const scheme: PaginationSchemeObject = {
+    type: 'pageToken',
+    request: continuation.request,
+  };
+  return {
+    scheme,
+    path: match.path,
+    method: match.method === 'get' ? ('GET' as const) : ('POST' as const),
+  };
 }
 
 async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
   const { document, operation, budget, upstream } = walk;
   const effective = resolveEffectiveScheme(document, operation);
   const scheme = effective?.scheme;
+  const continuation = scheme?.continuation;
+  if (
+    walk.checkpoint !== undefined &&
+    (!continuation || typeof walk.checkpoint !== 'string' || !walk.checkpoint)
+  )
+    throw new PageReadError(
+      'A checkpoint requires a continuation scheme and a nonempty cursor',
+    );
+  const target = continuation && continuationOperation(document, continuation);
+  if (
+    target?.method === 'GET' &&
+    Object.keys(continuation?.request.bodyFields ?? {}).length
+  )
+    throw new PageReadError(
+      'A GET continuation cannot send a JSON body cursor',
+    );
+  const cursorField =
+    continuation &&
+    Object.entries(scheme?.response?.bodyFields ?? {}).find(
+      ([, field]) =>
+        field.role === 'nextCursor' || field.role === 'nextPageToken',
+    )?.[0];
   const responseSchema =
     operation.responses?.['200']?.content?.['application/json']?.schema;
   const basePath = upstream.pathname.replace(/\/$/, '');
@@ -581,7 +655,9 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
     return;
   }
   const seen = new Set<string>();
-  let cursor: PageCursor = {};
+  let cursor: PageCursor =
+    walk.checkpoint === undefined ? {} : { pageToken: walk.checkpoint };
+  const usedCheckpoints = new Set<string>();
   let next: URL | undefined;
   let itemsSoFar = 0;
   // Pagination Schemes 0.6.0 §4.4.5: a page with fewer than `size` items
@@ -633,13 +709,14 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
   const first = scheme ? pageStart(scheme) : 1;
 
   for (;;) {
+    const following = cursor.pageToken !== undefined ? target : undefined;
     let url = next;
     if (!url) {
       url = new URL(upstream.href);
-      url.pathname = basePath + walk.path;
+      url.pathname = basePath + (following?.path ?? walk.path);
       const query = {
-        ...walk.query,
-        ...(scheme ? buildQuery(scheme, cursor, pageSize) : {}),
+        ...(following ? buildQuery(following.scheme, cursor) : walk.query),
+        ...(!following && scheme ? buildQuery(scheme, cursor, pageSize) : {}),
       };
       for (const [key, value] of Object.entries(query)) {
         url.searchParams.set(key, value);
@@ -648,16 +725,18 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
 
     const request: PurposedRequest = {
       url,
-      method: walk.method,
+      method: following?.method ?? walk.method,
       headers: { accept: 'application/json' },
       purpose: walk.purpose ?? 'list',
     };
-    if (walk.method === 'POST') {
+    if (request.method === 'POST') {
       request.headers['content-type'] = 'application/json';
       request.body = JSON.stringify(
-        next || !scheme
-          ? walk.body
-          : withBody(walk.body, buildBody(scheme, cursor, pageSize)),
+        following
+          ? buildBody(following.scheme, cursor)
+          : next || !scheme
+            ? walk.body
+            : withBody(walk.body, buildBody(scheme, cursor, pageSize)),
       );
     }
 
@@ -754,6 +833,30 @@ async function* walkAllPages(walk: PageWalk): AsyncGenerator<Page> {
         }
         previousPage = fingerprint;
       }
+    }
+    if (continuation && scheme) {
+      const responseBody = isRecord(body) ? body : {};
+      const hasMore = readNestedField(responseBody, continuation.hasMoreField);
+      const token = cursorField && readNestedField(responseBody, cursorField);
+      if (
+        typeof hasMore !== 'boolean' ||
+        typeof token !== 'string' ||
+        token.length === 0
+      )
+        throw new PageReadError(
+          'Continuation page must return a boolean flag and a nonempty cursor',
+        );
+      if (cursor.pageToken !== undefined) usedCheckpoints.add(cursor.pageToken);
+      if (hasMore && usedCheckpoints.has(token))
+        throw new PageReadError('Pagination repeated a continuation cursor');
+      itemsSoFar += items.length;
+      yield { url, items, body };
+      if (!hasMore) {
+        if (walk.outcome) walk.outcome.checkpoint = token;
+        return;
+      }
+      cursor = { pageToken: token };
+      continue;
     }
     itemsSoFar += items.length;
     yield { url, items, body };
