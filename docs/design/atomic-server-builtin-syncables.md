@@ -1,12 +1,12 @@
 # Contract with Atomic Server's built-in Syncables iframe
 
-**Status:** design agreement, 2026-11-13  
+**Status:** GitHub implementation and selected-read contract, 2026-11-16
 **Issues:** [atomic-plugins#733](https://github.com/ontola/atomic-plugins/issues/733), [atomic-server#2521](https://github.com/ontola/atomic-server/issues/2521).  
 **Atomic Server design:** `planning/builtin-syncables-apps.md` and `planning/builtin-syncables-wireframes.md` on the `feat/builtin-syncables-foundation` branch.
 
 ## Responsibility boundary
 
-The *consumer-facing* GitHub, Notion, Calendar, etc. entries are **configured platform instances** of Atomic Server's built-in Syncables UI. The UI and collector run **inside Atomic Server's existing null-origin sandboxed iframe**; their code is bundled and delivered by Atomic Server, not downloaded from the integration proxy or independently installed per platform.
+The Apps catalog lists provider definitions. GitHub is the first provider that Atomic Server can install as a configured instance of its built-in Syncables UI. The UI and collector run **inside Atomic Server's existing null-origin sandboxed iframe**; their code is bundled and delivered by Atomic Server, not downloaded from the integration proxy or independently installed per platform.
 
 This repository maintains the reusable browser-safe `syncables/browser` engine, provider OpenAPI descriptions/extensions, and integration-proxy implementation. Provider-specific code may later replace the generic built-in renderer while preserving the host's view-kind/source-binding contract.
 
@@ -15,29 +15,22 @@ The existing `integrations/pets/app/` and `integrations/notion/app/` code remain
 ## Proxy catalog contract
 
 Existing public endpoints:
+- `GET /catalog/apps` → version 1 app metadata with service IDs, display labels, descriptions and composed-document paths.
 - `GET /catalog` → JSON array of platform IDs (e.g. `["github-issues", "google-calendar"]`).
 - `GET /catalog/{platform}.yaml` → composed OpenAPI document.
 - `GET /catalog/{platform}.selection.json` → selection metadata, where available.
 
-These must remain backward-compatible. Define a separate structured, versioned service metadata endpoint with fields such as:
+Clients can fall back to the legacy catalog. The metadata contains provider
+descriptions and document paths. Catalog JSON is data and cannot install or
+execute a JavaScript module.
 
-```json
-{
-  "version": 1,
-  "platforms": [{
-    "id": "github-issues",
-    "name": "GitHub",
-    "description": "Browse repositories and sync issues",
-    "icon": "https://example.org/static/github.svg",
-    "document": "/catalog/github-issues.yaml",
-    "status": "available"
-  }]
-}
-```
-
-*Schema illustration only:* the endpoint path, icon provenance, safe URL policy, status semantics and possible authentication/profile variants are implementation choices, not existing features. Browser clients must accept the old `GET /catalog` array with fallback labels/icons until the new endpoint is deployed.
-
-Icons are **untrusted data**: whitelist safe HTTPS origins (or same proxy), content types and size; avoid injecting provider-supplied SVG or HTML into the app DOM. The catalog is not an executable-code registry.
+The default `catalog/2026-11-16-syncables-github.json` adds GitHub
+organization discovery and declares the `state` query for stable repository-ID
+Issues reads. It includes GitHub's `read:org` scope for listing memberships.
+Existing pinned catalogs retain their published contents. A self-hosted
+deployment with an explicit `CATALOG_PATH` must select the new catalog for
+organization discovery. The host can still group accessible repository owners
+when an older selected catalog has no organization endpoint.
 
 ## Syncables browser reader contract
 
@@ -72,7 +65,14 @@ type ReadOutcome = {
 
 ## Security invariants
 
-Provider tokens, OAuth secrets and refresh credentials remain sealed at the integration proxy. The generic iframe obtains **only scoped, short-lived proxy capabilities** via Atomic Server's host bridge. No provider URL chosen by user content may bypass the proxy's allowed operations; no unrestricted network calls from sandbox code. Host grants narrowly authorize creation/update of explicitly selected Atomic destination tables rather than all of drive root. A connection reference is not authorization by itself.
+Provider tokens, OAuth secrets and refresh credentials remain sealed at the
+integration proxy. For GitHub, Atomic Server's top-level host performs keyed
+PKCE redemption and owner-signed provider reads. The iframe can request named
+read operations over the existing bridge. The host binds each request to a
+known platform, connection and, for Issues, numeric repository ID. The
+browser-derived connection key, signer, and provider credentials stay outside
+the iframe. The host applies typed updates to the selected Atomic table using
+the signed-in user's existing permissions.
 
 No automatic remote writes or background sync for initial implementation.
 

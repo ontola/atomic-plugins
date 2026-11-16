@@ -2378,6 +2378,37 @@ mod tests {
         .unwrap()
     }
 
+    #[tokio::test]
+    #[ignore = "downloads the pinned GitHub OAD"]
+    async fn default_catalog_supports_built_in_github_discovery() {
+        let catalog =
+            checked_in_platform(crate::config::DEFAULT_CATALOG_FILE, "github-issues").await;
+        let provider = catalog.oauth_provider("github-issues").unwrap();
+        assert!(provider.scopes.iter().any(|scope| scope == "read:org"));
+        for path in [
+            "/user",
+            "/user/orgs",
+            "/user/repos",
+            "/repositories/456/issues",
+        ] {
+            assert!(
+                catalog.allows("github-issues", "GET", path).is_some(),
+                "{path}"
+            );
+        }
+        assert!(catalog
+            .allows("github-issues", "POST", "/user/orgs")
+            .is_none());
+        let document: Value = serde_yaml::from_str(catalog.get("github-issues").unwrap()).unwrap();
+        assert!(
+            document["paths"]["/repositories/{repository_id}/issues"]["get"]["parameters"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|parameter| parameter["name"] == "state")
+        );
+    }
+
     /// The default Keep profile composes the full refreshed OAD, but exposes
     /// only the four note operations selected by its authentication profile.
     #[tokio::test]

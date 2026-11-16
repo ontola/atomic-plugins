@@ -1,0 +1,59 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9c5cfb87b3f8b64e11069373a73e3fc85de0de5e/APIs/github.com/github-issues/1.1.4/openapi.yaml
+info:
+  title: GitHub organization discovery and Issues history
+  version: 1.0.0
+actions:
+- target: $.components.securitySchemes.githubOAuth.flows.authorizationCode.scopes
+  update:
+    read:org: List organizations visible to the authenticated user.
+- target: $.paths
+  update:
+    /user/orgs:
+      get:
+        operationId: orgs-list-for-authenticated-user
+        summary: List organizations for the authenticated user
+        security:
+        - githubOAuth:
+          - read:org
+        x-pagination:
+        - scheme: nextLink
+        parameters:
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        responses:
+          '200':
+            description: A page of organizations.
+            headers:
+              Link:
+                schema:
+                  type: string
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    type: object
+                    required: [id, login]
+                    properties:
+                      id:
+                        type: integer
+                      login:
+                        type: string
+- target: $.paths['/repositories/{repository_id}/issues'].get.parameters
+  update:
+  - name: state
+    in: query
+    schema:
+      type: string
+      enum: [open, closed, all]
+      default: open
