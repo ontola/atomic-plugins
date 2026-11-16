@@ -323,6 +323,10 @@ export function resolveEffectiveScheme(
         `x-pagination's overrides make the pagination scheme "${name}" invalid: ${afterMerge.join('; ')}`,
       );
     }
+    if (scheme.continuation && explicit.length !== 1)
+      throw new PaginationSchemeError(
+        'Continuation must be the only applied scheme',
+      );
     // Rule 17: an operation that applies a rangeWindow scheme, after
     // overrides, applies no other scheme.
     const windowed = explicit.some((entry) => {
