@@ -39,7 +39,7 @@ response envelope and cursor field apply to both operations.
 | Field | Meaning |
 | --- | --- |
 | `operationId` | Required. Identifies a unique continuation operation in the same document. It may identify the initial operation. |
-| `request` | Required. Uses the existing Request Object to locate exactly one cursor field on the continuation operation. For the first version of this proposal, the cursor is the only dynamic continuation input. |
+| `request` | Required. Locates one cursor field in a query parameter or POST JSON body. For the first version of this proposal, the cursor is the only dynamic continuation input. |
 | `hasMoreField` | Required. A dot-path using the response body field syntax. Both operations must return a boolean at that location on every successful page. |
 
 ## Traversal
@@ -65,18 +65,19 @@ response envelope and cursor field apply to both operations.
    and can replay from it. Provider-specific cursor reset handling and
    durable checkpoints for partial traversals are separate work.
 
-Resolve the continuation destination from the declared operation using the
+Resolve the continuation destination from a fixed GET or POST path on the document's upstream using the
 transport's normal authorization and origin checks. The cursor is an
 opaque request value. It never controls the destination, method or
 credential choice.
 
 ## Validation and compatibility
 
-A validator checks that the referenced operation exists, that its request
-declares the mapped cursor field, and that both successful page responses
-declare the item envelope, cursor and boolean flag. Any other required
-continuation inputs must be satisfiable through the operation declaration
-and the transport's existing authentication.
+The standalone validator checks the continuation target and its cursor
+input. Syncables checks the item envelope, cursor and flag when reading
+each response. SyncD uses the terminal cursor for incremental polling
+when the scheme declares `x-syncables-incremental: true`. Declare that
+flag only when continuation across polls returns changes to the same
+collection and its tombstones can be matched to stored item identities.
 
 A scheme with `continuation` requires explicit opt-in and a consumer
 that supports it. Publish its provider overlay separately from existing
