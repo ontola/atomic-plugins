@@ -574,7 +574,7 @@ export async function* walkPages(walk: PageWalk): AsyncGenerator<Page> {
 function continuationOperation(
   document: OpenApiDocument,
   continuation: NonNullable<PaginationSchemeObject['continuation']>,
-) {
+): { path: string; method: ListMethod; scheme: PaginationSchemeObject } {
   const matches = Object.entries(document.paths).flatMap(([path, item]) =>
     [
       'get',
