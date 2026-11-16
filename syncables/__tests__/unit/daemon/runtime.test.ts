@@ -401,6 +401,46 @@ describe.skipIf(!database)(
         return response('{"items":[],"checkpoint":"new-grant"}');
       }, 'grant-2');
     });
+    it('publishes a continuation checkpoint atomically with its records', async () => {
+      const h = await setup();
+      const doc = h.prepared.document;
+      doc.paths['/entries/continue'] = {
+        post: { operationId: 'continueEntries', responses: {} },
+      };
+      doc.components!.paginationSchemes!.pages = {
+        type: 'pageToken',
+        autoDetect: false,
+        'x-syncables-incremental': true,
+        continuation: {
+          operationId: 'continueEntries',
+          request: { bodyFields: { cursor: { role: 'cursor' } } },
+          hasMoreField: 'more',
+        },
+        response: {
+          envelope: { itemsField: 'items' },
+          bodyFields: { cursor: { role: 'nextCursor' } },
+        },
+      };
+      const initial = await h.sync(async ({ url }) => {
+        expect(url.pathname).toBe('/entries');
+        return response('{"items":[{"id":"a"}],"more":false,"cursor":"t1"}');
+      });
+      expect(initial).toMatchObject({ strategy: 'bootstrap', records: 1 });
+      await expect(
+        h.sync(async () => response('{"items":[],"more":false}')),
+      ).rejects.toThrow('nonempty cursor');
+      expect(await h.store.head(h.prepared.scope)).toBe(initial.revision);
+      const delta = await h.sync(async ({ url, method, body }) => {
+        expect(url.pathname).toBe('/entries/continue');
+        expect(method).toBe('POST');
+        expect(JSON.parse(body!)).toEqual({ cursor: 't1' });
+        return response('{"items":[{"id":"b"}],"more":false,"cursor":"t2"}');
+      });
+      expect(delta).toMatchObject({ strategy: 'delta', records: 2 });
+      expect(await h.store.context(h.prepared.scope)).toMatchObject({
+        syncToken: 't2',
+      });
+    });
     it('retains an exhausted provider retry deadline and never retries a declared blocked response', async () => {
       const h = await setup();
       const start = Date.now();
