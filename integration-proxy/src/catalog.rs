@@ -2400,13 +2400,15 @@ mod tests {
             .allows("github-issues", "POST", "/user/orgs")
             .is_none());
         let document: Value = serde_yaml::from_str(catalog.get("github-issues").unwrap()).unwrap();
-        assert!(
-            document["paths"]["/repositories/{repository_id}/issues"]["get"]["parameters"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|parameter| parameter["name"] == "state")
-        );
+        let parameters = document["paths"]["/repositories/{repository_id}/issues"]["get"]
+            ["parameters"]
+            .as_array()
+            .unwrap();
+        let names: Vec<_> = parameters
+            .iter()
+            .map(|parameter| parameter["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["repository_id", "per_page", "page", "state"]);
     }
 
     /// The default Keep profile composes the full refreshed OAD, but exposes

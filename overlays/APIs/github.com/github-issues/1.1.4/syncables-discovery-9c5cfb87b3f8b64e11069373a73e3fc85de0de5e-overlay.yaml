@@ -51,6 +51,22 @@ actions:
                         type: string
 - target: $.paths['/repositories/{repository_id}/issues'].get.parameters
   update:
+  - name: repository_id
+    in: path
+    required: true
+    schema:
+      type: integer
+    description: The stable numeric repository ID used by canonical pagination links.
+  - name: per_page
+    in: query
+    schema:
+      type: integer
+      default: 30
+  - name: page
+    in: query
+    schema:
+      type: integer
+      default: 1
   - name: state
     in: query
     schema:

@@ -5,6 +5,7 @@ these checks do not authorize or perform any request to Google Keep.
 """
 import importlib.util
 import json
+import re
 from pathlib import Path
 import tempfile
 import unittest
@@ -32,7 +33,7 @@ class GoogleKeepSyncDTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as cache:
             cls.document, cls.sources = compose("google-keep", Path(cache), cls.catalog)
 
-    def test_default_adds_only_keep_and_preserves_all_existing_platforms(self):
+    def test_keep_catalog_preserves_existing_platforms_and_keep_remains_available(self):
         previous = json.loads((ROOT / "catalog/2026-10-02-auth-profiles.json").read_text())
         self.assertEqual([p for p in self.catalog["platforms"] if p["name"] != "google-keep"], previous["platforms"])
         entry = next(p for p in self.catalog["platforms"] if p["name"] == "google-keep")
@@ -40,8 +41,10 @@ class GoogleKeepSyncDTests(unittest.TestCase):
         self.assertEqual(len(entry["overlays"]), 3)
         self.assertTrue(all(PIN in source["url"] for source in self.sources))
         config = (ROOT.parent / "integration-proxy/src/config.rs").read_text()
-        self.assertIn(f'"catalog/{CATALOG.name}"', config)
-        self.assertIn(f'/overlays/catalog/{CATALOG.name}"', config)
+        default = re.search(r'pub const DEFAULT_CATALOG_FILE: &str =\s*"([^"]+)"', config)
+        self.assertIsNotNone(default)
+        current = json.loads((ROOT / default.group(1)).read_text())
+        self.assertTrue(any(platform["name"] == "google-keep" for platform in current["platforms"]))
 
     def test_all_seven_google_operations_survive_without_an_update(self):
         operations = {op["operationId"] for item in self.document["paths"].values()
