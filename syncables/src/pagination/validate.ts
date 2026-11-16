@@ -419,6 +419,7 @@ function checkIncomplete(
 }
 
 const SCHEME_KEYS = new Set([
+  'continuation',
   'type',
   'description',
   'autoDetect',
@@ -597,6 +598,59 @@ function checkStructure(
       );
     }
   }
+  const continuation = scheme['continuation'];
+  if (continuation !== undefined) {
+    const at = `${path}.continuation`;
+    if (scheme['type'] !== 'pageToken' || scheme['autoDetect'] !== false)
+      errors.push(`${at} requires a pageToken scheme with autoDetect: false`);
+    if (!isObject(continuation)) {
+      errors.push(`${at} must be an object`);
+    } else {
+      unknownKeys(
+        at,
+        continuation,
+        new Set(['operationId', 'request', 'hasMoreField']),
+        'Continuation Object',
+        errors,
+      );
+      for (const key of ['operationId', 'hasMoreField']) {
+        if (typeof continuation[key] !== 'string' || !continuation[key].trim())
+          errors.push(`${at}.${key} must be a nonempty string`);
+      }
+      const mapping = continuation['request'];
+      if (!isObject(mapping)) {
+        errors.push(`${at}.request must be an object`);
+      } else {
+        const locations = ['queryParameters', 'bodyFields'] as const;
+        unknownKeys(
+          `${at}.request`,
+          mapping,
+          new Set(locations),
+          'Continuation Request Object',
+          errors,
+        );
+        fieldMaps(
+          `${at}.request`,
+          mapping,
+          locations,
+          REQUEST_FIELD_KEYS,
+          'Request Field Object',
+        );
+        const fields = locations.flatMap((location) =>
+          isObject(mapping[location]) ? Object.values(mapping[location]) : [],
+        );
+        if (
+          fields.length !== 1 ||
+          !isObject(fields[0]) ||
+          !['cursor', 'pageToken'].includes(String(fields[0]['role'])) ||
+          fields[0]['fromLastItem'] !== undefined
+        )
+          errors.push(
+            `${at}.request must declare exactly one response-derived cursor field`,
+          );
+      }
+    }
+  }
   const response = scheme['response'];
   if (response !== undefined) {
     if (!isObject(response)) {
@@ -769,6 +823,27 @@ export function validatePaginationScheme(
   checkShortPage(path, scheme, errors);
   checkIncomplete(path, scheme, errors);
   checkItemCursor(path, scheme, errors);
+  if (scheme.continuation) {
+    const fields = Object.values(scheme.response?.bodyFields ?? {});
+    if (
+      fields.filter(
+        (field) =>
+          field.role === 'nextCursor' || field.role === 'nextPageToken',
+      ).length !== 1 ||
+      Object.values(scheme.response?.headers ?? {}).some((field) =>
+        ['nextCursor', 'nextPageToken', 'nextLink'].includes(field.role ?? ''),
+      ) ||
+      fields.some((field) => field.role === 'nextLink') ||
+      REQUEST_LOCATIONS.some((location) =>
+        Object.values(scheme.request?.[location] ?? {}).some(
+          (field) => field.fromLastItem !== undefined,
+        ),
+      )
+    )
+      errors.push(
+        `${path}.continuation requires one body response cursor and cannot use next links or item cursors`,
+      );
+  }
 
   if (!scheme.request && !scheme.response) {
     errors.push(`${path} must define at least one of "request" or "response"`);
