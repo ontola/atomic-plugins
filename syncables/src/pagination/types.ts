@@ -202,6 +202,11 @@ export interface PaginationSchemeObject {
   autoDetect?: boolean | AutoDetectObject;
   /** Required for `rangeWindow`, absent otherwise (§4.6). */
   window?: RangeWindowObject;
+  continuation?: {
+    operationId: string;
+    request: RequestPaginationFieldsObject;
+    hasMoreField: string;
+  };
   request?: RequestPaginationFieldsObject;
   response?: ResponsePaginationFieldsObject;
   [key: `x-${string}`]: unknown;
