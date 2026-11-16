@@ -824,6 +824,8 @@ export function validatePaginationScheme(
   checkIncomplete(path, scheme, errors);
   checkItemCursor(path, scheme, errors);
   if (scheme.continuation) {
+    if (!scheme.response?.envelope)
+      errors.push(`${path}.continuation requires a response envelope`);
     const fields = Object.values(scheme.response?.bodyFields ?? {});
     if (
       fields.filter(
