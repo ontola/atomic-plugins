@@ -38,7 +38,10 @@ const document = (): OpenApiDocument => ({
   },
 });
 
-function provider(...pages: unknown[]) {
+function provider(...pages: unknown[]): {
+  requests: Parameters<Transport>[0][];
+  transport: Transport;
+} {
   const requests: Parameters<Transport>[0][] = [];
   const transport: Transport = async (request) => {
     requests.push(request);
