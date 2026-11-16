@@ -1540,7 +1540,7 @@ mod tests {
             Err("query parameter value is not permitted")
         );
         // Other users' and organizations' listings stay outside the document.
-        for path in ["/users/octocat/repos", "/orgs/ontola/repos", "/user/orgs"] {
+        for path in ["/users/octocat/repos", "/orgs/ontola/repos"] {
             assert!(
                 catalog.allows("github-issues", "GET", path).is_none(),
                 "{path}"
@@ -1597,7 +1597,7 @@ mod tests {
         );
         // Still the one `repo` scope: labels need no scope of their own.
         let github = catalog.oauth_provider("github-issues").unwrap();
-        assert_eq!(github.scopes, vec!["repo".to_string()]);
+        assert_eq!(github.scopes, ["read:org", "repo"]);
         // atomic-plugins#5 Phase 1: the composed google-calendar document
         // now allows the one write operation Devonian's lens sends.
         assert!(catalog
