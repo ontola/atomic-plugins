@@ -40,11 +40,7 @@
     "v2": {
       "name": "Learning tree v2",
       "description": "Skill, lesson and mastery classes for learning trees (Leerboom). Property names follow schema.org LRMI where one fits: teaches, competencyRequired, timeRequired. Assessments, questions and attempts are not part of this release. Declared, not verified.",
-      "classes": [
-        "skill-v1",
-        "lesson-v1",
-        "mastery-v1"
-      ],
+      "classes": ["skill-v1", "lesson-v1", "mastery-v1"],
       "properties": [
         "skill-requires",
         "skill-recommends",
@@ -190,9 +186,7 @@
     "issue-v1": {
       "name": "Issue",
       "description": "An issue or task, using the task/v1 vocabulary every AtomicServer embeds: status (todo, doing, blocked, done; done is closed), body, assignee and due date. Provider data (issue numbers, labels, comments, sync state) is not part of this class.",
-      "requires": [
-        "https://atomicdata.dev/properties/name"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name"],
       "recommends": [
         "https://atomicdata.dev/task/v1/status",
         "https://atomicdata.dev/task/v1/body",
@@ -203,9 +197,7 @@
     "time-entry-v1": {
       "name": "Time entry",
       "description": "One interval of work: a start instant, an end instant (absent while a timer runs), and optionally a project, a person and a billable flag. Provider data (source ids, observation logs) is not part of this class.",
-      "requires": [
-        "work-start"
-      ],
+      "requires": ["work-start"],
       "recommends": [
         "https://atomicdata.dev/properties/name",
         "work-end",
@@ -217,17 +209,13 @@
     "work-project-v1": {
       "name": "Project",
       "description": "A named body of work that time entries belong to.",
-      "requires": [
-        "https://atomicdata.dev/properties/name"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name"],
       "recommends": []
     },
     "work-person-v1": {
       "name": "Person",
       "description": "A person who performed work, by name. Not an Atomic authentication agent.",
-      "requires": [
-        "https://atomicdata.dev/properties/name"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name"],
       "recommends": []
     },
     "bank-transaction-v1": {
@@ -251,9 +239,7 @@
     "skill-v1": {
       "name": "Skill",
       "description": "A unit of knowledge in a learning tree, with the skills it requires and recommends. The tree belongs to everyone who can read it; whether a skill is open is computed per learner from their own mastery rows.",
-      "requires": [
-        "https://atomicdata.dev/properties/name"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name"],
       "recommends": [
         "https://atomicdata.dev/properties/description",
         "skill-requires",
@@ -266,10 +252,7 @@
     "lesson-v1": {
       "name": "Lesson",
       "description": "One route to a skill: a thin wrapper around the real material (video, document, exercise, live session). A skill may have many lessons.",
-      "requires": [
-        "https://atomicdata.dev/properties/name",
-        "lesson-teaches"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name", "lesson-teaches"],
       "recommends": [
         "lesson-content",
         "lesson-format",
@@ -280,21 +263,13 @@
     "mastery-v1": {
       "name": "Mastery",
       "description": "How well one learner masters one skill. Private data, kept in the learner's own drive. Not a credential: nobody attests it.",
-      "requires": [
-        "mastery-skill",
-        "mastery-level"
-      ],
-      "recommends": [
-        "mastery-source",
-        "mastery-updated-at"
-      ]
+      "requires": ["mastery-skill", "mastery-level"],
+      "recommends": ["mastery-source", "mastery-updated-at"]
     },
     "building-home-v1": {
       "name": "Home",
       "description": "A property: the digital twin of one house or apartment (IfcProject). The permission anchor of everything in it. Declared, not verified.",
-      "requires": [
-        "https://atomicdata.dev/properties/name"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name"],
       "recommends": [
         "bldg-units",
         "bldg-north-angle",
@@ -307,46 +282,25 @@
     "building-site-v1": {
       "name": "Site",
       "description": "The plot a building stands on (IfcSite).",
-      "requires": [
-        "https://atomicdata.dev/properties/name"
-      ],
-      "recommends": [
-        "bldg-boundary",
-        "bldg-home"
-      ]
+      "requires": ["https://atomicdata.dev/properties/name"],
+      "recommends": ["bldg-boundary", "bldg-home"]
     },
     "building-building-v1": {
       "name": "Building",
       "description": "One building on a site (IfcBuilding). Storeys are local to its origin, rotated by its rotation.",
-      "requires": [
-        "https://atomicdata.dev/properties/name"
-      ],
-      "recommends": [
-        "bldg-site",
-        "bldg-rotation",
-        "bldg-geo-origin"
-      ]
+      "requires": ["https://atomicdata.dev/properties/name"],
+      "recommends": ["bldg-site", "bldg-rotation", "bldg-geo-origin"]
     },
     "building-storey-v1": {
       "name": "Storey",
       "description": "One floor of a building (IfcBuildingStorey). Coordinates of what is on it are local to the storey.",
-      "requires": [
-        "https://atomicdata.dev/properties/name",
-        "bldg-building"
-      ],
-      "recommends": [
-        "bldg-elevation",
-        "bldg-height",
-        "bldg-level"
-      ]
+      "requires": ["https://atomicdata.dev/properties/name", "bldg-building"],
+      "recommends": ["bldg-elevation", "bldg-height", "bldg-level"]
     },
     "building-space-v1": {
       "name": "Space",
       "description": "A room or outdoor area (IfcSpace). Its boundary is stored, derived from walls, so rooms show before walls are confirmed. Origin and review properties record who proposed it.",
-      "requires": [
-        "https://atomicdata.dev/properties/name",
-        "bldg-storey"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name", "bldg-storey"],
       "recommends": [
         "bldg-usage",
         "bldg-boundary",
@@ -365,10 +319,7 @@
     "building-element-v1": {
       "name": "Element",
       "description": "A building element (IfcWall, IfcDoor, IfcWindow, ...) in one class: the IFC class is a property, not a type. Origin and review properties record who proposed it.",
-      "requires": [
-        "https://atomicdata.dev/properties/name",
-        "bldg-storey"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name", "bldg-storey"],
       "recommends": [
         "bldg-ifc-class",
         "bldg-ifc-guid",
@@ -393,9 +344,7 @@
     "building-source-v1": {
       "name": "Source",
       "description": "Something the user gave: a photo, video, PDF, floor plan, note or voice memo, as a File resource plus what is known about it.",
-      "requires": [
-        "https://atomicdata.dev/properties/name"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name"],
       "recommends": [
         "bldg-source-file",
         "bldg-media-kind",
@@ -409,9 +358,7 @@
     "building-analysis-run-v1": {
       "name": "Analysis run",
       "description": "One AI pass over sources: which model, what it read and how it ended. Its summary is the description. Resources it creates point back with created-by-run.",
-      "requires": [
-        "https://atomicdata.dev/properties/name"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name"],
       "recommends": [
         "bldg-model",
         "bldg-model-version",
@@ -424,10 +371,7 @@
     "building-evidence-v1": {
       "name": "Evidence",
       "description": "A source and a place in it that supports a fact, so the app can show why the AI believes something and a person can reject it.",
-      "requires": [
-        "bldg-source",
-        "bldg-supports"
-      ],
+      "requires": ["bldg-source", "bldg-supports"],
       "recommends": [
         "bldg-locator",
         "bldg-property",
@@ -438,9 +382,7 @@
     "building-question-v1": {
       "name": "Building question",
       "description": "The extras of a question the AI asks the user. Meant to sit on the same resource as issue-v1, which holds name, status, body and assignee; this class does not repeat them.",
-      "requires": [
-        "bldg-question-kind"
-      ],
+      "requires": ["bldg-question-kind"],
       "recommends": [
         "bldg-about",
         "bldg-options",
@@ -454,10 +396,7 @@
     "building-listing-v1": {
       "name": "Listing",
       "description": "What an agent publishes about a home (schema.org RealEstateListing). Separate from the twin: the public selection says which confirmed parts may be shown. Title is the name, the text is the description.",
-      "requires": [
-        "https://atomicdata.dev/properties/name",
-        "bldg-home"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name", "bldg-home"],
       "recommends": [
         "https://atomicdata.dev/properties/description",
         "bldg-listing-status",
@@ -472,9 +411,7 @@
     "building-material-v1": {
       "name": "Material",
       "description": "A material as a designer and a builder both need it: how it looks (colour, roughness, texture, pattern) and what it is (category, product, thermal and mass properties). Types and elements link to it; it is shared by everything in the home made of it.",
-      "requires": [
-        "https://atomicdata.dev/properties/name"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name"],
       "recommends": [
         "https://atomicdata.dev/properties/description",
         "bldg-home",
@@ -495,10 +432,7 @@
     "building-element-type-v1": {
       "name": "Element type",
       "description": "A reusable kind of element (IfcWallType, IfcWindowType, ...): a wall build-up, a window series, a slab. Elements link to it with element-type and inherit its layers, material and attributes; their own values override.",
-      "requires": [
-        "https://atomicdata.dev/properties/name",
-        "bldg-ifc-class"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name", "bldg-ifc-class"],
       "recommends": [
         "https://atomicdata.dev/properties/description",
         "bldg-home",
@@ -513,10 +447,7 @@
     "building-design-option-v1": {
       "name": "Design option",
       "description": "One alternative of a design, so the AI can propose several and the owner can choose. Spaces and elements with this option belong only to it.",
-      "requires": [
-        "https://atomicdata.dev/properties/name",
-        "bldg-home"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name", "bldg-home"],
       "recommends": [
         "https://atomicdata.dev/properties/description",
         "bldg-option-status"
@@ -525,10 +456,7 @@
     "building-view-v1": {
       "name": "View",
       "description": "A saved camera on the home, with the moment it shows, for renders and walkthroughs.",
-      "requires": [
-        "https://atomicdata.dev/properties/name",
-        "bldg-home"
-      ],
+      "requires": ["https://atomicdata.dev/properties/name", "bldg-home"],
       "recommends": [
         "https://atomicdata.dev/properties/description",
         "bldg-camera",
