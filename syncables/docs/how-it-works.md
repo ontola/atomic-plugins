@@ -3,7 +3,7 @@
 **SyncD turns existing APIs into a local, versioned copy of your data.** Its
 generic Syncables client reads OpenAPI documents extended with declarative
 descriptions of pagination, record identities and synchronization behavior,
-reducing the need for custom client code for each service. SyncD runs this as
+using a shared HTTP transport. [The design excludes platform-specific SDKs](daemon-design.md#api-integration-without-platform-sdks). SyncD runs this as
 a standalone daemon, preserving history and making your local data available
 offline through Git exports and Braid subscriptions.
 

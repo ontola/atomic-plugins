@@ -178,7 +178,7 @@ existing name, including concurrent adds. No keys or tokens belong in these
 definitions. Output says `status: configured` and `replicationImplemented:
 false`; no remote access or background job is started.
 
-Atomic and NextGraph native replication require their SDKs, identities,
+Atomic and NextGraph native replication require wire protocol support, identities,
 permissions, commit history and durable protocol state. remoteStorage requires
 WebFinger discovery, scoped authorization and ETag-aware document sync.
 Configuring an endpoint is not proof that any of those steps has happened.

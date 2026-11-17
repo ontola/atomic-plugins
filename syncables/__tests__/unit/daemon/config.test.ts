@@ -25,6 +25,7 @@ describe('configured daemon scope', () => {
             document: 'source.json',
             collection: 'entries',
             pollSeconds: 0,
+            readLimits: { maxRecords: 10_000, maxRequests: 2500 },
             query: { b: '2', a: '1' },
           },
         ],
@@ -42,6 +43,10 @@ describe('configured daemon scope', () => {
         join(dir, 'my-data'),
       );
       expect(source.pollSeconds).toBe(0);
+      expect(source.readLimits).toEqual({
+        maxRecords: 10_000,
+        maxRequests: 2500,
+      });
       expect(selectedCollections(config, ['example/work/entries'])).toEqual([
         source,
       ]);
@@ -52,7 +57,12 @@ describe('configured daemon scope', () => {
       expect(
         collectionScope(
           config.owner,
-          { ...source, pollSeconds: 300, query: { a: '1', b: '2' } },
+          {
+            ...source,
+            readLimits: { timeoutMs: 2000 },
+            pollSeconds: 300,
+            query: { a: '1', b: '2' },
+          },
           'definition',
         ),
       ).toBe(scope);
@@ -72,6 +82,23 @@ describe('configured daemon scope', () => {
         }),
       );
       await expect(loadDaemonConfig(file)).rejects.toThrow('Duplicate');
+      for (const readLimits of [
+        { maxRecords: 0 },
+        { maxRequests: '5' },
+        { timeoutMs: 1.5 },
+        { maxRetries: 3 },
+      ]) {
+        await writeFile(
+          file,
+          JSON.stringify({
+            ...value,
+            collections: [{ ...value.collections[0], readLimits }],
+          }),
+        );
+        await expect(loadDaemonConfig(file)).rejects.toThrow(
+          'Invalid collection readLimits',
+        );
+      }
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

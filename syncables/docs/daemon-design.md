@@ -28,6 +28,24 @@ or platform retirement exists. The implementation tickets are
 [#565](https://github.com/ontola/atomic-plugins/issues/565) (device authentication)
 and [#566](https://github.com/ontola/atomic-plugins/issues/566) (CLI and daemon).
 
+## API integration without platform SDKs
+
+Syncables and SyncD must never depend on or call platform-specific SDKs.
+Describe provider APIs in OpenAPI and express provider-specific behavior in
+overlays and reusable extensions. Build requests through the shared HTTP
+transport, directly or through integration-proxy. Generic HTTP, authentication
+and wire-format libraries are compatible with this design.
+
+For [file storage collections](https://github.com/ontola/atomic-plugins/issues/727),
+describe metadata and the retrieval of opaque bytes separately. The proposed
+extension should let an item identify its bytes through either a download URL
+or an OpenAPI operation with arguments bound from that item. The shared
+transport must support the operation's declared method, parameters, headers,
+body and authentication. Metadata synchronization leaves retrieval to explicit
+policy. Where a native replication protocol needs additional behavior, model
+its wire protocol behind a Syncables adapter. A destination stays planned
+until that protocol is supported.
+
 ## What exists and what is planned
 
 Status checked against this implementation branch on 2026-10-20; see the
@@ -639,7 +657,7 @@ Atomic drive. Git export is independent of this path and is never a prerequisite
    `(destination, source subject/schema)` to stable native Atomic identities;
    a retry or later source revision must update the same target identities.
    Existing JSON-AD is an intermediate representation, not automatically a valid
-   native drive commit. Use the supported Atomic SDK/schema and commit APIs.
+   native drive commit. Use the documented Atomic schema and commit APIs.
 3. Publish required native classes/properties and record data, preserving OAD
    provenance and links to the source snapshot. Define lossless handling of raw
    JSON and numbers that a native property datatype cannot express. Keep the
@@ -713,13 +731,13 @@ inspect, enable/disable and remove destinations, with real observed status.
 
 | Backend | Runtime work beyond saving a destination |
 | --- | --- |
-| Atomic native sync | Compatible SDK/engine, identities and permissions, signed commits, Loro/version-vector state, subscriptions and reconnect recovery. HTTP imports alone do not establish native replication. |
-| NextGraph native sync | Its SDK or wallet/verifier sidecar, encrypted commit synchronization, document permissions and durable native protocol state. Snapshot exchange alone is insufficient. |
+| Atomic native sync | Wire protocol support, identities and permissions, signed commits, Loro/version-vector state, subscriptions and reconnect recovery. HTTP imports alone do not establish native replication. |
+| NextGraph native sync | Encrypted commit synchronization, identity and verification, document permissions and durable native protocol state. Snapshot exchange alone is insufficient. |
 | remoteStorage | WebFinger discovery from a user address, scoped module authorization, ETag-aware document/listing sync and conflict handling. This is document storage synchronization. |
-| Jazz | Delayed adapter design: explicit CoValue/schema mapping, account/group permissions, stable identities and SDK-owned durable sync state. No configuration/runtime support is claimed. |
+| Jazz | Delayed adapter design: explicit CoValue/schema mapping, account/group permissions, stable identities and durable protocol state. No configuration/runtime support is claimed. |
 | atproto | Delayed adapter design: records mapped to appropriate lexicons, repository identity/authentication, writes/subscriptions and durable delivery state. A copied JSON response is not native repository synchronization. |
 
-Native SDKs may need durable protocol storage in addition to PostgreSQL.
+Native replication may need durable protocol storage in addition to PostgreSQL.
 Keep that state distinct from disposable hydrated API views and the provider
 mutation outbox. Preserve stable identity/provenance across representations
 and prevent replication echoes from repeatedly creating provider writes.
