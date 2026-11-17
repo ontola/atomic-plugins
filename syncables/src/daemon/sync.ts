@@ -1,28 +1,28 @@
-import type { SnapshotStore } from "./snapshot-store.js";
-import { readFile } from "node:fs/promises";
-import { load as parseYaml } from "js-yaml";
-import { loadOpenApiDocument } from "../openapi/load.js";
+import type { SnapshotStore } from './snapshot-store.js';
+import { readFile } from 'node:fs/promises';
+import { load as parseYaml } from 'js-yaml';
+import { loadOpenApiDocument } from '../openapi/load.js';
 import {
   discoverReadModel,
   listOperation,
   upstreamOf,
   isRecord,
-} from "../read/model.js";
+} from '../read/model.js';
 import {
   Budget,
   walkPages,
   bindPath,
   PageStatusError,
   type WalkOutcome,
-} from "../read/pages.js";
+} from '../read/pages.js';
 import {
   declaredThrottling,
   classifyThrottling,
   type ThrottlingVerdict,
-} from "../throttling/throttling.js";
-import { resolveEffectiveScheme } from "../pagination/autodetect.js";
-import { readNestedField } from "../pagination/response-parser.js";
-import { isListTombstone } from "../read/list-tombstones.js";
+} from '../throttling/throttling.js';
+import { resolveEffectiveScheme } from '../pagination/autodetect.js';
+import { readNestedField } from '../pagination/response-parser.js';
+import { isListTombstone } from '../read/list-tombstones.js';
 import {
   PostgresArchive,
   createCachingTransport,
@@ -33,59 +33,59 @@ import {
   type GraphNode,
   type GraphValue,
   type ArchiveScope,
-} from "../postgres/index.js";
-import type { Transport, TransportResponse } from "../read/transport.js";
-import type { OpenApiDocument } from "../openapi/types.js";
-import { validateCommitMessage } from "./git-store.js";
-import { inventoryDocument } from "./file-inventory-sources.js";
+} from '../postgres/index.js';
+import type { Transport, TransportResponse } from '../read/transport.js';
+import type { OpenApiDocument } from '../openapi/types.js';
+import { validateCommitMessage } from './git-store.js';
+import { inventoryDocument } from './file-inventory-sources.js';
 import {
   alias,
   collectionScope,
   itemSubject,
   type CollectionConfig,
-} from "./config.js";
+} from './config.js';
 
-export const SOURCE_JSON = "urn:syncables:property:source-json";
-export const SOURCE_ID = "urn:syncables:property:source-id";
-const IS_A = "https://atomicdata.dev/properties/is-a";
-const SOURCE_CLASS = "urn:syncables:class:source-record";
+export const SOURCE_JSON = 'urn:syncables:property:source-json';
+export const SOURCE_ID = 'urn:syncables:property:source-id';
+const IS_A = 'https://atomicdata.dev/properties/is-a';
+const SOURCE_CLASS = 'urn:syncables:class:source-record';
 const baseSchema = (): Map<string, string> =>
   new Map([
     [
       SOURCE_CLASS,
       JSON.stringify({
-        "@id": SOURCE_CLASS,
-        [IS_A]: ["https://atomicdata.dev/classes/Class"],
-        "https://atomicdata.dev/properties/requires": [SOURCE_ID, SOURCE_JSON],
+        '@id': SOURCE_CLASS,
+        [IS_A]: ['https://atomicdata.dev/classes/Class'],
+        'https://atomicdata.dev/properties/requires': [SOURCE_ID, SOURCE_JSON],
       }),
     ],
     [
       SOURCE_ID,
       JSON.stringify({
-        "@id": SOURCE_ID,
-        [IS_A]: ["https://atomicdata.dev/classes/Property"],
-        "https://atomicdata.dev/properties/datatype":
-          "https://atomicdata.dev/datatypes/string",
+        '@id': SOURCE_ID,
+        [IS_A]: ['https://atomicdata.dev/classes/Property'],
+        'https://atomicdata.dev/properties/datatype':
+          'https://atomicdata.dev/datatypes/string',
       }),
     ],
     [
       SOURCE_JSON,
       JSON.stringify({
-        "@id": SOURCE_JSON,
-        [IS_A]: ["https://atomicdata.dev/classes/Property"],
-        "https://atomicdata.dev/properties/datatype":
-          "https://atomicdata.dev/datatypes/json",
+        '@id': SOURCE_JSON,
+        [IS_A]: ['https://atomicdata.dev/classes/Property'],
+        'https://atomicdata.dev/properties/datatype':
+          'https://atomicdata.dev/datatypes/json',
       }),
     ],
   ]);
-const OAD_HASH = "urn:syncables:property:openapi-document-hash";
-const OAD_RESOURCE = "urn:syncables:property:openapi-resource";
+const OAD_HASH = 'urn:syncables:property:openapi-document-hash';
+const OAD_RESOURCE = 'urn:syncables:property:openapi-resource';
 export function sourceClass(prepared: PreparedCollection): string {
   const collections = discoverReadModel(prepared.document).collections.filter(
     (c) => c.name === prepared.source.collection,
   );
   if (collections.length !== 1)
-    throw new Error("Unknown or ambiguous metadata collection");
+    throw new Error('Unknown or ambiguous metadata collection');
   return `urn:syncables:oad:${prepared.documentHash}:class:${encodeURIComponent(collections[0].resource)}`;
 }
 export function sourceSchemas(
@@ -99,10 +99,10 @@ export function sourceSchemas(
   schemas.set(
     classId,
     JSON.stringify({
-      "@id": classId,
-      [IS_A]: ["https://atomicdata.dev/classes/Class"],
-      "https://atomicdata.dev/properties/description": `${prepared.document.info.title}: API resource ${resource}. The document hash identifies the declared contract, not a validation result.`,
-      "https://atomicdata.dev/properties/requires": [SOURCE_ID, SOURCE_JSON],
+      '@id': classId,
+      [IS_A]: ['https://atomicdata.dev/classes/Class'],
+      'https://atomicdata.dev/properties/description': `${prepared.document.info.title}: API resource ${resource}. The document hash identifies the declared contract, not a validation result.`,
+      'https://atomicdata.dev/properties/requires': [SOURCE_ID, SOURCE_JSON],
       [OAD_HASH]: prepared.documentHash,
       [OAD_RESOURCE]: resource,
     }),
@@ -111,10 +111,10 @@ export function sourceSchemas(
     schemas.set(
       property,
       JSON.stringify({
-        "@id": property,
-        [IS_A]: ["https://atomicdata.dev/classes/Property"],
-        "https://atomicdata.dev/properties/datatype":
-          "https://atomicdata.dev/datatypes/string",
+        '@id': property,
+        [IS_A]: ['https://atomicdata.dev/classes/Property'],
+        'https://atomicdata.dev/properties/datatype':
+          'https://atomicdata.dev/datatypes/string',
       }),
     );
   return schemas;
@@ -126,19 +126,19 @@ export async function typeSourceRecord(
 ): Promise<string> {
   const graph = indexJson(raw);
   const node = JSON.parse(graph.nodes.get(graph.root)!) as GraphNode;
-  if (node[2] !== "object") throw new Error("Source record is not an object");
+  if (node[2] !== 'object') throw new Error('Source record is not an object');
   const entries = node[3] as [string, GraphValue][];
   const priorTypes = (JSON.parse(raw) as Record<string, unknown>)[IS_A];
   const retained = Array.isArray(priorTypes)
-    ? priorTypes.filter((type): type is string => typeof type === "string")
+    ? priorTypes.filter((type): type is string => typeof type === 'string')
     : [];
   const types = indexJson(
     JSON.stringify([...new Set([classId, ...retained, SOURCE_CLASS])]),
   );
   for (const [hash, bytes] of types.nodes) graph.nodes.set(hash, bytes);
   const found = entries.find(([key]) => key === IS_A);
-  if (found) found[1] = ["ref", types.root];
-  else entries.push([IS_A, ["ref", types.root]]);
+  if (found) found[1] = ['ref', types.root];
+  else entries.push([IS_A, ['ref', types.root]]);
   entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const bytes = JSON.stringify(node);
   const root = nodeHash(bytes);
@@ -156,7 +156,7 @@ export async function upgradeSourceClasses(
   if (
     context.itemClass === sourceClass(prepared) &&
     context.documentHash === prepared.documentHash &&
-    context.classMapping === "oad-resource-class-v1"
+    context.classMapping === 'oad-resource-class-v1'
   )
     return undefined;
   const resources = new Map<string, string>();
@@ -167,7 +167,7 @@ export async function upgradeSourceClasses(
       ? await typeSourceRecord(raw, sourceClass(prepared))
       : raw;
     if (indexJson(raw).root !== indexJson(typed).root) changed = true;
-    resources.set(item["@id"] as string, typed);
+    resources.set(item['@id'] as string, typed);
   }
   for (const [subject, raw] of sourceSchemas(prepared)) {
     const existing = resources.get(subject);
@@ -182,7 +182,7 @@ export async function upgradeSourceClasses(
       resources,
       context: {
         ...context,
-        classMapping: "oad-resource-class-v1",
+        classMapping: 'oad-resource-class-v1',
         itemClass: sourceClass(prepared),
         documentHash: prepared.documentHash,
       },
@@ -197,26 +197,26 @@ function objectRefs(
 ): WeakMap<object, string> {
   const refs = new WeakMap<object, string>();
   const visit = (value: GraphValue, current: unknown): void => {
-    if (value[0] !== "ref") return;
+    if (value[0] !== 'ref') return;
     const node = JSON.parse(graph.nodes.get(value[1])!) as GraphNode;
-    if (current && typeof current === "object") refs.set(current, value[1]);
-    if (node[2] === "object" && isRecord(current))
+    if (current && typeof current === 'object') refs.set(current, value[1]);
+    if (node[2] === 'object' && isRecord(current))
       for (const [key, child] of node[3] as [string, GraphValue][])
         visit(child, current[key]);
-    if (node[2] === "array" && Array.isArray(current))
+    if (node[2] === 'array' && Array.isArray(current))
       (node[3] as GraphValue[]).forEach((child, i) => visit(child, current[i]));
   };
-  visit(["ref", graph.root], parsed);
+  visit(['ref', graph.root], parsed);
   return refs;
 }
 function adaptIncremental(document: OpenApiDocument): OpenApiDocument {
   const doc = structuredClone(document);
-  const schemes: unknown = doc.components?.["paginationSchemes"];
+  const schemes: unknown = doc.components?.['paginationSchemes'];
   if (isRecord(schemes))
     for (const entry of Object.values(schemes))
-      if (isRecord(entry) && entry.type === "incrementalSync") {
-        entry.type = "pageToken";
-        entry["x-syncables-incremental"] = true;
+      if (isRecord(entry) && entry.type === 'incrementalSync') {
+        entry.type = 'pageToken';
+        entry['x-syncables-incremental'] = true;
       }
   return doc;
 }
@@ -234,7 +234,7 @@ export async function prepareCollection(
     source.fileInventory && inventoryDocument(source.fileInventory.provider);
   const original = builtin
     ? JSON.stringify(builtin)
-    : await readFile(source.document, "utf8");
+    : await readFile(source.document, 'utf8');
   const document =
     builtin ??
     adaptIncremental(
@@ -254,7 +254,7 @@ export interface CollectionPublicationOptions {
   auth: ArchiveScope;
   signal?: AbortSignal;
   message?: string;
-  trigger?: "manual" | "scheduled";
+  trigger?: 'manual' | 'scheduled';
 }
 export interface SyncCollectionOptions extends CollectionPublicationOptions {
   upstream: Transport;
@@ -264,14 +264,14 @@ export interface CollectionSyncResult {
   revision: string;
   run: string;
   records: number;
-  strategy: "full" | "bootstrap" | "delta";
+  strategy: 'full' | 'bootstrap' | 'delta';
 }
 export class SyncRetryError extends Error {
   constructor(
     readonly retryAt?: number,
     readonly blocked = false,
   ) {
-    super(blocked ? "Source blocked automatic reads" : "Source deferred reads");
+    super(blocked ? 'Source blocked automatic reads' : 'Source deferred reads');
   }
 }
 export function sourceRecord(
@@ -281,12 +281,12 @@ export function sourceRecord(
   raw: string,
 ): string {
   const prefix = JSON.stringify({
-    "@id": subject,
+    '@id': subject,
     [IS_A]: [apiClass, SOURCE_CLASS],
     [SOURCE_ID]: id,
   });
   return (
-    prefix.slice(0, -1) + "," + JSON.stringify(SOURCE_JSON) + ":" + raw + "}"
+    prefix.slice(0, -1) + ',' + JSON.stringify(SOURCE_JSON) + ':' + raw + '}'
   );
 }
 
@@ -302,7 +302,7 @@ export async function publishCollection(
     expected: string | undefined;
     resources: Map<string, string>;
     resource: string;
-    strategy: CollectionSyncResult["strategy"];
+    strategy: CollectionSyncResult['strategy'];
     records: number;
     run: string;
     nextToken: string | undefined;
@@ -317,25 +317,25 @@ export async function publishCollection(
       scope,
       resources,
       message: [
-        `Sync ${alias(source)}: ${strategy} (${options.trigger ?? "direct"})`,
-        "",
+        `Sync ${alias(source)}: ${strategy} (${options.trigger ?? 'direct'})`,
+        '',
         ...(options.message === undefined
           ? []
           : [
-              "Intent (user supplied):",
+              'Intent (user supplied):',
               ...options.message
                 .trim()
-                .split("\n")
-                .map((line) => "  " + line),
-              "",
+                .split('\n')
+                .map((line) => '  ' + line),
+              '',
             ]),
-        "Syncables-Intent-Version: 1",
-        `Syncables-Trigger: ${options.trigger ?? "direct"}`,
+        'Syncables-Intent-Version: 1',
+        `Syncables-Trigger: ${options.trigger ?? 'direct'}`,
         `Syncables-Collection: ${alias(source)}`,
         `Syncables-Run: ${run}`,
         `Syncables-Strategy: ${strategy}`,
         `Syncables-Records: ${records}`,
-      ].join("\n"),
+      ].join('\n'),
       context: {
         owner: auth.owner,
         connection: auth.connection,
@@ -346,13 +346,13 @@ export async function publishCollection(
         account: source.account,
         run,
         strategy,
-        mapping: "source-json-ad-v1",
-        classMapping: "oad-resource-class-v1",
+        mapping: 'source-json-ad-v1',
+        classMapping: 'oad-resource-class-v1',
         itemClass: sourceClass(prepared),
         documentHash: prepared.documentHash,
         ...(nextToken ? { syncToken: nextToken } : {}),
         ...(source.fileInventory
-          ? { profile: "file-inventory-v1", records }
+          ? { profile: 'file-inventory-v1', records }
           : {}),
       },
     },
@@ -370,19 +370,19 @@ export async function syncCollection(
   if (options.message !== undefined) validateCommitMessage(options.message);
   const { document, source, scope } = prepared;
   if (source.fileInventory)
-    throw new Error("Use the file inventory reader for this collection");
+    throw new Error('Use the file inventory reader for this collection');
   if (source.connection !== auth.connection)
-    throw new Error("Collection does not match the authenticated connection");
+    throw new Error('Collection does not match the authenticated connection');
   const model = discoverReadModel(document);
   const matches = model.collections.filter((c) => c.name === source.collection);
   if (matches.length !== 1)
-    throw new Error("Unknown or ambiguous metadata collection");
+    throw new Error('Unknown or ambiguous metadata collection');
   const collection = matches[0];
   for (const key of collection.contextParams)
     if (!Object.hasOwn(source.bindings, key))
-      throw new Error("Configure all parent bindings before syncing");
+      throw new Error('Configure all parent bindings before syncing');
   const operation = listOperation(document, collection.url, collection.method);
-  if (!operation) throw new Error("Collection declares no read operation");
+  if (!operation) throw new Error('Collection declares no read operation');
   const inherited = document.paths[collection.url]?.parameters;
   const parameters = [
     ...(Array.isArray(inherited) ? inherited : []),
@@ -390,75 +390,75 @@ export async function syncCollection(
   ];
   for (const [key, value] of Object.entries(source.query)) {
     if (
-      !parameters.some((p) => isRecord(p) && p.in === "query" && p.name === key)
+      !parameters.some((p) => isRecord(p) && p.in === 'query' && p.name === key)
     )
       throw new Error(
-        "Configured query parameter is not declared by the read operation",
+        'Configured query parameter is not declared by the read operation',
       );
     if (
       Object.hasOwn(collection.listQuery, key) &&
       collection.listQuery[key] !== value
     )
       throw new Error(
-        "Configured query cannot replace a fixed collection value",
+        'Configured query cannot replace a fixed collection value',
       );
   }
-  if (parameters.some((p) => isRecord(p) && p["x-time-zone"] !== undefined))
+  if (parameters.some((p) => isRecord(p) && p['x-time-zone'] !== undefined))
     throw new Error(
-      "Zoned filter conversion is not supported by this daemon stage",
+      'Zoned filter conversion is not supported by this daemon stage',
     );
   const scheme = resolveEffectiveScheme(document, operation)?.scheme;
-  if (scheme?.type === "rangeWindow")
+  if (scheme?.type === 'rangeWindow')
     throw new Error(
-      "Range-window collections need coverage support before daemon publication",
+      'Range-window collections need coverage support before daemon publication',
     );
   const continuation = scheme?.continuation;
-  if (collection.method !== "GET" && !continuation)
+  if (collection.method !== 'GET' && !continuation)
     throw new Error(
-      "POST collection reads require a declared continuation scheme",
+      'POST collection reads require a declared continuation scheme',
     );
-  const incremental = scheme?.["x-syncables-incremental"] === true;
+  const incremental = scheme?.['x-syncables-incremental'] === true;
   for (const [key, field] of Object.entries(
     scheme?.request?.queryParameters ?? {},
   ))
     if (
       Object.hasOwn(source.query, key) &&
-      ["syncToken", "pageToken", "pageNumber", "offset"].includes(
-        field.role ?? "",
+      ['syncToken', 'pageToken', 'pageNumber', 'offset'].includes(
+        field.role ?? '',
       )
     )
-      throw new Error("Paging and sync checkpoints are managed by the daemon");
+      throw new Error('Paging and sync checkpoints are managed by the daemon');
   const tokenFields = Object.entries(
     scheme?.request?.queryParameters ?? {},
-  ).filter(([, field]) => field.role === "syncToken");
+  ).filter(([, field]) => field.role === 'syncToken');
   if (
     incremental &&
     !continuation &&
     (tokenFields.length !== 1 ||
       Object.values(scheme?.request?.bodyFields ?? {}).some(
-        (field) => field.role === "syncToken",
+        (field) => field.role === 'syncToken',
       ) ||
       Object.values(scheme?.request?.headerFields ?? {}).some(
-        (field) => field.role === "syncToken",
+        (field) => field.role === 'syncToken',
       ))
   )
     throw new Error(
-      "Incremental daemon reads require one query syncToken field",
+      'Incremental daemon reads require one query syncToken field',
     );
   const apiClass = sourceClass(prepared);
   const expected = await store.head(scope);
   const previous = expected ? await store.context(scope, expected) : {};
   const priorToken =
     previous.authorizationContext === auth.authorizationContext &&
-    typeof previous.syncToken === "string"
+    typeof previous.syncToken === 'string'
       ? previous.syncToken
       : undefined;
   let token = incremental && !options.forceFull ? priorToken : undefined;
   for (let bootstrap = 0; bootstrap < 2; bootstrap++) {
-    const strategy = incremental ? (token ? "delta" : "bootstrap") : "full";
+    const strategy = incremental ? (token ? 'delta' : 'bootstrap') : 'full';
     const run = await archive.createRun(
       auth,
-      "collection " + source.name + " " + strategy,
+      'collection ' + source.name + ' ' + strategy,
     );
     let finished = false;
     let verdict: ThrottlingVerdict | undefined;
@@ -469,9 +469,9 @@ export async function syncCollection(
         archive,
         scope: auth,
         run,
-        mode: "live",
+        mode: 'live',
         upstream: async (request) => {
-          if (options.signal?.aborted) throw new Error("Sync stopped");
+          if (options.signal?.aborted) throw new Error('Sync stopped');
           return options.upstream(request);
         },
         onResponse: ({ response }) => {
@@ -480,7 +480,7 @@ export async function syncCollection(
             ...response,
             receivedAt: Date.now(),
           });
-          if (verdict?.meaning === "blocked")
+          if (verdict?.meaning === 'blocked')
             throw new SyncRetryError(undefined, true);
           graph =
             response.status >= 200 && response.status < 300
@@ -492,17 +492,17 @@ export async function syncCollection(
         live,
         { ...DAEMON_READ_LIMITS, ...source.readLimits },
         async (ms) => {
-          if (options.signal?.aborted) throw new Error("Sync stopped");
+          if (options.signal?.aborted) throw new Error('Sync stopped');
           await new Promise<void>((done, reject) => {
             const stop = (): void => {
               clearTimeout(timer);
-              reject(new Error("Sync stopped"));
+              reject(new Error('Sync stopped'));
             };
             const timer = setTimeout(() => {
-              options.signal?.removeEventListener("abort", stop);
+              options.signal?.removeEventListener('abort', stop);
               done();
             }, ms);
-            options.signal?.addEventListener("abort", stop, { once: true });
+            options.signal?.addEventListener('abort', stop, { once: true });
           });
         },
         declaredThrottling(document),
@@ -511,7 +511,7 @@ export async function syncCollection(
         token && expected
           ? new Map(
               (await store.list(scope, expected)).map((text) => [
-                (JSON.parse(text) as { "@id": string })["@id"],
+                (JSON.parse(text) as { '@id': string })['@id'],
                 text,
               ]),
             )
@@ -537,20 +537,20 @@ export async function syncCollection(
           : { itemsField: collection.itemsField }),
         ...(collection.emptyWhenAbsent ? { emptyWhenAbsent: true } : {}),
       })) {
-        if (!graph) throw new Error("Missing graph for collection page");
+        if (!graph) throw new Error('Missing graph for collection page');
         const currentGraph: JsonGraph = graph;
         const refs = objectRefs(currentGraph, page.body);
         for (const item of page.items) {
           const idValue = item[collection.idField];
           if (
-            !(typeof idValue === "string" && idValue) &&
-            !(typeof idValue === "number" && Number.isSafeInteger(idValue))
+            !(typeof idValue === 'string' && idValue) &&
+            !(typeof idValue === 'number' && Number.isSafeInteger(idValue))
           )
-            throw new Error("Missing or unsafe numeric record identity");
+            throw new Error('Missing or unsafe numeric record identity');
           const id = String(idValue);
           if (seen.has(id) || ++count > budget.limits.maxRecords)
             throw new Error(
-              "Repeated identity or collection exceeds record limit",
+              'Repeated identity or collection exceeds record limit',
             );
           seen.add(id);
           const subject = itemSubject(
@@ -568,7 +568,7 @@ export async function syncCollection(
           }
           const root = refs.get(item);
           if (!root)
-            throw new Error("Cannot locate original item in response graph");
+            throw new Error('Cannot locate original item in response graph');
           const raw = await renderJson(
             root,
             async (hash) => currentGraph.nodes.get(hash)!,
@@ -578,23 +578,23 @@ export async function syncCollection(
       }
       if (!outcome.complete || options.signal?.aborted)
         throw new Error(
-          "Collection read incomplete; previous snapshot retained",
+          'Collection read incomplete; previous snapshot retained',
         );
       let nextToken: string | undefined;
       if (incremental && continuation) {
         nextToken = outcome.checkpoint;
         if (!nextToken)
-          throw new Error("Missing terminal continuation checkpoint");
+          throw new Error('Missing terminal continuation checkpoint');
       } else if (incremental) {
         const fields = Object.entries(
           scheme?.response?.bodyFields ?? {},
-        ).filter(([, field]) => field.role === "nextSyncToken");
+        ).filter(([, field]) => field.role === 'nextSyncToken');
         const headers = Object.entries(scheme?.response?.headers ?? {}).filter(
-          ([, field]) => field.role === "nextSyncToken",
+          ([, field]) => field.role === 'nextSyncToken',
         );
         if (fields.length + headers.length !== 1 || !last)
           throw new Error(
-            "Incremental scheme needs one terminal nextSyncToken",
+            'Incremental scheme needs one terminal nextSyncToken',
           );
         const response: TransportResponse = last;
         const found = fields.length
@@ -603,9 +603,9 @@ export async function syncCollection(
               fields[0][0],
             )
           : response.headers[headers[0][0].toLowerCase()];
-        if (typeof found !== "string" || !found)
+        if (typeof found !== 'string' || !found)
           throw new Error(
-            "Missing terminal nextSyncToken; previous checkpoint retained",
+            'Missing terminal nextSyncToken; previous checkpoint retained',
           );
         nextToken = found;
       }
@@ -636,12 +636,12 @@ export async function syncCollection(
         token = undefined;
         continue;
       }
-      if (verdict?.meaning === "blocked")
+      if (verdict?.meaning === 'blocked')
         throw new SyncRetryError(undefined, true);
       if (verdict?.retryAt !== undefined && verdict.retryAt > Date.now())
         throw new SyncRetryError(verdict.retryAt);
       throw error;
     }
   }
-  throw new Error("Incremental bootstrap failed");
+  throw new Error('Incremental bootstrap failed');
 }
