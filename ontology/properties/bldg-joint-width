@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-joint-width",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "bldg-joint-width",
+  "https://atomicdata.dev/properties/name": "Joint width",
+  "https://atomicdata.dev/properties/description": "Width of the joint or gap between modules, in metres (mortar, slat gap).",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/float"
+}

@@ -6,6 +6,6 @@
   "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "bldg-geometry-kind",
   "https://atomicdata.dev/properties/name": "Geometry kind",
-  "https://atomicdata.dev/properties/description": "Which shape the geometry JSON holds. One of: wallAxis, extrusion, opening, mesh.",
+  "https://atomicdata.dev/properties/description": "Which shape the geometry JSON holds. One of: wallAxis, extrusion, opening, stair, mesh.",
   "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
 }

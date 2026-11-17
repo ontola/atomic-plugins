@@ -6,6 +6,7 @@
   "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "bldg-material",
   "https://atomicdata.dev/properties/name": "Material",
-  "https://atomicdata.dev/properties/description": "Primary material as free text. Not a materials catalogue.",
-  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
+  "https://atomicdata.dev/properties/description": "The Material an element is made of, or that overrides the outer layers of its type. A Material resource, not free text, so a render, a quantity take-off and an IFC export read the same thing.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/atomicURL",
+  "https://atomicdata.dev/properties/classtype": "https://ontola.github.io/atomic-plugins/ontology/classes/building-material-v1"
 }

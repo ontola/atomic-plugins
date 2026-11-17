@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-brief",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "bldg-design-brief",
+  "https://atomicdata.dev/properties/name": "Design brief",
+  "https://atomicdata.dev/properties/description": "What the owner wants: program, atmosphere, budget, constraints. The AI designs against it.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/markdown"
+}

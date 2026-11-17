@@ -14,6 +14,8 @@
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-units",
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-north-angle",
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-address",
-    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-cover-image"
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-cover-image",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-style",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-brief"
   ]
 }

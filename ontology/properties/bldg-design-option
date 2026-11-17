@@ -1,0 +1,12 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-option",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "bldg-design-option",
+  "https://atomicdata.dev/properties/name": "Design option",
+  "https://atomicdata.dev/properties/description": "The Design option this space or element belongs to. Absent means it is part of every option.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/atomicURL",
+  "https://atomicdata.dev/properties/classtype": "https://ontola.github.io/atomic-plugins/ontology/classes/building-design-option-v1"
+}

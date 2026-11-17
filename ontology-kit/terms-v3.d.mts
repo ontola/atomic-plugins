@@ -73,6 +73,33 @@ export declare const properties: {
   readonly 'bldg-public-address': PropertyTerm;
   readonly 'bldg-published-at': PropertyTerm;
   readonly 'bldg-public-selection': PropertyTerm;
+  readonly 'bldg-material-category': PropertyTerm;
+  readonly 'bldg-color': PropertyTerm;
+  readonly 'bldg-roughness': PropertyTerm;
+  readonly 'bldg-metalness': PropertyTerm;
+  readonly 'bldg-opacity': PropertyTerm;
+  readonly 'bldg-texture': PropertyTerm;
+  readonly 'bldg-pattern': PropertyTerm;
+  readonly 'bldg-module-size': PropertyTerm;
+  readonly 'bldg-joint-width': PropertyTerm;
+  readonly 'bldg-thermal-conductivity': PropertyTerm;
+  readonly 'bldg-density': PropertyTerm;
+  readonly 'bldg-product': PropertyTerm;
+  readonly 'bldg-element-type': PropertyTerm;
+  readonly 'bldg-layers': PropertyTerm;
+  readonly 'bldg-floor-finish': PropertyTerm;
+  readonly 'bldg-wall-finish': PropertyTerm;
+  readonly 'bldg-ceiling-finish': PropertyTerm;
+  readonly 'bldg-load-bearing': PropertyTerm;
+  readonly 'bldg-is-external': PropertyTerm;
+  readonly 'bldg-light': PropertyTerm;
+  readonly 'bldg-style': PropertyTerm;
+  readonly 'bldg-design-brief': PropertyTerm;
+  readonly 'bldg-design-option': PropertyTerm;
+  readonly 'bldg-option-status': PropertyTerm;
+  readonly 'bldg-camera': PropertyTerm;
+  readonly 'bldg-view-time': PropertyTerm;
+  readonly 'bldg-render': PropertyTerm;
 };
 
 export declare const classes: {
@@ -87,4 +114,8 @@ export declare const classes: {
   readonly 'building-evidence-v1': SharedClass;
   readonly 'building-question-v1': SharedClass;
   readonly 'building-listing-v1': SharedClass;
+  readonly 'building-material-v1': SharedClass;
+  readonly 'building-element-type-v1': SharedClass;
+  readonly 'building-design-option-v1': SharedClass;
+  readonly 'building-view-v1': SharedClass;
 };

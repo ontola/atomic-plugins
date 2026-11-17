@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-opacity",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "bldg-opacity",
+  "https://atomicdata.dev/properties/name": "Opacity",
+  "https://atomicdata.dev/properties/description": "From 0 (clear) to 1 (opaque). Glass is about 0.15 to 0.3. Absent means opaque.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/float"
+}

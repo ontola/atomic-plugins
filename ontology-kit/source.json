@@ -76,7 +76,11 @@
         "building-analysis-run-v1",
         "building-evidence-v1",
         "building-question-v1",
-        "building-listing-v1"
+        "building-listing-v1",
+        "building-material-v1",
+        "building-element-type-v1",
+        "building-design-option-v1",
+        "building-view-v1"
       ],
       "properties": [
         "bldg-units",
@@ -134,7 +138,34 @@
         "bldg-currency",
         "bldg-public-address",
         "bldg-published-at",
-        "bldg-public-selection"
+        "bldg-public-selection",
+        "bldg-material-category",
+        "bldg-color",
+        "bldg-roughness",
+        "bldg-metalness",
+        "bldg-opacity",
+        "bldg-texture",
+        "bldg-pattern",
+        "bldg-module-size",
+        "bldg-joint-width",
+        "bldg-thermal-conductivity",
+        "bldg-density",
+        "bldg-product",
+        "bldg-element-type",
+        "bldg-layers",
+        "bldg-floor-finish",
+        "bldg-wall-finish",
+        "bldg-ceiling-finish",
+        "bldg-load-bearing",
+        "bldg-is-external",
+        "bldg-light",
+        "bldg-style",
+        "bldg-design-brief",
+        "bldg-design-option",
+        "bldg-option-status",
+        "bldg-camera",
+        "bldg-view-time",
+        "bldg-render"
       ]
     }
   },
@@ -268,7 +299,9 @@
         "bldg-units",
         "bldg-north-angle",
         "bldg-address",
-        "bldg-cover-image"
+        "bldg-cover-image",
+        "bldg-style",
+        "bldg-design-brief"
       ]
     },
     "building-site-v1": {
@@ -318,6 +351,10 @@
         "bldg-usage",
         "bldg-boundary",
         "bldg-height",
+        "bldg-design-option",
+        "bldg-ceiling-finish",
+        "bldg-wall-finish",
+        "bldg-floor-finish",
         "bldg-origin",
         "bldg-review-state",
         "bldg-confidence",
@@ -341,6 +378,11 @@
         "bldg-material",
         "bldg-hosted-by",
         "bldg-attributes",
+        "bldg-design-option",
+        "bldg-light",
+        "bldg-is-external",
+        "bldg-load-bearing",
+        "bldg-element-type",
         "bldg-origin",
         "bldg-review-state",
         "bldg-confidence",
@@ -425,6 +467,74 @@
         "bldg-published-at",
         "bldg-public-selection",
         "bldg-cover-image"
+      ]
+    },
+    "building-material-v1": {
+      "name": "Material",
+      "description": "A material as a designer and a builder both need it: how it looks (colour, roughness, texture, pattern) and what it is (category, product, thermal and mass properties). Types and elements link to it; it is shared by everything in the home made of it.",
+      "requires": [
+        "https://atomicdata.dev/properties/name"
+      ],
+      "recommends": [
+        "https://atomicdata.dev/properties/description",
+        "bldg-home",
+        "bldg-material-category",
+        "bldg-color",
+        "bldg-roughness",
+        "bldg-metalness",
+        "bldg-opacity",
+        "bldg-texture",
+        "bldg-pattern",
+        "bldg-module-size",
+        "bldg-joint-width",
+        "bldg-thermal-conductivity",
+        "bldg-density",
+        "bldg-product"
+      ]
+    },
+    "building-element-type-v1": {
+      "name": "Element type",
+      "description": "A reusable kind of element (IfcWallType, IfcWindowType, ...): a wall build-up, a window series, a slab. Elements link to it with element-type and inherit its layers, material and attributes; their own values override.",
+      "requires": [
+        "https://atomicdata.dev/properties/name",
+        "bldg-ifc-class"
+      ],
+      "recommends": [
+        "https://atomicdata.dev/properties/description",
+        "bldg-home",
+        "bldg-layers",
+        "bldg-material",
+        "bldg-attributes",
+        "bldg-product",
+        "bldg-load-bearing",
+        "bldg-is-external"
+      ]
+    },
+    "building-design-option-v1": {
+      "name": "Design option",
+      "description": "One alternative of a design, so the AI can propose several and the owner can choose. Spaces and elements with this option belong only to it.",
+      "requires": [
+        "https://atomicdata.dev/properties/name",
+        "bldg-home"
+      ],
+      "recommends": [
+        "https://atomicdata.dev/properties/description",
+        "bldg-option-status"
+      ]
+    },
+    "building-view-v1": {
+      "name": "View",
+      "description": "A saved camera on the home, with the moment it shows, for renders and walkthroughs.",
+      "requires": [
+        "https://atomicdata.dev/properties/name",
+        "bldg-home"
+      ],
+      "recommends": [
+        "https://atomicdata.dev/properties/description",
+        "bldg-camera",
+        "bldg-view-time",
+        "bldg-design-option",
+        "bldg-render"
       ]
     }
   },
@@ -704,7 +814,7 @@
     "bldg-ifc-class": {
       "name": "IFC class",
       "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "The IFC entity this element maps to, so an IFC export is a mapping and not a redesign. Not an exhaustive IFC list. One of: IfcWall, IfcSlab, IfcDoor, IfcWindow, IfcStair, IfcRoof, IfcColumn, IfcBeam, IfcCovering, IfcRailing, IfcFurnishingElement, IfcBuildingElementProxy."
+      "description": "The IFC entity this element maps to, so an IFC export is a mapping and not a redesign. Not an exhaustive IFC list. One of: IfcWall, IfcSlab, IfcDoor, IfcWindow, IfcStair, IfcRoof, IfcColumn, IfcBeam, IfcCovering, IfcRailing, IfcPlate, IfcChimney, IfcLightFixture, IfcSanitaryTerminal, IfcFurnishingElement, IfcBuildingElementProxy."
     },
     "bldg-ifc-guid": {
       "name": "IFC GUID",
@@ -720,22 +830,23 @@
     "bldg-geometry-kind": {
       "name": "Geometry kind",
       "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "Which shape the geometry JSON holds. One of: wallAxis, extrusion, opening, mesh."
+      "description": "Which shape the geometry JSON holds. One of: wallAxis, extrusion, opening, stair, mesh."
     },
     "bldg-geometry": {
       "name": "Geometry",
       "datatype": "https://atomicdata.dev/datatypes/json",
-      "description": "The shape, as JSON whose layout depends on the geometry kind: wallAxis {start, end, height, thickness}; extrusion {polygon, depth}; opening {offset, width, height, sill}; mesh {file} linking a glTF/GLB. Metres, local to the storey. Checked by the app, not by the server."
+      "description": "The shape, as JSON whose layout depends on the geometry kind. Metres, local to the storey, Z up; heights are above the storey floor. wallAxis {start: [x, y], end: [x, y], height, thickness, base?}: a straight wall centred on its axis. extrusion {polygon: [[x, y], ...], depth, base?}: a polygon pushed up by depth from base; base defaults to -depth for an IfcSlab (top flush with the floor) and to 0 otherwise. Floors, flat roofs with their overhang, columns, piers, chimneys, built-in furniture. opening {offset, width, height, sill}: a door or window in its host wall, offset metres from the wall start. stair {start: [x, y], direction, width, rise, risers, going, base?}: a straight flight starting at start, going direction degrees counter-clockwise from +X, climbing rise metres in risers equal steps over going metres. mesh {file, at?: [x, y, z], rotation?}: a glTF/GLB File resource placed at at, rotated rotation degrees around Z. Checked by the app, not by the server."
     },
     "bldg-material": {
       "name": "Material",
-      "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "Primary material as free text. Not a materials catalogue."
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The Material an element is made of, or that overrides the outer layers of its type. A Material resource, not free text, so a render, a quantity take-off and an IFC export read the same thing.",
+      "classtype": "building-material-v1"
     },
     "bldg-attributes": {
       "name": "Attributes",
       "datatype": "https://atomicdata.dev/datatypes/json",
-      "description": "Type-specific fields (door swing, wall thickness, glazing) as a JSON object, validated per IFC class by a JSON Schema shipped next to the ontology."
+      "description": "Type-specific fields as a JSON object; on an Element they override those of its type. Known keys: windows and doors: frameMaterial (Material subject), frameWidth and frameDepth (m), panes [columns, rows], operation (fixed, casement, sliding, tilt-turn, pivot, hinged), swing (left, right); stairs: treadMaterial and stringerMaterial (Material subjects), open (true for open risers); railings: height (m). Unknown keys are kept."
     },
     "bldg-origin": {
       "name": "Origin",
@@ -906,6 +1017,146 @@
       "name": "Public selection",
       "datatype": "https://atomicdata.dev/datatypes/json",
       "description": "Which Elements, Sources and storeys may be shown, as JSON {\"elements\": [...], \"sources\": [...], \"storeys\": [...]} of subjects. Unreviewed (proposed) facts are never published."
+    },
+    "bldg-material-category": {
+      "name": "Material category",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "What kind of material it is, for quantities and for a renderer that has no texture. One of: wood, stone, brick, concrete, plaster, metal, glass, ceramic, textile, plastic, insulation, membrane, earth, plant, water, other."
+    },
+    "bldg-color": {
+      "name": "Colour",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Base colour as #RRGGBB in sRGB, the average colour of the surface when no texture is loaded."
+    },
+    "bldg-roughness": {
+      "name": "Roughness",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Surface roughness from 0 (mirror) to 1 (matte), as in glTF PBR."
+    },
+    "bldg-metalness": {
+      "name": "Metalness",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "From 0 (dielectric) to 1 (bare metal), as in glTF PBR."
+    },
+    "bldg-opacity": {
+      "name": "Opacity",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "From 0 (clear) to 1 (opaque). Glass is about 0.15 to 0.3. Absent means opaque."
+    },
+    "bldg-texture": {
+      "name": "Texture",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "A File resource with a tileable colour image of the surface."
+    },
+    "bldg-pattern": {
+      "name": "Pattern",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "How the material is laid, so it reads right in a render and in a quantity take-off. One of: none, planks, slats, running-bond, stack-bond, ashlar, random-stone, tiles, herringbone, terrazzo, board-formed."
+    },
+    "bldg-module-size": {
+      "name": "Module size",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "Size of one plank, slat, brick, stone or tile as JSON [length, height] in metres; with the pattern it tells the renderer the scale."
+    },
+    "bldg-joint-width": {
+      "name": "Joint width",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Width of the joint or gap between modules, in metres (mortar, slat gap)."
+    },
+    "bldg-thermal-conductivity": {
+      "name": "Thermal conductivity",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Lambda value in W/(m K), so a U-value can be derived from a layered type."
+    },
+    "bldg-density": {
+      "name": "Density",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Density in kg per cubic metre."
+    },
+    "bldg-product": {
+      "name": "Product",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Manufacturer and product name or code, as free text."
+    },
+    "bldg-element-type": {
+      "name": "Element type",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The Element type this element is an instance of (IfcTypeObject): its layers, material and default attributes.",
+      "classtype": "building-element-type-v1"
+    },
+    "bldg-layers": {
+      "name": "Layers",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "The build-up of a layered type, as a JSON array of {material: Material subject, thickness: metres, function}. Function is one of: finish, structure, insulation, cavity, membrane, substrate. Walls list from the right side of the axis (looking from start to end) to the left, so an outer wall drawn counter-clockwise around the plan lists outside to inside; slabs and roofs list top to bottom. The thicknesses add up to the wall thickness or slab depth."
+    },
+    "bldg-floor-finish": {
+      "name": "Floor finish",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The Material of the floor surface of a space.",
+      "classtype": "building-material-v1"
+    },
+    "bldg-wall-finish": {
+      "name": "Wall finish",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The Material of the wall surfaces inside a space, unless an element says otherwise.",
+      "classtype": "building-material-v1"
+    },
+    "bldg-ceiling-finish": {
+      "name": "Ceiling finish",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The Material of the ceiling of a space.",
+      "classtype": "building-material-v1"
+    },
+    "bldg-load-bearing": {
+      "name": "Load-bearing",
+      "datatype": "https://atomicdata.dev/datatypes/boolean",
+      "description": "Whether the element carries load (IFC Pset LoadBearing). Absent means unknown."
+    },
+    "bldg-is-external": {
+      "name": "External",
+      "datatype": "https://atomicdata.dev/datatypes/boolean",
+      "description": "Whether the element is part of the building envelope, facing outside (IFC Pset IsExternal)."
+    },
+    "bldg-light": {
+      "name": "Light",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "The light an IfcLightFixture gives, as JSON {kind, lumen, kelvin, at: [x, y, z], direction?: [x, y, z], angle?}. Kind is one of: point, spot, area, line. At is relative to the storey; angle is the spot cone in degrees."
+    },
+    "bldg-style": {
+      "name": "Style",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "The architectural style the design follows, as free text, for example \"mid-century modern\"."
+    },
+    "bldg-design-brief": {
+      "name": "Design brief",
+      "datatype": "https://atomicdata.dev/datatypes/markdown",
+      "description": "What the owner wants: program, atmosphere, budget, constraints. The AI designs against it."
+    },
+    "bldg-design-option": {
+      "name": "Design option",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The Design option this space or element belongs to. Absent means it is part of every option.",
+      "classtype": "building-design-option-v1"
+    },
+    "bldg-option-status": {
+      "name": "Option status",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "State of a design option. One of: draft, chosen, rejected."
+    },
+    "bldg-camera": {
+      "name": "Camera",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "A camera as JSON {position: [x, y, z], target: [x, y, z], fov}: plan coordinates of the building in metres, Z up, fov the vertical field of view in degrees."
+    },
+    "bldg-view-time": {
+      "name": "View time",
+      "datatype": "https://atomicdata.dev/datatypes/timestamp",
+      "description": "The moment a view shows, milliseconds since the Unix epoch; with the geo origin and north angle it gives the sun position."
+    },
+    "bldg-render": {
+      "name": "Render",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "A File resource with the latest image rendered of this view."
     }
   }
 }

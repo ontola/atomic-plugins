@@ -6,6 +6,6 @@
   "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "bldg-attributes",
   "https://atomicdata.dev/properties/name": "Attributes",
-  "https://atomicdata.dev/properties/description": "Type-specific fields (door swing, wall thickness, glazing) as a JSON object, validated per IFC class by a JSON Schema shipped next to the ontology.",
+  "https://atomicdata.dev/properties/description": "Type-specific fields as a JSON object; on an Element they override those of its type. Known keys: windows and doors: frameMaterial (Material subject), frameWidth and frameDepth (m), panes [columns, rows], operation (fixed, casement, sliding, tilt-turn, pivot, hinged), swing (left, right); stairs: treadMaterial and stringerMaterial (Material subjects), open (true for open risers); railings: height (m). Unknown keys are kept.",
   "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/json"
 }

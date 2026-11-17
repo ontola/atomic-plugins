@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-pattern",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "bldg-pattern",
+  "https://atomicdata.dev/properties/name": "Pattern",
+  "https://atomicdata.dev/properties/description": "How the material is laid, so it reads right in a render and in a quantity take-off. One of: none, planks, slats, running-bond, stack-bond, ashlar, random-stone, tiles, herringbone, terrazzo, board-formed.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
+}

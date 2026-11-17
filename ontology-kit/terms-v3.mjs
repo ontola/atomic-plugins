@@ -128,7 +128,9 @@ export const properties = Object.freeze({
   'bldg-material': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material',
-    datatype: 'https://atomicdata.dev/datatypes/string',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/building-material-v1',
   }),
   'bldg-attributes': Object.freeze({
     subject:
@@ -310,6 +312,151 @@ export const properties = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-public-selection',
     datatype: 'https://atomicdata.dev/datatypes/json',
   }),
+  'bldg-material-category': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material-category',
+    datatype: 'https://atomicdata.dev/datatypes/string',
+  }),
+  'bldg-color': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-color',
+    datatype: 'https://atomicdata.dev/datatypes/string',
+  }),
+  'bldg-roughness': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-roughness',
+    datatype: 'https://atomicdata.dev/datatypes/float',
+  }),
+  'bldg-metalness': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-metalness',
+    datatype: 'https://atomicdata.dev/datatypes/float',
+  }),
+  'bldg-opacity': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-opacity',
+    datatype: 'https://atomicdata.dev/datatypes/float',
+  }),
+  'bldg-texture': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-texture',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+  }),
+  'bldg-pattern': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-pattern',
+    datatype: 'https://atomicdata.dev/datatypes/string',
+  }),
+  'bldg-module-size': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-module-size',
+    datatype: 'https://atomicdata.dev/datatypes/json',
+  }),
+  'bldg-joint-width': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-joint-width',
+    datatype: 'https://atomicdata.dev/datatypes/float',
+  }),
+  'bldg-thermal-conductivity': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-thermal-conductivity',
+    datatype: 'https://atomicdata.dev/datatypes/float',
+  }),
+  'bldg-density': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-density',
+    datatype: 'https://atomicdata.dev/datatypes/float',
+  }),
+  'bldg-product': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-product',
+    datatype: 'https://atomicdata.dev/datatypes/string',
+  }),
+  'bldg-element-type': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-element-type',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/building-element-type-v1',
+  }),
+  'bldg-layers': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-layers',
+    datatype: 'https://atomicdata.dev/datatypes/json',
+  }),
+  'bldg-floor-finish': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-floor-finish',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/building-material-v1',
+  }),
+  'bldg-wall-finish': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-wall-finish',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/building-material-v1',
+  }),
+  'bldg-ceiling-finish': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-ceiling-finish',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/building-material-v1',
+  }),
+  'bldg-load-bearing': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-load-bearing',
+    datatype: 'https://atomicdata.dev/datatypes/boolean',
+  }),
+  'bldg-is-external': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-is-external',
+    datatype: 'https://atomicdata.dev/datatypes/boolean',
+  }),
+  'bldg-light': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-light',
+    datatype: 'https://atomicdata.dev/datatypes/json',
+  }),
+  'bldg-style': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-style',
+    datatype: 'https://atomicdata.dev/datatypes/string',
+  }),
+  'bldg-design-brief': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-brief',
+    datatype: 'https://atomicdata.dev/datatypes/markdown',
+  }),
+  'bldg-design-option': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-option',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    classtype:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/building-design-option-v1',
+  }),
+  'bldg-option-status': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-option-status',
+    datatype: 'https://atomicdata.dev/datatypes/string',
+  }),
+  'bldg-camera': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-camera',
+    datatype: 'https://atomicdata.dev/datatypes/json',
+  }),
+  'bldg-view-time': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-view-time',
+    datatype: 'https://atomicdata.dev/datatypes/timestamp',
+  }),
+  'bldg-render': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-render',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+  }),
 });
 
 export const classes = Object.freeze({
@@ -322,6 +469,8 @@ export const classes = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-north-angle',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-address',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-cover-image',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-style',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-brief',
     ]),
   }),
   'building-site-v1': Object.freeze({
@@ -367,6 +516,10 @@ export const classes = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-usage',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-boundary',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-height',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-option',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-ceiling-finish',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-wall-finish',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-floor-finish',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-origin',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-review-state',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-confidence',
@@ -390,6 +543,11 @@ export const classes = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-hosted-by',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-attributes',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-option',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-light',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-is-external',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-load-bearing',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-element-type',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-origin',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-review-state',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-confidence',
@@ -470,6 +628,72 @@ export const classes = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-published-at',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-public-selection',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-cover-image',
+    ]),
+  }),
+  'building-material-v1': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/building-material-v1',
+    requires: Object.freeze(['https://atomicdata.dev/properties/name']),
+    recommends: Object.freeze([
+      'https://atomicdata.dev/properties/description',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-home',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material-category',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-color',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-roughness',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-metalness',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-opacity',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-texture',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-pattern',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-module-size',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-joint-width',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-thermal-conductivity',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-density',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-product',
+    ]),
+  }),
+  'building-element-type-v1': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/building-element-type-v1',
+    requires: Object.freeze([
+      'https://atomicdata.dev/properties/name',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-ifc-class',
+    ]),
+    recommends: Object.freeze([
+      'https://atomicdata.dev/properties/description',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-home',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-layers',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-attributes',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-product',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-load-bearing',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-is-external',
+    ]),
+  }),
+  'building-design-option-v1': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/building-design-option-v1',
+    requires: Object.freeze([
+      'https://atomicdata.dev/properties/name',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-home',
+    ]),
+    recommends: Object.freeze([
+      'https://atomicdata.dev/properties/description',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-option-status',
+    ]),
+  }),
+  'building-view-v1': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/classes/building-view-v1',
+    requires: Object.freeze([
+      'https://atomicdata.dev/properties/name',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-home',
+    ]),
+    recommends: Object.freeze([
+      'https://atomicdata.dev/properties/description',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-camera',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-view-time',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-option',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-render',
     ]),
   }),
 });

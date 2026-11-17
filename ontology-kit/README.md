@@ -95,6 +95,10 @@ URLs yet. Its subject constants are in `terms-v3.mjs`, not `terms.mjs` (see
 | `building-evidence-v1`      | `bldg-source`, `bldg-supports` | Locator, confidence                                                                     |
 | `building-question-v1`      | `bldg-question-kind`           | Extras only; used on one resource together with `issue-v1`                              |
 | `building-listing-v1`       | `name`, `bldg-home`            | Public status, price, public selection                                                  |
+| `building-material-v1`      | `name`                         | Look (colour, roughness, texture, pattern) and substance (category, lambda, density)    |
+| `building-element-type-v1`  | `name`, `bldg-ifc-class`       | Wall build-up or window series: layers, material, default attributes                    |
+| `building-design-option-v1` | `name`, `bldg-home`            | One alternative design; spaces and elements opt in with `bldg-design-option`            |
+| `building-view-v1`          | `name`, `bldg-home`            | Saved camera and moment (sun) for renders                                               |
 
 - Properties are shortnamed `bldg-*`; `name` and `description` are reused from
   `https://atomicdata.dev/properties/`. Links use `atomicURL` or
