@@ -226,7 +226,8 @@
       "name": "dropbox",
       "openapi": "https://raw.githubusercontent.com/ontola/openapi-directory/0695e2ed6567106e86ecd28c328624a859b13eee/APIs/dropbox.com/2/openapi.yaml",
       "overlays": [
-        "https://ontola.github.io/atomic-plugins/overlays/APIs/dropbox.com/2/file-metadata-0695e2ed6567106e86ecd28c328624a859b13eee-overlay.yaml"
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/dropbox.com/2/file-metadata-0695e2ed6567106e86ecd28c328624a859b13eee-overlay.yaml",
+        "https://ontola.github.io/atomic-plugins/overlays/APIs/dropbox.com/2/pagination-0695e2ed6567106e86ecd28c328624a859b13eee-overlay.yaml"
       ],
       "selection": {
         "oauthSecurityScheme": "dropboxOAuth"
