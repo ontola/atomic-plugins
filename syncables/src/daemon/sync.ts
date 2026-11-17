@@ -378,8 +378,6 @@ export async function syncCollection(
   if (matches.length !== 1)
     throw new Error('Unknown or ambiguous metadata collection');
   const collection = matches[0];
-  if (collection.method !== 'GET')
-    throw new Error('This read-only daemon supports GET collections only');
   for (const key of collection.contextParams)
     if (!Object.hasOwn(source.bindings, key))
       throw new Error('Configure all parent bindings before syncing');
@@ -414,6 +412,11 @@ export async function syncCollection(
     throw new Error(
       'Range-window collections need coverage support before daemon publication',
     );
+  const continuation = scheme?.continuation;
+  if (collection.method !== 'GET' && !continuation)
+    throw new Error(
+      'POST collection reads require a declared continuation scheme',
+    );
   const incremental = scheme?.['x-syncables-incremental'] === true;
   for (const [key, field] of Object.entries(
     scheme?.request?.queryParameters ?? {},
@@ -430,6 +433,7 @@ export async function syncCollection(
   ).filter(([, field]) => field.role === 'syncToken');
   if (
     incremental &&
+    !continuation &&
     (tokenFields.length !== 1 ||
       Object.values(scheme?.request?.bodyFields ?? {}).some(
         (field) => field.role === 'syncToken',
@@ -514,7 +518,7 @@ export async function syncCollection(
           : sourceSchemas(prepared);
       const seen = new Set<string>();
       const query = { ...collection.listQuery, ...source.query };
-      if (token) query[tokenFields[0][0]] = token;
+      if (token && !continuation) query[tokenFields[0][0]] = token;
       const outcome: WalkOutcome = { complete: false };
       let count = 0;
       for await (const page of walkPages({
@@ -523,9 +527,10 @@ export async function syncCollection(
         budget,
         upstream: upstreamOf(document),
         path: bindPath(collection.url, source.bindings),
-        method: 'GET',
+        method: collection.method,
         query,
-        body: {},
+        body: collection.listBody,
+        ...(continuation && token ? { checkpoint: token } : {}),
         outcome,
         ...(collection.itemsField === undefined
           ? {}
@@ -576,7 +581,11 @@ export async function syncCollection(
           'Collection read incomplete; previous snapshot retained',
         );
       let nextToken: string | undefined;
-      if (incremental) {
+      if (incremental && continuation) {
+        nextToken = outcome.checkpoint;
+        if (!nextToken)
+          throw new Error('Missing terminal continuation checkpoint');
+      } else if (incremental) {
         const fields = Object.entries(
           scheme?.response?.bodyFields ?? {},
         ).filter(([, field]) => field.role === 'nextSyncToken');
@@ -620,6 +629,7 @@ export async function syncCollection(
       if (
         error instanceof PageStatusError &&
         error.status === 410 &&
+        !continuation &&
         token &&
         bootstrap === 0
       ) {
