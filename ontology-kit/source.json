@@ -1056,7 +1056,7 @@
     "bldg-module-size": {
       "name": "Module size",
       "datatype": "https://atomicdata.dev/datatypes/json",
-      "description": "Size of one plank, slat, brick, stone or tile as JSON [length, height] in metres; with the pattern it tells the renderer the scale."
+      "description": "Size of one plank, slat, brick, stone or tile as seen on the surface, as JSON [width, height] in metres: [0.12, 3.0] is a vertical board, [0.21, 0.05] a brick. With the pattern it gives the renderer the scale and direction."
     },
     "bldg-joint-width": {
       "name": "Joint width",
@@ -1087,7 +1087,7 @@
     "bldg-layers": {
       "name": "Layers",
       "datatype": "https://atomicdata.dev/datatypes/json",
-      "description": "The build-up of a layered type, as a JSON array of {material: Material subject, thickness: metres, function}. Function is one of: finish, structure, insulation, cavity, membrane, substrate. Walls list from the right side of the axis (looking from start to end) to the left, so an outer wall drawn counter-clockwise around the plan lists outside to inside; slabs and roofs list top to bottom. The thicknesses add up to the wall thickness or slab depth."
+      "description": "The build-up of a layered type, as a JSON array of {material: Material subject (absent for an air cavity), thickness: metres, function}. Function is one of: finish, structure, insulation, cavity, membrane, substrate. Walls list from the right side of the axis (looking from start to end) to the left, so an outer wall drawn counter-clockwise around the plan lists outside to inside; slabs and roofs list top to bottom. The thicknesses add up to the wall thickness or slab depth."
     },
     "bldg-floor-finish": {
       "name": "Floor finish",

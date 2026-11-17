@@ -6,6 +6,6 @@
   "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "bldg-module-size",
   "https://atomicdata.dev/properties/name": "Module size",
-  "https://atomicdata.dev/properties/description": "Size of one plank, slat, brick, stone or tile as JSON [length, height] in metres; with the pattern it tells the renderer the scale.",
+  "https://atomicdata.dev/properties/description": "Size of one plank, slat, brick, stone or tile as seen on the surface, as JSON [width, height] in metres: [0.12, 3.0] is a vertical board, [0.21, 0.05] a brick. With the pattern it gives the renderer the scale and direction.",
   "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/json"
 }
