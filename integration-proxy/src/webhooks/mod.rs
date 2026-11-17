@@ -95,12 +95,78 @@ pub const MAX_WAITERS_PER_CONSUMER: usize = 4;
 
 /// The inbox and the operator-configured shared-hook secrets.
 pub struct Webhooks {
+    pub notifications_only: bool,
     pub store: Arc<Store>,
     shared_secrets: BTreeMap<String, Vec<u8>>,
     pub gate: IngressGate,
     /// Long polls waiting, per consumer.
     pub waiting: std::sync::Mutex<std::collections::HashMap<String, usize>>,
     pub limits: limits::Limits,
+    /// When this instance last looked for cleanup jobs waiting on each
+    /// connection's key ([`run_deferred_cleanup`]).
+    cleanup_looked: std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>,
+}
+
+/// How often one instance looks for cleanup jobs waiting on one connection.
+const CLEANUP_LOOK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+/// The most connections remembered for [`CLEANUP_LOOK_INTERVAL`]; past it
+/// the memory is dropped, which only means looking again sooner.
+const CLEANUP_LOOK_MEMORY: usize = 10_000;
+
+/// Starts the hook cleanup jobs that were waiting for `connection_id`'s key,
+/// now that an authorised request has presented it (see [`cleanup`]). Runs
+/// in the background and never delays or fails the request. The key lives
+/// in that task until its provider calls end, each bounded by the proxy's
+/// upstream timeouts.
+pub fn run_deferred_cleanup(
+    state: &crate::AppState,
+    connection_id: &str,
+    key: &crate::security::ConnectionKey,
+) {
+    let Some(webhooks) = state.webhooks.clone() else {
+        return;
+    };
+    {
+        let mut looked = webhooks
+            .cleanup_looked
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let now = std::time::Instant::now();
+        if looked
+            .get(connection_id)
+            .is_some_and(|at| now.duration_since(*at) < CLEANUP_LOOK_INTERVAL)
+        {
+            return;
+        }
+        if looked.len() >= CLEANUP_LOOK_MEMORY {
+            looked.clear();
+        }
+        looked.insert(connection_id.to_owned(), now);
+    }
+    let deleter = provider::ProviderHookDeleter {
+        state: state.clone(),
+        connection_id: connection_id.to_owned(),
+        key: key.clone(),
+    };
+    tokio::spawn(async move {
+        let connection_id = deleter.connection_id.clone();
+        match webhooks.store.cleanup_waits_for(&connection_id).await {
+            Ok(false) => return,
+            Ok(true) => {}
+            Err(error) => {
+                tracing::error!(%error, "looking for deferred webhook hook cleanup failed");
+                return;
+            }
+        }
+        match webhooks
+            .store
+            .run_cleanup_for_connection(&deleter, &connection_id, std::time::SystemTime::now())
+            .await
+        {
+            Ok(report) => tracing::debug!(?report, "deferred webhook hook cleanup ran"),
+            Err(error) => tracing::error!(%error, "deferred webhook hook cleanup failed"),
+        }
+    });
 }
 
 impl Webhooks {
@@ -120,11 +186,13 @@ impl Webhooks {
         limits: limits::Limits,
     ) -> Self {
         Self {
+            notifications_only: false,
             store,
             shared_secrets,
             gate: IngressGate::default(),
             waiting: Default::default(),
             limits,
+            cleanup_looked: Default::default(),
         }
     }
 
@@ -166,6 +234,7 @@ pub async fn start(
         )
         .await?,
     );
+    store.check_payload_mode(config.notifications_only).await?;
     let mut secrets = BTreeMap::new();
     for platform in catalog.names() {
         if catalog.webhook_document(&platform).is_none() {
@@ -183,9 +252,7 @@ pub async fn start(
         }
     }
     tracing::info!("webhook inbox enabled");
-    Ok(Some(Arc::new(Webhooks::with_limits(
-        store,
-        secrets,
-        limits::Limits::from_config(config),
-    ))))
+    let mut webhooks = Webhooks::with_limits(store, secrets, limits::Limits::from_config(config));
+    webhooks.notifications_only = config.notifications_only;
+    Ok(Some(Arc::new(webhooks)))
 }

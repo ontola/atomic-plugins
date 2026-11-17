@@ -1,0 +1,49 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/de95e5bf40f54e3752281a771a786854038d683b/APIs/clickup.com/v2-readonly/openapi.yaml
+info:
+  title: ClickUp read-only OAuth authentication profile
+  version: 1.0.0
+  description: >-
+    Select the documented OAuth authorization-code flow for reads from
+    authorized Workspaces. ClickUp tokens grant the Workspaces selected by
+    the user and do not have selectable scopes; this profile limits the
+    declared operations to reads but does not narrow the provider token.
+    OAuth behavior checked against ClickUp's authentication documentation on
+    2026-10-08.
+actions:
+- target: $.components.securitySchemes
+  update:
+    clickupReadOnlyOAuth:
+      type: oauth2
+      x-oauth-authentication-details:
+        authorizationServerMetadata:
+          token_endpoint_auth_methods_supported: [client_secret_post]
+        authorizationCode:
+          pkce:
+            requirement: unsupported
+      flows:
+        authorizationCode:
+          authorizationUrl: https://app.clickup.com/api
+          tokenUrl: https://api.clickup.com/api/v2/oauth/token
+          scopes: {}
+- target: $.paths['/v2/team'].get
+  update:
+    security:
+    - clickupReadOnlyOAuth: []
+- target: $.paths['/v2/team/{team_Id}/task'].get
+  update:
+    security:
+    - clickupReadOnlyOAuth: []
+- target: $.paths['/v2/task/{task_id}'].get
+  update:
+    security:
+    - clickupReadOnlyOAuth: []
+- target: $.components
+  update:
+    x-authentication-profiles:
+      clickupReadOnly:
+        securityScheme: clickupReadOnlyOAuth
+        description: >-
+          Read the authorized Workspace list and tasks the user can access.
+          The provider authorization may cover one or more Workspaces and does
+          not expose a read-only OAuth scope.

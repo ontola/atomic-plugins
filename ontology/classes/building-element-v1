@@ -3,7 +3,7 @@
   "https://atomicdata.dev/properties/isA": [
     "https://atomicdata.dev/classes/Class"
   ],
-  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "building-element-v1",
   "https://atomicdata.dev/properties/name": "Element",
   "https://atomicdata.dev/properties/description": "A building element (IfcWall, IfcDoor, IfcWindow, ...) in one class: the IFC class is a property, not a type. Origin and review properties record who proposed it.",

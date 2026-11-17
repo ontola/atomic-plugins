@@ -59,6 +59,9 @@ pub struct Config {
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct WebhookConfig {
+    /// Discard verified provider bodies after extracting routing metadata.
+    /// WEBHOOK_NOTIFICATIONS_ONLY=true stores only a fixed change hint.
+    pub notifications_only: bool,
     /// `WEBHOOKS_ENABLED`: `true` turns the inbox on; unset, empty or
     /// `false` leaves it off. Anything else stops the proxy at startup.
     pub enabled: bool,
@@ -86,6 +89,7 @@ pub struct WebhookConfig {
 impl Default for WebhookConfig {
     fn default() -> Self {
         Self {
+            notifications_only: false,
             enabled: false,
             inbox_max_bytes: DEFAULT_WEBHOOK_INBOX_MAX_BYTES,
             ingress_per_endpoint_per_minute: 600,
@@ -161,7 +165,16 @@ pub(crate) fn webhook_config_with(
             Ok(default)
         }
     };
+    let notifications_only = match variable("WEBHOOK_NOTIFICATIONS_ONLY")
+        .as_deref()
+        .map(str::trim)
+    {
+        None | Some("") | Some("false") => false,
+        Some("true") => true,
+        Some(_) => return Err("WEBHOOK_NOTIFICATIONS_ONLY must be true or false".into()),
+    };
     Ok(WebhookConfig {
+        notifications_only,
         enabled,
         inbox_max_bytes,
         ingress_per_endpoint_per_minute: limit(
@@ -252,16 +265,16 @@ pub const OVERLAYS_PAGES_BASE: &str = "https://ontola.github.io/atomic-plugins/o
 /// the checked-in copy; `default_catalog_is_the_published_checked_in_catalog`
 /// keeps it equal to [`DEFAULT_CATALOG_PATH`]'s.
 #[cfg(test)]
-pub const DEFAULT_CATALOG_FILE: &str = "catalog/2026-10-02-auth-profiles.json";
+pub const DEFAULT_CATALOG_FILE: &str = "catalog/2026-10-29-google-keep-writes.json";
 
-/// `overlays/catalog/2026-10-02-auth-profiles.json` as GitHub Pages publishes it from this
+/// `overlays/catalog/2026-10-29-google-keep-writes.json` as GitHub Pages publishes it from this
 /// repository's `main`, used when `CATALOG_PATH` is not set. Unlike the
 /// unversioned catalog this replaced, its dated file and selected overlay
 /// revisions are immutable; the proxy reads it once, at startup. Shared with
 /// tests that need to validate the exact catalog the application would load
 /// by default (they read the checked-in copy; see `Catalog::load_checked_in`).
 pub const DEFAULT_CATALOG_PATH: &str =
-    "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json";
+    "https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-29-google-keep-writes.json";
 
 /// Reads a required environment variable and rejects it if unset or blank,
 /// so a blank `.env` value fails configuration explicitly instead of being

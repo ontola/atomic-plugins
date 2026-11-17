@@ -17,21 +17,32 @@ pub(crate) async fn connect_once(database_url: &str) -> Result<(Client, Connecti
     let tls = postgres_native_tls::MakeTlsConnector::new(tls);
     let (client, connection) = tokio_postgres::connect(database_url, tls)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(db_error)?;
     Ok((client, Box::pin(connection)))
 }
 
 /// Drives the active connection to completion, then keeps reconnecting with
 /// exponential backoff and swapping the shared client in on success, so a
 /// dropped connection recovers without restarting the process.
+///
+/// It holds the shared client only weakly: once every [`Security`] handle
+/// is dropped, the client is dropped, its connection ends, and the
+/// supervisor stops instead of reconnecting. Holding it strongly kept one
+/// PostgreSQL connection open, and reconnecting, for every `Security` ever
+/// made; the test suite makes hundreds and ran out of server connections
+/// ("too many clients already").
 fn spawn_reconnect_supervisor(
     database_url: String,
-    current: Arc<RwLock<Arc<Client>>>,
+    current: std::sync::Weak<RwLock<Arc<Client>>>,
     mut connection: ConnectionDriver,
 ) {
     tokio::spawn(async move {
         loop {
-            if let Err(error) = connection.await {
+            let result = connection.await;
+            if current.strong_count() == 0 {
+                return;
+            }
+            if let Err(error) = result {
                 tracing::error!(%error, "postgres connection failed; reconnecting");
             } else {
                 tracing::warn!("postgres connection closed; reconnecting");
@@ -40,6 +51,9 @@ fn spawn_reconnect_supervisor(
             loop {
                 match connect_once(&database_url).await {
                     Ok((client, new_connection)) => {
+                        let Some(current) = current.upgrade() else {
+                            return;
+                        };
                         *current.write().await = Arc::new(client);
                         connection = new_connection;
                         break;
@@ -69,6 +83,17 @@ const REFRESH_LEASE_SECONDS: f64 = 30.0;
 /// (`oauth_states`, `connection_codes`) are no longer read or written; they
 /// are left in place rather than dropped, see the README's flag-day notes.
 pub(crate) const SCHEMA_LOCK: i64 = 7_316_186_474_691_124_077;
+
+/// Startup DDL takes this lock exclusively. Multi-table writes take its
+/// shared form before any owner or row lock, so a rolling instance cannot
+/// deadlock with a transaction upgrading its relation locks.
+pub(crate) async fn migration_lock(
+    tx: &tokio_postgres::Transaction<'_>,
+) -> Result<(), tokio_postgres::Error> {
+    tx.query_one("SELECT pg_advisory_xact_lock_shared($1)", &[&SCHEMA_LOCK])
+        .await?;
+    Ok(())
+}
 
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS used_challenges (nonce TEXT PRIMARY KEY, expires_at TIMESTAMPTZ NOT NULL);
@@ -131,7 +156,20 @@ pub enum TransferError {
     /// The move would collide with something the new id already holds (a
     /// runtime with the same agent); the whole statement was undone.
     Conflict,
+    /// A connection named for re-keying is not the old id's, or its old
+    /// key does not open it; nothing was moved.
+    Key,
+    /// A connection named for re-keying has a token refresh in flight.
+    Refreshing,
     Database(String),
+}
+
+/// One connection to re-seal during a transfer: opened with `from`, sealed
+/// again under `to`.
+pub struct Rekey {
+    pub connection_id: String,
+    pub from: ConnectionKey,
+    pub to: ConnectionKey,
 }
 
 /// What a transfer moved.
@@ -150,14 +188,60 @@ pub struct ConnectState {
     pub context: String,
 }
 
-/// A connection row, with its credential opened.
+/// A connection row. Its credential is still sealed: loading a row needs no
+/// key, and [`Security::open_credential`] opens it with a [`ConnectionKey`]
+/// once the caller is authorised.
 pub struct ConnectionRecord {
     pub connection_id: String,
     pub platform: String,
     /// Canonical `atomic:agent:` id.
     pub owner: String,
-    /// The serialized `StoredCredential`; interpreted by `proxy.rs`.
-    pub credential: Vec<u8>,
+    /// The sealed, serialized `StoredCredential`.
+    envelope: String,
+}
+
+/// The key one connection's credential is sealed under. The client holds it
+/// and presents it with each request that needs the credential
+/// ([`crate::connection_key`]); the proxy keeps no copy.
+#[derive(Clone)]
+pub struct ConnectionKey([u8; 32]);
+
+impl ConnectionKey {
+    pub(crate) fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Test-only: the key every test connection is sealed under unless a
+    /// test chooses another.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        Self([0x5a; 32])
+    }
+
+    #[cfg(test)]
+    pub(crate) fn to_base64_for_tests(&self) -> String {
+        URL_SAFE_NO_PAD.encode(self.0)
+    }
+}
+
+impl std::fmt::Debug for ConnectionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ConnectionKey(..)")
+    }
+}
+
+/// Why a connection was not created.
+#[derive(Debug)]
+pub enum CreateError {
+    /// The client-chosen id is taken.
+    Exists,
+    Other(String),
+}
+
+impl From<String> for CreateError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
 }
 
 /// How the signer of a request is related to a connection.
@@ -209,6 +293,48 @@ fn connection_aad(connection_id: &str) -> Vec<u8> {
     format!("agent-connection-v1:{connection_id}").into_bytes()
 }
 
+fn seal_with(key: &[u8; 32], plaintext: &[u8], associated_data: &[u8]) -> Result<String, String> {
+    let cipher = XChaCha20Poly1305::new(key.into());
+    let mut nonce = [0u8; 24];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    let ciphertext = cipher
+        .encrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: plaintext,
+                aad: associated_data,
+            },
+        )
+        .map_err(|_| "encryption failed")?;
+    Ok(format!(
+        "v1.{}.{}",
+        URL_SAFE_NO_PAD.encode(nonce),
+        URL_SAFE_NO_PAD.encode(ciphertext)
+    ))
+}
+
+fn open_with(key: &[u8; 32], envelope: &str, associated_data: &[u8]) -> Option<Vec<u8>> {
+    let (version, value) = envelope.split_once('.')?;
+    if version != "v1" {
+        return None;
+    }
+    let (nonce, ciphertext) = value.split_once('.')?;
+    let nonce = URL_SAFE_NO_PAD.decode(nonce).ok()?;
+    let ciphertext = URL_SAFE_NO_PAD.decode(ciphertext).ok()?;
+    if nonce.len() != 24 {
+        return None;
+    }
+    XChaCha20Poly1305::new(key.into())
+        .decrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: &ciphertext,
+                aad: associated_data,
+            },
+        )
+        .ok()
+}
+
 fn connection_label_aad(connection_id: &str) -> Vec<u8> {
     format!("agent-connection-label-v1:{connection_id}").into_bytes()
 }
@@ -220,7 +346,12 @@ fn timestamp(value: std::time::SystemTime) -> String {
 }
 
 fn db_error(error: tokio_postgres::Error) -> String {
-    error.to_string()
+    // `Display` alone says only "db error"; the server's message (never a
+    // parameter value) is what an operator needs in the log.
+    match error.as_db_error() {
+        Some(db) => format!("{error}: {} ({})", db.message(), db.code().code()),
+        None => error.to_string(),
+    }
 }
 
 #[derive(Clone)]
@@ -239,6 +370,9 @@ pub struct Security {
     /// `HMAC-SHA256(ENCRYPTION_KEY, IDEMPOTENCY_SUBKEY_LABEL)`, the key of
     /// [`Security::connection_idempotency_key`], derived once.
     idempotency_key: [u8; 32],
+    /// The key pair connection-key grants are encrypted to, derived from
+    /// `HMAC-SHA256(ENCRYPTION_KEY, GRANT_SUBKEY_LABEL)`.
+    grant_key: crate::connection_key::GrantKey,
 }
 
 const KEY_CHECK_SUBKEY_LABEL: &[u8] = b"integration-proxy-key-check-limit-v1";
@@ -258,6 +392,7 @@ pub const OWNER_RETIRED: &str = "owner retired";
 /// transfer and such a write never interleave: the write either commits
 /// before the transfer moves things, or sees the owner retired.
 async fn lock_owners(tx: &tokio_postgres::Transaction<'_>, owners: &[&str]) -> Result<(), String> {
+    migration_lock(tx).await.map_err(db_error)?;
     let mut owners = owners.to_vec();
     owners.sort_unstable();
     owners.dedup();
@@ -283,6 +418,8 @@ async fn retired_in(tx: &tokio_postgres::Transaction<'_>, agents: &[&str]) -> Re
     .map_err(db_error)
 }
 const IDEMPOTENCY_SUBKEY_LABEL: &[u8] = b"integration-proxy-idempotency-key-v1";
+/// The label of the key material the key-grant key pair is derived from.
+const GRANT_SUBKEY_LABEL: &[u8] = b"integration-proxy-connection-key-grant-v1";
 
 fn hmac_sha256(key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     use hmac::{Hmac, Mac};
@@ -325,13 +462,21 @@ impl Security {
 
         let (client, connection) = connect_once(database_url).await?;
         let database = Arc::new(RwLock::new(Arc::new(client)));
-        spawn_reconnect_supervisor(database_url.to_string(), database.clone(), connection);
+        spawn_reconnect_supervisor(
+            database_url.to_string(),
+            Arc::downgrade(&database),
+            connection,
+        );
         Ok(Self {
             device_pool: Arc::new(crate::webhooks::pool::Pool::new(database_url, 4)),
             database,
             owner_writes: Arc::new(crate::webhooks::pool::Pool::new(database_url, 4)),
             key_check_key: hmac_sha256(&encryption_key, &[KEY_CHECK_SUBKEY_LABEL]),
             idempotency_key: hmac_sha256(&encryption_key, &[IDEMPOTENCY_SUBKEY_LABEL]),
+            grant_key: crate::connection_key::GrantKey::derive(&hmac_sha256(
+                &encryption_key,
+                &[GRANT_SUBKEY_LABEL],
+            )),
             encryption_key,
         })
     }
@@ -496,48 +641,43 @@ impl Security {
         Ok(Some(1))
     }
 
+    /// Seals under the server's `ENCRYPTION_KEY`.
     pub fn seal(&self, plaintext: &[u8], associated_data: &[u8]) -> Result<String, String> {
-        let cipher = XChaCha20Poly1305::new((&self.encryption_key).into());
-        let mut nonce = [0u8; 24];
-        rand::thread_rng().fill_bytes(&mut nonce);
-        let ciphertext = cipher
-            .encrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: plaintext,
-                    aad: associated_data,
-                },
-            )
-            .map_err(|_| "encryption failed")?;
-        Ok(format!(
-            "v1.{}.{}",
-            URL_SAFE_NO_PAD.encode(nonce),
-            URL_SAFE_NO_PAD.encode(ciphertext)
-        ))
+        seal_with(&self.encryption_key, plaintext, associated_data)
     }
 
+    /// Opens an envelope sealed under the server's `ENCRYPTION_KEY`.
     pub fn open(&self, envelope: &str, associated_data: &[u8]) -> Option<Vec<u8>> {
-        let (version, value) = envelope.split_once('.')?;
-        if version != "v1" {
-            return None;
-        }
-        let (nonce, ciphertext) = value.split_once('.')?;
-        let nonce = URL_SAFE_NO_PAD.decode(nonce).ok()?;
-        let ciphertext = URL_SAFE_NO_PAD.decode(ciphertext).ok()?;
-        if nonce.len() != 24 {
-            return None;
-        }
-        XChaCha20Poly1305::new((&self.encryption_key).into())
-            .decrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: &ciphertext,
-                    aad: associated_data,
-                },
-            )
-            .ok()
+        open_with(&self.encryption_key, envelope, associated_data)
     }
 
+    /// The key pair key grants are encrypted to ([`crate::connection_key`]),
+    /// derived from `ENCRYPTION_KEY` like the other subkeys.
+    pub fn grant_key(&self) -> &crate::connection_key::GrantKey {
+        &self.grant_key
+    }
+
+    /// Test-only: a loaded row's credential, opened with the test key.
+    #[cfg(test)]
+    pub(crate) fn credential_for_tests(&self, record: &ConnectionRecord) -> Vec<u8> {
+        self.open_credential(record, &ConnectionKey::for_tests())
+            .expect("the row opens with the test connection key")
+    }
+
+    /// Opens a loaded row's credential (a serialized `StoredCredential`).
+    /// `None` when `key` is not the row's key or the envelope was altered or
+    /// moved from another row. Call it only after the caller is authorised.
+    pub fn open_credential(
+        &self,
+        record: &ConnectionRecord,
+        key: &ConnectionKey,
+    ) -> Option<Vec<u8>> {
+        open_with(
+            &key.0,
+            &record.envelope,
+            &connection_aad(&record.connection_id),
+        )
+    }
     pub async fn store_connect_state(
         &self,
         state: &str,
@@ -614,39 +754,75 @@ impl Security {
         owner: &str,
         credential: &[u8],
     ) -> Result<String, String> {
-        self.create_labelled_connection(platform, owner, credential, None)
-            .await
+        let connection_id = crate::connect::random();
+        self.create_labelled_connection(
+            &connection_id,
+            platform,
+            owner,
+            credential,
+            &ConnectionKey::for_tests(),
+            None,
+        )
+        .await
+        .map_err(|error| match error {
+            CreateError::Exists => "connection exists".to_owned(),
+            CreateError::Other(error) => error,
+        })?;
+        Ok(connection_id)
     }
 
-    /// [`Self::create_connection`] with a display label, sealed like the
-    /// credential (it can be personal data, such as an email address).
+    /// Creates the connection `connection_id` (chosen by the client, which
+    /// needs it to derive `key`) owned by `owner`, holding `credential` (a
+    /// serialized `StoredCredential`) sealed under `key`. The row is the
+    /// credential's only server-side copy, and the proxy keeps no copy of
+    /// `key`. The label is sealed under the server's key (it can be personal
+    /// data, such as an email address), because listing connections shows
+    /// it without any connection key.
     pub async fn create_labelled_connection(
         &self,
+        connection_id: &str,
         platform: &str,
         owner: &str,
         credential: &[u8],
+        key: &ConnectionKey,
         label: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<(), CreateError> {
         self.sweep_idle_connections().await?;
-        let connection_id = crate::connect::random();
-        let envelope = self.seal(credential, &connection_aad(&connection_id))?;
+        let envelope = seal_with(&key.0, credential, &connection_aad(connection_id))?;
         let label_envelope = label
-            .map(|label| self.seal(label.as_bytes(), &connection_label_aad(&connection_id)))
+            .map(|label| self.seal(label.as_bytes(), &connection_label_aad(connection_id)))
             .transpose()?;
         let mut client = self.owner_writes.get().await?;
         let tx = client.transaction().await.map_err(db_error)?;
         lock_owners(&tx, &[owner]).await?;
         if retired_in(&tx, &[owner]).await? {
-            return Err(OWNER_RETIRED.into());
+            return Err(OWNER_RETIRED.to_owned().into());
         }
-        tx.execute(
-            "INSERT INTO agent_connections (connection_id, platform, owner, envelope, label_envelope) VALUES ($1,$2,$3,$4,$5)",
-            &[&connection_id, &platform, &owner, &envelope, &label_envelope],
-        )
-        .await
-        .map_err(db_error)?;
+        let inserted = tx
+            .execute(
+                "INSERT INTO agent_connections (connection_id, platform, owner, envelope, label_envelope) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (connection_id) DO NOTHING",
+                &[&connection_id, &platform, &owner, &envelope, &label_envelope],
+            )
+            .await
+            .map_err(db_error)?;
+        if inserted == 0 {
+            return Err(CreateError::Exists);
+        }
         tx.commit().await.map_err(db_error)?;
-        Ok(connection_id)
+        Ok(())
+    }
+
+    /// Whether a row with this id exists, live or idle-expired.
+    pub async fn connection_exists(&self, connection_id: &str) -> Result<bool, String> {
+        self.client()
+            .await
+            .query_opt(
+                "SELECT 1 FROM agent_connections WHERE connection_id = $1",
+                &[&connection_id],
+            )
+            .await
+            .map(|row| row.is_some())
+            .map_err(db_error)
     }
 
     /// Test-only: points a connection at `owner` directly, as a row stranded
@@ -701,7 +877,12 @@ impl Security {
     /// committed before the open-subscriptions check, which then refuses
     /// the transfer, or finds the connection moved. The subscriptions table
     /// is checked whenever it exists, also with the webhook inbox off.
-    pub async fn transfer_owner(&self, from: &str, to: &str) -> Result<Transferred, TransferError> {
+    pub async fn transfer_owner(
+        &self,
+        from: &str,
+        to: &str,
+        rekey: &[Rekey],
+    ) -> Result<Transferred, TransferError> {
         let database = |error: tokio_postgres::Error| {
             if error.code() == Some(&tokio_postgres::error::SqlState::UNIQUE_VIOLATION) {
                 TransferError::Conflict
@@ -756,6 +937,38 @@ impl Security {
         )
         .await
         .map_err(database)?;
+        // Re-seal the named connections under their new keys, in the same
+        // transaction as the move: a client that derives each key from its
+        // agent key needs new keys once the agent changes. A token refresh
+        // in flight holds the old key and would store an old-key envelope
+        // after this commits, so a connection whose refresh lease is held
+        // is not re-keyed (the client retries). The rows are locked above:
+        // a refresh that starts later claims its lease only after this
+        // commits, and then finds a row its key no longer opens.
+        for item in rekey {
+            let row = tx
+                .query_opt(
+                    "SELECT envelope, coalesce(refresh_lease_until > NOW(), false) FROM agent_connections WHERE connection_id = $1 AND owner = $2",
+                    &[&item.connection_id, &from],
+                )
+                .await
+                .map_err(database)?
+                .ok_or(TransferError::Key)?;
+            if row.get::<_, bool>(1) {
+                return Err(TransferError::Refreshing);
+            }
+            let aad = connection_aad(&item.connection_id);
+            let credential = open_with(&item.from.0, &row.get::<_, String>(0), &aad)
+                .ok_or(TransferError::Key)?;
+            let envelope =
+                seal_with(&item.to.0, &credential, &aad).map_err(TransferError::Database)?;
+            tx.execute(
+                "UPDATE agent_connections SET envelope = $2 WHERE connection_id = $1",
+                &[&item.connection_id, &envelope],
+            )
+            .await
+            .map_err(database)?;
+        }
         let connections = tx
             .execute(
                 "UPDATE agent_connections SET owner = $2 WHERE owner = $1",
@@ -777,8 +990,9 @@ impl Security {
         })
     }
 
-    /// Reads a live connection without marking it used; the caller has not
-    /// authenticated yet. `None` for an unknown, idle-expired or tampered row.
+    /// Reads a live connection without marking it used and without opening
+    /// its credential; the caller has not authenticated yet. `None` for an
+    /// unknown or idle-expired row.
     pub async fn load_connection(
         &self,
         connection_id: &str,
@@ -792,14 +1006,11 @@ impl Security {
             )
             .await
             .map_err(db_error)?;
-        Ok(row.and_then(|row| {
-            let envelope: String = row.get(2);
-            Some(ConnectionRecord {
-                connection_id: connection_id.to_owned(),
-                platform: row.get(0),
-                owner: row.get(1),
-                credential: self.open(&envelope, &connection_aad(connection_id))?,
-            })
+        Ok(row.map(|row| ConnectionRecord {
+            connection_id: connection_id.to_owned(),
+            platform: row.get(0),
+            owner: row.get(1),
+            envelope: row.get(2),
         }))
     }
 
@@ -1084,13 +1295,15 @@ impl Security {
             .map_err(db_error)
     }
 
-    /// Stores a refreshed credential and releases the refresh lease.
+    /// Stores a refreshed credential, sealed under the same key the
+    /// connection was opened with, and releases the refresh lease.
     pub async fn store_refreshed_connection(
         &self,
         connection_id: &str,
         credential: &[u8],
+        key: &ConnectionKey,
     ) -> Result<(), String> {
-        let envelope = self.seal(credential, &connection_aad(connection_id))?;
+        let envelope = seal_with(&key.0, credential, &connection_aad(connection_id))?;
         self.client()
             .await
             .execute(
@@ -1138,6 +1351,104 @@ pub(crate) mod tests {
             let _ = connection.await;
         });
         admin
+    }
+
+    /// Dropping every handle of a `Security` closes its PostgreSQL
+    /// connections and stops its reconnect supervisor: 20 handles made and
+    /// dropped leave no connection behind (counted by an application name of
+    /// their own).
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn a_dropped_security_closes_its_connections() {
+        let tag = format!("leak_{:016x}", rand::random::<u64>());
+        let mut url = url::Url::parse(&test_database_url()).unwrap();
+        url.query_pairs_mut().append_pair("application_name", &tag);
+        let admin = admin().await;
+        let open = || async {
+            admin
+                .query_one(
+                    "SELECT count(*) FROM pg_stat_activity WHERE application_name = $1",
+                    &[&tag],
+                )
+                .await
+                .unwrap()
+                .get::<_, i64>(0)
+        };
+        for _ in 0..20 {
+            let security = Security::connect(url.as_str(), TEST_KEY).await.unwrap();
+            security
+                .create_connection("github-issues", "atomic:agent:leak", b"{}")
+                .await
+                .unwrap();
+            assert!(open().await >= 1);
+            drop(security);
+        }
+        let mut left = open().await;
+        for _ in 0..50 {
+            if left == 0 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            left = open().await;
+        }
+        assert_eq!(left, 0, "connections left open by dropped Security handles");
+    }
+
+    /// A rolling instance must wait for an owner write before running startup
+    /// DDL. Otherwise ALTER TABLE queues behind FOR UPDATE, while UPDATE's
+    /// relation-lock upgrade queues behind the initializer: a deadlock.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn startup_schema_does_not_deadlock_an_owner_write() {
+        let security = Security::connect(&test_database_url(), TEST_KEY)
+            .await
+            .unwrap();
+        let mut writer = admin().await;
+        let tx = writer.transaction().await.unwrap();
+        lock_owners(&tx, &["atomic:agent:startup-schema-fixture"])
+            .await
+            .unwrap();
+        tx.query("SELECT 1 FROM agent_connections FOR UPDATE", &[])
+            .await
+            .unwrap();
+
+        let tag = format!("startup_{:016x}", rand::random::<u64>());
+        let mut url = url::Url::parse(&test_database_url()).unwrap();
+        url.query_pairs_mut().append_pair("application_name", &tag);
+        let startup = tokio::spawn(async move { Security::connect(url.as_str(), TEST_KEY).await });
+        let observer = admin().await;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let waiting: bool = observer.query_one(
+                    "SELECT EXISTS (SELECT 1 FROM pg_locks l JOIN pg_stat_activity a USING (pid) WHERE a.application_name = $1 AND NOT l.granted)",
+                    &[&tag],
+                ).await.unwrap().get(0);
+                if waiting {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }).await.expect("initializer should wait for the writer");
+
+        let updated = tx
+            .execute(
+                "UPDATE agent_connections SET owner = owner WHERE false",
+                &[],
+            )
+            .await;
+        let committed = tx.commit().await;
+        let initialized = startup.await.unwrap();
+        assert!(updated.is_ok(), "owner write failed: {updated:?}");
+        assert!(
+            committed.is_ok(),
+            "owner write commit failed: {committed:?}"
+        );
+        assert!(
+            initialized.is_ok(),
+            "startup failed: {}",
+            initialized.err().unwrap_or_default()
+        );
+        drop(security);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
@@ -1335,14 +1646,16 @@ pub(crate) mod tests {
             .await
             .unwrap();
         assert_eq!(
-            security
-                .load_connection(&a)
-                .await
-                .unwrap()
-                .unwrap()
-                .credential,
+            security.credential_for_tests(&security.load_connection(&a).await.unwrap().unwrap()),
             b"credential-a"
         );
+        // Another key does not open a row, and the right key still does.
+        let own = security.load_connection(&a).await.unwrap().unwrap();
+        assert!(security
+            .open_credential(&own, &ConnectionKey([7; 32]))
+            .is_none());
+        assert_eq!(security.credential_for_tests(&own), b"credential-a");
+        assert_eq!(format!("{:?}", ConnectionKey([7; 32])), "ConnectionKey(..)");
         // One row's envelope pasted into another does not open.
         admin
             .execute(
@@ -1351,7 +1664,12 @@ pub(crate) mod tests {
             )
             .await
             .unwrap();
-        assert!(security.load_connection(&b).await.unwrap().is_none());
+        // The row still loads (that needs no key), but its credential does
+        // not open: the envelope is bound to the other row.
+        let moved = security.load_connection(&b).await.unwrap().unwrap();
+        assert!(security
+            .open_credential(&moved, &ConnectionKey::for_tests())
+            .is_none());
 
         // 89 idle days: still there. 90: gone, and swept with its delegations.
         security
@@ -1505,16 +1823,11 @@ pub(crate) mod tests {
         );
         assert_ne!(a.unwrap(), b.unwrap());
         security
-            .store_refreshed_connection(&id, b"new")
+            .store_refreshed_connection(&id, b"new", &ConnectionKey::for_tests())
             .await
             .unwrap();
         assert_eq!(
-            security
-                .load_connection(&id)
-                .await
-                .unwrap()
-                .unwrap()
-                .credential,
+            security.credential_for_tests(&security.load_connection(&id).await.unwrap().unwrap()),
             b"new"
         );
         assert!(security.claim_refresh_lease(&id).await.unwrap());

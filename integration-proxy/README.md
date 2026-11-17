@@ -65,6 +65,11 @@ atomic-request-v2
 {lowercase hex SHA-256 of the body; e3b0c442…b855 when empty}
 ```
 
+A request that carries `x-connection-key` (below) signs a sixth line, the
+lowercase hex SHA-256 of that header's value, so the key it presents cannot
+be swapped or removed without the signer. Without the header the message is
+the five lines above, unchanged.
+
 The proxy accepts version 2 only; a missing or different version header is
 refused, never retried as v1. The agent must be `atomic:agent:` of the public
 key header. The timestamp must be within ±5 minutes of the proxy's clock, and
@@ -76,6 +81,45 @@ received, e.g. `https://localthought.io/proxy/<id>/github-issues/user/repos?page
 It is never rebuilt from the `Host` header: behind a TLS-terminating reverse
 proxy or platform router the process sees plain HTTP. Clients sign the URL they fetch (`new URL(u).href`).
 `BASE_URL` must therefore be exactly the public origin clients use.
+
+### Connection keys (client-held)
+
+The proxy keeps each connection's provider credential sealed
+(XChaCha20-Poly1305) under a 256-bit **connection key that only the client
+holds**. A request that uses the credential presents the key in
+`x-connection-key`, in one of two forms:
+
+```text
+x-connection-key: k1.<base64url, unpadded: the 32 key bytes>
+x-connection-key: s1.<base64url, unpadded: enc || ciphertext>
+```
+
+- `k1` is the key itself, for the owner and software the owner runs.
+- `s1` is a **key grant**: the key encrypted to this proxy with HPKE
+  (RFC 9180) base mode, DHKEM(X25519, HKDF-SHA256), HKDF-SHA256,
+  AES-256-GCM, `info` = `integration-proxy-connection-key-grant-v1`, empty
+  `aad`; `enc` is 32 bytes. The plaintext is
+  `{"v":1,"connection_id","sub","key","exp"?}`: `sub` is the agent that may
+  present it, `key` the base64url key, `exp` optional Unix seconds. The
+  holder cannot read the key. `GET /connection-key-grants/key` gives the
+  public key (`{"kem","kdf","aead","info","public_key"}`, `public_key` 32
+  bytes base64url); it is derived from `ENCRYPTION_KEY` and stays the same
+  while that does.
+
+Which `sub` a grant must name: the signer for an owner, delegate or webhook
+consumer; the runtime's own agent or its app for a runtime; the
+capability's `app` for a frame (not the frame's temporary key); the owner
+for a device session.
+
+The key never authorises anything. Authentication, standing (owner,
+delegation, runtime, capability, device scope), the access policy and the
+catalog checks run first, exactly as before; only then is the key resolved
+and the credential opened. The proxy keeps no copy of the key: it is used
+for that request, and to re-seal a refreshed OAuth token under the same key.
+How a client derives or stores its keys is up to the client; one way is
+HKDF over the owner's Ed25519 signature of a fixed per-connection message,
+which needs no storage but changes with the agent key (see
+`/agents/transfer`).
 
 ### Routes
 
@@ -154,15 +198,22 @@ Subscriptions, `openapi-extensions/spec/`):
   handoff is not a credential: it is single-use, valid five minutes, and
   bound to the PKCE challenge.
 - `POST /connect/redeem` — **signed**; body
-  `{"code": "<handoff>", "code_verifier": "<PKCE verifier>"}`; answers
-  `{"connection_id", "platform", "owner", "label"?}`. The signer becomes the
-  owner. `label` is there when an API-key platform's key check gave one.
-  A wrong verifier does not burn the handoff.
+  `{"code": "<handoff>", "code_verifier": "<PKCE verifier>", "connection_id":
+  "<32 random bytes, base64url, unpadded>", "connection_key": "k1.<key>"}`;
+  answers `{"connection_id", "platform", "owner", "label"?}`. The client
+  chooses the connection id (ids are not secret) and the key; the proxy
+  seals the credential under the key and does not keep it. The signer
+  becomes the owner. `label` is there when an API-key platform's key check
+  gave one. A wrong verifier, a malformed id or key, and an id that is
+  taken (`409 connection_exists`) do not burn the handoff.
+- `GET /connection-key-grants/key` — the public key key grants are
+  encrypted to (see "Connection keys").
 - `ANY /proxy/{connection_id}/{platform}/{path}` — **signed** by the owner, a
   delegated app agent, or a registered runtime of a delegated app; or carrying
   a frame capability (below), or an opt-in Local Thought device access token
-  for approved GET/HEAD reads (DEVICE_AUTH.md). The proxy attaches the provider
-  credential,
+  for approved GET/HEAD reads (DEVICE_AUTH.md). Every caller also presents
+  the connection key in `x-connection-key` (see "Connection keys"). The proxy
+  attaches the provider credential,
   refreshing an expiring OAuth token (one refresh in flight per connection),
   and forwards only catalog-allowlisted methods and paths. The caller's
   `Authorization` and `x-atomic-*` headers are never forwarded: an
@@ -200,7 +251,7 @@ Subscriptions, `openapi-extensions/spec/`):
   signer. `DELETE /runtimes/{agent}` removes it. A runtime can use every
   connection its app is delegated.
 - `POST /agents/transfer` — **signed by the old agent**; body `{"to",
-  "proof"}` moves the signer's connections and runtimes to the agent `to`
+  "proof", "connection_keys"?}` moves the signer's connections and runtimes to the agent `to`
   and retires the signer (key rotation, #410). `proof` is `to`'s Ed25519
   signature (base64, either alphabet) over
   `integration-proxy-agent-transfer-v1\n{old id}\n{new id}\n{proxy origin}\n{this request's x-atomic-timestamp}`,
@@ -213,8 +264,14 @@ Subscriptions, `openapi-extensions/spec/`):
   longer verify. `409 transfer_blocked` while the old agent has open
   webhook subscriptions; `409 transfer_conflict`, with nothing moved, when
   the new agent already has a runtime with the same agent. `200`
-  `{"from", "to", "connections", "runtimes"}` (the counts moved). Only for a
-  key the user still holds: see SECURITY.md, "Key rotation".
+  `{"from", "to", "connections", "runtimes", "rekeyed"}` (the counts moved).
+  `connection_keys`, `{"<connection id>": {"from": "k1.<key>", "to":
+  "k1.<key>"}}` (at most 1000), re-seals those connections under new keys in
+  the same transaction, for clients whose keys derive from the agent key; a
+  connection that is not the old agent's or does not open with `from`
+  moves nothing (`403 invalid_connection_key`), and one whose token is being
+  refreshed answers `409 refresh_in_progress` (retry). Only for a key the
+  user still holds: see SECURITY.md, "Key rotation".
 - `GET /healthz` — `200 ok` when the database answers.
 
 Delegations and runtimes are read on every proxied request, so removing one
@@ -249,9 +306,9 @@ Signed endpoints answer errors as JSON, `{"error": "<code>", "message": "<text>"
 
 | Status | `error` |
 | --- | --- |
-| 401 | `missing_signature`, `unsupported_signature_version`, `invalid_agent`, `agent_key_mismatch`, `stale_timestamp`, `bad_signature`, `replayed`, `unsupported_authorization` (e.g. a retired `Bearer` connection code), `invalid_capability`, `capability_expired`, `capability_too_long`, `wrong_audience`, `capability_key_mismatch`, `credential_refresh_failed` (connect again), `invalid_transfer_proof` |
-| 403 | `not_owner`, `not_delegated`, `capability_scope`, `platform_mismatch`, `access_denied`, `agent_retired` |
-| 409 | `transfer_blocked`, `transfer_conflict` |
+| 401 | `missing_signature`, `unsupported_signature_version`, `invalid_agent`, `agent_key_mismatch`, `stale_timestamp`, `bad_signature`, `replayed`, `unsupported_authorization` (e.g. a retired `Bearer` connection code), `invalid_capability`, `capability_expired`, `capability_too_long`, `wrong_audience`, `capability_key_mismatch`, `credential_refresh_failed` (connect again), `invalid_transfer_proof`, `connection_key_required` (no `x-connection-key` where the credential is needed) |
+| 403 | `not_owner`, `not_delegated`, `capability_scope`, `platform_mismatch`, `access_denied`, `agent_retired`, `invalid_connection_key` (malformed, a grant for another caller, connection or proxy, expired, or not this connection's key) |
+| 409 | `transfer_blocked`, `transfer_conflict`, `connection_exists`, `refresh_in_progress` |
 | 404 | `unknown_connection` (deleted, idle-expired, or never existed: connect again) |
 | 400 | `bad_request`, `invalid_handoff` |
 | 429 | `provider_quota`, from `/proxy/…` only, with `Retry-After` in seconds: the proxy's own requests to the platform are at a quota the provider counts on the proxy's address (`x-throttling`; see "Pacing under provider quotas") |
@@ -297,7 +354,7 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `BASE_URL` | no | Public URL of the proxy, e.g. `https://localthought.io`. Defaults to `http://localhost:8080`. Used for OAuth callback URLs, as the prefix of every signed URL, and (its origin) as a capability's `aud`. Must be exactly what clients use. |
 | `PORT` | no | Port to listen on. Defaults to `8080`. |
 | `SESSION_SECRET` | no; set it in production | Secret for the short-lived consent and OAuth-binding cookies. If unset, a random key is generated at startup (with a warning in the log), and a consent screen open during a restart must be started again. Instances behind one name must share it. |
-| `CATALOG_PATH` | no | Local path or HTTPS URL for the catalog JSON. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-02-auth-profiles.json`, this repository's `overlays/catalog/2026-10-02-auth-profiles.json` as GitHub Pages publishes it from `main` (0.2.4 defaults to `catalog/2026-10-02.json`). |
+| `CATALOG_PATH` | no | Local path or HTTPS URL for the catalog JSON. Defaults to `https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-29-google-keep-writes.json`, this repository's `overlays/catalog/2026-10-29-google-keep-writes.json` as GitHub Pages publishes it from `main` (0.2.4 defaults to `catalog/2026-10-02.json`). |
 | `DATABASE_URL` | yes | PostgreSQL connection URL. See the TLS note below. |
 | `ENCRYPTION_KEY` | yes | Base64url-encoded, random 32-byte key for sealed provider credentials. Changing it makes every stored connection unreadable. |
 | `REVOKED_SUBJECTS` | no | Comma-separated agent ids (any accepted spelling) the default access policy refuses. |
@@ -380,16 +437,25 @@ scope). The initial integration imports contacts; supply the administration ID
 from the Moneybird account when connecting. OAuth tokens without `expires_in`
 remain usable until revoked; tokens with an expiry use the normal refresh flow.
 
-[`overlays/catalog/2026-10-02-auth-profiles.json`](../overlays/catalog/2026-10-02-auth-profiles.json) in this repository
+[`overlays/catalog/2026-10-29-google-keep-writes.json`](../overlays/catalog/2026-10-29-google-keep-writes.json) in this repository
 (migrated from the former `localthought/overlays` repository) is the source of
 the integration catalog. GitHub Pages publishes `overlays/` from `main` at
 `https://ontola.github.io/atomic-plugins/overlays/`, and the proxy defaults to
-the `catalog/2026-10-02-auth-profiles.json` there; set `CATALOG_PATH` to another HTTPS URL or to a
+the `catalog/2026-10-29-google-keep-writes.json` there; set `CATALOG_PATH` to another HTTPS URL or to a
 local fixture for development. Each platform names one pinned OpenAPI document
 (in `localthought/` or `ontola/openapi-directory`, at a commit) and zero or more Overlay
 Specification documents, each served from that same Pages folder. At startup
 the proxy downloads those HTTPS sources, applies each overlay's `update`
 actions in the listed order, and keeps the resulting YAML in memory.
+
+This source default retains the previous auth-profiles catalog's nine entries
+and adds Google Keep with a refreshed OAD and auth, pagination and CRUD overlays.
+The Keep profile exposes list/get/create/delete notes; Google has no update
+operation. Attachment download and sharing stay outside that profile. Device
+tokens require a separate, explicit `proxy:write` grant for mutations. Existing
+read sessions retain their restrictions. SyncD additionally requires per-collection
+write configuration and explicit sending; see
+[provider writes](../syncables/docs/daemon-writes.md). An explicit deployment `CATALOG_PATH` still wins.
 
 Provider overlay filenames include their kind and full OAD commit SHA under
 `overlays/APIs/`, so adding a newer OAD revision leaves existing catalog
@@ -415,7 +481,9 @@ names one of the document's `components.x-authentication-profiles`
 same as `oauthSecurityScheme` for a document with several `apiKey` schemes,
 or several bearer/basic `http` schemes.
 **GET /catalog/{platform}.selection.json** returns the selection object (or an
-empty object when absent).
+empty object when absent). Like the rest of `/catalog` it needs no
+signature, so a `throttlingPlans` entry in it tells anyone which provider
+plan the deployment is on.
 
 A composed document whose `paths` holds a path item that is a `$ref`
 (OpenAPI 3.1) or not an object is refused at load, naming the platform and
@@ -600,7 +668,7 @@ cd integration-proxy && cargo publish --dry-run
 git tag integration-proxy-v0.1.1 && git push origin integration-proxy-v0.1.1
 ```
 
-Only `src/`, `static/index.html`, `static/logo.png`, `Cargo.toml`,
+Only `src/`, `static/index.html`, `static/logo.svg`, `Cargo.toml`,
 `Cargo.lock`, `README.md`, `CHANGELOG.md`, `SECURITY.md` and `LICENSE` are packaged
 (`cargo package --list` shows the exact list). `tests/` fixtures are not, so
 `cargo test` only works from a checkout of this repository.

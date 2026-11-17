@@ -346,3 +346,55 @@ async fn google_tasks_readonly_profile_is_scoped_and_proxy_compatible() {
         )
         .is_none());
 }
+
+/// Prepared ClickUp catalog: proxy-only read restrictions, no invented provider
+/// scope. Pagination is blocked pending openapi-extensions#25; this is not a
+/// claim of complete import or live OAuth certification.
+#[tokio::test]
+#[ignore = "downloads pinned candidate sources; set CLICKUP_CATALOG_URL for Pages"]
+async fn clickup_read_profile_is_proxy_compatible_without_invented_scopes() {
+    let client = crate::build_http_client();
+    let catalog = if let Ok(url) = std::env::var("CLICKUP_CATALOG_URL") {
+        Catalog::load(&url, &client).await
+    } else {
+        Catalog::load_checked_in_file(&client, "catalog/2026-10-08-gitlab-tasks-clickup.json").await
+    }
+    .expect("prepared catalog pins must compose");
+    let provider = catalog
+        .oauth_provider("clickup")
+        .expect("ClickUp OAuth metadata must parse");
+    assert_eq!(provider.authorization_url, "https://app.clickup.com/api");
+    assert_eq!(
+        provider.token_url,
+        "https://api.clickup.com/api/v2/oauth/token"
+    );
+    assert!(
+        provider.scopes.is_empty(),
+        "ClickUp declares no selectable scopes"
+    );
+    assert!(
+        !provider.use_pkce,
+        "PKCE support is not documented by ClickUp"
+    );
+    for path in [
+        "/api/v2/team",
+        "/api/v2/team/123/task",
+        "/api/v2/task/task-1",
+    ] {
+        assert!(catalog.allows("clickup", "GET", path).is_some());
+        for method in ["POST", "PUT", "PATCH", "DELETE"] {
+            assert!(catalog.allows("clickup", method, path).is_none());
+        }
+    }
+    assert!(catalog.allows("clickup", "GET", "/api/v2/user").is_none());
+    catalog
+        .validate_request(
+            "clickup",
+            "GET",
+            "/api/v2/team/123/task",
+            Some("page=0"),
+            None,
+            false,
+        )
+        .expect("zero-based page request must validate");
+}

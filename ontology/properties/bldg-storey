@@ -3,7 +3,7 @@
   "https://atomicdata.dev/properties/isA": [
     "https://atomicdata.dev/classes/Property"
   ],
-  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "bldg-storey",
   "https://atomicdata.dev/properties/name": "Storey",
   "https://atomicdata.dev/properties/description": "The Storey this resource is on. Coordinates of its geometry are local to this storey. Spatial containment is a link, not the resource parent.",

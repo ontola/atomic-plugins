@@ -30,7 +30,11 @@ use serde::Deserialize;
 use super::provider::{check_access, deliveries, parameters, Checked};
 use super::store::{ended, now, AccessCheck, Binding, InboxError, NewSubscription};
 use super::Webhooks;
-use crate::{api_error::ApiError, security::Standing, AppState};
+use crate::{
+    api_error::ApiError,
+    security::{ConnectionKey, Standing},
+    AppState,
+};
 
 /// Longest long-poll wait (`fetch.maxWaitSeconds`).
 pub const MAX_WAIT: Duration = Duration::from_secs(25);
@@ -87,6 +91,37 @@ fn webhooks(state: &AppState) -> Result<Arc<Webhooks>, Box<Response>> {
         .ok_or_else(|| Box::new(no_store(StatusCode::NOT_FOUND.into_response())))
 }
 
+/// Device grants can only consume fixed change hints, never retained provider
+/// bodies. Selection is checked for every subscription operation.
+async fn notification_signer(
+    state: &AppState,
+    security: &crate::security::Security,
+    method: &Method,
+    uri: &axum::http::Uri,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(crate::agent_id::AgentId, Option<Vec<String>>), ApiError> {
+    if let Some(token) = crate::device::bearer(headers)? {
+        let principal = crate::device::principal(state, token).await?;
+        if !state
+            .webhooks
+            .as_ref()
+            .is_some_and(|w| w.notifications_only)
+            || !principal
+                .scope
+                .split_ascii_whitespace()
+                .any(|s| s == crate::device::NOTIFICATION_SCOPE)
+        {
+            return Err(ApiError::TokenScope);
+        }
+        return Ok((principal.owner, Some(principal.connections)));
+    }
+    Ok((
+        crate::signature::authenticate(state, security, method, uri, headers, body).await?,
+        None,
+    ))
+}
+
 /// Authenticates the request and checks the signer is still the
 /// subscription's consumer with standing on its connection.
 async fn consumer(
@@ -102,7 +137,7 @@ async fn consumer(
         .security
         .as_ref()
         .ok_or_else(|| Box::new(no_store(ApiError::Unavailable.into_response())))?;
-    let signer = crate::signature::authenticate(state, security, method, uri, headers, body)
+    let (signer, selected) = notification_signer(state, security, method, uri, headers, body)
         .await
         .map_err(|e| Box::new(no_store(e.into_response())))?;
     let binding = match webhooks.store.binding(id).await {
@@ -110,6 +145,12 @@ async fn consumer(
         Ok(_) => return Err(Box::new(inbox_error(InboxError::UnknownSubscription))),
         Err(error) => return Err(Box::new(inbox_error(error))),
     };
+    if selected
+        .as_ref()
+        .is_some_and(|ids| !ids.contains(&binding.connection_id))
+    {
+        return Err(Box::new(no_store(ApiError::TokenScope.into_response())));
+    }
     // Standing is checked whatever the subscription's state, so a former
     // consumer reads nothing, not even a closed subscription's tombstone.
     let standing = security
@@ -131,24 +172,64 @@ async fn consumer(
     Ok((webhooks, binding))
 }
 
-/// Re-runs the binding's access check with its recorded parameters.
-async fn recheck(state: &AppState, binding: &Binding) -> AccessCheck {
+/// The connection key a webhook request presents, checked against the
+/// connection before any access check is made with it: a missing or wrong
+/// key is the request's error, never a failed access check (which would
+/// suspend the subscription). A key grant must name `principal`, the
+/// request's signer. A connection that is gone is left to the access check,
+/// which reports it as a failure.
+async fn presented_key(
+    state: &AppState,
+    headers: &HeaderMap,
+    connection_id: &str,
+    principal: &str,
+) -> Result<ConnectionKey, ApiError> {
+    let security = state.security.as_ref().ok_or(ApiError::Unavailable)?;
+    let key = crate::connection_key::resolve(
+        headers,
+        security.grant_key(),
+        connection_id,
+        &[principal],
+        crate::now_secs(),
+    )?;
+    if let Some(record) = security
+        .load_connection(connection_id)
+        .await
+        .map_err(|_| ApiError::Unavailable)?
+    {
+        security
+            .open_credential(&record, &key)
+            .ok_or(ApiError::InvalidConnectionKey)?;
+    }
+    crate::webhooks::run_deferred_cleanup(state, connection_id, &key);
+    Ok(key)
+}
+
+/// Re-runs the binding's access check with its recorded parameters and the
+/// key the request presents.
+async fn recheck(
+    state: &AppState,
+    headers: &HeaderMap,
+    binding: &Binding,
+) -> Result<AccessCheck, ApiError> {
+    let key = presented_key(state, headers, &binding.connection_id, &binding.consumer).await?;
     let (Some(deliveries), Some(values)) = (
         deliveries(state, &binding.platform),
         parameters(&binding.access_parameters),
     ) else {
-        return AccessCheck::Failed;
+        return Ok(AccessCheck::Failed);
     };
-    check_access(
+    Ok(check_access(
         state,
         &binding.connection_id,
+        &key,
         &binding.platform,
         &deliveries,
         &binding.source_kind,
         &values,
     )
     .await
-    .against(&binding.source_key)
+    .against(&binding.source_key))
 }
 
 #[derive(Deserialize)]
@@ -176,14 +257,17 @@ pub async fn subscribe(
     let Some(security) = state.security.as_ref() else {
         return no_store(ApiError::Unavailable.into_response());
     };
-    let signer = match crate::signature::authenticate(
-        &state, security, &method, &uri, &headers, &body,
-    )
-    .await
+    let (signer, selected) =
+        match notification_signer(&state, security, &method, &uri, &headers, &body).await {
+            Ok(signer) => signer,
+            Err(error) => return no_store(error.into_response()),
+        };
+    if selected
+        .as_ref()
+        .is_some_and(|ids| !ids.contains(&connection_id))
     {
-        Ok(signer) => signer,
-        Err(error) => return no_store(error.into_response()),
-    };
+        return no_store(ApiError::TokenScope.into_response());
+    }
     if connection_id.len() != 43 {
         return no_store(ApiError::UnknownConnection.into_response());
     }
@@ -247,9 +331,16 @@ pub async fn subscribe(
     if webhooks.shared_secret(&record.platform).is_none() {
         return inbox_error(InboxError::CapacityUnavailable);
     }
+    // The key is needed only now, for the access check at the provider.
+    let connection_key =
+        match presented_key(&state, &headers, &connection_id, signer.as_str()).await {
+            Ok(key) => key,
+            Err(error) => return no_store(error.into_response()),
+        };
     let key = match check_access(
         &state,
         &connection_id,
+        &connection_key,
         &record.platform,
         &deliveries,
         &request.source,
@@ -348,7 +439,10 @@ pub async fn renew(
         Ok(found) => found,
         Err(response) => return *response,
     };
-    let access = recheck(&state, &binding).await;
+    let access = match recheck(&state, &headers, &binding).await {
+        Ok(access) => access,
+        Err(error) => return no_store(error.into_response()),
+    };
     match webhooks
         .store
         .renew(&id, &binding.consumer, access, now())
@@ -448,7 +542,12 @@ pub async fn events(
                 // The receiver runs the check itself rather than serve
                 // events on a stale one (Webhook Deliveries §4.4.1).
                 checked = true;
-                let access = recheck(&state, &binding).await;
+                let access = match recheck(&state, &headers, &binding).await {
+                    Ok(access) => access,
+                    // The stale check needs the connection's key: the
+                    // consumer asks again with x-connection-key.
+                    Err(error) => break no_store(error.into_response()),
+                };
                 if let Err(error) = webhooks
                     .store
                     .record_access_check(&id, &binding.consumer, access, now())
@@ -595,7 +694,10 @@ pub async fn reconciled(
     let Ok(request) = serde_json::from_slice::<ReconciledBody>(&body) else {
         return bad_request("expected {generation, barrier}");
     };
-    let access = recheck(&state, &binding).await;
+    let access = match recheck(&state, &headers, &binding).await {
+        Ok(access) => access,
+        Err(error) => return no_store(error.into_response()),
+    };
     match webhooks
         .store
         .complete_reconciliation(

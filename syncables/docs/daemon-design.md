@@ -28,6 +28,24 @@ or platform retirement exists. The implementation tickets are
 [#565](https://github.com/ontola/atomic-plugins/issues/565) (device authentication)
 and [#566](https://github.com/ontola/atomic-plugins/issues/566) (CLI and daemon).
 
+## API integration without platform SDKs
+
+Syncables and SyncD must never depend on or call platform-specific SDKs.
+Describe provider APIs in OpenAPI and express provider-specific behavior in
+overlays and reusable extensions. Build requests through the shared HTTP
+transport, directly or through integration-proxy. Generic HTTP, authentication
+and wire-format libraries are compatible with this design.
+
+For [file storage collections](https://github.com/ontola/atomic-plugins/issues/727),
+describe metadata and the retrieval of opaque bytes separately. The proposed
+extension should let an item identify its bytes through either a download URL
+or an OpenAPI operation with arguments bound from that item. The shared
+transport must support the operation's declared method, parameters, headers,
+body and authentication. Metadata synchronization leaves retrieval to explicit
+policy. Where a native replication protocol needs additional behavior, model
+its wire protocol behind a Syncables adapter. A destination stays planned
+until that protocol is supported.
+
 ## What exists and what is planned
 
 Status checked against this implementation branch on 2026-10-20; see the
@@ -43,7 +61,7 @@ Status checked against this implementation branch on 2026-10-20; see the
 | Compact collection coverage and disposable hydration | Planned for the daemon. Existing `ReadCoverage` is narrower than this design. |
 | Selected one-shot incremental fetch, webhook/poll scheduler and offline browser | Implemented in this branch: configured GET full reconciliation, a standalone query-token incremental subset, durable relay hints, polling and commit-pinned local browsing. The library reader still refuses `incrementalSync`. |
 | Credentials and service lifecycle | macOS Keychain adapter and serialized refresh implemented in this branch; live laptop validation remains. Foreground daemon only; launchd/IPC deferred. |
-| PostgreSQL outgoing outbox | Planned. This daemon is read-only; existing library outbox persistence is caller-supplied. |
+| PostgreSQL outgoing outbox | Implemented experimental explicit CLI creates, replacements and deletes, default off. Local intent, dispatch state and receipts persist separately from accepted snapshots; see [commands and recovery](daemon-writes.md). File, Braid and AtomicSync edit ingestion remain future work. |
 | Atomic, NextGraph, remoteStorage, Jazz and atproto runtime replication | Planned; only the first three have scaffold configuration commands. Configuring a destination does not establish replication. |
 | Retire the source and promote the local copy | Product direction; requires a separate migration plan and implementation. |
 
@@ -617,16 +635,17 @@ Start with one configured, authenticated, read-only collection:
    disconnect/reconnect, process restart and denied access. Test full-snapshot
    recovery when the requested history is unavailable.
 
-This first interface rejects client mutations. Later writable Braid and
-AtomicSync adapters, or accepted Git pushes, need a shared local-edit model,
-durable outgoing intent, preconditions and an explicit merge/authority policy.
+This first interface rejects client mutations. An [explicit CLI edit queue](daemon-writes.md)
+now implements local provider intent and recovery. Later writable Braid and
+AtomicSync adapters, or accepted Git pushes, still need edit ingestion and an
+explicit merge/authority policy over that queue.
 Braid's version graph does not automatically supply a CRDT or make provider
 writes safe. Keep local acceptance distinct from confirmed provider delivery;
 prevent changes crossing adapters from echoing into repeated provider writes.
 
 ## One-way Atomic drive mirror: next milestone
 
-**Plan only; runtime writes are not implemented.** Start with an explicitly
+**Plan only; runtime writes to an Atomic drive are not implemented.** Start with an explicitly
 configured, one-way mirror of selected PostgreSQL collections into an existing
 Atomic drive. Git export is independent of this path and is never a prerequisite.
 
@@ -638,7 +657,7 @@ Atomic drive. Git export is independent of this path and is never a prerequisite
    `(destination, source subject/schema)` to stable native Atomic identities;
    a retry or later source revision must update the same target identities.
    Existing JSON-AD is an intermediate representation, not automatically a valid
-   native drive commit. Use the supported Atomic SDK/schema and commit APIs.
+   native drive commit. Use the documented Atomic schema and commit APIs.
 3. Publish required native classes/properties and record data, preserving OAD
    provenance and links to the source snapshot. Define lossless handling of raw
    JSON and numbers that a native property datatype cannot express. Keep the
@@ -666,38 +685,35 @@ persist destination definitions; they do not execute this plan.
 
 ### Atomic sync peer as an alternative source interface
 
-A second candidate, suggested by Michiel, is for SyncD to expose an
-Atomic-compatible sync peer (**AtomicSync**) backed by PostgreSQL. Consumers
-could subscribe to a virtual Syncables drive through the normal Atomic
-protocol. This remains a proposal; no sync endpoint is implemented by the
-storage migration.
+The optional [Atomic peer implementation](atomic-peer.md) now projects selected
+accepted PostgreSQL collections into one owner-scoped native drive. Folders are
+keyed by platform/account and contain one table per collection. Native classes,
+properties and views are generated from resolved OpenAPI item schemas plus
+observed fields; nested objects/arrays stay inline as native JSON. Original
+JSON and source history remain in PostgreSQL. The earlier JSON-wrapper wire
+prototype remains a compatibility test path; the CLI uses the table format.
 
-The pipeline would be PostgreSQL snapshots → maintained native Atomic/Loro
-projection → sync protocol → replicas. Stable resource/schema identities,
-genesis and permission metadata, signed writes, version vectors, reconciliation,
-subscriptions and reconnect recovery are required. Begin with read-only access
-to one collection; reject incoming mutations and advertise only supported
-capabilities. Search, plugins and application hosting are outside this subset.
+The pipeline is PostgreSQL snapshots → maintained native Atomic/Loro projection
+→ sync protocol → replicas. The companion reuses pinned `atomic_lib` with an
+embedded redb projection store; it does not provide a PostgreSQL backend for the
+core. Persistent identities, Loro documents, a graph publication journal and
+property-ownership state support restart/delta reconciliation. Empty collections
+retain declared columns. Out-of-range/precision-sensitive numbers use exact
+native text. The source peer rejects incoming mutations and does not run search,
+plugins or application hosting.
 
-Reuse the existing `atomic_lib` core rather than independently implementing its
-wire format, signatures and permission rules. The current sync engine takes
-`atomic_lib::Db`; it has no ready-made PostgreSQL adapter. A prototype can embed
-a small Atomic projection store, or factor a storage interface and persist its
-native state in PostgreSQL. Fetched data/history remains authoritative in
-PostgreSQL. Persistent Loro documents/oplogs and projection checkpoints are
-additional derived representations: creating fresh Loro documents on every
-request would lose stable operation identities and incremental reconciliation.
+A native replica shares the **same drive identity**. Copying data into an
+existing drive remains a separate import operation, requiring destination
+identity mappings, conflicting-edit/removal rules and acknowledgement handling.
+The dedicated source drive makes SyncD ownership and permissions explicit;
+references between drives can connect local workflows without copying records.
+A client/replication connection must separately be configured to keep a server
+replica live. Offline native catch-up projects current accepted heads; retained
+intermediate source history stays in PostgreSQL. This source interface coexists
+with the Git and Braid interfaces described above.
 
-A native replica shares the **same drive identity**. Copying these records into
-a different existing drive remains an import/projection operation; native sync
-alone does not change their ownership namespace. Likewise, arbitrary local
-edits and bidirectional provider writes require policies beyond the read-only
-source. Prototype compatibility and restart/delta behavior with an unmodified
-Atomic client before choosing this interface over direct mirroring. It can
-coexist with the Git and Braid interfaces described above.
-
-Protocol references: [Atomic sync engine](https://github.com/ontola/atomic-server/blob/66880fc53f392771761bb4d967e1e443344a7e34/docs/src/sync-engine.md)
-and [wire protocol](https://github.com/ontola/atomic-server/blob/66880fc53f392771761bb4d967e1e443344a7e34/docs/src/websockets.md).
+Protocol references: [Atomic sync engine](https://github.com/ontola/atomic-server/blob/30994948b5adadd765ecfcdccdf0aad14ef5be1a/docs/src/sync-engine.md)
+and [wire protocol](https://github.com/ontola/atomic-server/blob/30994948b5adadd765ecfcdccdf0aad14ef5be1a/docs/src/websockets.md).
 
 ## Daemon lifecycle and replication destinations
 
@@ -715,13 +731,13 @@ inspect, enable/disable and remove destinations, with real observed status.
 
 | Backend | Runtime work beyond saving a destination |
 | --- | --- |
-| Atomic native sync | Compatible SDK/engine, identities and permissions, signed commits, Loro/version-vector state, subscriptions and reconnect recovery. HTTP imports alone do not establish native replication. |
-| NextGraph native sync | Its SDK or wallet/verifier sidecar, encrypted commit synchronization, document permissions and durable native protocol state. Snapshot exchange alone is insufficient. |
+| Atomic native sync | Wire protocol support, identities and permissions, signed commits, Loro/version-vector state, subscriptions and reconnect recovery. HTTP imports alone do not establish native replication. |
+| NextGraph native sync | Encrypted commit synchronization, identity and verification, document permissions and durable native protocol state. Snapshot exchange alone is insufficient. |
 | remoteStorage | WebFinger discovery from a user address, scoped module authorization, ETag-aware document/listing sync and conflict handling. This is document storage synchronization. |
-| Jazz | Delayed adapter design: explicit CoValue/schema mapping, account/group permissions, stable identities and SDK-owned durable sync state. No configuration/runtime support is claimed. |
+| Jazz | Delayed adapter design: explicit CoValue/schema mapping, account/group permissions, stable identities and durable protocol state. No configuration/runtime support is claimed. |
 | atproto | Delayed adapter design: records mapped to appropriate lexicons, repository identity/authentication, writes/subscriptions and durable delivery state. A copied JSON response is not native repository synchronization. |
 
-Native SDKs may need durable protocol storage in addition to PostgreSQL.
+Native replication may need durable protocol storage in addition to PostgreSQL.
 Keep that state distinct from disposable hydrated API views and the provider
 mutation outbox. Preserve stable identity/provenance across representations
 and prevent replication echoes from repeatedly creating provider writes.

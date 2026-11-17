@@ -716,6 +716,52 @@ impl Store {
         })
     }
 
+    /// Bind a database to one retention policy. Switching a populated inbox
+    /// could expose old provider bodies through a notification-only grant.
+    pub async fn check_payload_mode(
+        &self,
+        notifications_only: bool,
+    ) -> std::result::Result<(), String> {
+        let mut db = self.pool.get().await.map_err(|e| e.to_string())?;
+        let tx = db.transaction().await.map_err(|e| e.to_string())?;
+        tx.query_one(
+            "SELECT pg_advisory_xact_lock($1)",
+            &[&7_316_186_474_691_124_078_i64],
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        tx.batch_execute("CREATE TABLE IF NOT EXISTS webhook_storage_policy (id BOOLEAN PRIMARY KEY CHECK(id), notifications_only BOOLEAN NOT NULL)").await.map_err(|e| e.to_string())?;
+        let mode = tx
+            .query_opt(
+                "SELECT notifications_only FROM webhook_storage_policy WHERE id=TRUE",
+                &[],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        if let Some(mode) = mode {
+            if mode.get::<_, bool>(0) != notifications_only {
+                return Err("Webhook storage mode differs from this database; use a fresh inbox database for notification-only cutover".into());
+            }
+        } else {
+            if notifications_only {
+                let found = tx
+                    .query_one("SELECT EXISTS(SELECT 1 FROM webhook_payloads)", &[])
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if found.get::<_, bool>(0) {
+                    return Err("Notification-only mode requires an empty inbox database".into());
+                }
+            }
+            tx.execute(
+                "INSERT INTO webhook_storage_policy(id,notifications_only) VALUES(TRUE,$1)",
+                &[&notifications_only],
+            )
+            .await
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().await.map_err(|e| e.to_string())
+    }
+
     pub fn policy(&self) -> &Policy {
         &self.policy
     }

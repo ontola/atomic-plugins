@@ -3,7 +3,7 @@
   "https://atomicdata.dev/properties/isA": [
     "https://atomicdata.dev/classes/Class"
   ],
-  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "building-question-v1",
   "https://atomicdata.dev/properties/name": "Building question",
   "https://atomicdata.dev/properties/description": "The extras of a question the AI asks the user. Meant to sit on the same resource as issue-v1, which holds name, status, body and assignee; this class does not repeat them.",

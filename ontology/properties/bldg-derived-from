@@ -3,7 +3,7 @@
   "https://atomicdata.dev/properties/isA": [
     "https://atomicdata.dev/classes/Property"
   ],
-  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "bldg-derived-from",
   "https://atomicdata.dev/properties/name": "Derived from",
   "https://atomicdata.dev/properties/description": "The sources this one was derived from, for example the video a frame was sampled from or the PDF a page came from.",

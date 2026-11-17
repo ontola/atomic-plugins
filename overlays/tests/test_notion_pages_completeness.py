@@ -114,12 +114,14 @@ class NotionPagesCompletenessTests(unittest.TestCase):
         self.assertEqual(resources["page"], {"collections": {"pages": {"x-completeness": resources["page"][
             "collections"]["pages"]["x-completeness"]}}})
 
-    def test_no_dated_catalog_selects_the_overlay(self):
-        # Whoever adds the overlay to a dated catalog changes this test, and
-        # keeps the next one passing.
+    def test_first_selected_by_overlay_fixes_candidate(self):
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             with self.subTest(catalog=catalog.name):
-                self.assertNotIn(f"completeness-{PIN}", catalog.read_text(encoding="utf-8"))
+                text = catalog.read_text(encoding="utf-8")
+                if catalog.name < "2026-11-06-overlay-fixes.json":
+                    self.assertNotIn(f"completeness-{PIN}", text)
+                elif catalog.name == "2026-11-06-overlay-fixes.json":
+                    self.assertIn(f"completeness-{PIN}", text)
 
     def test_a_catalog_selects_it_only_with_pagination_v3(self):
         # Under an earlier pagination revision a query over 10,000 results

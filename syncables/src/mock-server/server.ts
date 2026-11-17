@@ -358,6 +358,7 @@ function buildNextLink(
   offsetParam: string | undefined,
   pageParam: string | undefined,
   pageSizeParam: string | undefined,
+  start: number,
 ): string {
   const next = new URL(url.toString());
   if (offsetParam) {
@@ -366,7 +367,9 @@ function buildNextLink(
   if (pageParam) {
     next.searchParams.set(
       pageParam,
-      String(Math.floor(nextOffset / pageSize) + 1),
+      // The scheme's first page number is `start` (Pagination Schemes
+      // §4.3.1, default 1), not always 1.
+      String(Math.floor(nextOffset / pageSize) + start),
     );
   }
   if (pageSizeParam) {
@@ -513,7 +516,11 @@ function handlePaginatedListRequest(
         setNestedField(body, path, slice.length);
         break;
       case 'currentPage':
-        setNestedField(body, path, Math.floor(offset / pageSize) + 1);
+        setNestedField(
+          body,
+          path,
+          Math.floor(offset / pageSize) + pageStart(scheme),
+        );
         break;
       case 'totalPages':
         setNestedField(body, path, Math.ceil(items.length / pageSize));
@@ -537,6 +544,7 @@ function handlePaginatedListRequest(
                 offsetParam,
                 pageParam,
                 pageSizeParam,
+                pageStart(scheme),
               )
             : null,
         );

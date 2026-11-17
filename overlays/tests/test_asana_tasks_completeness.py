@@ -192,11 +192,13 @@ class AsanaTasksCompletenessTests(unittest.TestCase):
             for collection in resource["collections"].values():
                 self.assertEqual(set(collection), {"x-completeness"})
 
-    def test_no_dated_catalog_selects_the_overlay(self):
-        # Whoever adds the overlay to a dated catalog changes this test.
+    def test_first_dated_catalog_selection(self):
+        first = "2026-10-19-newer-revisions.json"
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
-            with self.subTest(catalog=catalog.name):
-                self.assertNotIn(f"completeness-{PIN}", catalog.read_text(encoding="utf-8"))
+            if catalog.name <= first:
+                with self.subTest(catalog=catalog.name):
+                    self.assertEqual(f"completeness-{PIN}" in catalog.read_text(encoding="utf-8"),
+                                     catalog.name == first)
 
 
 if __name__ == "__main__":

@@ -16,19 +16,13 @@ authoritative):
   Michiel: …" on #227; don't number questions yourself.
 - **Never merge into atomic-server `develop`.** Only the trekmeester (Joep's
   agent) does, in batches.
-- **atomic-server freeze (Michiel, 2026-10-01).** No new atomic-server PRs;
-  only shepherd the open ones. (It also said no new pin candidates; Decision
-  Inbox Q-104 lifted that part on 2026-10-08.) A host need becomes an
-  **issue for Joep** on atomic-server (for example atomic-server#1952), drafted
-  in the worker's report. Atomic-plugins stays on the current pin. The
-  coordinator session can't file in ontola/atomic-server, so it collects the
-  drafts on #227 for someone with access (see
-  [Issue drafts for Joep](#issue-drafts-for-joep)).
-  One-off exception (Michiel in chat, 2026-10-08, relayed by the VPS
-  coordinator): candidate20, candidate19 plus atomic-server#2069's two
-  commits, may become the pin for user testing ("Even if we can't merge this
-  to develop, you can merge it to our pin so we can start user testing for
-  it"). The freeze otherwise stands.
+- **atomic-server PRs are allowed (Michiel, 2026-10-30).** Michiel lifted
+  the 2026-10-01 freeze on new atomic-server PRs in chat while requesting a
+  PR for the app signing-key recovery fix (atomic-server#2407). Host needs
+  may be implemented and submitted as PRs through the normal review and CI
+  process. The merge responsibility above still applies. The earlier ban
+  on new pin candidates was already lifted by Q-104 on 2026-10-08; see
+  [pins.md](pins.md).
 - **Pin bumps** (`.atomic-server-ref` → a candidate) are pre-approved. See
   [pins.md](pins.md).
 - **Standing OKs for deploys, candidates and releases** (Decision Inbox, both
@@ -39,11 +33,12 @@ authoritative):
     new atomic-server pin candidates ([pins.md](pins.md)).
   - **Q-105:** npm releases (syncables, devonian, …) and integration-proxy
     crates.io releases, and proxy deploys to Heroku, only from merged,
-    Opus-reviewed, CI-green `main`, following the recipes, and named in the
-    next status report ([proxy-release.md](proxy-release.md)). Heroku deploys
-    go through the coordinator's worker, which holds the Heroku access.
+    CI-green `main` reviewed by a state of the art model, following the
+    recipes, and named in the next status report
+    ([proxy-release.md](proxy-release.md)). Heroku deploys go through the
+    coordinator's worker, which holds the Heroku access.
 
-  Nothing else in these rules changes, and the rest of the freeze stands.
+  These permissions do not change the review, CI or merge requirements.
 - **Never `git commit --no-verify`.** Fix or report a failing hook. This repo
   has no git hooks of its own (no `core.hooksPath`, nothing in `.git/hooks`
   as cloned). Rule 5's "Fresh Worktrees" warm-up is not in this repo's
@@ -98,9 +93,11 @@ what's next, what's blocked or needs a decision. Keep it short.
 
 ## Issue drafts for Joep
 
-Host needs found while the atomic-server freeze is in force, drafted on #227
-on 2026-10-02 for someone with ontola/atomic-server access to file as written.
-Check whether one was filed before drafting a new one.
+Historical host needs drafted on #227 on 2026-10-02, while the former
+atomic-server freeze was in force, for someone with atomic-server access to
+file as written. Check whether one was filed before drafting a duplicate.
+New host needs may be submitted as PRs since Michiel lifted the freeze on
+2026-10-30.
 
 | # | Title | Comment |
 | --- | --- | --- |

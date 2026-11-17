@@ -16,6 +16,8 @@ interface Metadata {
 export interface Session {
   issuer: string;
   accessToken: string;
+  /** Server-approved device grant. Older stored sessions remain read-only. */
+  scope?: string;
 }
 
 export interface Connection {
@@ -230,6 +232,7 @@ export async function deviceLogin(
       const session = {
         issuer: safeUrl(options.issuer).origin,
         accessToken: text(token.access_token, 'access token'),
+        ...(typeof token.scope === 'string' ? { scope: token.scope } : {}),
       };
       if (hooks.onAuthorized) {
         if (
@@ -276,7 +279,10 @@ export async function listConnections(
     },
   );
   if (!response.ok)
-    throw new Error(`Connection discovery refused (HTTP ${response.status})`);
+    throw Object.assign(
+      new Error(`Connection discovery refused (HTTP ${response.status})`),
+      { status: response.status },
+    );
   const result = await json(response);
   if (!Array.isArray(result.connections))
     throw new Error('Missing connections array');

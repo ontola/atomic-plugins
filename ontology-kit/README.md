@@ -45,33 +45,56 @@ offer themselves as a view of a hand-made table of their class, and (from
 0.3.0, 0.3.0 and 0.6.0) can sync one. Each plugin's README is the authority
 for what it has checked.
 
+## Release v2: learning trees
+
+Three classes for the Leerboom drive app ([`integrations/learning/`](../integrations/learning/README.md)):
+`skill-v1` (name, description, `skill-requires`, `skill-recommends`,
+`skill-equivalent-to`, `skill-level`, `skill-mastery-threshold`), `lesson-v1`
+(name, `lesson-teaches`, `lesson-content`, `lesson-format`, `lesson-minutes`,
+`lesson-language`) and `mastery-v1` (`mastery-skill`, `mastery-level`,
+`mastery-source`, `mastery-updated-at`). Questions, assessments and attempts
+are left for a later release. Where schema.org LRMI has a term, ours follows
+it and says so in its description:
+
+| Ours                  | schema.org LRMI                                   |
+| --------------------- | ------------------------------------------------- |
+| `lesson-teaches`      | `teaches`                                         |
+| `skill-requires`      | `competencyRequired` (inverse direction: a skill) |
+| `lesson-minutes`      | `timeRequired` (minutes instead of ISO duration)  |
+| `lesson-format`       | `learningResourceType` (a small fixed list)       |
+| `skill-equivalent-to` | `sameAs`-like, merged when trees are combined     |
+
+`lesson-format` and `mastery-source` are plain strings with a documented list
+of values, because the kit has no enum constraint yet; a view shows an unknown
+value as text. Declared, not verified: no host E2E has used these classes yet.
+
 `name` is `https://atomicdata.dev/properties/name`. Provider data (ids, ETags,
 baselines, import bookkeeping such as `work-source-id` or `bank-source-id`) is
 never part of a shared class: each sync part defines it in its own ontology.
 
-## Buildings (v2)
+## Buildings (v3)
 
-Release `v2` ("Buildings v1") holds the classes of the AtomicBuildings
+Release `v3` ("Buildings v1") holds the classes of the AtomicBuildings
 digital-twin app: a home, its spaces and elements, the sources the user gave,
 the AI runs and evidence behind each fact, the questions the AI asks, and the
 listings agents publish. Spec: the AtomicBuildings schema proposal. Declared,
 not verified: no app has written or read these classes against the published
-URLs yet. Its subject constants are in `terms.v2.mjs`, not `terms.mjs` (see
+URLs yet. Its subject constants are in `terms-v3.mjs`, not `terms.mjs` (see
 "Using the terms").
 
-| Class                      | Requires                       | Notes                                                                                   |
-| -------------------------- | ------------------------------ | --------------------------------------------------------------------------------------- |
-| `building-home-v1`         | `name`                         | The property; permission anchor                                                         |
-| `building-site-v1`         | `name`                         | Plot, with a boundary polygon                                                           |
-| `building-building-v1`     | `name`                         | Rotation and optional geo origin                                                        |
-| `building-storey-v1`       | `name`, `bldg-building`        | Elevation, height, level                                                                |
-| `building-space-v1`        | `name`, `bldg-storey`          | Usage, boundary; recommends the provenance and review properties                        |
-| `building-element-v1`      | `name`, `bldg-storey`          | One class for walls, doors, windows and so on, typed by `bldg-ifc-class`; geometry JSON |
-| `building-source-v1`       | `name`                         | File, media kind, capture time, derived-from                                            |
-| `building-analysis-run-v1` | `name`                         | One AI pass: model, version, inputs                                                     |
-| `building-evidence-v1`     | `bldg-source`, `bldg-supports` | Locator, confidence                                                                     |
-| `building-question-v1`     | `bldg-question-kind`           | Extras only; used on one resource together with `issue-v1`                              |
-| `building-listing-v1`      | `name`, `bldg-home`            | Public status, price, public selection                                                  |
+| Class                       | Requires                       | Notes                                                                                   |
+| --------------------------- | ------------------------------ | --------------------------------------------------------------------------------------- |
+| `building-home-v1`          | `name`                         | The property; permission anchor                                                         |
+| `building-site-v1`          | `name`                         | Plot, with a boundary polygon                                                           |
+| `building-building-v1`      | `name`                         | Rotation and optional geo origin                                                        |
+| `building-storey-v1`        | `name`, `bldg-building`        | Elevation, height, level                                                                |
+| `building-space-v1`         | `name`, `bldg-storey`          | Usage, boundary; recommends the provenance and review properties                        |
+| `building-element-v1`       | `name`, `bldg-storey`          | One class for walls, doors, windows and so on, typed by `bldg-ifc-class`; geometry JSON |
+| `building-source-v1`        | `name`                         | File, media kind, capture time, derived-from                                            |
+| `building-analysis-run-v1`  | `name`                         | One AI pass: model, version, inputs                                                     |
+| `building-evidence-v1`      | `bldg-source`, `bldg-supports` | Locator, confidence                                                                     |
+| `building-question-v1`      | `bldg-question-kind`           | Extras only; used on one resource together with `issue-v1`                              |
+| `building-listing-v1`       | `name`, `bldg-home`            | Public status, price, public selection                                                  |
 
 - Properties are shortnamed `bldg-*`; `name` and `description` are reused from
   `https://atomicdata.dev/properties/`. Links use `atomicURL` or
@@ -201,7 +224,11 @@ card copy for its `limitation`: "Waits for the stable ontology domain."
 ## Using the terms and the resolver from a plugin
 
 Plugins **bundle** both at build time, by relative import from the repository;
-they are not vendored or published to npm:
+they are not vendored or published to npm. `terms.mjs` holds release v1;
+every later release has its own module (`terms-v2.mjs`, ...), so a new release
+never changes the bytes of an older one and the published
+`apps/<id>/<version>/ui.js` of the plugins that bundle `terms.mjs` stay
+reproducible. Import a class from the module of the release that introduced it:
 
 ```ts
 // integrations/<plugin>/app/view.ts
@@ -218,7 +245,7 @@ const start = values[properties['work-start'].subject];
 - `terms.mjs` holds only the first release's terms (v1) and never grows:
   every plugin bundles it, and a published plugin version is immutable, so a
   new release must not change its bytes. The terms of each later release are in
-  their own `terms.<release>.mjs` (for example `terms.v2.mjs`), same shape;
+  their own `terms-<release>.mjs` (for example `terms-v2.mjs`), same shape;
   import those from the plugins that use them, so existing bundles stay
   unchanged. A term belongs to the first release that lists it in
   `source.json`.

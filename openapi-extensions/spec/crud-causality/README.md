@@ -148,6 +148,7 @@ Normally there is no need to *construct* an object's URL — an operation that r
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `field` | string | **Yes** | Dot-path to the object field this URL template variable corresponds to. |
+| `x-path-segments` | boolean | No | Opt-in resource-name encoding extension. When `true`, the field is a slash-separated relative resource name: validate each nonempty segment and percent-encode each separately, preserving only the separating slashes. Never normalize or accept `.` or `..`, empty segments, NUL, padded segments or malformed Unicode. Without it, encode the entire value as one segment. Consumers that do not implement this extension MUST refuse writes using it. |
 | `x-*` | any | No | Extension fields. |
 
 Not every `{variable}` in `urlTemplate` needs a binding. A variable that isn't listed in `bindings` MUST instead be resolvable from the request context the object was reached through — typically because the same variable name also appears in the `urlTemplate` of a collection (§4.2) the object is a member of, in which case it takes the value that was used to request that collection. For example, given:

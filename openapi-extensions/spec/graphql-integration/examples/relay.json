@@ -1,0 +1,28 @@
+{
+  "version": "0.1.0-draft",
+  "endpoint": "https://api.example.com/graphql",
+  "schema": {
+    "path": "relay.graphql",
+    "sha256": "2e56a05c6c70c660eb778254a41b14b10a6c356d83a14e7d488329f74273b877"
+  },
+  "operations": [
+    {
+      "id": "RepositoryIssues",
+      "document": {
+        "path": "relay-query.graphql",
+        "sha256": "f62ffc2ea514dfcbaa88fe5b566fbfdf28af569000f78e3b619acc56ad309fd3"
+      },
+      "variables": {
+        "owner": {
+          "fixed": "example"
+        },
+        "name": {},
+        "first": {
+          "min": 1,
+          "max": 100
+        },
+        "after": {}
+      }
+    }
+  ]
+}

@@ -3,7 +3,7 @@
   "https://atomicdata.dev/properties/isA": [
     "https://atomicdata.dev/classes/Property"
   ],
-  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "bldg-rotation",
   "https://atomicdata.dev/properties/name": "Rotation",
   "https://atomicdata.dev/properties/description": "Rotation of the building around the Z axis, in degrees, relative to the site coordinates.",

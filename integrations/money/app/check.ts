@@ -11,7 +11,12 @@ import {
   type StatementErrorCode,
   type StatementErrorData,
 } from '../errors.js';
-import { entries, OVERLAP_MESSAGE, type Entry } from '../identity.js';
+import {
+  entries,
+  OVERLAP_MESSAGE,
+  statementIdentityKey,
+  type Entry,
+} from '../identity.js';
 import type { Statement } from '../parser.js';
 import {
   detectStatementFormat,
@@ -162,7 +167,14 @@ export function compare(
   }
 
   const bySource = new Map(existing.map(row => [row.sourceId, row]));
-  const byFingerprint = new Map(existing.map(row => [row.fingerprint, row]));
+  const byFingerprint = new Map<string, Txn[]>();
+
+  for (const row of existing) {
+    const rows = byFingerprint.get(row.fingerprint);
+    if (rows) rows.push(row);
+    else byFingerprint.set(row.fingerprint, [row]);
+  }
+
   const fresh: FileRow[] = [];
   const freshEntries: Entry[] = [];
   const already: FileRow[] = [];
@@ -181,9 +193,15 @@ export function compare(
       continue;
     }
 
+    // A row with the same content from an earlier import of another
+    // statement is an overlap. One from this same statement is not: it is a
+    // twin of this entry (identical rows without a bank reference, told
+    // apart by position), whose write went through while this one's didn't.
     const earlier = entry.reference
       ? undefined
-      : byFingerprint.get(entry.fingerprint);
+      : byFingerprint
+          .get(entry.fingerprint)
+          ?.find(stored => !sameStatement(stored.sourceId, entry.identity));
 
     if (earlier)
       return {
@@ -232,6 +250,17 @@ export function compare(
       withoutReference,
     },
   };
+}
+
+/**
+ * Whether two importer identities (`../identity.ts`) are positions in the
+ * same statement: the same format, account and currency, and both
+ * `['statement', statementKey, index]` with the same statement key.
+ */
+export function sameStatement(a: string, b: string): boolean {
+  const ka = statementIdentityKey(a);
+
+  return ka !== undefined && ka === statementIdentityKey(b);
 }
 
 function differences(mine: Txn, file: FileRow): Changed['fields'] {

@@ -296,12 +296,11 @@ impl Store {
     }
 }
 
-/// Runs [`Store::sweep`] and the hook cleanup every `sweep_interval` until
-/// the process ends.
-pub fn spawn<D>(store: std::sync::Arc<Store>, deleter: D)
-where
-    D: super::cleanup::HookDeleter + Send + Sync + 'static,
-{
+/// Runs [`Store::sweep`] every `sweep_interval` until the process ends, and
+/// fails the hook cleanup jobs whose deadline passed. It deletes no hook
+/// itself: that needs a connection key, which only a client's request
+/// brings ([`super::run_deferred_cleanup`]).
+pub fn spawn(store: std::sync::Arc<Store>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(store.policy().sweep_interval);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -317,8 +316,8 @@ where
                 Ok(report) => tracing::debug!(?report, "webhook inbox swept"),
                 Err(error) => tracing::error!(%error, "webhook inbox sweep failed"),
             }
-            if let Err(error) = store.run_cleanup(&deleter, SystemTime::now()).await {
-                tracing::error!(%error, "webhook hook cleanup failed");
+            if let Err(error) = store.expire_cleanup(SystemTime::now()).await {
+                tracing::error!(%error, "webhook hook cleanup expiry failed");
             }
         }
     });

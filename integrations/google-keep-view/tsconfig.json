@@ -1,0 +1,16 @@
+{
+  // The Google Keep view app's production TypeScript sources:
+  //   node integrations/tooling/run-lane.mjs google-keep-view --tier typecheck
+  "extends": "../../browser/tsconfig.build.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "typeRoots": ["../../browser/node_modules/@types"],
+    "types": ["node"],
+    "noEmit": true,
+    "lib": ["ES2023", "DOM"]
+  },
+  "include": ["app/*.ts"],
+  "exclude": ["app/*.test.ts", "app/fixture.ts"]
+}

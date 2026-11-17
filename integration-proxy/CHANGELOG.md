@@ -5,6 +5,59 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
 ## Unreleased
 
+Breaking: every client must change, and existing connections must be made
+again.
+
+- Provider credentials are sealed under a key the client holds, not under
+  `ENCRYPTION_KEY`. A copy of the database and the server configuration no
+  longer opens them. See SECURITY.md, "Client-held connection keys".
+- `/connect/redeem` takes `connection_id` (chosen by the client) and
+  `connection_key` (`k1.<key>`); a taken id is `409 connection_exists`.
+- Requests that use a credential send `x-connection-key`: the key (`k1.`),
+  or a key grant (`s1.`, HPKE-encrypted to the key from the new
+  `GET /connection-key-grants/key`) naming the caller. The header is bound
+  into the v2 signature as a sixth line. New errors:
+  `401 connection_key_required`, `403 invalid_connection_key`.
+- `/agents/transfer` can re-seal connections under new keys
+  (`connection_keys`); `409 refresh_in_progress` while one is refreshing.
+- Webhook hook cleanup waits for a request that presents the managing
+  connection's key, and fails visibly after 7 days (was 30).
+- No migration: connections stored before this release answer
+  `403 invalid_connection_key`; their owners connect again.
+
+## 0.4.3 (2026-11-11)
+
+- Use the official Atomic mark on the landing and consent pages and as the
+  favicon.
+
+## 0.4.2 (2026-11-09)
+
+- Explicit device permissions for selected-connection delegation/disconnection,
+  account-wide owner session management, and selected-connection notification
+  consumption. Existing/default device grants remain read-only and refresh
+  cannot widen authority.
+- Reusable credential-free `/manage` iframe and `/management.mjs` renderer,
+  integrated with SyncD's local control panel. See MANAGEMENT.md.
+- Opt-in `WEBHOOK_NOTIFICATIONS_ONLY=true` discards verified provider bodies
+  before retention. The receiver stores routing metadata and fixed change hints;
+  its database is bound to that retention mode. Use a fresh inbox for cutover
+  and never run older binaries that ignore this policy against it.
+
+## 0.4.1 (2026-10-29)
+
+- Device sessions support an independently approved `proxy:write` scope for
+  POST, PUT, PATCH and DELETE on explicitly selected connections. Existing
+  sessions and default logins remain read-only; write scope does not imply
+  read or connection-management authority. Catalog restrictions, provider
+  credentials, ownership, access policy and pacing still apply. Owner
+  approval names permanent deletion, and token refresh cannot widen scope.
+- The source-default catalog adds Google Keep to its previous nine entries,
+  with the refreshed full OAD and immutable auth, pagination and CRUD overlays.
+  Resource-name path encoding and explicit checkbox defaults support SyncD's
+  replacement sender. Keep has no update endpoint. An explicit `CATALOG_PATH`
+  remains authoritative; deployment must preserve every existing production
+  catalog selection when updating Keep.
+
 - Webhook inbox (`WEBHOOKS_ENABLED`, off by default): `GET
   /subscriptions/{id}/events` takes `maxBytes` (Webhook Subscriptions
   0.2.0-draft). A page carries at most that many bytes of base64 payload.
@@ -13,10 +66,26 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
   is acknowledged and released like any other. A `maxBytes` below 1 gets
   `400`. A page's payloads are now read only for the events it returns
   with their bodies, not for every row it looks at.
+
+- Overlay Requirements 0.1.0-draft at catalog load: a platform whose
+  selected overlays include one with `info.x-requires` that no selected
+  overlay meets, or `info.x-conflicts` naming a selected overlay, fails to
+  load, as an `extends` mismatch does; references resolve against the
+  overlay's own URL. A malformed declaration is an error too.
+
 - Plan tiers in pacing (Throttling 0.5.0): a paced bucket with `tiers` is
   paced at the tier whose `plans` name the plan the catalog selection's
   `throttlingPlans` gives for it, else within every tier at once (each its
-  own count). Unknown entries are logged at load and ignored.
+  own count). Unknown entries are logged at load and ignored. A tier above
+  the 10,000-requests cap is dropped (not paced) while the other tiers still
+  count, which paces below what Throttling requires when the dropped tier
+  would have been the binding one. Tier logs are keyed by bucket id and tier
+  position, so a bucket id can never collide with another bucket's tier.
+
+- Owner writes and key transfers share the startup schema lock, like device
+  transactions, so a rolling instance's DDL cannot deadlock a transfer's
+  upgrade from a row-locking read to an update.
+
 - Key rotation (#410): `POST /agents/transfer`, signed by the old agent with
   a proof by the new one, moves the old agent's connections and runtimes to
   the new id in one transaction and retires the old id (new `retired_agents`

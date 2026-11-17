@@ -1,0 +1,12 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/skill-requires",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "skill-requires",
+  "https://atomicdata.dev/properties/name": "Requires",
+  "https://atomicdata.dev/properties/description": "Skills that must be mastered before this one. Advisory: a view may show a skill as locked but never refuses to open it. Maps to schema.org competencyRequired.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/resourceArray",
+  "https://atomicdata.dev/properties/classtype": "https://ontola.github.io/atomic-plugins/ontology/classes/skill-v1"
+}

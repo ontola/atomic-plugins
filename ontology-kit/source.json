@@ -38,6 +38,31 @@
       ]
     },
     "v2": {
+      "name": "Learning tree v2",
+      "description": "Skill, lesson and mastery classes for learning trees (Leerboom). Property names follow schema.org LRMI where one fits: teaches, competencyRequired, timeRequired. Assessments, questions and attempts are not part of this release. Declared, not verified.",
+      "classes": [
+        "skill-v1",
+        "lesson-v1",
+        "mastery-v1"
+      ],
+      "properties": [
+        "skill-requires",
+        "skill-recommends",
+        "skill-equivalent-to",
+        "skill-level",
+        "skill-mastery-threshold",
+        "lesson-teaches",
+        "lesson-content",
+        "lesson-format",
+        "lesson-minutes",
+        "lesson-language",
+        "mastery-skill",
+        "mastery-level",
+        "mastery-source",
+        "mastery-updated-at"
+      ]
+    },
+    "v3": {
       "name": "Buildings v1",
       "description": "Classes of the AtomicBuildings digital-twin app: a home, its spaces and elements, the sources the user gave, the AI runs and evidence behind each fact, the questions the AI asks and the listings agents publish. Declared, not verified: no app writes these classes yet.",
       "classes": [
@@ -134,7 +159,9 @@
     "issue-v1": {
       "name": "Issue",
       "description": "An issue or task, using the task/v1 vocabulary every AtomicServer embeds: status (todo, doing, blocked, done; done is closed), body, assignee and due date. Provider data (issue numbers, labels, comments, sync state) is not part of this class.",
-      "requires": ["https://atomicdata.dev/properties/name"],
+      "requires": [
+        "https://atomicdata.dev/properties/name"
+      ],
       "recommends": [
         "https://atomicdata.dev/task/v1/status",
         "https://atomicdata.dev/task/v1/body",
@@ -145,7 +172,9 @@
     "time-entry-v1": {
       "name": "Time entry",
       "description": "One interval of work: a start instant, an end instant (absent while a timer runs), and optionally a project, a person and a billable flag. Provider data (source ids, observation logs) is not part of this class.",
-      "requires": ["work-start"],
+      "requires": [
+        "work-start"
+      ],
       "recommends": [
         "https://atomicdata.dev/properties/name",
         "work-end",
@@ -157,13 +186,17 @@
     "work-project-v1": {
       "name": "Project",
       "description": "A named body of work that time entries belong to.",
-      "requires": ["https://atomicdata.dev/properties/name"],
+      "requires": [
+        "https://atomicdata.dev/properties/name"
+      ],
       "recommends": []
     },
     "work-person-v1": {
       "name": "Person",
       "description": "A person who performed work, by name. Not an Atomic authentication agent.",
-      "requires": ["https://atomicdata.dev/properties/name"],
+      "requires": [
+        "https://atomicdata.dev/properties/name"
+      ],
       "recommends": []
     },
     "bank-transaction-v1": {
@@ -184,10 +217,53 @@
         "money-note"
       ]
     },
+    "skill-v1": {
+      "name": "Skill",
+      "description": "A unit of knowledge in a learning tree, with the skills it requires and recommends. The tree belongs to everyone who can read it; whether a skill is open is computed per learner from their own mastery rows.",
+      "requires": [
+        "https://atomicdata.dev/properties/name"
+      ],
+      "recommends": [
+        "https://atomicdata.dev/properties/description",
+        "skill-requires",
+        "skill-recommends",
+        "skill-equivalent-to",
+        "skill-level",
+        "skill-mastery-threshold"
+      ]
+    },
+    "lesson-v1": {
+      "name": "Lesson",
+      "description": "One route to a skill: a thin wrapper around the real material (video, document, exercise, live session). A skill may have many lessons.",
+      "requires": [
+        "https://atomicdata.dev/properties/name",
+        "lesson-teaches"
+      ],
+      "recommends": [
+        "lesson-content",
+        "lesson-format",
+        "lesson-minutes",
+        "lesson-language"
+      ]
+    },
+    "mastery-v1": {
+      "name": "Mastery",
+      "description": "How well one learner masters one skill. Private data, kept in the learner's own drive. Not a credential: nobody attests it.",
+      "requires": [
+        "mastery-skill",
+        "mastery-level"
+      ],
+      "recommends": [
+        "mastery-source",
+        "mastery-updated-at"
+      ]
+    },
     "building-home-v1": {
       "name": "Home",
       "description": "A property: the digital twin of one house or apartment (IfcProject). The permission anchor of everything in it. Declared, not verified.",
-      "requires": ["https://atomicdata.dev/properties/name"],
+      "requires": [
+        "https://atomicdata.dev/properties/name"
+      ],
       "recommends": [
         "bldg-units",
         "bldg-north-angle",
@@ -198,25 +274,46 @@
     "building-site-v1": {
       "name": "Site",
       "description": "The plot a building stands on (IfcSite).",
-      "requires": ["https://atomicdata.dev/properties/name"],
-      "recommends": ["bldg-boundary", "bldg-home"]
+      "requires": [
+        "https://atomicdata.dev/properties/name"
+      ],
+      "recommends": [
+        "bldg-boundary",
+        "bldg-home"
+      ]
     },
     "building-building-v1": {
       "name": "Building",
       "description": "One building on a site (IfcBuilding). Storeys are local to its origin, rotated by its rotation.",
-      "requires": ["https://atomicdata.dev/properties/name"],
-      "recommends": ["bldg-site", "bldg-rotation", "bldg-geo-origin"]
+      "requires": [
+        "https://atomicdata.dev/properties/name"
+      ],
+      "recommends": [
+        "bldg-site",
+        "bldg-rotation",
+        "bldg-geo-origin"
+      ]
     },
     "building-storey-v1": {
       "name": "Storey",
       "description": "One floor of a building (IfcBuildingStorey). Coordinates of what is on it are local to the storey.",
-      "requires": ["https://atomicdata.dev/properties/name", "bldg-building"],
-      "recommends": ["bldg-elevation", "bldg-height", "bldg-level"]
+      "requires": [
+        "https://atomicdata.dev/properties/name",
+        "bldg-building"
+      ],
+      "recommends": [
+        "bldg-elevation",
+        "bldg-height",
+        "bldg-level"
+      ]
     },
     "building-space-v1": {
       "name": "Space",
       "description": "A room or outdoor area (IfcSpace). Its boundary is stored, derived from walls, so rooms show before walls are confirmed. Origin and review properties record who proposed it.",
-      "requires": ["https://atomicdata.dev/properties/name", "bldg-storey"],
+      "requires": [
+        "https://atomicdata.dev/properties/name",
+        "bldg-storey"
+      ],
       "recommends": [
         "bldg-usage",
         "bldg-boundary",
@@ -231,7 +328,10 @@
     "building-element-v1": {
       "name": "Element",
       "description": "A building element (IfcWall, IfcDoor, IfcWindow, ...) in one class: the IFC class is a property, not a type. Origin and review properties record who proposed it.",
-      "requires": ["https://atomicdata.dev/properties/name", "bldg-storey"],
+      "requires": [
+        "https://atomicdata.dev/properties/name",
+        "bldg-storey"
+      ],
       "recommends": [
         "bldg-ifc-class",
         "bldg-ifc-guid",
@@ -251,7 +351,9 @@
     "building-source-v1": {
       "name": "Source",
       "description": "Something the user gave: a photo, video, PDF, floor plan, note or voice memo, as a File resource plus what is known about it.",
-      "requires": ["https://atomicdata.dev/properties/name"],
+      "requires": [
+        "https://atomicdata.dev/properties/name"
+      ],
       "recommends": [
         "bldg-source-file",
         "bldg-media-kind",
@@ -265,7 +367,9 @@
     "building-analysis-run-v1": {
       "name": "Analysis run",
       "description": "One AI pass over sources: which model, what it read and how it ended. Its summary is the description. Resources it creates point back with created-by-run.",
-      "requires": ["https://atomicdata.dev/properties/name"],
+      "requires": [
+        "https://atomicdata.dev/properties/name"
+      ],
       "recommends": [
         "bldg-model",
         "bldg-model-version",
@@ -278,7 +382,10 @@
     "building-evidence-v1": {
       "name": "Evidence",
       "description": "A source and a place in it that supports a fact, so the app can show why the AI believes something and a person can reject it.",
-      "requires": ["bldg-source", "bldg-supports"],
+      "requires": [
+        "bldg-source",
+        "bldg-supports"
+      ],
       "recommends": [
         "bldg-locator",
         "bldg-property",
@@ -289,7 +396,9 @@
     "building-question-v1": {
       "name": "Building question",
       "description": "The extras of a question the AI asks the user. Meant to sit on the same resource as issue-v1, which holds name, status, body and assignee; this class does not repeat them.",
-      "requires": ["bldg-question-kind"],
+      "requires": [
+        "bldg-question-kind"
+      ],
       "recommends": [
         "bldg-about",
         "bldg-options",
@@ -303,7 +412,10 @@
     "building-listing-v1": {
       "name": "Listing",
       "description": "What an agent publishes about a home (schema.org RealEstateListing). Separate from the twin: the public selection says which confirmed parts may be shown. Title is the name, the text is the description.",
-      "requires": ["https://atomicdata.dev/properties/name", "bldg-home"],
+      "requires": [
+        "https://atomicdata.dev/properties/name",
+        "bldg-home"
+      ],
       "recommends": [
         "https://atomicdata.dev/properties/description",
         "bldg-listing-status",
@@ -428,6 +540,81 @@
       "name": "Note",
       "datatype": "https://atomicdata.dev/datatypes/string",
       "description": "The person's own note on this transaction. Never written by an importer."
+    },
+    "skill-requires": {
+      "name": "Requires",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "Skills that must be mastered before this one. Advisory: a view may show a skill as locked but never refuses to open it. Maps to schema.org competencyRequired.",
+      "classtype": "skill-v1"
+    },
+    "skill-recommends": {
+      "name": "Recommends",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "Skills that help with this one but are never needed.",
+      "classtype": "skill-v1"
+    },
+    "skill-equivalent-to": {
+      "name": "Equivalent to",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "The same skill in another tree or drive. Equivalent skills are merged when trees are combined, so mastering one counts for all.",
+      "classtype": "skill-v1"
+    },
+    "skill-level": {
+      "name": "Level",
+      "datatype": "https://atomicdata.dev/datatypes/integer",
+      "description": "Rough difficulty, 1 and up, for layout and filters. Not a prerequisite."
+    },
+    "skill-mastery-threshold": {
+      "name": "Mastery threshold",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Mastery level from 0 to 1 at which this skill counts as mastered. Absent: the view default, 0.8."
+    },
+    "lesson-teaches": {
+      "name": "Teaches",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "Skills this lesson helps with. Maps to schema.org teaches.",
+      "classtype": "skill-v1"
+    },
+    "lesson-content": {
+      "name": "Content",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The material: a resource (document, file, canvas, plugin view, tour) or an external https link."
+    },
+    "lesson-format": {
+      "name": "Format",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "One of video, text, interactive, exercise, live, tour. A view shows an unknown value as plain text."
+    },
+    "lesson-minutes": {
+      "name": "Minutes",
+      "datatype": "https://atomicdata.dev/datatypes/integer",
+      "description": "Estimated duration in minutes. Maps to schema.org timeRequired."
+    },
+    "lesson-language": {
+      "name": "Language",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "BCP 47 language code of the material, for example nl or en."
+    },
+    "mastery-skill": {
+      "name": "Skill",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The skill this mastery is about.",
+      "classtype": "skill-v1"
+    },
+    "mastery-level": {
+      "name": "Level",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "How well the learner masters the skill, 0 to 1."
+    },
+    "mastery-source": {
+      "name": "Source",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Where the level comes from: one of attempt, lesson, self, endorsement."
+    },
+    "mastery-updated-at": {
+      "name": "Updated at",
+      "datatype": "https://atomicdata.dev/datatypes/timestamp",
+      "description": "When the level was last set, milliseconds since the Unix epoch."
     },
     "bldg-units": {
       "name": "Units",

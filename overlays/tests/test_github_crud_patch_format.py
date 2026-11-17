@@ -139,12 +139,14 @@ class GitHubPatchFormatTests(unittest.TestCase):
                 crud.validate(copy.deepcopy(document), warnings)
                 self.assertEqual(warnings, [])
 
-    def test_no_dated_catalog_selects_v2(self):
-        # Whoever adds v2 to a dated catalog changes this test.
+    def test_v2_first_selected_by_overlay_fixes_candidate(self):
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
             text = catalog.read_text(encoding="utf-8")
             with self.subTest(catalog=catalog.name):
-                self.assertNotIn(f"crud-causality-v2-{ISSUES_PIN}", text)
+                if catalog.name < "2026-11-06-overlay-fixes.json":
+                    self.assertNotIn(f"crud-causality-v2-{ISSUES_PIN}", text)
+                elif catalog.name == "2026-11-06-overlay-fixes.json":
+                    self.assertIn(f"crud-causality-v2-{ISSUES_PIN}", text)
                 self.assertNotIn(f"crud-causality-v2-{REST_PIN}", text)
 
 

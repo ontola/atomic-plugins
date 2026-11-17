@@ -43,13 +43,78 @@ export function scopeValues(scope: ArchiveScope): string[] {
   return values;
 }
 
+export interface ArchivedRequest {
+  url: string;
+  method: 'GET' | 'POST';
+  headers: Record<string, string>;
+  body?: string;
+  bodyHash?: string;
+}
+
+function dropboxMetadataRead(request: TransportRequest): boolean {
+  if (
+    request.method !== 'POST' ||
+    request.purpose !== 'list' ||
+    request.url.origin !== 'https://api.dropboxapi.com' ||
+    request.url.search ||
+    request.body === undefined
+  )
+    return false;
+  let body: Record<string, unknown> | null;
+  try {
+    body = JSON.parse(request.body) as Record<string, unknown> | null;
+  } catch {
+    return false;
+  }
+  if (!body) return false;
+  if (request.url.pathname === '/2/files/list_folder/continue')
+    return Object.keys(body).length === 1 && typeof body.cursor === 'string';
+  return (
+    request.url.pathname === '/2/files/list_folder' &&
+    Object.keys(body).length === 4 &&
+    body.path === '' &&
+    body.recursive === true &&
+    body.include_deleted === true &&
+    typeof body.limit === 'number' &&
+    Number.isInteger(body.limit) &&
+    body.limit >= 1 &&
+    body.limit <= 1000
+  );
+}
+
+function jsonListRead(request: TransportRequest): boolean {
+  if (
+    request.method !== 'POST' ||
+    request.purpose !== 'list' ||
+    request.body === undefined ||
+    !Object.entries(request.headers).some(
+      ([name, value]) =>
+        name.toLowerCase() === 'content-type' &&
+        value.toLowerCase() === 'application/json',
+    )
+  )
+    return false;
+  try {
+    const body: unknown = JSON.parse(request.body);
+    return body !== null && typeof body === 'object' && !Array.isArray(body);
+  } catch {
+    return false;
+  }
+}
+
 export function requestIdentity(request: TransportRequest): {
   key: string;
   cacheKey: string;
-  request: { url: string; method: 'GET'; headers: Record<string, string> };
+  request: ArchivedRequest;
 } {
-  if (request.method !== 'GET' || request.body !== undefined)
-    throw new Error('This archive stage accepts bodyless GET reads only');
+  if (
+    (request.method !== 'GET' || request.body !== undefined) &&
+    !dropboxMetadataRead(request) &&
+    !jsonListRead(request)
+  )
+    throw new Error(
+      'This archive stage accepts bodyless GET reads and JSON POST list reads only',
+    );
   if (request.url.username || request.url.password || request.url.hash)
     throw new Error(
       'Archived request URLs must not contain credentials or fragments',
@@ -67,7 +132,16 @@ export function requestIdentity(request: TransportRequest): {
       ([key]) => !['if-none-match', 'if-modified-since'].includes(key),
     ),
   );
-  const data = { url: request.url.href, method: 'GET' as const, headers };
+  const data: ArchivedRequest = {
+    url: request.url.href,
+    method: request.method as ArchivedRequest['method'],
+    headers,
+    ...(request.body === undefined
+      ? {}
+      : dropboxMetadataRead(request)
+        ? { body: request.body }
+        : { bodyHash: digest(request.body) }),
+  };
   return {
     key: digest(JSON.stringify(data)),
     cacheKey: digest(JSON.stringify({ ...data, headers: representation })),

@@ -8,7 +8,7 @@ For an illustrated overview of the whole stack, including OpenAPI extensions,
 worked GitHub/Keep examples and what a page proves, start with
 [How Syncables turns APIs into a local copy](how-it-works.md).
 
-The source implementation adds a read-only standalone daemon to the existing
+The source implementation adds a standalone daemon to the existing
 `syncables` executable. It stores original API response text and lossless,
 content-addressed nested JSON nodes in a separate local PostgreSQL database.
 Successful syncs also maintain normal working folders per collection, without requiring Git.
@@ -24,12 +24,16 @@ and AtomicSync peer are separate work. See the
 [three-interface design](daemon-design.md#syncd-interfaces-git-braid-and-atomicsync)
 for their roles and the implemented read-only Braid milestone.
 
-This implementation is unreleased. It reuses #567's CLI/archive work without
+This implementation is experimental. It reuses #567's CLI/archive work without
 changing that draft branch. Device authorization uses the deployed
 [integration-proxy contract](../../integration-proxy/DEVICE_AUTH.md). Owner
 signing stays in the existing laptop bridge; the daemon receives device tokens.
 The October 16 live GitHub read verified that protocol. The new daemon and
 macOS Keychain adapter still need a laptop run against the deployed issuer.
+
+Explicit, opt-in provider creates, edits and deletes are documented in
+[Provider writes and recovery](daemon-writes.md). Polling and snapshot folders
+remain read-only observations.
 
 ## From a fetch to stored data
 
@@ -153,13 +157,15 @@ npm ci
 npm run build:release
 ```
 
-### Copy the two files
+### Prepare the configuration and full contract
 
-Yes: the demo config is `examples/daemon/config.demo.json`, and its OpenAPI
-document is `examples/daemon/github-issues.json`. Here, "composed OpenAPI
-document" means the API description already contains the collection identity
-and paging metadata the daemon needs. The supplied small GitHub document is
-ready to use; you do not need to download or compose a full GitHub specification.
+The demo config is `examples/daemon/config.demo.json`, and its OpenAPI
+document is generated from the complete pinned upstream GitHub OAD. Run
+`node examples/daemon/prepare-github-issues.mjs` once before using the demo; it
+retains every upstream path and schema and adds the collection/pagination
+annotations from `github-issues.annotations.json`. The generated document is
+ignored by Git because it is large and reproducible. Read-only selection is
+enforced by the daemon, rather than by removing operations or schemas.
 
 Use a directory outside the source checkout for real data, for example
 `$HOME/.local/share/syncables-live`. Run these commands from the checkout's
@@ -169,18 +175,18 @@ Use a directory outside the source checkout for real data, for example
 mkdir -p "$HOME/.local/share/syncables-live"
 chmod 700 "$HOME/.local/share/syncables-live"
 cp -n examples/daemon/config.demo.json "$HOME/.local/share/syncables-live/config.json"
-cp -n examples/daemon/github-issues.json "$HOME/.local/share/syncables-live/github-issues.json"
+node examples/daemon/prepare-github-issues.mjs "$HOME/.local/share/syncables-live/generated/github-issues.json"
 chmod 600 "$HOME/.local/share/syncables-live/"*.json
 ```
 
 `cp -n` preserves any copies you have already edited. Keep both files together.
-The config's `"document": "./github-issues.json"` resolves relative to the config
+The config's `"document": "./generated/github-issues.json"` resolves relative to the config
 file, as does `"dataDirectory": "./local-data.git"`. The resulting layout is:
 
 ```text
 ~/.local/share/syncables-live/
   config.json             your edited config
-  github-issues.json      GET collection/pagination description
+  generated/github-issues.json  complete GitHub OAD plus collection/pagination annotations
   local-data.git/         preserved legacy history (if upgrading)
   data/                   preserved legacy Git worktrees (if upgrading)
   workspace/              ordinary PostgreSQL snapshot folders
@@ -231,7 +237,7 @@ For the previously tested `ontola/usertest-findings` repository, change:
 | `collections[0].bindings`    | `{"owner":"ontola","repo":"usertest-findings"}` |
 | `collections[0].pollSeconds` | `0` for manual tests first                      |
 
-Keep `platform` as `github-issues`, `document` as `./github-issues.json`,
+Keep `platform` as `github-issues`, `document` as `./generated/github-issues.json`,
 `collection` as `issues` and `query` as `{"per_page":"100"}`. The profile's
 fixed query reads `state=all`, so the list includes closed issues and pull
 requests. Substitute your own namespace/repository in the labels and bindings
@@ -261,7 +267,9 @@ first successful read, use `cli login` to save a separately approved session in
 macOS Keychain and run `cli sync`/`cli daemon` without `--interactive`.
 
 Paths in the config resolve relative to the config file. Restart the foreground
-daemon after editing its config or composed documents. Each collection has:
+daemon after editing its config or composed documents. For Dropbox, Google Drive
+and iCloud Drive, see [File inventories](file-inventory.md). Each OpenAPI
+collection has:
 
 | Field                   | Meaning                                                                                               |
 | ----------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -272,6 +280,7 @@ daemon after editing its config or composed documents. Each collection has:
 | `bindings`              | Explicit parent path variables; this pilot does not recursively discover accounts/parents.            |
 | `query`                 | Declared query parameters. Fixed collection values and paging/checkpoint controls cannot be replaced. |
 | `pollSeconds`           | Default 300; 5–86400 for polling, 0 for initial fetch plus webhook/manual triggers.                   |
+| `readLimits`            | Optional `maxRecords`, `maxRequests` and `timeoutMs` overrides.                                         |
 
 `workspaceDirectory` selects the ordinary working-folder root, defaulting to
 `./workspace` relative to the config. For example, Keep notes appear at
@@ -283,9 +292,9 @@ Existing repositories and their worktrees are not modified by migration.
 Config changes to owner, connection, collection definition, bindings or query
 create a separate
 data scope and bootstrap it. Changing a local label or poll interval does not
-change source identity. This pilot caps config at 100 collections, each read
-at 5,000 records/1,000 requests/120 seconds, each response at 8 MiB and a
-snapshot at 16 MiB. Incomplete reads retain the previous published snapshot.
+change source identity. Config supports up to 100 collections. OpenAPI reads default to 5,000
+records, 1,000 requests and 120 seconds. Each response is capped at 8 MiB
+and each OpenAPI snapshot at 16 MiB. Incomplete reads retain the previous published snapshot.
 
 On macOS, with the existing approval bridge running:
 
@@ -337,8 +346,17 @@ key or Google client secret belongs in the daemon config. This guide does not
 establish that the deployed Keep setup has been completed.
 
 Once the connection exists, rerun the connection-discovery command above and
-approve Keep. From the checkout's `syncables/` directory, copy its GET-only
-collection description:
+approve Keep. From the checkout's `syncables/` directory, copy the composed
+Keep OAD. This is the full Google Keep v1 description from
+`ontola/openapi-directory`, refreshed from Discovery revision `20261019`,
+with the same auth, pagination and CRUD overlays selected by the proxy's
+`2026-10-29-google-keep.json` catalog. Its declared writes do not enable
+write-back: this daemon still sends GET requests only.
+
+Changing a collection's document changes its scope. When replacing the older
+GET-only example in an existing private config, the next sync bootstraps a new
+scope; previous snapshots/history remain stored in the old scope. There is
+no automatic history migration between these document revisions.
 
 ```sh
 cp -n examples/daemon/google-keep.json "$HOME/.local/share/syncables-live/google-keep.json"
@@ -400,7 +418,27 @@ failed pages and interrupted reads do not publish a partial snapshot. Each
 manual fetch is a full reconciliation. List bodies and attachment metadata are
 kept within the note's original JSON; attachment files are not downloaded.
 The daemon makes GET requests only and does not apply the Drive app's two-way
-mapping or replace/edit/delete Keep notes.
+mapping or replace/edit/delete Keep notes. The composed document preserves
+Google's schemas and all seven operations, including attachment download,
+plus the proxy's note-ID aliases. Its metadata declares that edits would
+replace a note (create, then delete), block replacement of notes with
+attachments or live collaborators, and merge unkeyed checklist items. SyncD
+does not execute those write declarations yet; its device grant remains
+`connections:read proxy:read`.
+
+Maintainers regenerate the committed example from the repository root with
+Python and the overlay test requirements installed:
+
+```sh
+python overlays/tests/compose_catalog_platform.py google-keep \
+  --catalog overlays/catalog/2026-10-29-google-keep.json \
+  --output syncables/examples/daemon/google-keep.json
+```
+
+This reads the exact pinned OAD from a sibling `openapi-directory` clone when
+present, otherwise from its immutable GitHub URL, and applies local overlay
+bytes in catalog order. The composition test requires the example to equal
+that result exactly.
 
 For a second history entry, make an intentional change to a chosen issue/note
 in its provider UI, then rerun that collection's `cli sync --interactive` with
@@ -635,6 +673,97 @@ Redeliveries are deduplicated per owner/collection/delivery ID. Hints arriving
 during a read remain pending for another read; polling reconciles missed hints.
 The relay must retry non-2xx responses and queue while the laptop is offline.
 
-Remote Atomic, remoteStorage, NextGraph, Jazz and atproto destinations remain
-planned, as do outgoing writes/outbox and promotion of the local copy to an
-authoritative source. The existing replication commands save configuration only.
+Selected PostgreSQL collections can be served as one read-only native Atomic
+drive using the optional Rust companion. Account folders contain a native table
+per collection; original JSON stays in PostgreSQL. See [Atomic peer](atomic-peer.md).
+It maintains a separate durable native projection and uses explicitly selected
+owner signing authority and readers. Direct target-drive mirrors,
+remoteStorage, NextGraph, Jazz and atproto destinations remain planned, as do
+outgoing writes/outbox and promotion of the local copy to an authoritative
+source. The existing replication destination commands save configuration only.
+
+## Local data browser
+
+Run `syncables ui --config FILE` to inspect accepted local snapshots in your
+browser, with collection navigation, search, paginated records and source JSON.
+See [setup, usage and limits](daemon-browser.md). The browser never fetches
+provider data or sends edits.
+
+## SyncD with Integrations Atomic Place (IAP)
+
+SyncD keeps collection selections, imported records, history and work items on
+this device. IAP holds provider credentials and grants. The control panel uses
+IAP's grant API without receiving provider credentials. These additions require
+the matching proxy source from the SyncD/IAP management change; the published
+0.4.1 proxy does not implement management device scopes or `/manage`.
+
+Start the local control panel with a fresh, explicit management approval:
+
+```sh
+node build/src/cli/main.js ui --config YOUR-CONFIG.json --manage
+```
+
+`--manage` always uses a foreground, in-memory session, including on macOS.
+It leaves the daemon's ordinary Keychain session alone. Approve
+`connections:manage` for selected connections and `sessions:manage` for
+account-wide IAP session visibility/revocation. Neither grants provider data
+reads or writes. SyncD also requests its normal connection-discovery/read
+permissions. Existing sync sessions never acquire management authority on
+refresh. Without `--manage`, the panel can display read-only connection status;
+management actions require an appropriately approved session.
+
+Open the printed private localhost link, then **Connections & sessions**.
+The embedded IAP page lists selected provider connections, app delegations
+and IAP client sessions. You can revoke an app, grant access to an app agent,
+disconnect a provider connection or revoke a client session. Disconnecting
+provider access keeps previously saved local snapshots. Revoking the panel's
+own session requires another login. New provider connections still use the
+existing provider consent/owner-hub flow and require fresh selection approval.
+This panel does not implement an Ontola account login or replace that owner hub.
+
+The iframe holds no credential. It sends structured actions to the parent;
+SyncD verifies the frame origin/window and calls an allowlisted local API using
+the private localhost token. The local API requires the exact browser Origin
+and a JSON body, rejects arbitrary URLs/methods, and keeps IAP tokens in the
+Node process. IAP checks permissions, selected connections and ownership again.
+Other clients can use the same API over CORS or embed the same `/manage` page;
+see `integration-proxy/MANAGEMENT.md`.
+
+### Change notifications while the laptop sleeps
+
+For IAP, enable `WEBHOOKS_ENABLED=true` and
+`WEBHOOK_NOTIFICATIONS_ONLY=true`. A verified delivery is routed using catalog
+metadata, then its provider body is discarded before persistence. IAP retains
+only routing metadata, delivery identity and a fixed `{"notification":true}`
+hint, with the existing bounded leases, retention and gap reporting. This is
+not an archive of provider changes. The operator must configure the platform's
+shared hook and secret, and the catalog must declare its delivery/access rules.
+No new public endpoint is opened on the laptop.
+
+A collection can opt into a notification source declared by its composed
+OpenAPI document, for example these **invented** metadata names:
+
+```json
+"notifications": {
+  "source": "project",
+  "parameters": { "project": "example-project" },
+  "events": ["changed"]
+}
+```
+
+Run `syncables login --config FILE` again after adding notifications, so the
+owner can explicitly approve `notifications:consume` for those connections.
+Then run `syncables daemon --config FILE`. The daemon subscribes and polls
+IAP outbound, remembers its subscription locally, and records a durable work
+item before acknowledging a hint. Startup, expiry and gaps cause a complete
+reconciliation, ignoring an existing incremental sync token; failed reads do
+not acknowledge reconciliation. Normal provider requests still need
+`proxy:read`. Polling can remain enabled as a fallback. Restart the daemon
+after changing configuration. Subscription settings remain in the local config;
+this version does not offer a browser form for editing them.
+
+Notification-only mode is bound to its inbox database. Switching retention
+mode is refused, and a new notification-only database must not contain old raw
+payloads. Use a fresh inbox for the cutover, as agreed for IAP; do not run old
+proxy binaries against it, because they do not enforce this policy. Sessions,
+provider applications, DNS and production rollout are separate deployment work.

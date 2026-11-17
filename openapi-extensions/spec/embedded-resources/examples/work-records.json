@@ -1,0 +1,88 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Invented work records",
+    "version": "1"
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "PersonShape": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "LabelShape": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "crudResources": {
+      "issue": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "user": {
+              "$ref": "#/components/schemas/PersonShape"
+            },
+            "labels": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/LabelShape"
+              }
+            }
+          }
+        },
+        "x-embeddedResources": {
+          "user": {
+            "resource": "person",
+            "cardinality": "one"
+          },
+          "labels": {
+            "resource": "label",
+            "cardinality": "many"
+          }
+        }
+      },
+      "person": {
+        "schema": {
+          "$ref": "#/components/schemas/PersonShape"
+        },
+        "identity": {
+          "urlTemplate": "/people/{personId}",
+          "bindings": {
+            "personId": {
+              "field": "id"
+            }
+          }
+        }
+      },
+      "label": {
+        "schema": {
+          "$ref": "#/components/schemas/LabelShape"
+        },
+        "identity": {
+          "urlTemplate": "/repos/{owner}/{repo}/labels/{labelId}",
+          "bindings": {
+            "labelId": {
+              "field": "id"
+            }
+          }
+        }
+      }
+    }
+  }
+}

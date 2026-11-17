@@ -46,6 +46,7 @@ mod catalog;
 mod client_addr;
 mod config;
 mod connect;
+mod connection_key;
 mod connections;
 mod device;
 #[cfg(test)]
@@ -289,12 +290,7 @@ pub async fn build_app_with_access(
         test_upstream: None,
     };
     if let Some(webhooks) = &state.webhooks {
-        webhooks::sweeper::spawn(
-            webhooks.store.clone(),
-            webhooks::provider::ProviderHookDeleter {
-                state: state.clone(),
-            },
-        );
+        webhooks::sweeper::spawn(webhooks.store.clone());
     }
 
     Ok(router(state))
@@ -370,6 +366,7 @@ fn browser_cors() -> tower_http::cors::CorsLayer {
             [
                 header::AUTHORIZATION,
                 HeaderName::from_static(proxy::IDEMPOTENCY_KEY),
+                HeaderName::from_static(connection_key::HEADER),
                 HeaderName::from_static(signature::AGENT_HEADER),
                 HeaderName::from_static(signature::PUBLIC_KEY_HEADER),
                 HeaderName::from_static(signature::TIMESTAMP_HEADER),
@@ -384,6 +381,52 @@ fn browser_cors() -> tower_http::cors::CorsLayer {
         .expose_headers(proxy::forwarded_response_headers().collect::<Vec<_>>())
 }
 
+/// `GET /connection-key-grants/key`: the public key a client encrypts a
+/// connection-key grant to (see [`connection_key`]). Public, and stable for
+/// one `ENCRYPTION_KEY`.
+async fn connection_key_grant_key(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let Some(security) = state.security.as_ref() else {
+        return api_error::ApiError::Unavailable.into_response();
+    };
+    axum::Json(serde_json::json!({
+        "kem": "DHKEM(X25519, HKDF-SHA256)",
+        "kdf": "HKDF-SHA256",
+        "aead": "AES-256-GCM",
+        "info": String::from_utf8_lossy(connection_key::GRANT_INFO),
+        "public_key": security.grant_key().public_key(),
+    }))
+    .into_response()
+}
+
+async fn management_asset(
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let (body, kind) = match uri.path().trim_start_matches('/') {
+        "manage" => (
+            include_str!("../static/management.html"),
+            "text/html; charset=utf-8",
+        ),
+        "management.mjs" => (
+            include_str!("../static/management.mjs"),
+            "text/javascript; charset=utf-8",
+        ),
+        "management.css" => (
+            include_str!("../static/management.css"),
+            "text/css; charset=utf-8",
+        ),
+        _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
+    };
+    ([
+        ("Content-Type", kind), ("Cache-Control", "no-store"),
+        ("Referrer-Policy", "no-referrer"), ("X-Content-Type-Options", "nosniff"),
+        ("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'; frame-ancestors https: http://127.0.0.1:* http://localhost:*; base-uri 'none'; form-action 'none'"),
+    ], body).into_response()
+}
+
 fn router(state: AppState) -> Router {
     // The webhook routes exist only while the inbox is on.
     let webhook_routes = match &state.webhooks {
@@ -391,14 +434,18 @@ fn router(state: AppState) -> Router {
         None => Router::new(),
     };
     Router::new()
+        .route("/manage", get(management_asset))
+        .route("/management.mjs", get(management_asset))
+        .route("/management.css", get(management_asset))
         .merge(webhook_routes)
         .merge(device::router())
         .route("/", get(home))
         .route("/healthz", get(healthz))
-        .route("/logo.png", get(logo))
+        .route("/logo.svg", get(logo))
         .route("/connect", get(connect::page))
         .route("/connect/authorize", post(connect::authorize))
         .route("/connect/redeem", post(connect::redeem))
+        .route("/connection-key-grants/key", get(connection_key_grant_key))
         .route("/connections", get(connections::list))
         .route("/connections/:connection_id", delete(connections::delete))
         .route(
@@ -442,10 +489,10 @@ async fn healthz(State(state): State<AppState>) -> impl axum::response::IntoResp
 async fn logo() -> impl axum::response::IntoResponse {
     (
         [
-            (axum::http::header::CONTENT_TYPE, "image/png"),
+            (axum::http::header::CONTENT_TYPE, "image/svg+xml"),
             (axum::http::header::CACHE_CONTROL, "public, max-age=3600"),
         ],
-        include_bytes!("../static/logo.png").as_slice(),
+        include_bytes!("../static/logo.svg").as_slice(),
     )
 }
 

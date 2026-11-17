@@ -16,6 +16,7 @@
           "oneOf": [{ "type": "boolean" }, { "$ref": "#/$defs/autoDetect" }]
         },
         "window": { "$ref": "#/$defs/window" },
+        "continuation": { "$ref": "#/$defs/continuation" },
         "request": { "$ref": "#/$defs/request" },
         "response": { "$ref": "#/$defs/response" },
         "coverage": { "$ref": "#/$defs/coverage" },
@@ -26,6 +27,17 @@
       "patternProperties": { "^x-": true },
       "additionalProperties": false,
       "allOf": [
+        {
+          "if": { "required": ["continuation"] },
+          "then": {
+            "required": ["autoDetect", "response"],
+            "properties": {
+              "type": { "const": "pageToken" },
+              "autoDetect": { "const": false },
+              "response": { "required": ["bodyFields", "envelope"] }
+            }
+          }
+        },
         {
           "description": "Rule 20: shortPage only on a pageNumber scheme.",
           "if": { "required": ["type"], "properties": { "type": { "const": "pageNumber" } } },
@@ -47,6 +59,37 @@
         "description": "Rules 12 and 14: no window, and no window role, outside a rangeWindow scheme.",
         "not": { "required": ["window"] },
         "properties": { "request": { "$ref": "#/$defs/pagedRequest" } }
+      }
+    },
+    "continuation": {
+      "type": "object",
+      "required": ["operationId", "request", "hasMoreField"],
+      "properties": {
+        "operationId": { "type": "string", "pattern": "\\S" },
+        "hasMoreField": { "type": "string", "pattern": "\\S" },
+        "request": {
+          "type": "object",
+          "oneOf": [{ "required": ["queryParameters"] }, { "required": ["bodyFields"] }],
+          "properties": {
+            "queryParameters": { "$ref": "#/$defs/continuationCursor" },
+            "bodyFields": { "$ref": "#/$defs/continuationCursor" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "patternProperties": { "^x-": true },
+      "additionalProperties": false
+    },
+    "continuationCursor": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "required": ["role"],
+        "properties": { "role": { "enum": ["cursor", "pageToken"] } },
+        "patternProperties": { "^x-": true },
+        "additionalProperties": false
       }
     },
     "pagedRequest": {

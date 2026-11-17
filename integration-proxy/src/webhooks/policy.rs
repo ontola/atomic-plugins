@@ -75,7 +75,10 @@ impl Policy {
             receipt_min_age: Duration::from_secs(MIN_RECEIPT_TTL),
             tombstone_ttl: Duration::from_secs(30 * DAY),
             tombstone_max_count: 10_000,
-            cleanup_deadline: Duration::from_secs(30 * DAY),
+            // The spec's default is its maximum, 30 days. A job here waits
+            // for a client to present the managing connection's key, and a
+            // week is how long it waits (decided with client-held keys).
+            cleanup_deadline: Duration::from_secs(7 * DAY),
             cleanup_max_jobs: 10_000,
             cleanup_max_jobs_per_owner: 20,
             unused_hook_deadline: Duration::from_secs(3600),
@@ -221,10 +224,10 @@ mod tests {
             secs(pilot.tombstone_ttl),
             default("closed", "tombstoneTtlSeconds")
         );
-        assert_eq!(
-            secs(pilot.cleanup_deadline),
-            default("cleanup", "deadlineSeconds")
-        );
+        // Shorter than the spec's default (its maximum): cleanup waits for
+        // a client's connection key, for a week.
+        assert_eq!(secs(pilot.cleanup_deadline), 7 * 86_400);
+        assert!(secs(pilot.cleanup_deadline) <= default("cleanup", "deadlineSeconds"));
         assert_eq!(
             secs(pilot.sweep_interval),
             default("sweep", "maxIntervalSeconds")

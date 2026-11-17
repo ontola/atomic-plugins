@@ -62,7 +62,10 @@ export async function cacheCommand(
         url: new URL(stored.request.url),
         method: stored.request.method,
         headers: stored.request.headers,
-        purpose: 'item',
+        ...(stored.request.body === undefined
+          ? {}
+          : { body: stored.request.body }),
+        purpose: stored.request.method === 'POST' ? 'list' : 'item',
       });
       process.stdout.write(
         JSON.stringify({

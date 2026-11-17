@@ -1,0 +1,27 @@
+{
+  "id": "google-keep-note-list",
+  "version": "1",
+  "rootClassName": "Note",
+  "listClassName": "List",
+  "itemClassName": "ListItem",
+  "listAt": ["list"],
+  "itemsAt": ["listItems"],
+  "childrenAt": ["childListItems"],
+  "itemFields": [
+    {
+      "shortname": "text",
+      "name": "Text",
+      "path": ["text", "text"],
+      "datatype": "string",
+      "optional": true,
+      "displayName": true
+    },
+    {
+      "shortname": "checked",
+      "name": "Checked",
+      "path": ["checked"],
+      "datatype": "boolean",
+      "optional": true
+    }
+  ]
+}

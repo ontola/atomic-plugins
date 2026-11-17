@@ -11,10 +11,13 @@
 //! `unspecified`. A full bucket refuses the request with `429` and a
 //! `Retry-After` taken from the log; nothing is queued.
 //!
-//! Bounds: one log per declared bucket, so the keys come from the catalog,
-//! never from callers; a bucket with more than [`MAX_PACED_REQUESTS`]
-//! requests per window is not paced, so no log holds more timestamps than
-//! that. In memory, per instance: with N instances behind one egress
+//! Bounds: one log per declared bucket, or per tier of a bucket with plan
+//! tiers, so the keys come from the catalog, never from callers. A bucket or
+//! tier with more than [`MAX_PACED_REQUESTS`] requests per window is not
+//! paced, so no log holds more timestamps than that; for a tiered bucket
+//! the other tiers still count, which paces below what Throttling requires
+//! (every tier at once) when the left-out tier would have been the binding
+//! one. In memory, per instance: with N instances behind one egress
 //! address the proxy may send up to N times the limit, and other clients of
 //! the provider behind the same address (or, for `[]`, anywhere) are not
 //! seen.
@@ -32,19 +35,22 @@ pub const MAX_PACED_REQUESTS: u64 = 10_000;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PacedBucket {
     pub id: String,
+    /// The tier's position in the limit's `tiers`, for a bucket with plan
+    /// tiers: each tier keeps its own log, keyed apart from every bucket id.
+    pub tier: Option<usize>,
     pub requests: usize,
     pub window: Duration,
 }
 
-/// The counts a limit asks a consumer to keep within, as `(suffix,
-/// requests, window seconds)`: its own `requests` in its `window`; for a
+/// The counts a limit asks a consumer to keep within, as `(tier, requests,
+/// window seconds)`: its own `requests` in its `window` (tier `None`); for a
 /// Limit Object with plan `tiers` (Throttling 0.5.0), the tier whose `plans`
 /// name `plan`, else every tier at once, each its own count over the same
 /// requests (no single tier is safe alone: 30 per hour still allows a burst
-/// that 20 per second forbids). A tier is told apart by its position,
-/// `#tier<i>`, so it keeps its own count. Tiers without a positive
-/// `requests` and `window.seconds` are skipped.
-pub fn limit_counts(limit: &Value, plan: Option<&str>) -> Vec<(String, u64, u64)> {
+/// that 20 per second forbids). A tier is told apart by its position in
+/// `tiers`, so it keeps its own count. Tiers without a positive `requests`
+/// and `window.seconds` are skipped.
+pub fn limit_counts(limit: &Value, plan: Option<&str>) -> Vec<(Option<usize>, u64, u64)> {
     let amount = |value: &Value| -> Option<(u64, u64)> {
         let requests = value.get("requests").and_then(Value::as_u64)?;
         let seconds = value
@@ -55,14 +61,14 @@ pub fn limit_counts(limit: &Value, plan: Option<&str>) -> Vec<(String, u64, u64)
     };
     let Some(tiers) = limit.get("tiers").and_then(Value::as_array) else {
         return amount(limit)
-            .map(|(requests, seconds)| (String::new(), requests, seconds))
+            .map(|(requests, seconds)| (None, requests, seconds))
             .into_iter()
             .collect();
     };
-    let tiers: Vec<(String, &Value)> = tiers
+    let tiers: Vec<(Option<usize>, &Value)> = tiers
         .iter()
         .enumerate()
-        .map(|(index, tier)| (format!("#tier{index}"), tier))
+        .map(|(index, tier)| (Some(index), tier))
         .collect();
     let names = |tier: &Value, plan: &str| {
         tier.get("plans")
@@ -73,22 +79,22 @@ pub fn limit_counts(limit: &Value, plan: Option<&str>) -> Vec<(String, u64, u64)
         plan.and_then(|plan| tiers.iter().find(|(_, tier)| names(tier, plan)))
     {
         if let Some((requests, seconds)) = amount(tier) {
-            return vec![(suffix.clone(), requests, seconds)];
+            return vec![(*suffix, requests, seconds)];
         }
     }
     tiers
         .iter()
         .filter_map(|(suffix, tier)| {
-            amount(tier).map(|(requests, seconds)| (suffix.clone(), requests, seconds))
+            amount(tier).map(|(requests, seconds)| (*suffix, requests, seconds))
         })
         .collect()
 }
 
 /// What is wrong with a catalog selection's `throttlingPlans` (a map from
-/// bucket id to the provider plan the deployment is on) for this document:
-/// entries for a bucket without plan tiers, for a plan no tier names, or
-/// that are not strings. Such an entry is ignored, so its bucket keeps
-/// within every tier; the catalog load logs these.
+/// bucket id to the provider plan the deployment is on) for this document,
+/// each a complete sentence for the catalog load to log: an entry for a
+/// bucket id not in `limits`, for a bucket without plan tiers, for a plan no
+/// tier names, or that is not a string. Such an entry is ignored.
 pub fn plan_selection_problems(
     document: &Value,
     selection: &serde_json::Map<String, Value>,
@@ -97,7 +103,9 @@ pub fn plan_selection_problems(
         return Vec::new();
     };
     let Some(plans) = plans.as_object() else {
-        return vec!["is not an object of bucket ids to plan names".into()];
+        return vec![
+            "throttlingPlans is not an object of bucket ids to plan names; it is ignored, and every tiered bucket keeps within all its tiers".into(),
+        ];
     };
     let limits = document
         .get("x-throttling")
@@ -105,9 +113,14 @@ pub fn plan_selection_problems(
         .and_then(Value::as_object);
     let mut problems = Vec::new();
     for (bucket, plan) in plans {
-        let named: Vec<&str> = limits
-            .and_then(|limits| limits.get(bucket))
-            .and_then(|limit| limit.get("tiers"))
+        let Some(limit) = limits.and_then(|limits| limits.get(bucket)) else {
+            problems.push(format!(
+                "throttlingPlans names {bucket:?}: no such bucket in x-throttling limits; the entry is ignored"
+            ));
+            continue;
+        };
+        let named: Vec<&str> = limit
+            .get("tiers")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
@@ -116,12 +129,16 @@ pub fn plan_selection_problems(
             .filter_map(Value::as_str)
             .collect();
         match plan.as_str() {
-            _ if named.is_empty() => problems.push(format!("bucket {bucket:?} has no plan tiers")),
+            _ if named.is_empty() => problems.push(format!(
+                "throttlingPlans names {bucket:?}, which has no plan tiers; the entry is ignored"
+            )),
             Some(plan) if named.contains(&plan) => {}
-            Some(plan) => {
-                problems.push(format!("no tier of bucket {bucket:?} names plan {plan:?}"))
-            }
-            None => problems.push(format!("the plan for bucket {bucket:?} is not a string")),
+            Some(plan) => problems.push(format!(
+                "throttlingPlans gives {bucket:?} the plan {plan:?}, which no tier names; the bucket keeps within all its tiers"
+            )),
+            None => problems.push(format!(
+                "throttlingPlans gives {bucket:?} a plan that is not a string; the bucket keeps within all its tiers"
+            )),
         }
     }
     problems
@@ -168,11 +185,14 @@ pub fn selected_buckets(
         let plan = plans
             .and_then(|plans| plans.get(id))
             .and_then(Value::as_str);
-        for (suffix, requests, seconds) in limit_counts(limit, plan) {
-            let id = format!("{id}{suffix}");
-            if requests <= MAX_PACED_REQUESTS && !buckets.iter().any(|b: &PacedBucket| b.id == id) {
+        for (tier, requests, seconds) in limit_counts(limit, plan) {
+            let duplicate = buckets
+                .iter()
+                .any(|b: &PacedBucket| b.id == id && b.tier == tier);
+            if requests <= MAX_PACED_REQUESTS && !duplicate {
                 buckets.push(PacedBucket {
-                    id,
+                    id: id.to_owned(),
+                    tier,
                     requests: requests as usize,
                     window: Duration::from_secs(seconds),
                 });
@@ -182,10 +202,14 @@ pub fn selected_buckets(
     buckets
 }
 
-/// The sliding logs, keyed by (platform, bucket id).
+/// A log's key: platform, bucket id, and the tier's position for a bucket
+/// with plan tiers.
+type LogKey = (String, String, Option<usize>);
+
+/// The sliding logs, keyed by (platform, bucket id, tier).
 #[derive(Default)]
 pub struct Pacer {
-    logs: Mutex<HashMap<(String, String), VecDeque<Instant>>>,
+    logs: Mutex<HashMap<LogKey, VecDeque<Instant>>>,
 }
 
 impl Pacer {
@@ -211,7 +235,7 @@ impl Pacer {
         let mut wait = Duration::ZERO;
         for bucket in buckets {
             let log = logs
-                .entry((platform.to_owned(), bucket.id.clone()))
+                .entry((platform.to_owned(), bucket.id.clone(), bucket.tier))
                 .or_default();
             while log
                 .front()
@@ -230,7 +254,7 @@ impl Pacer {
             return Err(Duration::from_secs(wait.as_secs_f64().ceil() as u64));
         }
         for bucket in buckets {
-            logs.get_mut(&(platform.to_owned(), bucket.id.clone()))
+            logs.get_mut(&(platform.to_owned(), bucket.id.clone(), bucket.tier))
                 .expect("created above")
                 .push_back(now);
         }
@@ -257,8 +281,16 @@ mod tests {
     fn bucket(id: &str, requests: usize, seconds: u64) -> PacedBucket {
         PacedBucket {
             id: id.into(),
+            tier: None,
             requests,
             window: Duration::from_secs(seconds),
+        }
+    }
+
+    fn tier(id: &str, tier: usize, requests: usize, seconds: u64) -> PacedBucket {
+        PacedBucket {
+            tier: Some(tier),
+            ..bucket(id, requests, seconds)
         }
     }
 
@@ -275,13 +307,9 @@ mod tests {
     fn a_tiered_limit_uses_the_plans_tier_else_every_tier_at_once() {
         let limit = tiered();
         let counts = |plan| limit_counts(&limit, plan);
-        assert_eq!(counts(Some("PRO")), [("#tier1".to_string(), 20, 1)]);
-        assert_eq!(counts(Some("ENTERPRISE")), [("#tier2".to_string(), 50, 1)]);
-        let every = vec![
-            ("#tier0".to_string(), 30, 3600),
-            ("#tier1".to_string(), 20, 1),
-            ("#tier2".to_string(), 50, 1),
-        ];
+        assert_eq!(counts(Some("PRO")), [(Some(1), 20, 1)]);
+        assert_eq!(counts(Some("ENTERPRISE")), [(Some(2), 50, 1)]);
+        let every = vec![(Some(0), 30, 3600), (Some(1), 20, 1), (Some(2), 50, 1)];
         assert_eq!(counts(None), every);
         // An unknown plan, or one whose tier has no usable amount: every tier.
         assert_eq!(counts(Some("GOLD")), every);
@@ -292,7 +320,7 @@ mod tests {
                 &json!({"requests": 5, "window": {"seconds": 60}}),
                 Some("PRO")
             ),
-            [(String::new(), 5, 60)]
+            [(None, 5, 60)]
         );
         assert!(limit_counts(&json!({"tiers": [{"plans": ["X"]}]}), None).is_empty());
     }
@@ -308,16 +336,13 @@ mod tests {
         assert_eq!(
             paced(json!({})),
             [
-                bucket("plan#tier0", 30, 3600),
-                bucket("plan#tier1", 20, 1),
-                bucket("plan#tier2", 50, 1)
+                tier("plan", 0, 30, 3600),
+                tier("plan", 1, 20, 1),
+                tier("plan", 2, 50, 1)
             ],
             "no plan: every tier, each its own count; a user bucket is not paced"
         );
-        assert_eq!(
-            paced(json!({"plan": "BASIC"})),
-            [bucket("plan#tier1", 20, 1)]
-        );
+        assert_eq!(paced(json!({"plan": "BASIC"})), [tier("plan", 1, 20, 1)]);
         // Every tier together: 30 an hour is the binding count over a
         // minute, 20 a second over a second.
         let pacer = Pacer::default();
@@ -346,7 +371,7 @@ mod tests {
             {"plans": ["B"], "requests": 10, "window": {"seconds": 1}}]}}, "applies": ["b"]}});
         assert_eq!(
             selected_buckets(&huge, &json!({}), None),
-            [bucket("b#tier1", 10, 1)]
+            [tier("b", 1, 10, 1)]
         );
 
         let selection = |plans: Value| {
@@ -362,19 +387,53 @@ mod tests {
             &selection(json!({"plan": "GOLD", "missing": "FREE", "user": 3})),
         );
         assert_eq!(problems.len(), 3, "{problems:?}");
+        assert!(problems.iter().any(|p| p.contains(
+            "gives \"plan\" the plan \"GOLD\", which no tier names; the bucket keeps within all its tiers"
+        )));
+        assert!(problems.iter().any(|p| p.contains(
+            "names \"missing\": no such bucket in x-throttling limits; the entry is ignored"
+        )));
         assert!(problems
             .iter()
-            .any(|p| p.contains("bucket \"plan\" names plan \"GOLD\"")));
-        assert!(problems
-            .iter()
-            .any(|p| p.contains("\"missing\" has no plan tiers")));
-        assert!(problems
-            .iter()
-            .any(|p| p.contains("\"user\" is not a string")));
+            .any(|p| p.contains("gives \"user\" a plan that is not a string")));
+        // A bucket that exists but has no tiers.
+        let flat = json!({"x-throttling": {"limits": {"flat": {"partitionBy": [],
+            "requests": 5, "window": {"seconds": 60}}}, "applies": ["flat"]}});
+        assert_eq!(
+            plan_selection_problems(&flat, &selection(json!({"flat": "PRO"}))),
+            ["throttlingPlans names \"flat\", which has no plan tiers; the entry is ignored"]
+        );
         assert_eq!(
             plan_selection_problems(&document, &selection(json!(["plan"]))).len(),
             1
         );
+    }
+
+    /// A tier's log is keyed by (bucket id, tier position), never by a
+    /// string built from them, so a bucket whose id looks like another's
+    /// tier (`plan#tier0`) keeps its own count.
+    #[test]
+    fn tier_logs_never_collide_with_bucket_ids() {
+        let pacer = Pacer::default();
+        let start = Instant::now();
+        let tiered = tier("plan", 0, 1, 60);
+        let lookalike = bucket("plan#tier0", 1, 60);
+        pacer
+            .take_at("p", std::slice::from_ref(&tiered), start)
+            .unwrap();
+        assert!(pacer
+            .take_at("p", std::slice::from_ref(&tiered), start)
+            .is_err());
+        pacer
+            .take_at("p", std::slice::from_ref(&lookalike), start)
+            .unwrap();
+        // And tier 0 of another bucket, or tier 1 of this one, is separate.
+        pacer
+            .take_at("p", &[tier("plan", 1, 1, 60)], start)
+            .unwrap();
+        pacer
+            .take_at("p", &[tier("other", 0, 1, 60)], start)
+            .unwrap();
     }
 
     #[test]

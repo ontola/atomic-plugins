@@ -4,7 +4,8 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 
 const devices = new Map();
-const tokens = new Set();
+const tokens = new Map();
+const notes = new Map();
 const refreshTokens = new Map();
 const port = Number(process.env.SYNCABLES_MOCK_PORT ?? 11872);
 const origin = `http://127.0.0.1:${port}`;
@@ -47,6 +48,7 @@ const server = createServer(async (request, response) => {
     devices.set(deviceCode, {
       userCode,
       approved: false,
+      scope: form.get('scope') ?? 'connections:read proxy:read',
       expires: Date.now() + 300_000,
     });
     send(200, {
@@ -92,7 +94,7 @@ const server = createServer(async (request, response) => {
       tokens.delete(session.access);
       const access = randomUUID();
       const refresh = randomUUID();
-      tokens.add(access);
+      tokens.set(access,session.scope);
       refreshTokens.set(refresh, { ...session, access });
       send(200, {
         access_token: access,
@@ -101,6 +103,7 @@ const server = createServer(async (request, response) => {
         expires_in: 300,
         owner,
         session_id: session.id,
+        scope: session.scope,
       });
       return;
     }
@@ -123,10 +126,10 @@ const server = createServer(async (request, response) => {
     }
     devices.delete(code);
     const token = randomUUID();
-    tokens.add(token);
+    tokens.set(token,device.scope);
     const refresh = randomUUID();
     const id = randomUUID();
-    refreshTokens.set(refresh, { id, access: token });
+    refreshTokens.set(refresh, { id, access: token, scope: device.scope });
     send(200, {
       access_token: token,
       refresh_token: refresh,
@@ -134,6 +137,7 @@ const server = createServer(async (request, response) => {
       expires_in: 300,
       owner,
       session_id: id,
+      scope: device.scope,
     });
   } else if (
     request.method === 'POST' &&
@@ -153,6 +157,7 @@ const server = createServer(async (request, response) => {
     send(200, {
       owner,
       connections: [
+        { connection_id: 'demo-keep', platform: 'google-keep', label: 'Invented notes' },
         {
           connection_id: 'demo-connection',
           platform: 'github-issues',
@@ -182,6 +187,17 @@ const server = createServer(async (request, response) => {
       ],
       'private, max-age=60',
     );
+  } else if (url.pathname.startsWith('/proxy/demo-keep/google-keep/v1/notes')) {
+    const scope=tokens.get(request.headers.authorization?.replace(/^Bearer /,''));
+    if (!scope || !scope.split(' ').includes(request.method==='GET'?'proxy:read':'proxy:write')) { send(403,{}); return; }
+    const id=decodeURIComponent(url.pathname.slice('/proxy/demo-keep/google-keep/v1/'.length));
+    if (request.method==='POST' && id==='notes') {
+      const name='notes/'+randomUUID();
+      const note={...JSON.parse(body),name}; notes.set(name,note); send(200,note);
+    } else if (request.method==='GET' && id==='notes') send(200,{notes:[...notes.values()]});
+    else if (request.method==='GET') send(notes.has(id)?200:404,notes.get(id)??{});
+    else if (request.method==='DELETE') { notes.delete(id); send(200,{}); }
+    else send(405,{});
   } else send(404, { error: 'not_available' });
 });
 

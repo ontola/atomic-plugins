@@ -1,0 +1,50 @@
+{
+  "paths": {
+    "/repos/{owner}/{repo}/issues": {
+      "get": {
+        "x-pagination": [
+          {
+            "scheme": "links"
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "paginationSchemes": {
+      "links": {
+        "type": "nextLink",
+        "response": {
+          "headers": {
+            "Link": {
+              "role": "nextLink"
+            }
+          }
+        }
+      }
+    },
+    "crudResources": {
+      "issue": {
+        "identity": {
+          "urlTemplate": "/repos/{owner}/{repo}/issues/{issue_number}",
+          "bindings": {
+            "issue_number": {
+              "field": "number"
+            }
+          }
+        },
+        "collections": {
+          "issues": {
+            "urlTemplate": "/repos/{owner}/{repo}/issues",
+            "envelope": {
+              "itemsField": null
+            },
+            "listQuery": {
+              "state": "all"
+            }
+          }
+        }
+      }
+    }
+  }
+}

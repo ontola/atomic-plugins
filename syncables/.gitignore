@@ -29,3 +29,5 @@ build/
 .DS_Store
 # Local standalone daemon demonstration data
 /examples/daemon/local-data.git/
+
+/examples/daemon/generated/

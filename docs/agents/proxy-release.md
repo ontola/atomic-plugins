@@ -20,8 +20,8 @@ catalog selected in v85.
 **Publishing a crate version and deploying to Heroku have Michiel's standing
 OK since 2026-10-08** (Decision Inbox Q-105, [working-model.md](working-model.md);
 before that each needed his OK per release, #227 rule 10). Conditions: publish
-only from merged, Opus-reviewed, CI-green `main`, follow these steps, and name
-the release and the Heroku release in the next status report.
+only from merged, CI-green `main` reviewed by a state of the art model, follow
+these steps, and name the release and the Heroku release in the next status report.
 
 ## Steps
 

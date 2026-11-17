@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/skill-mastery-threshold",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v2",
+  "https://atomicdata.dev/properties/shortname": "skill-mastery-threshold",
+  "https://atomicdata.dev/properties/name": "Mastery threshold",
+  "https://atomicdata.dev/properties/description": "Mastery level from 0 to 1 at which this skill counts as mastered. Absent: the view default, 0.8.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/float"
+}

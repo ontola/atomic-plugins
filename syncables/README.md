@@ -33,7 +33,7 @@ The extension versions this source reads, against the specifications in
 | Extension | Version | What Syncables reads |
 | --- | --- | --- |
 | [Pagination Schemes](../openapi-extensions/spec/pagination-schemes/README.md) | 0.10.2 | `components.paginationSchemes` and `x-pagination`: the `pageNumber` (with `start` and `shortPage`), `pageToken`, `nextLink` and `rangeWindow` types, an `offset` field's `advance`, `linkResolution`, a scheme's `response.envelope` (with `emptyWhenAbsent`) its `response.incomplete`, and a cursor read from the last item (`fromLastItem`, with `hasMore` and a checked `order`) ([below](#reading-in-a-browser-syncablesbrowser)). Auto-detection by query parameters, body fields, and (§6.3, when the scheme turns them on) response headers and response fields as the operation's description declares them. Not `incrementalSync`. |
-| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.7.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), Reference Objects resolved to a path (`resolveReference`, §4.1.3), and 0.7.0's `replace` and `unkeyedLists` through exported helpers (§4.8, §4.9; `createApiClient` does not use them yet). Not its request, patch or mint semantics, nor 0.8.0's `committedErrors`. |
+| [CRUD Causality](../openapi-extensions/spec/crud-causality/README.md) | 0.8.0 | `components.crudResources`: collections with their fixed reads (`listMethod`, `listQuery`, `listBody`) and `envelope`, identities (optional for a list-only resource, one that no `x-crud` operation or Reference Object addresses; it is read-only, §4.1) and bindings, and `x-crud` operations for writes, with created identities (§4.3.2) and compound creates (`followUps`, §4.7), Reference Objects resolved to a path (`resolveReference`, §4.1.3), 0.7.0's `replace` and `unkeyedLists` through exported helpers (§4.8, §4.9; `createApiClient` does not use them yet), and 0.8.0's `committedErrors` (§4.3.3). Not its request, patch or mint semantics. |
 | [Throttling](../openapi-extensions/spec/throttling/README.md) | 0.5.1-draft | The root `x-throttling` (`headers`, `bodyFields`, `signals` with `blocked`, `limits` with plan `tiers`, `applies`) and an operation's bucket list. Requests are paced under the `limits` that state `requests`, or every tier in force. |
 | [Collection Completeness](../openapi-extensions/spec/collection-completeness/README.md) | 0.4.0-draft | `x-completeness`: `absent` (only `deleted` changes what the client does without a read), `notFound` and `gone` (what a 404 or 410 of a record's read means, resource-wide; an unrecognised `absent` or value fails closed to `unavailable`) and `parentAbsent`. |
 | [Deletion Feeds](../openapi-extensions/spec/deletion-feeds/README.md) | 0.3.0-draft | `x-deletion-feed`, `x-read-tombstone` and `x-list-tombstone`. |
@@ -94,10 +94,12 @@ Git is an optional subtree export with messages, branches and ancestry; existing
 Git histories can be migrated without changing their original repositories. See the
 [daemon guide](docs/daemon.md) for setup, supported incremental reads, queued
 webhook hints and limits, and [Versioned Atomic Data](../docs/design/versioned-atomic-data.md)
-for snapshot resolution. The [CLI guide](docs/cli.md) covers device login and
-read-only API probes. Replication definitions remain configuration only.
+for snapshot resolution. The [file inventory guide](docs/file-inventory.md)
+covers metadata-only Dropbox, Google Drive and iCloud Drive sync. The
+[CLI guide](docs/cli.md) covers device login and read-only API probes.
+Replication definitions remain configuration only.
 Root/browser library imports do not start the daemon or load its storage.
-Successful syncs expose normal working folders for each collection;
+Successful OpenAPI syncs expose normal working folders for each collection.
 `syncables checkout` exposes existing snapshots without fetching again.
 Items and bundled schemas have document-scoped API resource classes.
 
@@ -1276,6 +1278,29 @@ When the create operation declares an `x-crud` `create` for the resource
   restart treats as before: `uncertain`, or resent under its idempotency
   key. Settle it with `confirm` (the server's id, found by a
   refresh) or `discard`, or let the next read bind it (below).
+- `committedErrors` (CRUD Causality 0.8.0 §4.3.3) declares `5xx` answers
+  the provider documents as sent only after the create was applied, with
+  where the new object's id is in the error body (Notion's `503` with
+  `additional_data.committed_resource_id`). A matching answer (a listed
+  status, a JSON body, and a usable value at every `identity` path: a
+  nonempty string without surrounding whitespace, `/`, `?`, `#` or a
+  control character, not `.` or `..`, or a non-negative integer) makes the
+  create applied: it is bound to that id, the record being what was sent,
+  and never sent again. Before, a `503` took the ordinary retry path and
+  the create was sent twice. A listed status that does not match (no
+  usable id) is an unknown outcome, since the provider says that status
+  can follow an applied create: `uncertain` without an idempotency key,
+  resent under one. Identity paths step through objects only, never into
+  an array (`errors.length` names nothing), and a JSON `5.0` is read as
+  `5`. When the id field's template variable is not among the values (a
+  template with another variable the error does not name), the create is
+  applied but unbound, as above: the named fields are kept on the local
+  record, it is never sent again, and `matchUnboundCreates` can bind it
+  from a later read. Only a create's answer counts. Entries the spec's
+  rules refuse are ignored, and so is `committedErrors` beside
+  `followUps` (rule 32).
+  String identities must also be well-formed Unicode, as with ordinary
+  identity bindings.
 - `matchUnboundCreates: { uniqueFields: { pets: ['ref'] } }` (off by
   default) binds an unbound create from the first complete read of its
   collection that starts after the create was answered, as `confirm` with
@@ -2216,17 +2241,246 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **Unreleased**: the webhook inbox consumer speaks Webhook Subscriptions
-  0.2.0-draft's `maxBytes` (ontola/atomic-plugins#369, step 4b plan Unit
-  B). `InboxClient.events()` takes `maxBytes` and refuses one that is not
-  an integer of at least 1 (`RangeError`), and `InboxConsumerOptions`
-  passes `maxBytes` to every fetch. An event whose body alone is over it
-  reaches the journal with `payload.omitted: true` and no `body`, and is
-  acknowledged like any other; `scopedReads` names no reads for it.
-  **Breaking for TypeScript:** `InboxEvent.payload.body` is now optional
-  (`body?: string`), so code that reads it must handle its absence; a
-  receiver sends no omitted event unless the consumer asked for
-  `maxBytes`.
+- **0.27.0**: SyncD control panel for IAP grants and change notifications.
+  - **Behaviour change:** Align the experimental native Atomic companion with the Atomic plugins
+    candidate23 host and browser pin, including batched SYNC_PUSH persistence.
+    The peer advertises the full-sync protocol supported by that candidate;
+    sparse-sync is not advertised. Use a fresh peer directory when upgrading
+    from the recursive prototype, as required by projection version 2.
+  - **Behaviour change:** Experimental Atomic table schema keys now follow the pinned OAD's declared
+    CRUD resource, so several collections or operations can share one Class.
+    Existing row and table keys remain stable. Consumers that saved references
+    to the earlier operation-scoped experimental Classes should migrate those
+    references explicitly; relation Properties use new identities when their
+    datatype changes from JSON to a resource link.
+  - **Behaviour change:** Generated Atomic schemas now use the pinned OAD and response operation,
+    rather than the account/collection alias. Accounts using the same operation
+    share declared Classes and Properties; observed records do not change the
+    declared Class. Tables and rows retain their account-specific identities.
+    Existing native peers retain superseded schema resources as previous members
+    when their import keys change.
+  - **Behaviour change:** The experimental Atomic peer now generates one owner-scoped drive with account
+    folders and a native table for each selected API collection. All configured
+    collections are selected by default; use --collections or --collection for a
+    subset. Typed fields and linked nested resources replace JSON wrappers;
+    original responses and history stay in PostgreSQL. Preserve unsafe numbers as
+    exact text and use a new projection directory when upgrading from the original
+    single-collection wrapper prototype.
+  - **Behaviour change:** The experimental Atomic table projection uses one resource per API record,
+    with nested objects, arrays and comments kept as inline native JSON. Use a new
+    projection directory when upgrading from the recursive-resource format. API
+    identity columns have distinct labels, imported permissions remain source
+    metadata, and declared compound-field schemas stay on their Properties. The
+    Keep daemon example retains the complete pinned upstream OAD. Prepare the full
+    GitHub example with examples/daemon/prepare-github-issues.mjs before using the
+    demo config; generated large contracts stay outside Git. The daemon still
+    selects read-only GET collections.
+  - **Added:** Atomic table projections can turn explicitly declared embedded API objects
+    into named resource links and resource lists, with account-scoped referenced
+    tables. Source-hash-bound projection overlays support offline reprojection
+    without changing accepted snapshot provenance or making provider requests.
+    Unresolved fields retain their complete JSON value with diagnostics.
+  - **Added:** Project a selected accepted API record into typed owned Note, List and ListItem
+    resources through a separate consumer profile, preserving its complete original
+    body JSON and other typed fields. Ordered links, explicit parentage, optional
+    checked state and snapshot-bound item identities make the result queryable
+    without changing the API contract or inferring item identity across refreshes.
+  - **Added:** Experimental `atomic-peer` serves one accepted PostgreSQL collection as a
+    read-only native Atomic drive through an optional Rust companion. Persistent
+    signed Loro documents retain record/schema identities across updates,
+    absence/reappearance and restart; a durable projection journal gates
+    publication and recovery. Source JSON and numbers remain lossless text.
+    Explicit owner signing authority and reader agents are required; see
+    `docs/atomic-peer.md`. Replication destination definitions remain configuration
+    only, and no provider writes, service installation or public listener is added.
+  - **Added:** CRUD Causality 0.8.0 `committedErrors` (§4.3.3): a create answered with a
+    `5xx` that a Committed Error Object matches (a listed status and a usable
+    id at its `identity` path in the JSON error body, as Notion's `503` with
+    `additional_data.committed_resource_id`) is applied, bound to that id and
+    never sent again. Before, a `503` took the ordinary retry path, so such a
+    create was sent twice. A listed status whose body names no usable id is
+    an unknown outcome (uncertain without an idempotency key). A match that
+    does not name the record's id leaves the create applied but unbound,
+    which `matchUnboundCreates` can bind. Documents without
+    `committedErrors` read as before. `committedIdentity` ports the
+    reference `committed_identity()`, sharing the path-segment validation used
+    by other identity bindings, including rejection of malformed Unicode.
+  - **Added:** The browser-safe `syncables/graphql` subpath reads a validated GraphQL
+    collection description through an injected operation-ID executor. Cursor
+    and explicit empty-page offset traversals enforce identity, progress and
+    read limits; partial GraphQL errors leave the read incomplete. A finished
+    traversal supplies no absence/deletion evidence. This does not add GraphQL
+    support to the REST replica or integration-proxy authorization routes.
+  - **Added:** The SyncD UI now lists remote connections approved for its device grant,
+    including connections not configured for local syncing. It shows per-collection
+    sync state, last successful sync and attempt times, next due time, and distinct
+    auth, sync and working-folder errors. Local snapshots remain browsable when
+    login or remote discovery fails. Existing records without timestamp tracking
+    are shown as unknown; new successful unchanged reads update the sync time.
+  - **Added:** SyncD now has a local read-only data browser: `syncables ui --config FILE`
+    prints a browser link for configured collections, searchable paginated records
+    and exact source JSON details. It reads accepted PostgreSQL snapshots without
+    provider requests and keeps paging on one saved revision until refreshed.
+  - **Added:** SyncD can embed IAP's reusable access-management page in its local control
+    panel. Start ui with --manage for a separate, foreground-only approval to
+    manage selected provider connections and account-wide client sessions.
+    Optional collection notifications subscribe to IAP's notification-only
+    webhook inbox, schedule durable local work before acknowledgement, and
+    perform full bootstrap reconciliation after a gap. Provider credentials
+    remain in IAP and imported data remains in local PostgreSQL.
+  - **Fixed:** The mock server's next link and `currentPage` count page numbers from
+    the scheme's `start` (Pagination Schemes §4.3.1, default 1). Before,
+    they used `+ 1` whatever the start: with `start: 0` the next link
+    skipped a page, and with `start: 2` it pointed back at the first page.
+  - **Other:** Document the native Atomic companion's certified-genesis and read-only session
+    boundaries and its independent Cargo lockfile compatibility procedure. The
+    validated core pin and replication permissions are unchanged.
+- **0.26.0**: Experimental SyncD with PostgreSQL history, offline browsing, Git import/export, read-only Braid and explicit provider writes; check migration and API changes before upgrading.
+  - **Behaviour change:** The supported Node range is now 22.11 or newer, with CI on Node 22, 24 and 26;
+    the inherited Node 22-only upper limit is removed. Volta still defaults to
+    Node 22 for development.
+  - **Behaviour change:** The Google Keep daemon example uses the full pinned Keep v1 OAD and the
+    proxy catalog's auth, pagination and CRUD overlays. Reads remain the default;
+    provider writes require separate approval, collection opt-in and explicit
+    sending. Replacing an existing private example changes its document hash
+    and starts a new collection scope; previous snapshot history is retained
+    under the old scope rather than migrated automatically.
+  - **Behaviour change:** Syncs maintain ordinary snapshot folders per collection under
+    `workspaceDirectory` (default `./workspace`). Local edits block automatic
+    updates instead of being overwritten, and never trigger provider writes.
+    Existing snapshots can be exposed offline with `syncables checkout`; source
+    classes and schemas are added while preserving original history and payloads.
+  - **Behaviour change:** Local daemon snapshots, schemas, messages and revision heads now live in
+    PostgreSQL, sharing content-addressed JSON nodes with the response archive.
+    Existing Git installations must run `syncables migrate git --config FILE`
+    before continuing. Original archives and worktrees remain untouched; ordinary
+    snapshot folders use `workspaceDirectory` (default `./workspace`). Use
+    `syncables export git --subtree platform/account/collection --output NEW_DIR`
+    for checked-out Git history, including branches, tags and commit metadata.
+  - **Behaviour change:** the webhook inbox consumer speaks Webhook Subscriptions
+    0.2.0-draft's `maxBytes` (ontola/atomic-plugins#369, step 4b plan Unit
+    B). `InboxClient.events()` takes `maxBytes` and refuses one that is not
+    an integer of at least 1 (`RangeError`), and `InboxConsumerOptions`
+    passes `maxBytes` to every fetch. An event whose body alone is over it
+    reaches the journal with `payload.omitted: true` and no `body`, and is
+    acknowledged like any other; `scopedReads` names no reads for it.
+    **Breaking for TypeScript:** `InboxEvent.payload.body` is now optional
+    (`body?: string`), so code that reads it must handle its absence; a
+    receiver sends no omitted event unless the consumer asked for
+    `maxBytes`.
+  - **Added:** The optional `syncables` CLI tests device login and provider access through
+    Local Thought, saves replication destination definitions, and records reads
+    in a separate local PostgreSQL archive. The `syncables/postgres` entry
+    provides owner-scoped compressed payloads, caching and offline recorded-run
+    replay. Runtime replication and background service installation remain
+    unimplemented. Existing Node and browser library imports are unchanged.
+  - **Added:** SyncD can serve selected PostgreSQL snapshots with the new local-only braid
+    command: authenticated versioned GETs, read-only Braid subscriptions, bounded
+    replay after reconnect and explicit full-snapshot reset. JSON-AD records and
+    bundled schemas travel as text to preserve numeric lexemes. The listener is
+    independent of provider login, Git export and the Atomic adapter; writes and
+    patches are not supported. See docs/braid.md for commands and limits.
+  - **Added:** The standalone daemon guide names the exact config and OpenAPI files to
+    copy, recommends a private data directory outside the source checkout, and
+    shows real GitHub configuration and connection discovery. The full Google
+    Keep profile and trial instructions cover provider setup prerequisites,
+    pagination, account-wide response archival, local title filtering and revision
+    history. Explicit provider writes and recovery have a separate guide. No
+    provider credentials or live note data are included.
+  - **Added:** The mock server deduplicates creates on a declared `Idempotency-Key`
+    header parameter: a POST sent again with a key it has seen gets the
+    record made the first time, and the same key with another body gets a
+    `422` (bodies compare as JSON with sorted keys, or as text when they are
+    not JSON). A test runs the client's retry of a create whose response was
+    lost against it over HTTP, and finds one record at the server.
+  - **Added:** Standalone sync and daemon commands accept `--message` to record intent in
+    local PostgreSQL snapshot revisions alongside generated run provenance.
+    History returns messages, timestamps and parents, supports a pinned `--at`
+    revision, and accepts `--subject` for resource or schema history while
+    preserving the revision-ID list. Explicit storage-layer messages retain
+    intent-only revisions even when their trees are unchanged; Git exports
+    preserve these messages and ancestry.
+  - **Added:** Add experimental standalone sync, foreground daemon, local browse/history
+    and commit/tag resource lookup commands. Archive lossless nested JSON objects
+    by content hash in local PostgreSQL and version the JSON-AD data copy with its
+    bundled schemas in PostgreSQL snapshots, with optional Git import/export.
+    Support configured GET collections, a query-token incremental subset,
+    durable deduplicated webhook hints, periodic polling and macOS Keychain
+    device credentials. See `docs/daemon.md` for setup and limits; remote
+    replication and background service installation remain planned.
+  - **Added:** SyncD adds explicit, opt-in provider creates, replacements and deletes through
+    an independently approved device write grant. Local edits and receipts persist
+    in PostgreSQL; interrupted creates remain uncertain without automatic reposting,
+    and replacement identities are committed before originals are retired. Google
+    Keep uses a revised composed profile with resource-name path bindings. See
+    Provider writes and recovery for configuration, conflict handling, metadata
+    loss, ownership attestation and the remaining non-atomic deletion race.
+  - **Fixed:** `apiKeyAuth` takes `cookie` as well as `header` and `query`, the third
+    place an OpenAPI `apiKey` security scheme can put a key: it adds the
+    cookie to the request's `cookie` header, keeping the others, and refuses
+    a cookie name that is not an RFC 6265 token and a key that is not
+    cookie-octets (a `;` would inject a cookie). It and
+    `bearerAuth` now replace a header of the same name in any case; before,
+    a request with `Authorization` or `X-Api-Key` already set was sent with
+    both that header and the lower-case one the adapter added.
+  - **Fixed:** A create's identity read from its response (CRUD Causality §4.3.2) must
+    be a value `resolveReference` would also accept: a nonempty string that
+    is not `.` or `..`, is not padded with whitespace, and holds no NUL or
+    lone surrogate, or a safe integer. A numeric string past 2^53 is kept,
+    as a string. Before, a `Location` of `/pets/..` (or `%2E%2E`) bound the
+    record to `..`, whose path normalises to another resource; a lone
+    surrogate made every later update or delete of the record throw
+    `URIError`; and a body `id` that was an object or a boolean bound it to
+    `[object Object]` or `true`. Such a create is now unbound, as one
+    without a usable identity already was.
+  - **Fixed:** Device login now prints the server's complete verification link with the
+    matching user code prefilled, and explains continuing to owner approval.
+    Previously it printed the bare instruction page, which has no code-entry
+    field. Complete links are checked against the verification endpoint and user
+    code; servers without a complete link retain the manual-entry flow. The mock
+    approval page also supports a prefilled code.
+  - **Fixed:** A read by the last item's cursor (Pagination Schemes `fromLastItem`)
+    ends with a `PageReadError`, not complete, when that item's cursor value
+    is an empty string. Before, the client sent `?starting_after=`, and a
+    provider that answered it with an empty page made the read end as
+    complete after the items before it.
+  - **Fixed:** `apiKeyAuth(name)` and `apiKeyAuth(name, 'header')` refuse a header name
+    that is not an RFC 7230 token (a space, a colon, CR or LF, a non-ASCII
+    letter) when the adapter is made, as `cookie` placement already refused
+    such a cookie name. A query parameter name is not restricted.
+  - **Fixed:** The mock server answers a paginated list's page size, offset, page
+    number or page token with a `400` when it is not a whole number in range
+    (a page size of at least 1, a page at least the scheme's `start`).
+    Before, `limit=0` answered `hasMore` with the same next offset forever,
+    and a value that is not a number (`limit=abc`, `cursor=abc`) an empty
+    page that ended a read as if it were complete.
+  - **Fixed:** The Node entry's `createApiClient` reads `SYNCABLES_*` credentials from
+    the environment only when an `authenticate` adapter is given; without
+    one they are ignored, silently. Before, a
+    `SYNCABLES_API_KEY` or `SYNCABLES_ACCESS_TOKEN` set for something else
+    made a client without an adapter (a transport that authenticates itself)
+    refuse to start with "Credentials require an authenticate adapter".
+    Explicit credentials without an adapter are still refused.
+  - **Other:** Clarify pagination coverage as an observation of a possibly stale API view,
+    with mixed snapshots across pages. Explain the limits of repeated identical
+    reads and the separate append-only, stable-selection and closed-prefix
+    guarantees needed for stronger cursor-based synchronization.
+  - **Other:** Add an illustrated whole-stack explainer covering OpenAPI extensions, GitHub
+    and Keep profiles, authentication, shared JSON storage, versioned snapshots
+    and contract-derived page coverage. Add a design investigation of ambiguous,
+    delayed cross-collection matches using bank-transfer examples.
+  - **Other:** Lead the illustrated stack explainer with SyncD's elevator pitch: a generic
+    client driven by declarative OpenAPI extensions, running as a daemon that
+    keeps local versioned data available through Git exports and Braid subscriptions.
+  - **Other:** Document SyncD as Michiel's shorthand for the standalone Syncables Daemon,
+    without renaming the syncables package or command. Describe Git and Braid
+    as implemented experimental interfaces over shared PostgreSQL data/history,
+    and AtomicSync as a planned adapter. Git import/export and read-only Braid
+    subscriptions do not imply native Atomic peer replication or writable Braid.
+  - **Other:** Document Versioned Atomic Data resources, schemas, immutable revisions and
+    commit/tag lookup over local PostgreSQL history, with optional Git
+    import/export. Distinguish these versions from native Atomic signed commits
+    and describe publication and missing-schema behavior.
 - **0.25.0**: behaviour changes to know before upgrading come first:
   explicit `x-pagination` entries must have the spec's shape; Throttling
   `blocked`; auto-detection by response headers and fields; `applyOverlay`
@@ -2964,3 +3218,17 @@ As an NLnet-funded project, it records AI-assisted work with reference to
   [`docs/ai-logs/pending-historical-sessions.md`](docs/ai-logs/pending-historical-sessions.md)).
 - AI-drafted content is identified as assisted work; the disclosure log
   records the maintainer's review or delegation and the validation performed.
+
+## GraphQL collections
+
+The additive browser-safe `syncables/graphql` subpath reads a validated
+GraphQL collection through an injected operation-ID executor. See
+[the reader contract and usage](docs/graphql.md). GraphQL proxy authorization
+and local-replica pruning are not implemented by this adapter.
+
+## SyncD data browser
+
+The local `syncables ui --config FILE` command shows saved collections,
+searchable records and source JSON in a read-only browser interface, with
+remote connections approved for SyncD and per-collection sync times/errors. See
+[setup and usage](docs/daemon-browser.md).

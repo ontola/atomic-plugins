@@ -22,6 +22,7 @@ import {
   type Period,
 } from './ledger.js';
 import { adopt } from './adopt.js';
+import { groupDuplicates, planRemoval, type Duplicate } from './duplicates.js';
 import { localToday } from './format.js';
 import type { OwnSchema } from './own.js';
 import {
@@ -161,6 +162,14 @@ export interface State {
    * check ever counts one.
    */
   incomplete: Txn[];
+  /**
+   * Complete rows that copy another row of the table (same source id and
+   * fingerprint; `duplicates.ts`, #587). Kept apart from `rows` like
+   * incomplete rows: no balance, total, count or filter sees them.
+   */
+  duplicates: Duplicate[];
+  /** "Remove duplicates", once pressed. */
+  dedupe?: Dedupe;
   /** Whether the host can show a row's page (`store.openResource`). */
   canOpenRows: boolean;
   fields: Fields;
@@ -212,6 +221,27 @@ export interface State {
   source?: Source;
 }
 
+export type Dedupe =
+  | { status: 'removing' }
+  | {
+      status: 'done';
+      /** Duplicates destroyed (or found already gone). */
+      removed: number;
+      /** Left: their category or note differs from the kept row's. */
+      kept: number;
+      /** Couldn't be removed this time. */
+      failed: number;
+      /**
+       * Groups left alone because, read again at the press, their kept row
+       * was gone or the rows no longer agree.
+       */
+      skipped: number;
+      /** The first failure, for the details line. */
+      details?: string;
+    }
+  /** Nothing was done; `message` says why and what to do. */
+  | { status: 'stopped'; message: string };
+
 export const NOT_A_BANK_TABLE =
   'This app shows a Bank transactions table: the one the Bank statements importer created, or a table of the shared Bank transaction class (bank-transaction-v1), such as the one this app got when it was installed. Open it from the app tab of such a table.';
 
@@ -240,6 +270,12 @@ export interface Controller {
   openImporter(): Promise<void>;
   /** Leaves the app for a row's page in the host, to complete it there. */
   openRow(subject: string): Promise<void>;
+  /**
+   * Moves a category or note only a duplicate has onto the kept row, then
+   * destroys the duplicates nothing else differs on (#587). Only ever on
+   * the person's press.
+   */
+  removeDuplicates(): Promise<void>;
   /** ISO date the period filters are relative to. */
   today(): string;
   dispose(): void;
@@ -270,6 +306,7 @@ export function createController(
     tab: 'transactions',
     rows: [],
     incomplete: [],
+    duplicates: [],
     canOpenRows: Boolean(store.openResource),
     fields: {},
     filters: noFilters({ kind: 'all' }),
@@ -321,7 +358,8 @@ export function createController(
    * table as listed now (#572): the host's `query` can answer `[]`, or skip
    * a page of 500 that failed, with no error, and a refresh is suppressed
    * while an import writes. So a row once seen or written stays known;
-   * one deleted elsewhere reads as already imported until the next load.
+   * one deleted elsewhere reads as already imported until the app is opened
+   * again: `load()` (also "Try again") clears `seen`, never `written`.
    */
   const seen = new Map<string, Txn>();
   const written = new Map<string, Txn>();
@@ -360,7 +398,8 @@ export function createController(
       property: atomic.parent,
       value: table,
     });
-    const known = new Set(state.rows.map(row => row.subject));
+    const complete = [...state.rows, ...state.duplicates];
+    const known = new Set(complete.map(row => row.subject));
     const wereIncomplete = new Set(state.incomplete.map(row => row.subject));
     const fresh = subjects.filter(s => !known.has(s));
     const { items: freshRows, unread } = await readRowsReport(
@@ -372,10 +411,10 @@ export function createController(
     const added = split(freshRows);
     const present = new Set(subjects);
     const wasEmpty = state.rows.length === 0;
-    const rows = [
-      ...state.rows.filter(row => present.has(row.subject)),
+    const { rows, duplicates } = groupDuplicates([
+      ...complete.filter(row => present.has(row.subject)),
       ...added.rows,
-    ];
+    ]);
     const incomplete = added.incomplete;
     remember(added.rows);
     const arrived = freshRows.filter(
@@ -383,6 +422,7 @@ export function createController(
     ).length;
     update({
       rows,
+      duplicates,
       incomplete,
       view: settled(rows, incomplete),
       ...(arrived
@@ -717,7 +757,7 @@ export function createController(
           if (access) update({ rowAccess: access.status });
         }
 
-        const { rows, incomplete } = split(
+        const { rows: complete, incomplete } = split(
           await readRows(store, subjects, fields, rowClass, loaded => {
             // Progress in steps, not per row: each update re-renders.
             if (loaded % 50 === 0)
@@ -727,9 +767,12 @@ export function createController(
           }),
         );
         seen.clear();
-        remember(rows);
+        remember(complete);
+        const { rows, duplicates } = groupDuplicates(complete);
         update({
           rows,
+          duplicates,
+          dedupe: undefined,
           incomplete,
           view: settled(rows, incomplete),
           filters: noFilters(defaultPeriod(rows, today())),
@@ -1055,6 +1098,185 @@ export function createController(
           openFailure: error instanceof Error ? error.message : String(error),
         });
       }
+    },
+    async removeDuplicates() {
+      if (state.dedupe?.status === 'removing') return;
+      if (!state.duplicates.length || !table || !rowClass) return;
+
+      // The host lets an app delete only its own rows: on any other table
+      // the copies are removed in the table itself (the view says so).
+      if (state.source !== 'own') return;
+
+      if (writing) {
+        update({
+          dedupe: {
+            status: 'stopped',
+            message:
+              'An import is still writing to this table. Try again when it has finished.',
+          },
+        });
+
+        return;
+      }
+
+      update({ dedupe: { status: 'removing' } });
+      const where = table;
+      let removed = 0;
+      let kept = 0;
+      let failed = 0;
+      let skipped = 0;
+      let details: string | undefined;
+      const gone = new Set<string>();
+      const merged = new Map<string, Partial<Record<NoteKey, string>>>();
+
+      const firstFailure = (error: unknown) => {
+        details ??= error instanceof Error ? error.message : String(error);
+      };
+
+      // Planned from the table as it is now, never from what this view read
+      // earlier: the listing once, then every row of every group read again.
+      const listing = await store
+        .query({ property: atomic.parent, value: where })
+        .catch((error: unknown) => {
+          firstFailure(error);
+
+          return undefined;
+        });
+
+      if (!listing) {
+        update({
+          dedupe: {
+            status: 'stopped',
+            message: `Couldn't read this table, so nothing was removed. Try again in a moment.${details ? ` (${details})` : ''}`,
+          },
+        });
+
+        return;
+      }
+
+      const listed = new Set(listing);
+      const groups = new Map<string, string[]>();
+
+      for (const copy of state.duplicates) {
+        const members = groups.get(copy.duplicateOf) ?? [copy.duplicateOf];
+        members.push(copy.subject);
+        groups.set(copy.duplicateOf, members);
+      }
+
+      /**
+       * Whether a destroy that failed left the row gone anyway (it was gone
+       * already, or the destroy landed): only a listing that still shows the
+       * kept row is trusted to say so, since the host's query can answer
+       * [] with no error.
+       */
+      const isGone = async (subject: string, keptRow: string) => {
+        const listedNow = await store
+          .query({ property: atomic.parent, value: where })
+          .catch(() => undefined);
+
+        return Boolean(
+          listedNow &&
+          listedNow.includes(keptRow) &&
+          !listedNow.includes(subject),
+        );
+      };
+
+      writing = true;
+
+      try {
+        for (const [keptSubject, members] of groups) {
+          // The kept row is gone (deleted elsewhere): removing its copies
+          // would leave nothing. Left as it is; the next read regroups.
+          if (!listed.has(keptSubject)) {
+            skipped++;
+            continue;
+          }
+
+          // Copies no longer listed are gone already.
+          for (const subject of members.slice(1))
+            if (!listed.has(subject)) {
+              gone.add(subject);
+              removed++;
+            }
+
+          const present = members.filter(subject => listed.has(subject));
+          const { items, unread } = await readRowsReport(
+            store,
+            present,
+            state.fields,
+            rowClass,
+          );
+
+          if (unread || items.length !== present.length) {
+            skipped++;
+            continue;
+          }
+
+          const fresh = groupDuplicates(items.filter(row => !row.incomplete));
+          const plan = planRemoval(fresh.rows, fresh.duplicates).find(
+            group => group.subject === keptSubject,
+          );
+
+          if (!plan) {
+            // Read again, the rows no longer agree (an amount or a date was
+            // edited meanwhile): not duplicates any more.
+            skipped++;
+            continue;
+          }
+
+          kept += plan.keep.length;
+          const fields = Object.entries(plan.set) as [NoteKey, string][];
+
+          if (fields.length) {
+            try {
+              const resource = await store.getResource(plan.subject);
+
+              for (const [field, value] of fields) {
+                const property = state.fields[PROPERTY[field]];
+                if (property) resource.set(property, value);
+              }
+
+              await resource.save();
+              merged.set(plan.subject, plan.set);
+            } catch (error) {
+              // Without its category or note on the kept row, a copy would
+              // take them with it: leave this group as it is.
+              firstFailure(error);
+              failed += plan.remove.length;
+              continue;
+            }
+          }
+
+          for (const subject of plan.remove) {
+            try {
+              await (await store.getResource(subject)).destroy();
+              gone.add(subject);
+              removed++;
+            } catch (error) {
+              if (await isGone(subject, plan.subject)) {
+                gone.add(subject);
+                removed++;
+              } else {
+                firstFailure(error);
+                failed++;
+              }
+            }
+          }
+        }
+      } finally {
+        writing = false;
+      }
+
+      update({
+        rows: state.rows.map(row => {
+          const set = merged.get(row.subject);
+
+          return set ? { ...row, ...set } : row;
+        }),
+        duplicates: state.duplicates.filter(row => !gone.has(row.subject)),
+        dedupe: { status: 'done', removed, kept, failed, skipped, details },
+      });
+      queueRefresh();
     },
     async allowEditing() {
       return askForAccess().catch(() => false);

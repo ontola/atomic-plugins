@@ -20,6 +20,12 @@
 //! {sha-256 hex of the body}
 //! ```
 //!
+//! A request that carries `x-connection-key` (see [`crate::connection_key`])
+//! signs a sixth line, `\n{sha-256 hex of that header's value}`, so the key
+//! or key grant a request presents cannot be swapped, added or removed
+//! without the signer. A request without the header signs the five lines
+//! above, exactly as Atomic's own v2.
+//!
 //! The proxy accepts version 2 only. Atomic's version 1 message
 //! (`"{URL} {timestamp}"`) covers neither the method nor the body, and v1
 //! proofs are deliberately reusable for five minutes, so a captured one could
@@ -63,6 +69,22 @@ pub fn message(method: &str, url: &str, timestamp_ms: &str, body: &[u8]) -> Stri
         method.to_ascii_uppercase(),
         sha256_hex(body)
     )
+}
+
+/// The message of a request that presents `connection_key` as its
+/// `x-connection-key` header value: [`message`] plus a line binding it.
+pub fn message_with_key(
+    method: &str,
+    url: &str,
+    timestamp_ms: &str,
+    body: &[u8],
+    connection_key: Option<&str>,
+) -> String {
+    let message = message(method, url, timestamp_ms, body);
+    match connection_key {
+        Some(key) => format!("{message}\n{}", sha256_hex(key.as_bytes())),
+        None => message,
+    }
 }
 
 /// The URL a client signs for a request that arrived with `path_and_query`,
@@ -118,7 +140,12 @@ pub fn verify(
     if timestamp_ms.abs_diff(now_ms) > MAX_SKEW_MS {
         return Err(ApiError::StaleTimestamp);
     }
-    let message = message(method, url, timestamp, body);
+    // A header that is not visible ASCII is not a key in either form; it is
+    // bound as given all the same, so the request fails here, not later.
+    let connection_key = headers
+        .get(crate::connection_key::HEADER)
+        .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned());
+    let message = message_with_key(method, url, timestamp, body, connection_key.as_deref());
     if !agent.verify(message.as_bytes(), signature) {
         return Err(ApiError::BadSignature);
     }
@@ -187,7 +214,34 @@ pub fn test_headers(
     timestamp_ms: u64,
     body: &[u8],
 ) -> Vec<(&'static str, String)> {
-    let message = message(method, url, &timestamp_ms.to_string(), body);
+    test_headers_with_key(agent, method, url, timestamp_ms, body, None)
+}
+
+/// Test-only: [`test_headers`] for a request that also presents
+/// `connection_key`, which is among the returned headers.
+#[cfg(test)]
+pub fn test_headers_with_key(
+    agent: &crate::agent_id::test_signer::Agent,
+    method: &str,
+    url: &str,
+    timestamp_ms: u64,
+    body: &[u8],
+    connection_key: Option<&str>,
+) -> Vec<(&'static str, String)> {
+    let message = message_with_key(method, url, &timestamp_ms.to_string(), body, connection_key);
+    let mut headers = connection_key
+        .map(|key| vec![(crate::connection_key::HEADER, key.to_owned())])
+        .unwrap_or_default();
+    headers.extend(test_signature_headers(agent, timestamp_ms, &message));
+    headers
+}
+
+#[cfg(test)]
+fn test_signature_headers(
+    agent: &crate::agent_id::test_signer::Agent,
+    timestamp_ms: u64,
+    message: &str,
+) -> Vec<(&'static str, String)> {
     vec![
         (AGENT_HEADER, agent.id()),
         (PUBLIC_KEY_HEADER, agent.public_key()),
@@ -202,6 +256,18 @@ mod tests {
     use super::*;
     use crate::agent_id::test_signer::Agent;
     use axum::http::{HeaderMap, HeaderValue};
+
+    /// A request with `x-connection-key` signs one more line, the header's
+    /// SHA-256; one without signs Atomic's five lines unchanged.
+    #[test]
+    fn a_connection_key_is_bound_as_a_sixth_line() {
+        let five = message("GET", URL, "1", b"");
+        assert_eq!(message_with_key("GET", URL, "1", b"", None), five);
+        assert_eq!(
+            message_with_key("GET", URL, "1", b"", Some("k1.abc")),
+            format!("{five}\n{}", sha256_hex(b"k1.abc"))
+        );
+    }
 
     const NOW: u64 = 1_790_000_000_000;
     const URL: &str = "https://proxy.example/proxy/conn/github-issues/repos/o/r/issues?state=all";

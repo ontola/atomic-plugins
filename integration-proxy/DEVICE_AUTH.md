@@ -47,6 +47,16 @@ are accepted only in `Authorization: Bearer <access_token>`, never in a cookie,
 query parameter, or request body. Retired bearer connection codes remain
 unsupported. No JWT introspection or ID token is supplied.
 
+**Connection keys (unreleased).** A device session authorises a request; it
+does not open the connection's credential, whose key the proxy does not keep
+(SECURITY.md, "Client-held connection keys"). A device request through
+`/proxy/…`, and a notification consumer request that runs an access check,
+also sends `x-connection-key`: the key itself (`k1.`) or a grant (`s1.`)
+whose `sub` is the session's **owner**. The owner's browser hands the CLI
+these during approval, outside this protocol; this repository does not yet
+define how. A bearer request has no signature, so for it the header is not
+bound to anything: TLS is what protects it, as it protects the bearer token.
+
 The machine-readable fixture is [device-contract.json](tests/fixtures/device-contract.json).
 It contains schema/contract information, not reusable device or token secrets.
 The companion mock's proposed discovery + form POST + bearer GET protocol is
@@ -66,7 +76,7 @@ that client registered. The mock's approval is not owner authentication.
 | `GET /device/sessions` | Atomic v2 owner signature; lists only that owner's client sessions. |
 | `DELETE /device/sessions/{session_id}` | Atomic v2 owner signature; revokes that individual session. |
 | `GET /connections` | Device bearer: filtered connection discovery, or existing Atomic owner signature. |
-| `GET /proxy/{connection_id}/{platform}/{path}` | Device bearer: approved read, or existing signature/capability authentication. |
+| `GET /proxy/{connection_id}/{platform}/{path}` | Device bearer: approved read/write method, or existing signature/capability authentication. |
 
 Token/form responses use `Cache-Control: no-store` and `Pragma: no-cache`.
 Device JSON/form request bodies are limited to 8 KiB. Duplicate form fields
@@ -84,16 +94,20 @@ use `token_endpoint_auth_methods_supported: ["none"]`.
   existing live connection ownership/idle expiry, owner `AccessPolicy`,
   provider credential binding, catalog operation/security restrictions,
   validation and pacing. HEAD must itself be allowed by the catalog.
-- `proxy:write` is reserved for future upstream writes. It is not issued in
-  this pilot: requesting it (or administrative scopes) returns `invalid_scope`.
+- `proxy:write`: explicitly approved POST, PUT, PATCH and DELETE through the
+  selected connections, with the same ownership, access policy, catalog,
+  provider scope, validation and pacing checks. It does not imply `proxy:read`.
+  The owner approval screen names the permanent deletion permission. Existing
+  sessions and omitted scope stay read-only; administrative scopes are rejected.
 
 Default scope is `connections:read proxy:read`. Approval selects 1–20
 connections currently owned by the authenticated owner. This pilot does not
 issue device grants for connections merely delegated to an app. Connections
 retain their existing canonical Atomic owner identity. A device client is a
 restricted session of that owner, not a new owner/account/cache namespace.
-The bearer path does not grant connection deletion, delegation/runtime
-changes, webhook administration or provider connect/redeem authority.
+The default bearer scopes do not grant connection deletion, delegation/runtime
+changes, webhook administration or provider connect/redeem authority. Additional
+explicit management/notification scopes in the current source are described below.
 
 ### Device grant and polling
 
@@ -305,3 +319,15 @@ test harness and its Chromium browser, then set `DEVICE_BROWSER_TEST=1`,
 needed, `PLAYWRIGHT_BROWSERS_PATH` before the same `cargo test device::` command.
 This test starts the actual loopback proxy, an invented provider and the owner
 bridge, and approves through Chromium before probing and revoking the session.
+
+### Additional opt-in management and notification scopes
+
+The source adds `connections:manage`, `sessions:manage`, and
+`notifications:consume`, described in [MANAGEMENT.md](MANAGEMENT.md).
+`connections:manage` permits selected-connection delegation/disconnection,
+`sessions:manage` permits listing/revoking this owner's client sessions, and
+`notifications:consume` permits selected-connection webhook consumer routes
+only on notification-only deployments. These are not granted by default or by
+refresh. None implies provider read/write authority. The standalone/reusable
+management view never receives credentials. A source change does not establish
+that a published or deployed proxy supports these additions.

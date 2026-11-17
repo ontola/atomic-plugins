@@ -1,6 +1,6 @@
 [package]
 name = "atomic-integration-proxy"
-version = "0.4.0"
+version = "0.4.3"
 edition = "2021"
 description = "OAuth/catalog integration proxy (pinned OpenAPI catalog, connections owned by Atomic agents, Atomic v2 request signatures, delegations and frame capabilities) used by Atomic Server and LocalThought"
 license = "MIT"
@@ -17,14 +17,18 @@ categories = ["web-programming::http-server", "authentication"]
 include = [
     "/src/**/*.rs",
     "/static/index.html",
-    "/static/logo.png",
+    "/static/logo.svg",
     "/static/device-approval.mjs",
+    "/static/management.html",
+    "/static/management.mjs",
+    "/static/management.css",
     "/Cargo.toml",
     "/Cargo.lock",
     "/README.md",
     "/CHANGELOG.md",
     "/SECURITY.md",
     "/DEVICE_AUTH.md",
+    "/MANAGEMENT.md",
     "/LICENSE",
 ]
 
@@ -58,6 +62,7 @@ postgres-native-tls = "0.5"
 native-tls = "0.2"
 chacha20poly1305 = "0.10"
 ed25519-dalek = "2"
+hpke = { version = "0.13", default-features = false, features = ["x25519", "alloc"] }
 
 [profile.release]
 opt-level = 3
@@ -66,3 +71,4 @@ lto = true
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 futures-util = { version = "0.3", default-features = false }
+rand_core = { version = "0.9", features = ["os_rng"] }

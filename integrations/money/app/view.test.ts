@@ -138,6 +138,59 @@ describe('Money view: the shared class (#177)', () => {
   });
 });
 
+describe('Money view: duplicate rows (#587)', () => {
+  it('lists the copy above the ledger, sums the transaction once, and removes it only on press', async () => {
+    const one = seedRow('-1.50', '2026-09-22', { 'bank-reference': 'R1' });
+    const store = fakeStore({
+      data: 'own',
+      rows: [one, { ...one, 'money-note': '' }, seedRow('-2', '2026-09-22')],
+    });
+    const root = await open(store);
+    const region = root.querySelector(
+      '[role="region"][aria-label="Duplicate rows"]',
+    )!;
+    expect(text(region)).toContain('1 row is a duplicate');
+    expect(text(region)).toContain('counted once in every balance and total');
+    expect(text(region.querySelector('li'))).toContain('Copy of Payment -1.50');
+    expect(root.querySelectorAll('.m-row')).toHaveLength(2);
+    expect(text(root.querySelector('.m-seg .m-net'))).toBe('−€3.50net');
+    expect(store.destroyed).toEqual([]);
+    const remove = [...region.querySelectorAll('button')].find(
+      b => text(b) === 'Remove duplicate',
+    )!;
+    remove.click();
+    for (let i = 0; i < 6; i++) await settle();
+    expect(store.destroyed).toHaveLength(1);
+    const after = root.querySelector(
+      '[role="region"][aria-label="Duplicate rows"]',
+    )!;
+    expect(text(after)).toBe('Removed 1 duplicate row.');
+    expect(text(root.querySelector('.m-seg .m-net'))).toBe('−€3.50net');
+  });
+});
+
+describe('Money view: duplicate rows on a table that is not the app’s own (#587)', () => {
+  it('lists the copy and says to remove it in the table itself; no button', async () => {
+    const one = seedRow('-1.50', '2026-09-22', { 'bank-reference': 'R1' });
+    const store = fakeStore({
+      data: 'shared',
+      access: 'granted',
+      rows: [one, one],
+    });
+    const root = await open(store);
+    const region = root.querySelector(
+      '[role="region"][aria-label="Duplicate rows"]',
+    )!;
+    expect(text(region)).toContain('1 row is a duplicate');
+    expect(text(region)).toContain(
+      'Apps may not delete rows in this table: remove the copies in the table itself.',
+    );
+    expect(
+      [...region.querySelectorAll('button')].map(b => text(b)),
+    ).not.toContain('Remove duplicate');
+  });
+});
+
 describe('Money view: incomplete rows (#177)', () => {
   it('lists a row missing its amount above the ledger, with Open row, and leaves it out of the strip', async () => {
     const store = fakeStore({

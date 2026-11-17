@@ -4,9 +4,9 @@ name: Syncables CI
 # (see .github/workflows/syncables-publish.yml for the other half of that
 # migration). It is a self-contained TypeScript package with its own
 # package.json/package-lock.json and does not depend on an atomic-server
-# checkout the way integrations/ does (see ci.yml), so this workflow never
-# touches atomic-server and skips its work entirely when a change doesn't
-# touch syncables/.
+# checkout the way integrations/ does (see ci.yml). Its optional native peer
+# pins atomic_lib as a Cargo dependency and has a separate compatibility job.
+# Skip this workflow's implementation checks when syncables/ is unchanged.
 #
 # Do not confuse this with integrations/localthought/syncables/, an
 # unrelated vendored Rust port ("syncables-rs") of the same upstream
@@ -98,3 +98,48 @@ jobs:
         run: |
           npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP"
           node scripts/daemon-smoke.mjs "$RUNNER_TEMP"/syncables-*.tgz
+
+  atomic-peer:
+    name: Native Atomic peer compatibility
+    needs: changes
+    if: needs.changes.outputs.syncables == 'true'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: syncables_test
+          POSTGRES_PASSWORD: syncables_test
+          POSTGRES_DB: syncables_cache_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U syncables_test"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      SYNCABLES_TEST_DATABASE_URL: postgresql://syncables_test:syncables_test@127.0.0.1:5432/syncables_cache_test
+    defaults:
+      run:
+        working-directory: syncables
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: syncables/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: syncables/native-atomic-peer
+      - run: cargo fmt --manifest-path native-atomic-peer/Cargo.toml -- --check
+      - run: cargo clippy --locked --manifest-path native-atomic-peer/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path native-atomic-peer/Cargo.toml
+      - run: cargo build --locked --manifest-path native-atomic-peer/Cargo.toml
+      - run: npm ci --no-audit
+      - name: PostgreSQL to native process acceptance
+        run: |
+          SYNCABLES_ATOMIC_PEER_BINARY="$PWD/native-atomic-peer/target/debug/syncables-atomic-peer" \
+            npx vitest run __tests__/unit/daemon/atomic-peer.test.ts __tests__/unit/daemon/atomic-tables.test.ts --config __tests__/vitest.config.ts

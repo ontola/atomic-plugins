@@ -77,10 +77,23 @@ async function main(): Promise<void> {
         'branches',
         'output',
         'source',
+        'peer-binary',
+        'peer-directory',
+        'signer-file',
+        'reader',
+        'peer-port',
+        'browser-port',
         'braid-port',
         'braid-origin',
+        'projection-contract',
+        'input',
+        'edit-id',
+        'created-id',
       ].map((key) => [key, { type: 'string' as const }]),
     );
+  options.write = { type: 'boolean' };
+  options.manage = { type: 'boolean' };
+  options.owned = { type: 'boolean' };
   options.help = { type: 'boolean' };
   options.archive = { type: 'boolean' };
   options.interactive = { type: 'boolean' };
@@ -94,6 +107,12 @@ async function main(): Promise<void> {
     process.stdout.write(HELP + DAEMON_HELP);
     return;
   }
+  if (positionals[0] === 'ui') {
+    if (positionals.length !== 1) throw new Error('Unexpected UI arguments');
+    const { browserCommand } = await import('../daemon/browser-command.js');
+    await browserCommand(values);
+    return;
+  }
   if (positionals[0] === 'braid') {
     if (positionals.length !== 1) throw new Error('Unexpected Braid arguments');
     const { braidCommand } = await import('../daemon/braid-command.js');
@@ -102,6 +121,14 @@ async function main(): Promise<void> {
   }
   if (
     [
+      'create',
+      'edit',
+      'delete',
+      'edits',
+      'send',
+      'cancel-edit',
+      'adopt-edit',
+      'keep-both',
       'login',
       'logout',
       'sync',
@@ -109,8 +136,10 @@ async function main(): Promise<void> {
       'migrate',
       'export',
       'daemon',
+      'atomic-peer',
       'status',
       'browse',
+      'file-duplicates',
       'resource',
       'history',
       'tag',

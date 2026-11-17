@@ -13,6 +13,7 @@ use super::cleanup::{CleanupError, HookDeleter};
 use super::metadata::{fill_path, Deliveries};
 use super::store::{AccessCheck, HookToDelete};
 use crate::proxy::ReceiverReply;
+use crate::security::ConnectionKey;
 use crate::AppState;
 
 /// The result of an access check.
@@ -46,10 +47,12 @@ pub fn parameters(json: &str) -> Option<BTreeMap<String, String>> {
     serde_json::from_str(json).ok()
 }
 
-/// Runs `source_kind`'s access check through `connection_id`.
+/// Runs `source_kind`'s access check through `connection_id`, whose
+/// credential `key` opens.
 pub async fn check_access(
     state: &AppState,
     connection_id: &str,
+    key: &ConnectionKey,
     platform: &str,
     deliveries: &Deliveries,
     source_kind: &str,
@@ -64,9 +67,16 @@ pub async fn check_access(
     let Ok(path) = fill_path(&source.access_path, parameters) else {
         return Checked::Invalid("access parameters must fill the access path, one segment each");
     };
-    let reply =
-        crate::proxy::receiver_call(state, security, connection_id, platform, Method::GET, &path)
-            .await;
+    let reply = crate::proxy::receiver_call(
+        state,
+        security,
+        connection_id,
+        key,
+        platform,
+        Method::GET,
+        &path,
+    )
+    .await;
     classify(reply, source)
 }
 
@@ -90,7 +100,11 @@ fn classify(reply: ReceiverReply, source: &super::metadata::Source) -> Checked {
             | StatusCode::GONE,
             _,
         ) => Checked::Failed,
-        ReceiverReply::Answered(..) | ReceiverReply::Unreachable => Checked::Unavailable,
+        // A key that does not open the connection says nothing about the
+        // provider's answer; callers check the key before they get here.
+        ReceiverReply::Answered(..)
+        | ReceiverReply::Unreachable
+        | ReceiverReply::Refused("connection-key") => Checked::Unavailable,
         ReceiverReply::Refused("unknown-connection" | "platform-mismatch")
         | ReceiverReply::RefreshRefused => Checked::Failed,
         ReceiverReply::Refused(reason) => Checked::Invalid(reason),
@@ -113,6 +127,7 @@ pub fn endpoint_url(state: &AppState, endpoint_id: &str) -> String {
 async fn find_hook(
     state: &AppState,
     connection: &str,
+    key: &ConnectionKey,
     hook: &HookToDelete,
     dedicated: &super::metadata::Dedicated,
     values: &BTreeMap<String, String>,
@@ -129,6 +144,7 @@ async fn find_hook(
         state,
         security,
         connection,
+        key,
         &hook.platform,
         Method::GET,
         &path,
@@ -141,6 +157,9 @@ async fn find_hook(
         }
         ReceiverReply::Answered(..) | ReceiverReply::Unreachable => {
             return Err(CleanupError::Retry("unavailable"))
+        }
+        ReceiverReply::Refused("connection-key") => {
+            return Err(CleanupError::Retry("connection-key"))
         }
         ReceiverReply::Refused(_) => return Err(CleanupError::Permanent("not-allowlisted")),
         ReceiverReply::RefreshRefused => return Err(CleanupError::Permanent("refresh-refused")),
@@ -171,16 +190,21 @@ async fn find_hook(
 
 /// Deletes dedicated hooks through their managing connection, after
 /// re-running its access check with the hook's recorded parameters and
-/// finding the hook's bound key (Webhook Deliveries §4.5.2).
+/// finding the hook's bound key (Webhook Deliveries §4.5.2). It holds the
+/// key of one connection, from the request that started it, and only acts
+/// on hooks that connection manages.
 #[derive(Clone)]
 pub struct ProviderHookDeleter {
     pub state: AppState,
+    pub connection_id: String,
+    pub key: ConnectionKey,
 }
 
 impl HookDeleter for ProviderHookDeleter {
     fn delete(&self, hook: &HookToDelete) -> impl Future<Output = Result<(), CleanupError>> + Send {
         let state = self.state.clone();
         let hook = hook.clone();
+        let (managed, key) = (self.connection_id.clone(), self.key.clone());
         async move {
             tracing::debug!(hook = %hook.hook_id, platform = %hook.platform, "deleting a dedicated webhook hook");
             let deliveries = deliveries(&state, &hook.platform)
@@ -196,11 +220,17 @@ impl HookDeleter for ProviderHookDeleter {
                 .management_connection_id
                 .as_deref()
                 .ok_or(CleanupError::Permanent("no-managing-connection"))?;
+            if connection != managed {
+                // Not this key's connection: leave the job for its own.
+                return Err(CleanupError::Retry("connection-key"));
+            }
+            let key = &key;
             let mut values = parameters(&hook.access_parameters)
                 .ok_or(CleanupError::Permanent("invalid-parameters"))?;
             match check_access(
                 &state,
                 connection,
+                key,
                 &hook.platform,
                 &deliveries,
                 &hook.source_kind,
@@ -219,11 +249,13 @@ impl HookDeleter for ProviderHookDeleter {
                 Some(id) => id,
                 // Provisioning ended before the provider's answer: find the
                 // hook by the endpoint URL it was created with.
-                None => match find_hook(&state, connection, &hook, dedicated, &values).await? {
-                    Some(id) => id,
-                    // Not there: nothing was created, nothing to delete.
-                    None => return Ok(()),
-                },
+                None => {
+                    match find_hook(&state, connection, key, &hook, dedicated, &values).await? {
+                        Some(id) => id,
+                        // Not there: nothing was created, nothing to delete.
+                        None => return Ok(()),
+                    }
+                }
             };
             values.insert(dedicated.hook_id_parameter.clone(), provider_hook_id);
             let path = fill_path(&dedicated.delete.path, &values)
@@ -239,6 +271,7 @@ impl HookDeleter for ProviderHookDeleter {
                 &state,
                 security,
                 connection,
+                key,
                 &hook.platform,
                 method,
                 &path,
@@ -257,6 +290,9 @@ impl HookDeleter for ProviderHookDeleter {
                 }
                 ReceiverReply::Answered(..) | ReceiverReply::Unreachable => {
                     Err(CleanupError::Retry("unavailable"))
+                }
+                ReceiverReply::Refused("connection-key") => {
+                    Err(CleanupError::Retry("connection-key"))
                 }
                 ReceiverReply::Refused(_) => Err(CleanupError::Permanent("not-allowlisted")),
                 ReceiverReply::RefreshRefused => Err(CleanupError::Permanent("refresh-refused")),

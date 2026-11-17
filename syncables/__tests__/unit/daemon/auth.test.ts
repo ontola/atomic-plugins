@@ -93,6 +93,34 @@ describe.skipIf(!database)(
       expect(h.value()?.refreshToken).toBe('new-refresh');
       expect(await a.authorizationContext()).toBe('test-session');
     });
+    it('preserves an approved write scope across refresh and rejects escalation of an old read session', async () => {
+      for (const write of [false, true]) {
+        const h = setup();
+        if (write)
+          await h.vault.set({
+            ...h.value()!,
+            scope: 'connections:read proxy:read proxy:write',
+          });
+        const fetchImpl = vi.fn<typeof fetch>(async () =>
+          Response.json({
+            access_token: 'invented-access',
+            refresh_token: 'invented-refresh',
+            token_type: 'Bearer',
+            expires_in: 600,
+            session_id: 'test-session',
+            owner: h.config.owner,
+            scope: 'connections:read proxy:read proxy:write',
+          }),
+        );
+        const auth = new DaemonAuth(h.config, archive, h.vault, fetchImpl);
+        if (write)
+          expect((await auth.session()).scope).toContain('proxy:write');
+        else {
+          await expect(auth.session()).rejects.toThrow('Login required');
+          expect(h.value()).toBeUndefined();
+        }
+      }
+    });
     it('clears an uncertain refresh and never retries a possibly consumed token', async () => {
       const h = setup();
       const fetchImpl = vi.fn<typeof fetch>(async () => {

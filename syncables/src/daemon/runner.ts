@@ -1,3 +1,6 @@
+import { notificationConsumer, NOTIFICATION_SCHEMA } from './notifications.js';
+import type { InboxConsumer } from '../inbox/consumer.js';
+import { isSyncAuthError } from './sync-errors.js';
 import type { SnapshotStore } from './snapshot-store.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
@@ -9,6 +12,11 @@ import {
   type Session,
 } from '../cli/auth.js';
 import { upstreamOf } from '../read/model.js';
+import { syncFileInventory } from './file-inventory.js';
+import {
+  InventoryCredentialError,
+  InventoryReadError,
+} from './file-inventory-sources.js';
 import {
   syncCollection,
   prepareCollection,
@@ -30,6 +38,10 @@ export interface JobStatus {
   state: string;
   revision: string | null;
   last_error: string | null;
+  last_attempt_at?: Date | null;
+  last_success_at?: Date | null;
+  last_failure_at?: Date | null;
+  error_kind?: 'auth' | 'sync' | 'checkout' | null;
   next_due: Date;
   generation: string;
   completed: string;
@@ -42,6 +54,11 @@ CREATE TABLE IF NOT EXISTS syncables_cache.daemon_jobs (
  failures integer NOT NULL DEFAULT 0, next_due timestamptz NOT NULL DEFAULT clock_timestamp(),
  PRIMARY KEY(owner,alias)
 );
+ALTER TABLE syncables_cache.daemon_jobs
+ ADD COLUMN IF NOT EXISTS last_attempt_at timestamptz,
+ ADD COLUMN IF NOT EXISTS last_success_at timestamptz,
+ ADD COLUMN IF NOT EXISTS last_failure_at timestamptz,
+ ADD COLUMN IF NOT EXISTS error_kind text;
 CREATE TABLE IF NOT EXISTS syncables_cache.daemon_inbox (
  owner text NOT NULL, alias text NOT NULL, delivery text NOT NULL,
  body bytea NOT NULL, received_at timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -55,13 +72,18 @@ export async function jobStatuses(
   await archive.pool.query(JOB_SCHEMA);
   return (
     await archive.pool.query(
-      'SELECT alias,scope,state,revision,last_error,next_due,generation,completed FROM syncables_cache.daemon_jobs WHERE owner=$1 ORDER BY alias',
+      'SELECT alias,scope,state,revision,last_error,last_attempt_at,last_success_at,last_failure_at,error_kind,next_due,generation,completed FROM syncables_cache.daemon_jobs WHERE owner=$1 ORDER BY alias',
       [owner],
     )
   ).rows as JobStatus[];
 }
 export class DaemonRunner {
   private prepared: PreparedCollection[] = [];
+  private notifications: {
+    alias: string;
+    consumer: InboxConsumer;
+    next: number;
+  }[] = [];
   constructor(
     readonly config: DaemonConfig,
     readonly archive: PostgresArchive,
@@ -83,10 +105,56 @@ export class DaemonRunner {
       await this.archive.pool.query(
         `INSERT INTO syncables_cache.daemon_jobs(owner,alias,scope) VALUES($1,$2,$3)
       ON CONFLICT(owner,alias) DO UPDATE SET scope=EXCLUDED.scope,
+      last_attempt_at=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.last_attempt_at END,
+      last_success_at=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.last_success_at END,
+      last_failure_at=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.last_failure_at END,
+      last_error=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.last_error END,
+      error_kind=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.error_kind END,
+      revision=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN NULL ELSE daemon_jobs.revision END,
+      state=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN 'pending' ELSE daemon_jobs.state END,
       generation=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN daemon_jobs.generation+1 ELSE daemon_jobs.generation END,
       next_due=CASE WHEN daemon_jobs.scope<>EXCLUDED.scope THEN clock_timestamp() ELSE daemon_jobs.next_due END`,
         [this.config.owner, alias(p.source), p.scope],
       );
+    await this.archive.pool.query(NOTIFICATION_SCHEMA);
+    this.notifications = this.config.collections
+      .filter((c) => c.notifications)
+      .map((collection) => ({
+        alias: alias(collection),
+        next: 0,
+        consumer: notificationConsumer({
+          archive: this.archive,
+          owner: this.config.owner,
+          issuer: this.config.issuer,
+          collection,
+          session: () => this.auth.session(),
+          fetch: this.fetchImpl,
+          trigger: (delivery) =>
+            this.trigger(
+              alias(collection),
+              delivery,
+              Buffer.from('{"notification":true}'),
+            ),
+          reconcile: async () => {
+            const results = await this.sync(
+              [alias(collection)],
+              undefined,
+              false,
+              true,
+            );
+            if (
+              !results.some(
+                (result) =>
+                  result.alias === alias(collection) &&
+                  result.result &&
+                  !result.error,
+              )
+            )
+              return 'pending';
+            return undefined;
+          },
+        }),
+      }));
   }
   async trigger(
     name: string,
@@ -127,10 +195,12 @@ export class DaemonRunner {
     selectors: string[] = [],
     signal?: AbortSignal,
     dueOnly = false,
+    forceFull = false,
   ): Promise<
     {
       alias: string;
       result?: CollectionSyncResult;
+      pending?: true;
       error?: string;
       checkout?: CheckoutResult;
     }[]
@@ -141,6 +211,7 @@ export class DaemonRunner {
     const results: {
       alias: string;
       result?: CollectionSyncResult;
+      pending?: true;
       error?: string;
       checkout?: CheckoutResult;
     }[] = [];
@@ -174,58 +245,40 @@ export class DaemonRunner {
         ).rows[0];
         if (!job || (dueOnly && !job.due)) continue;
         await client.query(
-          "UPDATE syncables_cache.daemon_jobs SET state='working' WHERE owner=$1 AND alias=$2",
+          "UPDATE syncables_cache.daemon_jobs SET state='working',last_attempt_at=clock_timestamp() WHERE owner=$1 AND alias=$2",
           [this.config.owner, name],
         );
         try {
-          await this.store.checkout(p.scope, name);
-          if (await upgradeSourceClasses(p, this.store))
+          if (!p.source.fileInventory) {
             await this.store.checkout(p.scope, name);
-          const session = await this.auth.session();
-          const connections = await listConnections(session, this.fetchImpl);
-          if (connections.owner !== this.config.owner)
-            throw new Error('Login required: owner mismatch');
-          const connection = connections.connections.find(
-            (c) =>
-              c.connection_id === p.source.connection &&
-              c.platform === p.source.platform,
-          );
-          if (!connection)
-            throw new Error(
-              'Login required: collection connection is not approved',
+            if (await upgradeSourceClasses(p, this.store))
+              await this.store.checkout(p.scope, name);
+          }
+          const result = p.source.fileInventory
+            ? await syncFileInventory({
+                prepared: p,
+                owner: this.config.owner,
+                archive: this.archive,
+                store: this.store,
+                fetch: this.fetchImpl,
+                signal: controller.signal,
+                trigger: dueOnly ? 'scheduled' : 'manual',
+                ...(this.message === undefined
+                  ? {}
+                  : { message: this.message }),
+              })
+            : await this.syncOpenApi(p, controller.signal, dueOnly, forceFull);
+          if (!result) {
+            await client.query(
+              `UPDATE syncables_cache.daemon_jobs SET state='pending',last_error=NULL,error_kind=NULL,failures=0,
+               next_due=clock_timestamp()+interval '1 second' WHERE owner=$1 AND alias=$2`,
+              [this.config.owner, name],
             );
-          const authorizationContext = await this.auth.authorizationContext();
-          const upstream = upstreamOf(p.document);
-          const result = await syncCollection({
-            prepared: p,
-            archive: this.archive,
-            store: this.store,
-            auth: {
-              owner: this.config.owner,
-              connection: connection.connection_id,
-              authorizationContext,
-            },
-            upstream: async (input) => {
-              if (input.url.origin !== upstream.origin)
-                throw new Error('Source request escaped its declared API');
-              const fresh = await this.auth.session();
-              const request = proxyRequest(
-                fresh,
-                connection,
-                input.url.pathname + input.url.search,
-              );
-              return proxyReadTransport(
-                fresh,
-                connection,
-                this.fetchImpl,
-              )({ ...request, headers: input.headers });
-            },
-            signal: controller.signal,
-            trigger: dueOnly ? 'scheduled' : 'manual',
-            ...(this.message === undefined ? {} : { message: this.message }),
-          });
+            results.push({ alias: name, pending: true });
+            continue;
+          }
           await client.query(
-            `UPDATE syncables_cache.daemon_jobs SET completed=$3,revision=$4,last_error=NULL,failures=0,
+            `UPDATE syncables_cache.daemon_jobs SET completed=$3,revision=$4,last_error=NULL,error_kind=NULL,last_success_at=clock_timestamp(),failures=0,
             state=CASE WHEN generation=$3 THEN 'idle' ELSE 'pending' END,
             next_due=CASE WHEN generation<>$3 THEN clock_timestamp() WHEN $5=0 THEN 'infinity'::timestamptz ELSE clock_timestamp()+$5*interval '1 second' END
             WHERE owner=$1 AND alias=$2`,
@@ -238,7 +291,9 @@ export class DaemonRunner {
             ],
           );
           try {
-            const checkout = await this.store.checkout(p.scope, name);
+            const checkout = p.source.fileInventory
+              ? undefined
+              : await this.store.checkout(p.scope, name);
             results.push({
               alias: name,
               result,
@@ -250,19 +305,22 @@ export class DaemonRunner {
                 ? error.message
                 : 'Snapshot saved, but its working folder could not be updated; run checkout to retry';
             await client.query(
-              "UPDATE syncables_cache.daemon_jobs SET state='checkout-blocked',last_error=$3 WHERE owner=$1 AND alias=$2",
+              "UPDATE syncables_cache.daemon_jobs SET state='checkout-blocked',last_error=$3,error_kind='checkout',last_failure_at=clock_timestamp() WHERE owner=$1 AND alias=$2",
               [this.config.owner, name, message],
             );
             results.push({ alias: name, result, error: message });
           }
         } catch (error) {
           const message =
-            error instanceof CheckoutBlockedError
+            error instanceof CheckoutBlockedError ||
+            error instanceof InventoryReadError ||
+            error instanceof InventoryCredentialError
               ? error.message
-              : error instanceof Error &&
-                  /login|401|403|connection.*refused/i.test(error.message)
+              : isSyncAuthError(error)
                 ? 'Authorization needs attention; run login or check approved connections'
-                : 'Sync did not finish; next attempt resumes from the published snapshot';
+                : p.source.fileInventory
+                  ? 'File inventory did not finish. The next attempt resumes from its last saved page.'
+                  : 'Sync did not finish; next attempt resumes from the published snapshot';
           const retry = Math.min(
             300,
             5 * 2 ** Math.min(Number(job.failures), 6),
@@ -277,8 +335,19 @@ export class DaemonRunner {
                   ),
                 ).toISOString();
           await client.query(
-            "UPDATE syncables_cache.daemon_jobs SET state='failed',last_error=$3,failures=failures+1,next_due=$4::timestamptz WHERE owner=$1 AND alias=$2",
-            [this.config.owner, name, message, nextDue],
+            "UPDATE syncables_cache.daemon_jobs SET state='failed',last_error=$3,failures=failures+1,next_due=$4::timestamptz,last_failure_at=clock_timestamp(),error_kind=$5 WHERE owner=$1 AND alias=$2",
+            [
+              this.config.owner,
+              name,
+              message,
+              nextDue,
+              isSyncAuthError(error) ||
+              error instanceof InventoryCredentialError
+                ? 'auth'
+                : error instanceof CheckoutBlockedError
+                  ? 'checkout'
+                  : 'sync',
+            ],
           );
           results.push({ alias: name, error: message });
         }
@@ -296,6 +365,55 @@ export class DaemonRunner {
       }
     }
     return results;
+  }
+  private async syncOpenApi(
+    p: PreparedCollection,
+    signal: AbortSignal,
+    dueOnly: boolean,
+    forceFull: boolean,
+  ): Promise<CollectionSyncResult> {
+    const session = await this.auth.session();
+    const connections = await listConnections(session, this.fetchImpl);
+    if (connections.owner !== this.config.owner)
+      throw new Error('Login required: owner mismatch');
+    const connection = connections.connections.find(
+      (c) =>
+        c.connection_id === p.source.connection &&
+        c.platform === p.source.platform,
+    );
+    if (!connection)
+      throw new Error('Login required: collection connection is not approved');
+    const authorizationContext = await this.auth.authorizationContext();
+    const upstream = upstreamOf(p.document);
+    return syncCollection({
+      prepared: p,
+      forceFull,
+      archive: this.archive,
+      store: this.store,
+      auth: {
+        owner: this.config.owner,
+        connection: connection.connection_id,
+        authorizationContext,
+      },
+      upstream: async (input) => {
+        if (input.url.origin !== upstream.origin)
+          throw new Error('Source request escaped its declared API');
+        const fresh = await this.auth.session();
+        const request = proxyRequest(
+          fresh,
+          connection,
+          input.url.pathname + input.url.search,
+        );
+        return proxyReadTransport(
+          fresh,
+          connection,
+          this.fetchImpl,
+        )({ ...request, headers: input.headers });
+      },
+      signal,
+      trigger: dueOnly ? 'scheduled' : 'manual',
+      ...(this.message === undefined ? {} : { message: this.message }),
+    });
   }
   private async webhook(token: string): Promise<Server | undefined> {
     if (!this.config.webhookPort) return undefined;
@@ -382,6 +500,31 @@ export class DaemonRunner {
       });
       while (!controller.signal.aborted) {
         try {
+          const names = new Set(
+            selectedCollections(this.config, selectors).map(alias),
+          );
+          for (const notification of this.notifications) {
+            if (
+              !names.has(notification.alias) ||
+              notification.next > Date.now() ||
+              controller.signal.aborted
+            )
+              continue;
+            notification.next = Date.now() + 5000;
+            try {
+              const result = await notification.consumer.step();
+              if (result.kind === 'backoff')
+                notification.next =
+                  Date.now() + Math.max(5, result.seconds) * 1000;
+            } catch {
+              report({
+                notifications: notification.alias,
+                state: 'unavailable',
+                error:
+                  'Could not receive IAP change notifications; check approval and receiver configuration.',
+              });
+            }
+          }
           for (const result of await this.sync(
             selectors,
             controller.signal,

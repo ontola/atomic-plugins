@@ -76,10 +76,12 @@ class TodoistCompletenessV2Tests(unittest.TestCase):
         self.assertEqual(classify(200, {"id": "p1", "is_archived": True}), "present")
         self.assertEqual(classify(403), "unknown")
 
-    def test_no_dated_catalog_selects_it(self):
+    def test_first_dated_catalog_selection(self):
+        first = "2026-10-19-newer-revisions.json"
         for catalog in sorted((ROOT / "catalog").glob("*.json")):
-            with self.subTest(catalog=catalog.name):
-                self.assertNotIn(V2, catalog.read_text(encoding="utf-8"))
+            if catalog.name <= first:
+                with self.subTest(catalog=catalog.name):
+                    self.assertEqual(V2 in catalog.read_text(encoding="utf-8"), catalog.name == first)
 
 
 if __name__ == "__main__":

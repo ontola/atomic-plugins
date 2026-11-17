@@ -14,9 +14,10 @@
  * compared the file with every row of the table by identity and fingerprint,
  * so a reimport writes nothing and a changed booking never reaches here. Not
  * covered: two copies of the app importing the same file at the same moment
- * can both write a row (the importer's server-side `localId` uniqueness has
- * no equivalent for app writes). Amounts, balances and dates stay the exact
- * strings the readers produced.
+ * can both write a row (the importer's `localId` is unique per importer run
+ * only, and app writes have no equivalent); the reader groups such rows as
+ * duplicates (`duplicates.ts`, #587). Amounts, balances and dates stay the
+ * exact strings the readers produced.
  */
 import type { Entry } from '../identity.js';
 import type { Statement } from '../parser.js';

@@ -341,6 +341,32 @@ describe.skipIf(!database)(
       ).rejects.toThrow('unsafe numeric');
       expect(await h.store.head(h.prepared.scope)).toBe(first.revision);
     });
+    it('reconciles a notification gap with a full bootstrap instead of its saved delta token', async () => {
+      const h = await setup(true);
+      await h.sync(async () =>
+        response('{"items":[{"id":"old"}],"checkpoint":"old-token"}'),
+      );
+      const fresh = await syncCollection({
+        prepared: h.prepared,
+        archive,
+        store: h.store,
+        auth: {
+          owner: h.config.owner,
+          connection: 'test-connection',
+          authorizationContext: 'grant-1',
+        },
+        forceFull: true,
+        upstream: async ({ url }) => {
+          expect(url.searchParams.has('since')).toBe(false);
+          return response('{"items":[{"id":"new"}],"checkpoint":"new-token"}');
+        },
+      });
+      expect(fresh.strategy).toBe('bootstrap');
+      expect(fresh.records).toBe(1);
+      expect(await h.store.context(h.prepared.scope)).toMatchObject({
+        syncToken: 'new-token',
+      });
+    });
     it('publishes terminal incremental tokens with data, applies tombstones, and bootstraps after 410 or a new grant', async () => {
       const h = await setup(true);
       const initial = await h.sync(async () =>
@@ -375,6 +401,46 @@ describe.skipIf(!database)(
         return response('{"items":[],"checkpoint":"new-grant"}');
       }, 'grant-2');
     });
+    it('publishes a continuation checkpoint atomically with its records', async () => {
+      const h = await setup();
+      const doc = h.prepared.document;
+      doc.paths['/entries/continue'] = {
+        post: { operationId: 'continueEntries', responses: {} },
+      };
+      doc.components!.paginationSchemes!.pages = {
+        type: 'pageToken',
+        autoDetect: false,
+        'x-syncables-incremental': true,
+        continuation: {
+          operationId: 'continueEntries',
+          request: { bodyFields: { cursor: { role: 'cursor' } } },
+          hasMoreField: 'more',
+        },
+        response: {
+          envelope: { itemsField: 'items' },
+          bodyFields: { cursor: { role: 'nextCursor' } },
+        },
+      };
+      const initial = await h.sync(async ({ url }) => {
+        expect(url.pathname).toBe('/entries');
+        return response('{"items":[{"id":"a"}],"more":false,"cursor":"t1"}');
+      });
+      expect(initial).toMatchObject({ strategy: 'bootstrap', records: 1 });
+      await expect(
+        h.sync(async () => response('{"items":[],"more":false}')),
+      ).rejects.toThrow('nonempty cursor');
+      expect(await h.store.head(h.prepared.scope)).toBe(initial.revision);
+      const delta = await h.sync(async ({ url, method, body }) => {
+        expect(url.pathname).toBe('/entries/continue');
+        expect(method).toBe('POST');
+        expect(JSON.parse(body!)).toEqual({ cursor: 't1' });
+        return response('{"items":[{"id":"b"}],"more":false,"cursor":"t2"}');
+      });
+      expect(delta).toMatchObject({ strategy: 'delta', records: 2 });
+      expect(await h.store.context(h.prepared.scope)).toMatchObject({
+        syncToken: 't2',
+      });
+    });
     it('retains an exhausted provider retry deadline and never retries a declared blocked response', async () => {
       const h = await setup();
       const start = Date.now();
@@ -394,6 +460,78 @@ describe.skipIf(!database)(
       const transport = vi.fn<Transport>(async () => response('', 403));
       await expect(h.sync(transport)).rejects.toMatchObject({ blocked: true });
       expect(transport).toHaveBeenCalledTimes(1);
+    });
+    it('records attempts, unchanged successful syncs and distinct failures, preserving success until scope changes', async () => {
+      const h = await setup();
+      let discoveryStatus = 200;
+      const runner = new DaemonRunner(
+        h.config,
+        archive,
+        h.store,
+        {
+          session: async () => ({
+            issuer: h.config.issuer,
+            accessToken: 'invented',
+          }),
+          authorizationContext: async () => 'invented-grant',
+        },
+        async (input) =>
+          String(input).endsWith('/connections')
+            ? Response.json(
+                {
+                  owner: h.config.owner,
+                  connections: [
+                    { connection_id: 'test-connection', platform: 'example' },
+                  ],
+                },
+                { status: discoveryStatus },
+              )
+            : Response.json({ items: [{ id: 'unchanged' }] }),
+      );
+      await runner.initialize();
+      expect((await runner.sync())[0].result).toBeDefined();
+      const first = (await jobStatuses(archive, h.config.owner))[0];
+      expect(first.last_attempt_at).toBeInstanceOf(Date);
+      expect(first.last_success_at).toBeInstanceOf(Date);
+      await archive.pool.query(
+        "UPDATE syncables_cache.daemon_jobs SET last_success_at='2001-01-01' WHERE owner=$1",
+        [h.config.owner],
+      );
+      expect((await runner.sync())[0].result).toBeDefined();
+      const success = (await jobStatuses(archive, h.config.owner))[0];
+      expect(success.last_success_at!.getTime()).toBeGreaterThan(
+        new Date('2001-01-01').getTime(),
+      );
+      discoveryStatus = 500;
+      await runner.sync();
+      const failed = (await jobStatuses(archive, h.config.owner))[0];
+      expect(failed.error_kind).toBe('sync');
+      expect(failed.last_failure_at).toBeInstanceOf(Date);
+      expect(failed.last_success_at).toEqual(success.last_success_at);
+      discoveryStatus = 401;
+      await runner.sync();
+      expect((await jobStatuses(archive, h.config.owner))[0].error_kind).toBe(
+        'auth',
+      );
+      discoveryStatus = 200;
+      await runner.sync();
+      const recovered = (await jobStatuses(archive, h.config.owner))[0];
+      expect(recovered.error_kind).toBeNull();
+      expect(recovered.last_error).toBeNull();
+      await runner.initialize();
+      expect(
+        (await jobStatuses(archive, h.config.owner))[0].last_success_at,
+      ).toEqual(recovered.last_success_at);
+      h.config.collections[0].query = { filter: 'changed' };
+      await runner.initialize();
+      expect((await jobStatuses(archive, h.config.owner))[0]).toMatchObject({
+        state: 'pending',
+        revision: null,
+        last_attempt_at: null,
+        last_success_at: null,
+        last_failure_at: null,
+        error_kind: null,
+      });
     });
     it('deduplicates inbox delivery across restart, retains a hint arriving during a fetch, and serializes competing readers', async () => {
       const h = await setup();

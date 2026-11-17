@@ -754,6 +754,18 @@ function parseCamt053(text) {
 }
 
 // integrations/money/identity.ts
+function contentFingerprint(format, statement, row) {
+  return `${format}-content:` + JSON.stringify([
+    statement.account,
+    statement.currency,
+    row.date,
+    row.bookingDate,
+    row.amount,
+    row.code,
+    row.reference,
+    row.description
+  ]);
+}
 function entries(format, statements) {
   const out = [];
   const seen = /* @__PURE__ */ new Map();
@@ -766,16 +778,7 @@ function entries(format, statements) {
       statement.closing
     ]);
     for (const [index, row] of statement.transactions.entries()) {
-      const fingerprint = `${format}-content:` + JSON.stringify([
-        statement.account,
-        statement.currency,
-        row.date,
-        row.bookingDate,
-        row.amount,
-        row.code,
-        row.reference,
-        row.description
-      ]);
+      const fingerprint = contentFingerprint(format, statement, row);
       const reference = row.bankReference && row.bankReference !== "NONREF" ? row.bankReference : "";
       const identity = JSON.stringify([
         format,
@@ -975,7 +978,7 @@ var manifest = {
   schemaVersion: 2,
   name: "bank-statements",
   namespace: "atomic-plugins",
-  version: "0.4.5",
+  version: "0.4.6",
   description: "Import bank transactions from MT940 and camt.053 statement exports.",
   operations: [],
   secrets: [],

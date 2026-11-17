@@ -128,7 +128,9 @@ await archive.close();
 The caller supplies trusted owner/connection/grant context; local PostgreSQL
 credentials grant access to the private archive. This is application-level
 namespace isolation, not a public multi-tenant database endpoint. Replay has no
-upstream transport and accepts only the next matching bodyless GET.
+upstream transport. It accepts the next matching bodyless GET or Dropbox
+file-inventory listing POST. The Dropbox cursor body forms part of its
+request identity.
 
 ## Storage and recovery behavior
 

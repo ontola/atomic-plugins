@@ -1,8 +1,11 @@
-import { lstat, realpath } from 'node:fs/promises';
+import { EDIT_COMMANDS, editCommand } from './edit-commands.js';
+import { lstat, realpath, readFile } from 'node:fs/promises';
 import type { SnapshotStore } from './snapshot-store.js';
 import { resolve, dirname } from 'node:path';
 import { PostgresHistoryStore } from './history-store.js';
 import { importGitHistory, exportGitHistory } from './git-io.js';
+import { runAtomicTablesPeer } from './atomic-peer.js';
+import type { ProjectionContract } from './atomic-tables.js';
 import { localArchive } from '../cli/cache.js';
 import {
   loadDaemonConfig,
@@ -14,6 +17,8 @@ import {
 import { validateCommitMessage } from './git-store.js';
 import { DaemonAuth, KeychainCredentials } from './auth.js';
 import { DaemonRunner, jobStatuses } from './runner.js';
+import { inventoryFiles } from './file-inventory.js';
+import { findFileDuplicates, type FileLocation } from './file-duplicates.js';
 import {
   SOURCE_ID,
   SOURCE_JSON,
@@ -156,6 +161,8 @@ export async function daemonCommand(
   }
   if (string('subject') !== undefined && command !== 'history')
     throw new Error('--subject is supported by history only');
+  if (string('projection-contract') !== undefined && command !== 'atomic-peer')
+    throw new Error('--projection-contract is supported by atomic-peer only');
   const archive = localArchive();
   const store = new PostgresHistoryStore(
     archive.pool,
@@ -170,6 +177,99 @@ export async function daemonCommand(
   try {
     await archive.initialize();
     await store.initialize();
+    if (EDIT_COMMANDS.includes(command)) {
+      await editCommand(
+        config,
+        archive,
+        store,
+        positionals,
+        values,
+        controller.signal,
+      );
+      return;
+    }
+    if (command === 'file-duplicates') {
+      if (positionals.length !== 1)
+        throw new Error('Unexpected command arguments');
+      const selectors = string('collections')?.split(',') ?? [];
+      const locations: FileLocation[] = [];
+      const inventories: { collection: string; revision: string | null }[] = [];
+      for (const source of selectedCollections(config, selectors)) {
+        if (!source.fileInventory) {
+          if (selectors.length)
+            throw new Error(
+              'Select fileInventory collections for file-duplicates',
+            );
+          continue;
+        }
+        const { scope } = await prepareCollection(config.owner, source);
+        const revision = await store.head(scope);
+        inventories.push({
+          collection: alias(source),
+          revision: revision ?? null,
+        });
+        if (!revision) continue;
+        for (const file of inventoryFiles(
+          await store.list(scope, revision),
+        ).values())
+          locations.push({
+            collection: alias(source),
+            provider: source.fileInventory.provider,
+            file,
+          });
+      }
+      if (!inventories.length)
+        throw new Error('No fileInventory collections configured');
+      write({ inventories, ...findFileDuplicates(locations) });
+      return;
+    }
+    if (command === 'atomic-peer') {
+      if (positionals.length !== 1)
+        throw new Error('Unexpected command arguments');
+      if (string('collection') && string('collections'))
+        throw new Error('Use --collection or --collections, not both');
+      const selectors =
+        (string('collections') ?? string('collection'))?.split(',') ?? [];
+      const prepared = await Promise.all(
+        selectedCollections(config, selectors).map((source) =>
+          prepareCollection(config.owner, source),
+        ),
+      );
+      let projectionContracts: ProjectionContract[] = [];
+      if (string('projection-contract')) {
+        const contents = await readFile(
+          resolve(string('projection-contract')!),
+        );
+        if (contents.byteLength > 1024 * 1024)
+          throw new Error('Projection contract file exceeds 1 MiB');
+        const parsed: unknown = JSON.parse(contents.toString('utf8'));
+        // The projector validates the complete contract before native allocation.
+        projectionContracts = (
+          Array.isArray(parsed) ? parsed : [parsed]
+        ) as ProjectionContract[];
+      }
+      await runAtomicTablesPeer(
+        store,
+        {
+          binary: resolve(requireValue(string('peer-binary'), 'peer-binary')),
+          directory: resolve(
+            requireValue(string('peer-directory'), 'peer-directory'),
+          ),
+          signerFile: resolve(
+            requireValue(string('signer-file'), 'signer-file'),
+          ),
+          owner: config.owner,
+          collections: prepared,
+          readers: requireValue(string('reader'), 'reader').split(','),
+          port: Number(string('peer-port') ?? '9901'),
+          projectionContracts,
+          ...(string('at') ? { at: string('at')! } : {}),
+        },
+        controller.signal,
+        write,
+      );
+      return;
+    }
     if (command === 'migrate') {
       if (positionals.length !== 2 || positionals[1] !== 'git')
         throw new Error('Use migrate git --config FILE [--source ARCHIVE]');
@@ -390,7 +490,10 @@ export async function daemonCommand(
       values.interactive ? undefined : new KeychainCredentials(config),
     );
     if (command === 'login' || values.interactive) {
-      await auth.login((message) => process.stderr.write(message + '\n'));
+      await auth.login(
+        (message) => process.stderr.write(message + '\n'),
+        values.write === true,
+      );
       if (command === 'login') {
         write({ login: 'approved', persistent: !values.interactive });
         return;
