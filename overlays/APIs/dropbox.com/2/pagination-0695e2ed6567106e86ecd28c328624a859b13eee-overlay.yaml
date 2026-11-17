@@ -6,6 +6,21 @@ extends: https://raw.githubusercontent.com/ontola/openapi-directory/0695e2ed6567
 actions:
   - target: $.components
     update:
+      crudResources:
+        dropboxEntry:
+          description: File and folder metadata visible in the connected Dropbox namespace.
+          schema:
+            $ref: '#/components/schemas/Metadata'
+          collections:
+            files:
+              urlTemplate: /files/list_folder
+              listMethod: POST
+              listBody:
+                path: ''
+                recursive: true
+                include_deleted: false
+              envelope:
+                itemsField: entries
       paginationSchemes:
         folderListing:
           type: pageToken
