@@ -1,0 +1,44 @@
+overlay: 1.0.0
+info:
+  title: Dropbox folder listing continuation
+  version: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/0695e2ed6567106e86ecd28c328624a859b13eee/APIs/dropbox.com/2/openapi.yaml
+actions:
+  - target: $.components
+    update:
+      crudResources:
+        dropboxEntry:
+          description: File and folder metadata visible in the connected Dropbox namespace.
+          schema:
+            $ref: '#/components/schemas/Metadata'
+          collections:
+            files:
+              urlTemplate: /files/list_folder
+              listMethod: POST
+              listBody:
+                path: ''
+                recursive: true
+                include_deleted: false
+              envelope:
+                itemsField: entries
+      paginationSchemes:
+        folderListing:
+          type: pageToken
+          autoDetect: false
+          response:
+            envelope:
+              itemsField: entries
+            bodyFields:
+              cursor:
+                role: nextCursor
+          continuation:
+            operationId: continueListFolder
+            request:
+              bodyFields:
+                cursor:
+                  role: cursor
+            hasMoreField: has_more
+  - target: $.paths['/files/list_folder'].post
+    update:
+      x-pagination:
+        - scheme: folderListing
