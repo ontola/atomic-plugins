@@ -74,3 +74,11 @@ collection recorded both receipts. macOS reported account-access error 4355
 for cloud upload, so remote upload confirmation remained unverified. The
 maintainer was asked to check the Mac's iCloud account state. The local browser
 uses the packaged build and reports local connection status.
+
+## Integration review
+
+Merged the latest generic metadata/connection-grant work from main and verified
+2,085 tests with three optional skips. Review then identified that changing
+root directories could reuse the earlier root's transfer receipts. Staged
+content and receipts now have a separate namespace for each root/connection,
+with reconnect and isolation coverage.

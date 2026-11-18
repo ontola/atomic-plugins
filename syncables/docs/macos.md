@@ -127,6 +127,8 @@ Connector-to-connector copying currently accepts configured local HTTP
 sources. Remote IAP binary transfer support can extend the same staging
 boundary when available.
 
+Each root and connection has its own staged-content and receipt namespace.
+Changing roots keeps the previous root's transfer history isolated.
 Staging streams at most 1 GiB into an owner-private file named by SHA-256.
 The JSON outbox stores its hash and destination intent. `--edit-id UUID`
 allows resubmitting identical queued intent. Staged bytes remain after

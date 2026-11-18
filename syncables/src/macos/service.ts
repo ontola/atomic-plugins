@@ -81,13 +81,23 @@ export interface MacServiceOptions {
   native: NativeOperation;
   pageSize?: number;
 }
-export async function startMacService(
-  options: MacServiceOptions,
-): Promise<{ server: Server; url: string; close(): Promise<void> }> {
+export async function startMacService(options: MacServiceOptions): Promise<{
+  server: Server;
+  url: string;
+  storageDirectory: string;
+  close(): Promise<void>;
+}> {
   const root = await realpath(options.directory);
   if (!(await lstat(root)).isDirectory()) throw new Error('Select a directory');
-  const blobDirectory = join(options.stateDirectory, 'blobs');
-  const receipts = join(options.stateDirectory, 'receipts');
+  const storageDirectory = join(
+    options.stateDirectory,
+    'sources',
+    createHash('sha256')
+      .update(JSON.stringify([root, options.connection]))
+      .digest('hex'),
+  );
+  const blobDirectory = join(storageDirectory, 'blobs');
+  const receipts = join(storageDirectory, 'receipts');
   await mkdir(blobDirectory, { recursive: true, mode: 0o700 });
   await mkdir(receipts, { recursive: true, mode: 0o700 });
   const snapshots = new Map<
@@ -468,6 +478,7 @@ export async function startMacService(
   origin = 'http://127.0.0.1:' + address.port;
   return {
     server,
+    storageDirectory,
     url: origin,
     close: () =>
       new Promise<void>((done, reject) => {

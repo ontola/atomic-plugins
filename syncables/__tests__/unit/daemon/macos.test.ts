@@ -171,7 +171,7 @@ describe('macOS service through generic OpenAPI paths', () => {
     expect((await request('different')).status).toBe(409);
     const saved = JSON.parse(
       await readFile(
-        join(f.directory, 'receipts', operationId + '.json'),
+        join(f.server.storageDirectory, 'receipts', operationId + '.json'),
         'utf8',
       ),
     );
@@ -194,9 +194,9 @@ describe('macOS service through generic OpenAPI paths', () => {
       path,
       new AbortController().signal,
     );
-    expect(await readFile(join(f.directory, 'blobs', hash), 'utf8')).toBe(
-      'Invented source bytes',
-    );
+    expect(
+      await readFile(join(f.server.storageDirectory, 'blobs', hash), 'utf8'),
+    ).toBe('Invented source bytes');
     expect(
       f.native.mock.calls.filter(
         ([request]) => request.operation === 'content',
@@ -210,6 +210,68 @@ describe('macOS service through generic OpenAPI paths', () => {
         new AbortController().signal,
       ),
     ).rejects.toThrow('binary GET');
+  });
+  it('isolates transfer receipts when changing roots and restores them on reconnect', async () => {
+    const f = await fixture();
+    const operationId = randomUUID();
+    const response = await localTransport(f.source)({
+      url: new URL('/transfers', f.server.url),
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify({
+        operationId,
+        path: 'first-root-folder',
+        kind: 'directory',
+      }),
+    });
+    expect(response.status).toBe(201);
+    const otherRoot = join(f.directory, 'other-root');
+    await mkdir(otherRoot);
+    const other = await startMacService({
+      directory: otherRoot,
+      stateDirectory: f.directory,
+      token: 'a'.repeat(64),
+      connection: 'other-local',
+      port: 0,
+      photos: false,
+      writable: true,
+      native: f.native,
+    });
+    cleanup.push(other.close);
+    const source = {
+      ...f.source,
+      connection: 'other-local',
+      local: { ...f.source.local!, url: other.url },
+    };
+    const second = await localTransport(source)({
+      url: new URL('/transfers', other.url),
+      method: 'GET',
+      headers: {},
+    });
+    expect(JSON.parse(second.body).items).toEqual([]);
+    const restored = await startMacService({
+      directory: join(f.directory, 'drive'),
+      stateDirectory: f.directory,
+      token: 'a'.repeat(64),
+      connection: f.source.connection,
+      port: 0,
+      photos: false,
+      writable: true,
+      native: f.native,
+    });
+    cleanup.push(restored.close);
+    const restoredSource = {
+      ...f.source,
+      local: { ...f.source.local!, url: restored.url },
+    };
+    const original = await localTransport(restoredSource)({
+      url: new URL('/transfers', restored.url),
+      method: 'GET',
+      headers: {},
+    });
+    expect(
+      JSON.parse(original.body).items.map((item: { id: string }) => item.id),
+    ).toEqual([operationId]);
   });
   it('validates explicit local transport configuration', async () => {
     const f = await fixture();
