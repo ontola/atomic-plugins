@@ -82,3 +82,14 @@ Merged the latest generic metadata/connection-grant work from main and verified
 root directories could reuse the earlier root's transfer receipts. Staged
 content and receipts now have a separate namespace for each root/connection,
 with reconnect and isolation coverage.
+
+The maintainer reported resolving the iCloud warning. Subsequent native
+observations retained an earlier error while also reporting an active upload.
+The adapter now gives active/completed state precedence and retains the error
+domain/code separately, with protocol-level regression coverage.
+
+A fast native process exposed a LaunchServices process-wait race. The adapter
+now consumes an already-written atomic terminal response even if waiting for
+the exited app fails. It never repeats a write to recover that wait error.
+Native metadata access and serialization are explicitly isolated to the main
+actor.

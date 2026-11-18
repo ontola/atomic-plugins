@@ -145,7 +145,9 @@ Directory creation can also be queued with normal `create` using JSON
 Transfer receipts persist before dispatch and after a successful local
 write. The outbox's `confirmed` state records acceptance by the local
 connector. A subsequent transfer inventory reports `localStatus` and the
-current `uploadStatus` from macOS independently. `unknown` stays unknown
+current `uploadStatus` from macOS independently. An active or completed
+upload takes precedence over a retained error from an earlier attempt, and
+the error domain/code remain available as `uploadError`. `unknown` stays unknown
 when macOS supplies no confirmation. The original modification time is
 preserved for copies from local files. Extended attributes and ACLs are
 outside this transfer contract.

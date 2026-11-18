@@ -69,12 +69,23 @@ export function macNative(app: string, directory: string): NativeOperation {
       flag: 'wx',
     });
     try {
-      await execute(
-        '/usr/bin/open',
-        ['-n', '-W', '-a', app, '--args', input, output],
-        { timeout: 300_000 },
-      );
-      const result: unknown = JSON.parse(await readFile(output, 'utf8'));
+      let launchError: unknown;
+      try {
+        await execute(
+          '/usr/bin/open',
+          ['-n', '-W', '-a', app, '--args', input, output],
+          { timeout: 300_000 },
+        );
+      } catch (error) {
+        launchError = error;
+      }
+      // LaunchServices can lose its process wait when a short-lived app has
+      // already exited. Its atomic terminal response is authoritative. Never
+      // repeat a write merely because waiting for the process failed.
+      const response = await readFile(output, 'utf8').catch((error) => {
+        throw launchError ?? error;
+      });
+      const result: unknown = JSON.parse(response);
       if (!isRecord(result))
         throw new Error('Invalid native connector response');
       if (result.error)

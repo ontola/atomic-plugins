@@ -16,6 +16,7 @@ let fractionalDateFormatter = ISO8601DateFormatter()
 fractionalDateFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 umask(0o077)
 
+@MainActor
 func emit(_ value: [String: Any]) {
   do {
     let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
@@ -23,18 +24,20 @@ func emit(_ value: [String: Any]) {
   } catch { exit(1) }
 }
 
+@MainActor
 func stamp(_ date: Date?) -> Any {
   guard let date = date else { return NSNull() }
   return dateFormatter.string(from: date)
 }
 
+@MainActor
 func metadata(_ url: URL, root: URL) throws -> [String: Any] {
   let keys: Set<URLResourceKey> = [
     .nameKey, .isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey,
     .contentModificationDateKey, .creationDateKey, .isUbiquitousItemKey,
     .ubiquitousItemDownloadingStatusKey, .ubiquitousItemIsUploadedKey,
     .ubiquitousItemIsUploadingKey, .ubiquitousItemUploadingErrorKey,
-    .ubiquitousItemDownloadingErrorKey,
+    .ubiquitousItemDownloadingErrorKey, .ubiquitousItemIsDownloadingKey,
   ]
   let values = try url.resourceValues(forKeys: keys)
   let path = String(url.path.dropFirst(root.path.count + 1))
@@ -51,17 +54,25 @@ func metadata(_ url: URL, root: URL) throws -> [String: Any] {
   ]
   if let size = values.fileSize { row["size"] = String(size) }
   if let status = values.ubiquitousItemDownloadingStatus { row["downloadStatus"] = status.rawValue }
-  if let uploaded = values.ubiquitousItemIsUploaded {
-    row["uploadStatus"] =
-      uploaded ? "uploaded" : values.ubiquitousItemIsUploading == true ? "uploading" : "pending"
-  } else {
-    row["uploadStatus"] = "unknown"
+  if values.ubiquitousItemIsDownloading == true { row["downloadStatus"] = "downloading" }
+  if let uploaded = values.ubiquitousItemIsUploaded { row["uploaded"] = uploaded }
+  if let uploading = values.ubiquitousItemIsUploading { row["uploading"] = uploading }
+  if let error = values.ubiquitousItemUploadingError as NSError? {
+    row["uploadError"] = ["domain": error.domain, "code": error.code]
   }
-  if values.ubiquitousItemUploadingError != nil { row["uploadStatus"] = "failed" }
-  if values.ubiquitousItemDownloadingError != nil { row["downloadStatus"] = "failed" }
+  if let error = values.ubiquitousItemDownloadingError as NSError? {
+    row["downloadError"] = ["domain": error.domain, "code": error.code]
+    if values.ubiquitousItemDownloadingStatus != .current
+      && values.ubiquitousItemDownloadingStatus != .downloaded
+      && values.ubiquitousItemIsDownloading != true
+    {
+      row["downloadStatus"] = "failed"
+    }
+  }
   return row
 }
 
+@MainActor
 func drive(_ request: [String: Any]) throws -> [String: Any] {
   let root = URL(fileURLWithPath: request["directory"] as! String).standardizedFileURL
   if let path = request["path"] as? String {
@@ -92,6 +103,7 @@ func drive(_ request: [String: Any]) throws -> [String: Any] {
   ]
 }
 
+@MainActor
 func photos() throws -> [String: Any] {
   let options = PHFetchOptions()
   options.includeAssetSourceTypes = .typeUserLibrary
@@ -140,6 +152,7 @@ func photos() throws -> [String: Any] {
 
 // Walk each destination directory by descriptor, refusing symlinks and traversal.
 // Files are published with linkat, which atomically refuses an existing target.
+@MainActor
 func write(_ request: [String: Any]) throws -> [String: Any] {
   let root = request["directory"] as! String
   let path = request["path"] as! String
@@ -221,6 +234,7 @@ func write(_ request: [String: Any]) throws -> [String: Any] {
   return ["localStatus": "written"]
 }
 
+@MainActor
 func content(_ request: [String: Any]) throws -> [String: Any] {
   let parts = (request["path"] as! String).components(separatedBy: "/")
   guard parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\0") }) else {
@@ -271,11 +285,13 @@ DispatchQueue.main.async {
     if request["operation"] as? String == "photos" {
       PHPhotoLibrary.requestAuthorization(for: .readWrite) { authorization in
         guard authorization == .authorized else {
-          emit([
-            "error": "Photos access requires full library permission",
-            "authorization": authorization.rawValue,
-          ])
-          DispatchQueue.main.async { app.terminate(nil) }
+          DispatchQueue.main.async {
+            emit([
+              "error": "Photos access requires full library permission",
+              "authorization": authorization.rawValue,
+            ])
+            app.terminate(nil)
+          }
           return
         }
         DispatchQueue.main.async {

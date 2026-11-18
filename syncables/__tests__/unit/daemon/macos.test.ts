@@ -163,11 +163,22 @@ describe('macOS service through generic OpenAPI paths', () => {
         body: JSON.stringify({ operationId, path, kind: 'directory' }),
       });
     expect((await request('../escape')).status).toBe(400);
+    const unusual = await transport({
+      url: new URL('/transfers', f.server.url),
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify({
+        operationId: randomUUID(),
+        path: 'folder\\with\ttab',
+        kind: 'directory',
+      }),
+    });
+    expect(unusual.status).toBe(201);
     expect((await request('folder')).status).toBe(201);
     expect((await request('folder')).status).toBe(201);
     expect(
       f.native.mock.calls.filter(([r]) => r.operation === 'write'),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
     expect((await request('different')).status).toBe(409);
     const saved = JSON.parse(
       await readFile(
@@ -272,6 +283,57 @@ describe('macOS service through generic OpenAPI paths', () => {
     expect(
       JSON.parse(original.body).items.map((item: { id: string }) => item.id),
     ).toEqual([operationId]);
+  });
+  it('prioritizes active or completed uploads over retained errors while preserving the error evidence', async () => {
+    const f = await fixture();
+    const error = { domain: 'NSCocoaErrorDomain', code: 4355 };
+    const active = {
+      id: 'active',
+      uploaded: false,
+      uploading: true,
+      uploadError: error,
+    };
+    f.native.mockImplementation(async (request) => {
+      if (request.operation === 'write') return { localStatus: 'written' };
+      if (request.path) return { item: active };
+      return {
+        complete: true,
+        scope: {},
+        items:
+          request.operation === 'photos'
+            ? []
+            : [
+                active,
+                { ...active, id: 'complete', uploaded: true },
+                { ...active, id: 'failed', uploading: false },
+              ],
+      };
+    });
+    const result = await readCollections(f.document, {
+      transport: localTransport(f.source),
+    });
+    expect(result.errors).toEqual([]);
+    expect(
+      result.collections[0].items.map(
+        (item) => (item as { uploadStatus: string }).uploadStatus,
+      ),
+    ).toEqual(['uploading', 'uploaded', 'failed']);
+    const operationId = randomUUID();
+    const written = await localTransport(f.source)({
+      url: new URL('/transfers', f.server.url),
+      method: 'POST',
+      headers: {},
+      body: JSON.stringify({
+        operationId,
+        path: 'upload-status',
+        kind: 'directory',
+      }),
+    });
+    expect(JSON.parse(written.body)).toMatchObject({
+      localStatus: 'written',
+      uploadStatus: 'uploading',
+      uploadError: error,
+    });
   });
   it('validates explicit local transport configuration', async () => {
     const f = await fixture();

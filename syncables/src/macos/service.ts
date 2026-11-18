@@ -25,6 +25,19 @@ class ServiceError extends Error {
     super(message);
   }
 }
+/** macOS may retain a previous error while an upload is active or complete. */
+function fileObservation(value: unknown): Record<string, unknown> {
+  if (!isRecord(value))
+    throw new ServiceError(503, 'Invalid native file metadata');
+  let status =
+    typeof value.uploadStatus === 'string' ? value.uploadStatus : 'unknown';
+  if (value.uploaded === false) status = 'pending';
+  if (isRecord(value.uploadError)) status = 'failed';
+  if (value.uploading === true) status = 'uploading';
+  if (value.uploaded === true) status = 'uploaded';
+  return { ...value, uploadStatus: status };
+}
+
 async function save(file: string, value: unknown): Promise<void> {
   const temporary = file + '.' + randomUUID();
   const handle = await open(temporary, 'wx', 0o600);
@@ -49,9 +62,7 @@ function safePath(value: unknown): string {
           part === '..' ||
           part.startsWith('.syncables-transfer-'),
       ) ||
-    [...value].some(
-      (character) => character.charCodeAt(0) < 32 || character === '\\',
-    )
+    value.includes('\0')
   )
     throw new ServiceError(
       400,
@@ -130,9 +141,9 @@ export async function startMacService(options: MacServiceOptions): Promise<{
           directory: root,
           path: value.path,
         });
-        value.uploadStatus = isRecord(result.item)
-          ? (result.item.uploadStatus ?? 'unknown')
-          : 'unknown';
+        const item = fileObservation(result.item);
+        value.uploadStatus = item.uploadStatus;
+        value.uploadError = item.uploadError;
       } catch {
         value.uploadStatus = 'unknown';
       }
@@ -352,7 +363,7 @@ export async function startMacService(options: MacServiceOptions): Promise<{
         const result = await exclusive(() =>
           options.native({ operation: 'drive', directory: root, path }),
         );
-        json(200, result.item);
+        json(200, fileObservation(result.item));
         return;
       }
       if (parts.length === 2 && collection === 'photos') {
@@ -419,7 +430,10 @@ export async function startMacService(options: MacServiceOptions): Promise<{
           snapshots.delete(snapshots.keys().next().value!);
         snapshots.set(id, {
           collection,
-          items: scan.items,
+          items:
+            collection === 'files'
+              ? scan.items.map(fileObservation)
+              : scan.items,
           observation: {
             adapter: 'macos-v1',
             scan: id,
