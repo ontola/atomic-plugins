@@ -1,7 +1,11 @@
 /** Device-flow scaffold. Tokens live only for the duration of auth-test. */
 import { setTimeout as sleep } from 'node:timers/promises';
-import { gatewayRetryDelay } from '../read/gateway-retry.js';
-import type { Transport, TransportRequest } from '../read/transport.js';
+import { gatewayRetryDelay, readRetryBackoff } from '../read/gateway-retry.js';
+import {
+  TransientReadError,
+  type Transport,
+  type TransportRequest,
+} from '../read/transport.js';
 export interface AuthOptions {
   issuer: string;
   clientId: string;
@@ -86,22 +90,38 @@ function text(value: unknown, name: string): string {
   return value;
 }
 
+const INTERRUPTED_EXCHANGE = new Set([
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'EPIPE',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+]);
+
+function requestError(error: unknown, timedOut: boolean): Error {
+  const code = (error as { cause?: { code?: unknown } } | null)?.cause?.code;
+  if (timedOut || (typeof code === 'string' && INTERRUPTED_EXCHANGE.has(code)))
+    return new TransientReadError();
+  return new Error(
+    'Local Thought request failed (network, timeout or redirect)',
+  );
+}
+
 async function request(
   fetchImpl: typeof fetch,
   url: string,
   init: RequestInit,
+  signal: AbortSignal = AbortSignal.timeout(10_000),
 ): Promise<Response> {
   // Never follow redirects carrying a token, device code or client state.
   try {
-    return await fetchImpl(url, {
-      ...init,
-      redirect: 'error',
-      signal: AbortSignal.timeout(10_000),
-    });
-  } catch {
-    throw new Error(
-      'Local Thought request failed (network, timeout or redirect)',
-    );
+    return await fetchImpl(url, { ...init, redirect: 'error', signal });
+  } catch (error) {
+    throw requestError(error, signal.aborted);
   }
 }
 
@@ -271,28 +291,43 @@ export async function deviceLogin(
 export async function listConnections(
   session: Session,
   fetchImpl: typeof fetch = globalThis.fetch,
-  retryGatewayErrors = false,
+  retryTemporaryFailures = false,
 ): Promise<{ owner: string; connections: Connection[] }> {
   const url = new URL('/connections', session.issuer).href;
   const init = {
     method: 'GET',
     headers: { authorization: `Bearer ${session.accessToken}` },
   };
-  const retryDeadline = Date.now() + 10_000;
-  let response = await request(fetchImpl, url, init);
-  for (let retries = 0; retryGatewayErrors && retries < 3; retries += 1) {
+  const retryDeadline = Date.now() + 20_000;
+  let response: Response;
+  for (let retries = 0; ; retries += 1) {
+    const canRetry = retryTemporaryFailures && retries < 3;
+    try {
+      response = await request(fetchImpl, url, init);
+    } catch (error) {
+      const delay = readRetryBackoff(retries);
+      if (
+        !canRetry ||
+        !(error instanceof TransientReadError) ||
+        Date.now() + delay >= retryDeadline
+      )
+        throw error;
+      await sleep(delay);
+      continue;
+    }
     const now = Date.now();
-    const delay = gatewayRetryDelay(
-      response.status,
-      retries,
-      now,
-      response.headers.get('retry-after') ?? undefined,
-      response.headers.get('date') ?? undefined,
-    );
+    const delay = canRetry
+      ? gatewayRetryDelay(
+          response.status,
+          retries,
+          now,
+          response.headers.get('retry-after') ?? undefined,
+          response.headers.get('date') ?? undefined,
+        )
+      : undefined;
     if (delay === undefined || now + delay >= retryDeadline) break;
     await response.body?.cancel();
     await sleep(delay);
-    response = await request(fetchImpl, url, init);
   }
   if (!response.ok)
     throw Object.assign(
@@ -376,17 +411,33 @@ export function proxyReadTransport(
         throw new Error('Invalid sealed connection grant');
       headersForProxy.set('x-connection-key', connectionGrant);
     }
-    const response = await request(fetchImpl, input.url.href, {
-      method: input.method,
-      headers: headersForProxy,
-      ...(input.body === undefined ? {} : { body: input.body }),
-    });
+    // The integration proxy allows 30 seconds for its upstream exchange.
+    // Give it time to return the status before the client times out.
+    const signal = AbortSignal.timeout(35_000);
+    const response = await request(
+      fetchImpl,
+      input.url.href,
+      {
+        method: input.method,
+        headers: headersForProxy,
+        ...(input.body === undefined ? {} : { body: input.body }),
+      },
+      signal,
+    );
     const chunks: Uint8Array[] = [];
     let size = 0;
     const reader = response.body?.getReader();
     if (reader) {
       for (;;) {
-        const chunk = await reader.read();
+        const chunk = await reader.read().catch((error: unknown) => {
+          // Once the proxy has refused access, a lost error body cannot turn
+          // that refusal into a retryable exchange.
+          if (response.status === 401 || response.status === 403) {
+            chunks.length = 0;
+            return { done: true } as const;
+          }
+          throw requestError(error, signal.aborted);
+        });
         if (chunk.done) break;
         size += chunk.value.length;
         if (size > 8 * 1024 * 1024) {
