@@ -257,15 +257,17 @@ export async function readCollections(
 ): Promise<CollectionReadResult> {
   const doc = resolveRefs(document);
   const model = discoverReadModel(doc, options.legacy);
-  if (options.collectionNames) {
-    selectCollections(model, options.collectionNames, options.constants ?? {});
-  }
   // The collections' own fixed query values, before a selection narrows
   // them: they define a collection rather than narrow it (coverage).
   const fixedQueries = new Map(
     model.collections.map((c) => [c.name, { ...c.listQuery }]),
   );
+  // Catalog defaults describe the complete model, even for a selected read.
+  // Validate them before dropping unrelated collections and their parameters.
   applySelection(doc, model, options.selection);
+  if (options.collectionNames) {
+    selectCollections(model, options.collectionNames, options.constants ?? {});
+  }
   const constants = options.constants ?? {};
   for (const param of rootParameters(model)) {
     if (!constants[param]) throw new Error(`Enter a value for ${param}`);

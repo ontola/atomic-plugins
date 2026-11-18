@@ -1,6 +1,26 @@
 # overlays
 OpenAPI Overlay files that complete existing OpenAPI files with Pagination Schemes and other additions
 
+## Bundled read models
+
+`@ontola/openapi-overlays` is a metadata-only package, installed from this
+repository's `overlays/` subdirectory at an exact Git commit. It has no
+installation scripts or executable modules. Its `./github-issues/read-model`
+export is an opt-in JSON Overlay for the built-in Atomic Sync app.
+
+The app applies that bundled overlay to its configured proxy's composed GitHub
+OpenAPI document with `prepareDocument` from `syncables/browser`. The overlay
+declares `githubOrganizations`, `githubRepositories` and `repositoryIssues`,
+including their pagination schemes and fixed read queries. `readCollections`
+discovers and reads those collections, with a selected repository's stable ID
+supplied as `repository_id`. Atomic storage, presentation, host credentials and
+permission checks stay in Atomic Server. Missing or failed organization reads
+remain incomplete snapshots, rather than an empty successful directory.
+
+This asset does not change any dated proxy catalog or require a proxy
+redeployment. A proxy that lacks an operation can still refuse it; adding a
+local read declaration never grants additional proxy or provider authority.
+
 ## Where this lives and how it is published
 
 This folder was migrated from the standalone `localthought/overlays`

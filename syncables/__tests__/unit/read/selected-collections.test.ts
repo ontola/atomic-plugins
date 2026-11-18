@@ -57,6 +57,26 @@ describe('selected Syncables collections', () => {
     );
   });
 
+  it('retains catalog defaults for selected reads without requiring unrelated collections', async () => {
+    const fetch = transport();
+    const result = await readCollections(fixedReads, {
+      transport: fetch,
+      collectionNames: ['searchedPages'],
+      selection: {
+        query_overrides: [
+          { path: '/lists/{listId}/tasks', values: { showHidden: false } },
+        ],
+      },
+    });
+    expect(result.errors).toEqual([]);
+    expect(
+      result.collections.map((snapshot) => snapshot.collection.name),
+    ).toEqual(['searchedPages']);
+    expect(
+      fetch.mock.calls.every(([request]) => request.url.pathname === '/search'),
+    ).toBe(true);
+  });
+
   it('refuses unknown names without sending provider requests', async () => {
     const fetch = transport();
     await expect(

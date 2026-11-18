@@ -1,0 +1,14 @@
+{
+  "name": "@ontola/openapi-overlays",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Declarative OpenAPI overlays for bundling with trusted API clients.",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "./github-issues/read-model": "./APIs/github.com/github-issues/1.1.4/builtin-read-model-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.json"
+  },
+  "files": [
+    "APIs/github.com/github-issues/1.1.4/builtin-read-model-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.json"
+  ]
+}
