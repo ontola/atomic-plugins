@@ -1,6 +1,6 @@
 import { notificationConsumer, NOTIFICATION_SCHEMA } from './notifications.js';
 import type { InboxConsumer } from '../inbox/consumer.js';
-import { isSyncAuthError } from './sync-errors.js';
+import { ConnectionGrantAuthError, isSyncAuthError } from './sync-errors.js';
 import type { SnapshotStore } from './snapshot-store.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
@@ -29,9 +29,15 @@ import {
 import { alias, selectedCollections, type DaemonConfig } from './config.js';
 import { CheckoutBlockedError, type CheckoutResult } from './git-store.js';
 
-export interface RunnerAuth {
-  session(): Promise<Session>;
+type RunnerSession = Session & { sessionId?: string };
+
+export interface RunnerAuth<SessionType extends RunnerSession = RunnerSession> {
+  session(): Promise<SessionType>;
   authorizationContext(): Promise<string>;
+  connectionGrant?(
+    connectionId: string,
+    session: NoInfer<SessionType>,
+  ): Promise<string | undefined>;
 }
 export interface JobStatus {
   alias: string;
@@ -78,7 +84,7 @@ export async function jobStatuses(
     )
   ).rows as JobStatus[];
 }
-export class DaemonRunner {
+export class DaemonRunner<SessionType extends RunnerSession = RunnerSession> {
   private prepared: PreparedCollection[] = [];
   private notifications: {
     alias: string;
@@ -89,7 +95,7 @@ export class DaemonRunner {
     readonly config: DaemonConfig,
     readonly archive: PostgresArchive,
     readonly store: SnapshotStore,
-    readonly auth: RunnerAuth,
+    readonly auth: RunnerAuth<SessionType>,
     private readonly fetchImpl: typeof fetch = globalThis.fetch,
     private readonly message?: string,
   ) {}
@@ -313,6 +319,7 @@ export class DaemonRunner {
           }
         } catch (error) {
           const message =
+            error instanceof ConnectionGrantAuthError ||
             error instanceof CheckoutBlockedError ||
             error instanceof InventoryReadError ||
             error instanceof InventoryCredentialError
@@ -401,8 +408,10 @@ export class DaemonRunner {
     );
     if (!connection)
       throw new Error('Login required: collection connection is not approved');
-    const authorizationContext = await this.auth.authorizationContext();
+    const authorizationContext =
+      session.sessionId ?? (await this.auth.authorizationContext());
     const upstream = upstreamOf(p.document);
+    let authFailure: Error | undefined;
     return syncCollection({
       prepared: p,
       forceFull,
@@ -414,23 +423,53 @@ export class DaemonRunner {
         authorizationContext,
       },
       upstream: async (input) => {
-        if (input.url.origin !== upstream.origin)
+        if (
+          input.url.origin !== upstream.origin ||
+          input.url.username ||
+          input.url.password ||
+          input.url.hash
+        )
           throw new Error('Source request escaped its declared API');
         const fresh = await this.auth.session();
-        const request = proxyRequest(
+        const freshContext =
+          fresh.sessionId ?? (await this.auth.authorizationContext());
+        if (
+          fresh.issuer !== session.issuer ||
+          freshContext !== authorizationContext
+        ) {
+          authFailure = new Error(
+            'Authorization needs attention: device session changed during the read',
+          );
+          throw authFailure;
+        }
+        const { url } = proxyRequest(
           fresh,
           connection,
           input.url.pathname + input.url.search,
         );
+        const grant = await this.auth
+          .connectionGrant?.(connection.connection_id, fresh)
+          .catch((error: unknown) => {
+            // The cache deliberately masks upstream exceptions. Keep only
+            // fixed connection grant diagnostics for the daemon job status.
+            if (error instanceof ConnectionGrantAuthError) authFailure = error;
+            throw error;
+          });
         return proxyReadTransport(
           fresh,
           connection,
           this.fetchImpl,
-        )({ ...request, headers: input.headers });
+          grant,
+        )({
+          ...input,
+          url,
+        });
       },
       signal,
       trigger: dueOnly ? 'scheduled' : 'manual',
       ...(this.message === undefined ? {} : { message: this.message }),
+    }).catch((error: unknown) => {
+      throw authFailure ?? error;
     });
   }
   private async webhook(token: string): Promise<Server | undefined> {

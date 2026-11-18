@@ -5,6 +5,10 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
 ## Unreleased
 
+- Read-only device sessions can call POST operations explicitly declared as
+  collection lists or their cursor continuations in the trusted catalog.
+  Other POST operations still require write scope.
+
 Breaking: every client must change, and existing connections must be made
 again.
 

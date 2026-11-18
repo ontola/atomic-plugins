@@ -9,6 +9,7 @@ Inventory reads metadata. Cloud upload status is reported separately in transfer
 
 Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export only):
   syncables login --config FILE [--write]
+  syncables import-connection-grant --config FILE  (grant JSON on stdin)
   syncables create --collection ALIAS --input JSON_FILE --config FILE [--edit-id UUID]
   syncables edit ITEM_ID --collection ALIAS --at REVISION --input JSON_FILE --owned --config FILE
   syncables delete ITEM_ID --collection ALIAS --at REVISION --config FILE

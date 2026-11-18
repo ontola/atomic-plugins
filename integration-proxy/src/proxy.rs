@@ -314,6 +314,7 @@ async fn authenticate(
     security: &Security,
     record: &ConnectionRecord,
     platform: &str,
+    request_path: &str,
     method: &Method,
     uri: &axum::http::Uri,
     headers: &HeaderMap,
@@ -333,7 +334,12 @@ async fn authenticate(
             let principal =
                 crate::device::principal(state, crate::device::bearer(headers)?.unwrap()).await?;
             if principal.owner != owner
-                || !crate::device::store::may_request(&principal, &record.connection_id, method)
+                || !crate::device::store::may_request(
+                    &principal,
+                    &record.connection_id,
+                    method,
+                    *method == Method::POST && state.catalog.is_read_post(platform, request_path),
+                )
             {
                 return Err(ApiError::TokenScope);
             }
@@ -479,7 +485,15 @@ async fn forward_inner(
         .map_err(|_| ApiError::Unavailable)?
         .ok_or(ApiError::UnknownConnection)?;
     let caller = authenticate(
-        state, security, &record, platform, &method, uri, headers, &body,
+        state,
+        security,
+        &record,
+        platform,
+        &request_path,
+        &method,
+        uri,
+        headers,
+        &body,
     )
     .await?;
     // Only an authenticated use keeps a connection alive.

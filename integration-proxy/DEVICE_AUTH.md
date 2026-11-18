@@ -90,10 +90,15 @@ use `token_endpoint_auth_methods_supported: ["none"]`.
   non-secret `session_id`, and `connections` with `connection_id`, `platform`,
   `owner` and optional `label`. It includes no credentials, delegations or
   runtimes. A new connection is never implicitly included.
-- `proxy:read`: GET and HEAD through those connections, subject to the
+- `proxy:read`: GET, HEAD and catalog-declared collection read POSTs through
+  those connections, subject to the
   existing live connection ownership/idle expiry, owner `AccessPolicy`,
   provider credential binding, catalog operation/security restrictions,
-  validation and pacing. HEAD must itself be allowed by the catalog.
+  validation and pacing. HEAD must itself be allowed by the catalog. A POST is
+  a read when a catalog collection declares `listMethod: POST`, or when a
+  collection list explicitly applies a page-token scheme naming the POST
+  operation as its cursor continuation. Ambiguous operations and POSTs
+  annotated as mutations never qualify for read access.
 - `proxy:write`: explicitly approved POST, PUT, PATCH and DELETE through the
   selected connections, with the same ownership, access policy, catalog,
   provider scope, validation and pacing checks. It does not imply `proxy:read`.

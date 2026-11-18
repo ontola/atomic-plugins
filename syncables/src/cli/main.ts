@@ -40,6 +40,24 @@ Remote replication and range-window coverage follow in later stages.
 `;
 
 async function main(): Promise<void> {
+  const args = process.argv.slice(2);
+  if (
+    args[0] === 'import-connection-grant' &&
+    !(args.length === 2 && args[1] === '--help')
+  ) {
+    if (
+      args.length !== 3 ||
+      args[1] !== '--config' ||
+      !args[2] ||
+      args[2].startsWith('--')
+    )
+      throw new Error(
+        'Use syncables import-connection-grant --config FILE with JSON on stdin',
+      );
+    const { daemonCommand } = await import('../daemon/commands.js');
+    await daemonCommand([args[0]], { config: args[2] });
+    return;
+  }
   const options: Record<string, { type: 'string' | 'boolean' }> =
     Object.fromEntries(
       [
