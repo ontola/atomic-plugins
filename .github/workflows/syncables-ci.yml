@@ -143,3 +143,22 @@ jobs:
         run: |
           SYNCABLES_ATOMIC_PEER_BINARY="$PWD/native-atomic-peer/target/debug/syncables-atomic-peer" \
             npx vitest run __tests__/unit/daemon/atomic-peer.test.ts __tests__/unit/daemon/atomic-tables.test.ts --config __tests__/vitest.config.ts
+
+  macos-connector:
+    name: Native macOS connector
+    needs: changes
+    if: needs.changes.outputs.syncables == 'true'
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: syncables
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: syncables/package-lock.json
+      - run: npm ci --no-audit
+      - run: swiftc -typecheck native-macos/main.swift
+      - run: npx vitest run __tests__/unit/daemon/macos-native.test.ts __tests__/unit/daemon/macos.test.ts --config __tests__/vitest.config.ts

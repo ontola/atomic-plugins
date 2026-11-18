@@ -33,7 +33,8 @@
     }
   },
   "files": [
-    "build/src"
+    "build/src",
+    "native-macos"
   ],
   "engines": {
     "node": ">= 22.11"

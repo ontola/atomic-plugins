@@ -27,19 +27,18 @@ export const BROWSER_HTML = `
         <div>
           <div class="eyebrow">CONTROL PANEL</div>
           <h1>Connections &amp; synced data</h1>
-          <p>Your approved remote connections and saved local records.</p>
+          <p>Your configured sources and saved local records.</p>
         </div>
         <span class="badge">Local snapshots</span>
       </header>
       <div id="error" class="error" role="alert" hidden></div>
-      <section class="connections-panel" aria-label="Remote connections">
+      <section class="connections-panel" aria-label="Connections">
         <div class="section-heading">
-          <h2>Remote connections</h2>
+          <h2>Connections</h2>
           <button id="refresh-status" class="secondary">↻ Check status</button>
         </div>
         <p class="connections-caption">
-          Connections approved for this SyncD access grant. Checking status does
-          not fetch provider data.
+          Local sources and remote connections available to SyncD. Checking status reads saved sync information.
         </p>
         <div id="discovery-message" role="status" aria-live="polite">
           Checking available connections…
@@ -47,7 +46,7 @@ export const BROWSER_HTML = `
         <div id="remote-connections" class="connection-grid"></div>
         <p id="status-checked" class="checked"></p>
       </section>
-      <section class="connections-panel" aria-label="IAP access management">
+      <section id="management-panel" class="connections-panel" aria-label="IAP access management" hidden>
         <div class="section-heading"><h2>Manage access</h2><button id="open-management" class="secondary">Connections &amp; sessions</button></div>
         <p id="management-help">Manage provider connections, app grants and IAP sessions here. Management requires separate owner approval.</p>
         <iframe id="iap-management" title="IAP access management" sandbox="allow-scripts allow-same-origin allow-modals" referrerpolicy="no-referrer" hidden></iframe>
@@ -1013,7 +1012,9 @@ async function loadStatus() {
       platform.textContent =
         connection.platform +
         ' · ' +
-        (connection.availability === 'approved'
+        (connection.availability === 'local'
+          ? 'Local connector'
+          : connection.availability === 'approved'
           ? 'Approved for SyncD'
           : connection.availability === 'unknown'
             ? 'Remote access not checked'
@@ -1141,6 +1142,7 @@ el('next').addEventListener('click', () => {
     loadRecords();
   }
 });
+api('/api/management/config').then(result => { el('management-panel').hidden = !result.url; }).catch(() => {});
 loadCollections();
 loadStatus();
 setInterval(() => {

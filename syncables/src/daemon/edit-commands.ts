@@ -6,10 +6,18 @@ import { prepareCollection, SOURCE_ID, SOURCE_JSON } from './sync.js';
 import { withEditLock } from './edits.js';
 import { DaemonAuth, KeychainCredentials } from './auth.js';
 import { listConnections } from '../cli/auth.js';
+import {
+  localTransport,
+  stageLocalContent,
+  stageConnectorContent,
+} from './local-transport.js';
+import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import { proxyWriteTransport } from './write-transport.js';
 import { isRecord } from '../read/model.js';
 
 export const EDIT_COMMANDS = [
+  'copy',
   'create',
   'edit',
   'delete',
@@ -59,6 +67,60 @@ export async function editCommand(
       if (command === 'keep-both') {
         await edits.keepBoth(positionals[1]);
         return edits.list();
+      }
+      if (command === 'copy') {
+        let sha256: string;
+        let modifiedTime: string | undefined;
+        if (string('source-collection')) {
+          if (string('source'))
+            throw new Error('Choose a source file or a source collection');
+          const from = selectedCollections(config, [
+            required('source-collection'),
+          ])[0];
+          sha256 = await stageConnectorContent(
+            source,
+            await prepareCollection(config.owner, from),
+            required('source-path'),
+            lockedSignal,
+          );
+        } else {
+          const input = required('source');
+          const information = await stat(input);
+          if (!information.isFile() || information.size > 1024 * 1024 * 1024)
+            throw new Error('Copy supports regular files up to 1 GiB');
+          sha256 = await stageLocalContent(source, input, lockedSignal);
+          modifiedTime = information.mtime.toISOString();
+        }
+        const operationId = string('edit-id') ?? randomUUID();
+        return edits.enqueue({
+          action: 'create',
+          id: operationId,
+          desired: {
+            operationId,
+            path: required('path'),
+            kind: 'file',
+            sha256,
+            ...(modifiedTime === undefined ? {} : { modifiedTime }),
+          },
+        });
+      }
+      if ((command === 'send' || command === 'adopt-edit') && source.local) {
+        const transport = localTransport(source, lockedSignal);
+        const connection = {
+          connection_id: source.connection,
+          platform: source.platform,
+        };
+        if (command === 'adopt-edit') {
+          await edits.adopt(
+            positionals[1],
+            required('created-id'),
+            transport,
+            undefined,
+            connection,
+          );
+          return edits.list();
+        }
+        return edits.send(transport, undefined, connection);
       }
       if (command === 'send' || command === 'adopt-edit') {
         const auth = new DaemonAuth(

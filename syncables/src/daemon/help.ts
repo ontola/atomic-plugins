@@ -1,4 +1,12 @@
 export const DAEMON_HELP = `
+macOS storage connector:
+  syncables macos --directory ICLOUD_DRIVE --config-dir PRIVATE_DIRECTORY --owner OWNER
+    [--photos] [--write] [--connector-port 9890]
+  syncables copy --source LOCAL_FILE --path DESTINATION_PATH --collection macos/personal/transfers --config FILE
+  syncables send --collection macos/personal/transfers --config FILE
+copy stages content and queues a durable operation. send performs the local write.
+Inventory reads metadata. Cloud upload status is reported separately in transfers.
+
 Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export only):
   syncables login --config FILE [--write]
   syncables import-connection-grant --config FILE  (grant JSON on stdin)

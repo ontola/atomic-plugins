@@ -1,3 +1,4 @@
+import { snapshotLimits, type SnapshotLimits } from './snapshot-limits.js';
 import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { nodeHash } from '../postgres/json-graph.js';
@@ -21,7 +22,10 @@ export interface CollectionConfig {
   readLimits?: Partial<
     Pick<ReadLimits, 'maxRecords' | 'maxRequests' | 'timeoutMs'>
   >;
+  snapshotLimits?: SnapshotLimits;
   fileInventory?: FileInventorySource;
+  /** Explicitly configured local OpenAPI service, outside IAP authentication. */
+  local?: { url: string; tokenFile: string };
   notifications?: {
     source: string;
     parameters: Record<string, string>;
@@ -134,11 +138,35 @@ export async function loadDaemonConfig(file: string): Promise<DaemonConfig> {
         'query',
         'notifications',
         'writes',
+        'local',
       ].some((key) => Object.hasOwn(c, key))
     )
       throw new Error(
         'fileInventory defines a read-only collection with its own provider and source',
       );
+    let local: CollectionConfig['local'];
+    if (c.local !== undefined) {
+      const settings = object(c.local);
+      const url = new URL(text(settings.url, 'local URL'));
+      if (
+        url.protocol !== 'http:' ||
+        url.hostname !== '127.0.0.1' ||
+        url.pathname !== '/' ||
+        url.search ||
+        url.hash ||
+        url.username ||
+        url.password
+      )
+        throw new Error(
+          'Local connector URL must be an HTTP origin on 127.0.0.1',
+        );
+      local = {
+        url: url.origin,
+        tokenFile: resolve(base, text(settings.tokenFile, 'local token file')),
+      };
+      if (c.notifications !== undefined)
+        throw new Error('Local connectors use polling');
+    }
     const account = label(c.account, 'account');
     const name = label(c.name, 'collection name');
     const collection: CollectionConfig = {
@@ -159,6 +187,10 @@ export async function loadDaemonConfig(file: string): Promise<DaemonConfig> {
       query: strings(c.query),
       pollSeconds: Number(c.pollSeconds ?? 300),
       ...(files ? { fileInventory: files } : {}),
+      ...(c.snapshotLimits === undefined
+        ? {}
+        : { snapshotLimits: snapshotLimits(c.snapshotLimits) }),
+      ...(local ? { local } : {}),
       ...(c.readLimits === undefined
         ? {}
         : { readLimits: readLimits(c.readLimits) }),

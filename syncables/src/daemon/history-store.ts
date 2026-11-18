@@ -13,6 +13,7 @@ import {
   type SnapshotRevision,
   type CheckoutResult,
 } from './git-store.js';
+import { snapshotLimits } from './snapshot-limits.js';
 import type { SnapshotStore } from './snapshot-store.js';
 import { materialize } from './materialize.js';
 
@@ -152,10 +153,17 @@ export class PostgresHistoryStore implements SnapshotStore {
     metadata?: Omit<ImportRevision, 'snapshot' | 'parents' | 'gitId'>,
   ): Promise<string> {
     const inventory = snapshot.context.profile === 'file-inventory-v1';
+    const limits =
+      snapshot.context.snapshotLimits === undefined
+        ? {
+            maxRecords: inventory ? INVENTORY_RECORD_LIMIT : 50_000,
+            maxBytes: inventory ? INVENTORY_LIMIT : LIMIT,
+          }
+        : snapshotLimits(snapshot.context.snapshotLimits);
     if (
       !snapshot.scope ||
       snapshot.scope.length > 8192 ||
-      snapshot.resources.size > (inventory ? INVENTORY_RECORD_LIMIT : 50_000)
+      snapshot.resources.size > limits.maxRecords
     )
       throw new Error('Invalid snapshot scope or size');
     if (snapshot.context.owner !== this.owner)
@@ -167,11 +175,13 @@ export class PostgresHistoryStore implements SnapshotStore {
       a < b ? -1 : a > b ? 1 : 0,
     )) {
       total += Buffer.byteLength(text);
-      if (total > (inventory ? INVENTORY_LIMIT : LIMIT))
+      if (total > limits.maxBytes)
         throw new Error(
-          inventory
-            ? 'File inventory exceeds the 192 MiB snapshot limit'
-            : 'Data snapshot exceeds the 16 MiB stage limit',
+          snapshot.context.snapshotLimits
+            ? 'Data snapshot exceeds its configured byte limit'
+            : inventory
+              ? 'File inventory exceeds the 192 MiB snapshot limit'
+              : 'Data snapshot exceeds the 16 MiB stage limit',
         );
       const graph = indexJson(text, { maxBytes: LIMIT });
       const data = JSON.parse(text) as Record<string, unknown>;
