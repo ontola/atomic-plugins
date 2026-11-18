@@ -335,6 +335,37 @@ describe('macOS service through generic OpenAPI paths', () => {
       uploadError: error,
     });
   });
+  it('describes required path parameters, local authentication and binary staging in OpenAPI', async () => {
+    const f = await fixture();
+    for (const [template, path] of Object.entries(f.document.paths)) {
+      for (const method of ['get', 'post'] as const) {
+        const operation = path[method];
+        if (!operation) continue;
+        const variables = [...template.matchAll(/\{([^{}]+)\}/g)].map(
+          (match) => match[1],
+        );
+        for (const name of variables)
+          expect(operation.parameters).toContainEqual({
+            name,
+            in: 'path',
+            required: true,
+            schema: { type: 'string' },
+          });
+        expect(operation.parameters).toContainEqual({
+          name: 'x-syncables-connection',
+          in: 'header',
+          required: true,
+          schema: { type: 'string' },
+        });
+      }
+    }
+    expect(
+      f.document.paths['/blobs'].post?.requestBody?.content?.[
+        'application/octet-stream'
+      ],
+    ).toBeDefined();
+    expect(f.document.security).toEqual([{ localConnector: [] }]);
+  });
   it('validates explicit local transport configuration', async () => {
     const f = await fixture();
     const file = join(f.directory, 'config.json');

@@ -8,6 +8,9 @@ export function macDocument(
   writable: boolean,
 ): OpenApiDocument {
   const string: SchemaObject = { type: 'string' };
+  const timestamp: SchemaObject = {
+    oneOf: [{ type: 'string', format: 'date-time' }, { type: 'null' }],
+  };
   const properties = {
     id: { ...string, readOnly: true },
     operationId: string,
@@ -22,6 +25,7 @@ export function macDocument(
     openapi: '3.1.0',
     info: { title: 'Syncables macOS storage', version: '1' },
     servers: [{ url }],
+    security: [{ localConnector: [] }],
     'x-syncables-native-scope': {
       version: 1,
       adapter: 'macos',
@@ -30,6 +34,7 @@ export function macDocument(
     },
     paths: {},
     components: {
+      securitySchemes: { localConnector: { type: 'http', scheme: 'bearer' } },
       schemas: {
         File: {
           type: 'object',
@@ -39,7 +44,8 @@ export function macDocument(
             path: string,
             kind: string,
             size: string,
-            modifiedTime: string,
+            createdTime: timestamp,
+            modifiedTime: timestamp,
             uploadStatus: string,
             downloadStatus: string,
           },
@@ -59,7 +65,11 @@ export function macDocument(
             resources: { type: 'array', items: { type: 'object' } },
           },
         },
-        Transfer: { type: 'object', properties },
+        Transfer: {
+          type: 'object',
+          required: ['operationId', 'path', 'kind'],
+          properties,
+        },
       },
       paginationSchemes: {
         pages: {
@@ -108,6 +118,9 @@ export function macDocument(
     document.paths['/' + name + '/{id}'] = {
       get: {
         'x-crud': { resource, action: 'read' },
+        parameters: [
+          { name: 'id', in: 'path', required: true, schema: string },
+        ],
         responses: {
           '200': {
             description: 'Metadata item',
@@ -122,6 +135,7 @@ export function macDocument(
     };
     (document.components!.crudResources as Record<string, unknown>)[resource] =
       {
+        schema: { $ref: '#/components/schemas/' + schema },
         identity: {
           urlTemplate: '/' + name + '/{id}',
           bindings: { id: { field: 'id' } },
@@ -151,6 +165,32 @@ export function macDocument(
     },
   };
   if (writable) {
+    document.paths['/blobs'] = {
+      post: {
+        requestBody: {
+          required: true,
+          content: {
+            'application/octet-stream': {
+              schema: { type: 'string', format: 'binary' },
+            },
+          },
+        },
+        responses: {
+          '201': {
+            description: 'Immutable staged content',
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  properties: { sha256: string, size: string },
+                  required: ['sha256', 'size'],
+                },
+              },
+            },
+          },
+        },
+      },
+    };
     document.paths['/transfers'].post = {
       'x-crud': {
         resource: 'macos-transfers',
@@ -178,5 +218,17 @@ export function macDocument(
       },
     };
   }
+  for (const path of Object.values(document.paths))
+    for (const method of ['get', 'post'] as const)
+      if (path[method])
+        path[method].parameters = [
+          ...(path[method].parameters ?? []),
+          {
+            name: 'x-syncables-connection',
+            in: 'header',
+            required: true,
+            schema: string,
+          },
+        ];
   return document;
 }
