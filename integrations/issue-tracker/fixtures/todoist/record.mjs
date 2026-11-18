@@ -107,6 +107,7 @@ import {
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const API = 'https://api.todoist.com/api/v1';
+
 export const DEFAULT_PROXY = 'https://integrations.atomic.place';
 
 /**

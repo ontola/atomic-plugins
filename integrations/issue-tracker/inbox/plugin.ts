@@ -376,6 +376,7 @@ export async function run(ctx: Ctx): Promise<Output> {
       'Build this unpublished webhook inbox with an explicit --proxy-origin test receiver; production IAP requires a host connection-key handoff.',
     );
   }
+
   if (ctx.phase === 'action') {
     throw new Error('The webhook inbox has no actions');
   }

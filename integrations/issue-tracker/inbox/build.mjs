@@ -27,7 +27,9 @@ export async function bundle({ proxyOrigin } = {}) {
       'Webhook inbox prototype requires an explicit --proxy-origin test receiver. Production IAP needs a host connection-key handoff and a signature binding that key; this sandbox pilot does not implement it.',
     );
   }
+
   const origin = new URL(proxyOrigin);
+
   if (
     !['http:', 'https:'].includes(origin.protocol) ||
     origin.username ||
@@ -38,6 +40,7 @@ export async function bundle({ proxyOrigin } = {}) {
   ) {
     throw new Error('--proxy-origin must be a bare HTTP(S) origin');
   }
+
   const result = await build({
     entryPoints: [here('./plugin.ts')],
     bundle: true,
