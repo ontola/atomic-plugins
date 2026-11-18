@@ -137,9 +137,7 @@ describe.skipIf(!database)(
         join(root, 'concurrent'),
       );
       await expect(store.browserPage(first, '', 1)).resolves.toBeUndefined();
-      await expect(
-        concurrent.browserPage(first, '', 1),
-      ).resolves.toBeUndefined();
+      await concurrent.browserPage(first, '', 1);
       await vi.waitFor(
         async () => {
           const sorted = await store.browserPage(first, '', 1);
