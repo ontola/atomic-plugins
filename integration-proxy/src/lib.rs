@@ -465,6 +465,7 @@ fn router(state: AppState) -> Router {
         )
         .route("/oauth/:provider/callback", get(oauth::callback))
         .route("/catalog", get(catalog::list))
+        .route("/catalog/apps", get(catalog::apps))
         .route("/catalog/:file", get(catalog::document))
         .layer(browser_cors())
         .layer(TraceLayer::new_for_http().make_span_with(|request: &axum::http::Request<_>| {

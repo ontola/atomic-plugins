@@ -49,6 +49,14 @@ export interface CollectionReadOptions {
   transport: Transport;
   constants?: Record<string, string>;
   /**
+   * Restrict a read to these CRUD-causality collection names. If a selected
+   * collection's path parameters were not supplied in `constants`, only the
+   * provider collections needed to resolve those parameters are included.
+   * Unrelated collections are never fetched. Omit to retain the existing
+   * read-everything behavior.
+   */
+  collectionNames?: string[];
+  /**
    * Throttling 0.5.0 plan tiers: the account's plan, as the provider names
    * it in a tier's `plans`. A Limit Object with `tiers` is then read
    * through the tier that names it; without one, or with a plan no tier
@@ -203,6 +211,45 @@ function invocations(
   });
 }
 
+/**
+ * Scope a model to explicit collection definitions and only their unresolved
+ * parent dependencies. With a concrete owner/repo/calendar id in `constants`,
+ * this reads the requested instance directly instead of fetching every parent
+ * and sibling merely to discover its path parameters.
+ *
+ * The set preserves the document's declaration order, so parent collection
+ * records become available before their dependants as with an unscoped read.
+ */
+function selectCollections(
+  model: ReadModel,
+  requested: string[],
+  constants: Record<string, string>,
+): void {
+  const byName = new Map(
+    model.collections.map((collection) => [collection.name, collection]),
+  );
+  const needed = new Set<string>();
+
+  const include = (name: string): void => {
+    const collection = byName.get(name);
+    if (!collection) throw new Error(`Unknown collection ${name}`);
+    if (needed.has(name)) return;
+    needed.add(name);
+
+    for (const param of collection.contextParams) {
+      if (constants[param]) continue;
+      const provider = model.providers.get(param);
+      if (provider && provider.collection !== name)
+        include(provider.collection);
+    }
+  };
+
+  for (const name of requested) include(name);
+  model.collections = model.collections.filter((collection) =>
+    needed.has(collection.name),
+  );
+}
+
 /** Raw provider collections, using the same traversal as the typed reader and local replica. */
 export async function readCollections(
   document: OpenApiDocument,
@@ -215,7 +262,12 @@ export async function readCollections(
   const fixedQueries = new Map(
     model.collections.map((c) => [c.name, { ...c.listQuery }]),
   );
+  // Catalog defaults describe the complete model, even for a selected read.
+  // Validate them before dropping unrelated collections and their parameters.
   applySelection(doc, model, options.selection);
+  if (options.collectionNames) {
+    selectCollections(model, options.collectionNames, options.constants ?? {});
+  }
   const constants = options.constants ?? {};
   for (const param of rootParameters(model)) {
     if (!constants[param]) throw new Error(`Enter a value for ${param}`);

@@ -1055,6 +1055,67 @@ pub async fn list(State(state): State<AppState>) -> Json<Vec<String>> {
     Json(state.catalog.names())
 }
 
+/// Public metadata for data-browser app discovery. This is not a source of
+/// executable code: `/catalog` keeps its existing platform-ID array contract.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppIndex {
+    version: u8,
+    platforms: Vec<AppEntry>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppEntry {
+    id: String,
+    name: String,
+    description: Option<String>,
+    document: String,
+}
+
+/// Versioned catalog metadata for user-facing Apps discovery.
+///
+/// The proxy's composed OpenAPI `info` is already loaded and validated at
+/// startup. Catalog metadata is never evaluated as HTML or JavaScript.
+pub async fn apps(State(state): State<AppState>) -> Json<AppIndex> {
+    let platforms = state
+        .catalog
+        .names()
+        .into_iter()
+        .map(|id| {
+            let parsed: Value = state
+                .catalog
+                .get(&id)
+                .and_then(|source| serde_yaml::from_str(source).ok())
+                .unwrap_or(Value::Null);
+            let info = parsed.get("info");
+            let name = info
+                .and_then(|value| value.get("title"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(&id)
+                .to_owned();
+            let description = info
+                .and_then(|value| value.get("description"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_owned);
+
+            AppEntry {
+                document: format!("/catalog/{id}.yaml"),
+                id,
+                name,
+                description,
+            }
+        })
+        .collect();
+
+    Json(AppIndex {
+        version: 1,
+        platforms,
+    })
+}
+
 pub async fn document(Path(file): Path<String>, State(state): State<AppState>) -> Response {
     if let Some(platform) = file.strip_suffix(".selection.json") {
         if state.catalog.get(platform).is_none() {
@@ -1690,7 +1751,7 @@ mod tests {
             Err("query parameter value is not permitted")
         );
         // Other users' and organizations' listings stay outside the document.
-        for path in ["/users/octocat/repos", "/orgs/ontola/repos", "/user/orgs"] {
+        for path in ["/users/octocat/repos", "/orgs/ontola/repos"] {
             assert!(
                 catalog.allows("github-issues", "GET", path).is_none(),
                 "{path}"
@@ -1747,7 +1808,7 @@ mod tests {
         );
         // Still the one `repo` scope: labels need no scope of their own.
         let github = catalog.oauth_provider("github-issues").unwrap();
-        assert_eq!(github.scopes, vec!["repo".to_string()]);
+        assert_eq!(github.scopes, ["read:org", "repo"]);
         // atomic-plugins#5 Phase 1: the composed google-calendar document
         // now allows the one write operation Devonian's lens sends.
         assert!(catalog
@@ -2141,6 +2202,29 @@ mod tests {
             serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert!(!names.is_empty());
+
+        let index = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/catalog/apps")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(index.status(), StatusCode::OK);
+        let index: Value =
+            serde_json::from_slice(&to_bytes(index.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(index["version"], 1);
+        assert_eq!(index["platforms"].as_array().unwrap().len(), names.len());
+        assert!(index["platforms"].as_array().unwrap().iter().any(|entry| {
+            entry["id"] == "github-issues"
+                && entry["name"] == "Test"
+                && entry["document"] == "/catalog/github-issues.yaml"
+        }));
+
         for name in names {
             let response = app
                 .clone()
@@ -2503,6 +2587,103 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "downloads the pinned GitHub OAD"]
+    async fn default_catalog_supports_built_in_github_discovery() {
+        let catalog =
+            checked_in_platform(crate::config::DEFAULT_CATALOG_FILE, "github-issues").await;
+        let provider = catalog.oauth_provider("github-issues").unwrap();
+        assert!(provider.scopes.iter().any(|scope| scope == "read:org"));
+        for path in [
+            "/user",
+            "/user/orgs",
+            "/user/repos",
+            "/repositories/456/issues",
+        ] {
+            assert!(
+                catalog.allows("github-issues", "GET", path).is_some(),
+                "{path}"
+            );
+        }
+        assert!(catalog
+            .allows("github-issues", "POST", "/user/orgs")
+            .is_none());
+        let document: Value = serde_yaml::from_str(catalog.get("github-issues").unwrap()).unwrap();
+        let parameters = document["paths"]["/repositories/{repository_id}/issues"]["get"]
+            ["parameters"]
+            .as_array()
+            .unwrap();
+        let names: Vec<_> = parameters
+            .iter()
+            .map(|parameter| parameter["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, ["repository_id", "per_page", "page", "state"]);
+    }
+
+    #[tokio::test]
+    #[ignore = "downloads the pinned GitHub OAD"]
+    async fn syncables_apps_catalog_declares_selected_github_collections() {
+        let catalog =
+            checked_in_platform("catalog/2026-11-18-syncables-apps.json", "github-issues").await;
+        let provider = catalog.oauth_provider("github-issues").unwrap();
+        assert!(provider.scopes.iter().any(|scope| scope == "read:org"));
+        for path in [
+            "/user",
+            "/user/orgs",
+            "/user/repos",
+            "/repositories/456/issues",
+        ] {
+            assert!(
+                catalog.allows("github-issues", "GET", path).is_some(),
+                "{path}"
+            );
+        }
+        assert!(catalog
+            .allows("github-issues", "POST", "/user/orgs")
+            .is_none());
+        let document: Value = serde_yaml::from_str(catalog.get("github-issues").unwrap()).unwrap();
+        let parameters = document["paths"]["/repositories/{repository_id}/issues"]["get"]
+            ["parameters"]
+            .as_array()
+            .unwrap();
+        let names: Vec<_> = parameters
+            .iter()
+            .map(|parameter| parameter["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            ["repository_id", "per_page", "page", "state", "after"]
+        );
+        for (resource, collection, path) in [
+            ("githubOrganization", "githubOrganizations", "/user/orgs"),
+            ("githubRepository", "githubRepositories", "/user/repos"),
+            (
+                "issue",
+                "repositoryIssues",
+                "/repositories/{repository_id}/issues",
+            ),
+        ] {
+            assert_eq!(
+                document["components"]["crudResources"][resource]["collections"][collection]
+                    ["urlTemplate"],
+                path
+            );
+        }
+        assert_eq!(
+            document["components"]["crudResources"]["issue"]["collections"]["repositoryIssues"]
+                ["listQuery"]["state"],
+            "all"
+        );
+        assert_eq!(
+            catalog.selections["github-issues"]["query_overrides"],
+            serde_json::json!([
+                {"path": "/user/orgs", "values": {"per_page": 100}},
+                {"path": "/user/repos", "values": {"per_page": 100}},
+                {"path": "/repositories/{repository_id}/issues", "values": {"per_page": 100}}
+            ])
+        );
     }
 
     #[tokio::test]

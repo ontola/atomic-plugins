@@ -76,6 +76,8 @@ export interface ReadOptions {
   platform: string;
   /** Values for `describePlatform(document).parameters`. */
   constants: Record<string, string>;
+  /** Read only these collection definitions, plus unresolved parent dependencies. */
+  collectionNames?: string[];
   transport: Transport;
   /** Optional storage hook for original data-read responses. */
   storeResponse?: StoreReadResponse;

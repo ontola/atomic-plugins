@@ -1,6 +1,27 @@
 # overlays
 OpenAPI Overlay files that complete existing OpenAPI files with Pagination Schemes and other additions
 
+## GitHub collection discovery
+
+The opt-in catalog `catalog/2026-11-18-syncables-apps.json` preserves all 17
+providers and existing selections from `2026-11-16-storage-metadata.json`,
+including GitHub's CRUD Causality v2 overlay. It appends the GitHub discovery
+and read-model OpenAPI Overlays. The read model declares CRUD Causality collections
+`githubOrganizations`, `githubRepositories` and `repositoryIssues`, with
+Pagination Schemes metadata. Issues define a complete history read with
+`state: all` and a stable numeric `repository_id` binding. The catalog
+selection chooses `per_page: 100` for all three list operations; page size
+is a consumer choice, separate from provider behavior.
+Existing dated catalogs and overlays remain unchanged.
+
+A client reads the proxy's composed OpenAPI document normally. The published
+`syncables/browser` reader can discover these collections and select one with
+`collectionNames`; supplying `repository_id` reads only the selected issue
+tracker. Atomic Server keeps its storage mapping, UI and permission checks.
+There is no separate metadata package or runtime client-side overlay patch.
+An integration proxy opts in by selecting this dated catalog through
+`CATALOG_PATH`.
+
 ## Where this lives and how it is published
 
 This folder was migrated from the standalone `localthought/overlays`
@@ -18,7 +39,7 @@ https://ontola.github.io/atomic-plugins/overlays/<path>
 
 Each dated catalog under `catalog/` lists each platform's overlays by those
 URLs. The integration proxy's default `CATALOG_PATH` is
-`https://ontola.github.io/atomic-plugins/overlays/catalog/2026-10-29-google-keep-writes.json`
+`https://ontola.github.io/atomic-plugins/overlays/catalog/2026-11-16-syncables-github.json`
 in current source (unreleased); proxy 0.2.4, and localthought.io's explicit
 `CATALOG_PATH`, use `catalog/2026-10-02.json`. Before this
 migration every overlay URL was pinned to a `localthought/overlays` commit

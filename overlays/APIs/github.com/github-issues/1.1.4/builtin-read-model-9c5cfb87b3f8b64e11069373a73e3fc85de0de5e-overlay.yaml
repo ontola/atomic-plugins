@@ -1,0 +1,258 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9c5cfb87b3f8b64e11069373a73e3fc85de0de5e/APIs/github.com/github-issues/1.1.4/openapi.yaml
+info:
+  title: GitHub organization, repository and canonical Issues collections
+  version: 1.0.0
+actions:
+- target: $.info
+  update:
+    title: GitHub
+    x-logo:
+      url: https://ontola.github.io/atomic-plugins/overlays/assets/github-mark-1.svg
+- target: $.components
+  update:
+    paginationSchemes:
+      builtinGithubNextLink:
+        type: nextLink
+        request:
+          queryParameters:
+            per_page:
+              role: pageSize
+        response:
+          headers:
+            Link:
+              role: nextLink
+    schemas:
+      builtinGithubOrganization:
+        type: object
+        title: Owner namespaces
+        required:
+        - id
+        - login
+        properties:
+          id:
+            type: integer
+          login:
+            type: string
+            title: Owner namespace
+          type:
+            type: string
+            title: Kind
+            oneOf:
+            - enum: [Organization]
+              title: Organization
+            - enum: [User]
+              title: Personal owner
+      builtinGithubRepository:
+        type: object
+        title: Repositories
+        required:
+        - id
+        - name
+        - owner
+        properties:
+          id:
+            type: integer
+          name:
+            type: string
+            title: Repository
+          private:
+            type: boolean
+            title: Kind
+            oneOf:
+            - enum: [true]
+              title: Private
+            - enum: [false]
+              title: Public
+          has_issues:
+            type: boolean
+            title: Issues
+            oneOf:
+            - enum: [true]
+              title: Available
+            - enum: [false]
+              title: Disabled in GitHub
+          open_issues_count:
+            type: integer
+            minimum: 0
+            title: Open issues + PRs
+          owner:
+            type: object
+            properties:
+              id:
+                type: integer
+              login:
+                type: string
+                title: Owner
+              type:
+                type: string
+    crudResources:
+      githubOrganization:
+        schema:
+          $ref: '#/components/schemas/builtinGithubOrganization'
+        identity:
+          urlTemplate: /organizations/{organization_id}
+          bindings:
+            organization_id:
+              field: id
+        collections:
+          githubOrganizations:
+            urlTemplate: /user/orgs
+            envelope:
+              itemsField: ''
+      githubRepository:
+        schema:
+          $ref: '#/components/schemas/builtinGithubRepository'
+        identity:
+          urlTemplate: /repositories/{repository_id}
+          bindings:
+            repository_id:
+              field: id
+        collections:
+          githubRepositories:
+            urlTemplate: /user/repos
+            envelope:
+              itemsField: ''
+      issue:
+        collections:
+          repositoryIssues:
+            urlTemplate: /repositories/{repository_id}/issues
+            listQuery:
+              state: all
+            envelope:
+              itemsField: ''
+- target: $.paths
+  update:
+    /user/orgs:
+      get:
+        parameters:
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        x-pagination:
+        - scheme: builtinGithubNextLink
+        x-crud:
+          action: list
+          resource: githubOrganization
+          collection: githubOrganizations
+        responses:
+          '200':
+            description: A page of GitHub records.
+            headers:
+              Link:
+                schema:
+                  type: string
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/builtinGithubOrganization'
+    /user/repos:
+      get:
+        parameters:
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum:
+            - created
+            - updated
+            - pushed
+            - full_name
+            default: full_name
+        - name: direction
+          in: query
+          schema:
+            type: string
+            enum:
+            - asc
+            - desc
+        x-pagination:
+        - scheme: builtinGithubNextLink
+        x-crud:
+          action: list
+          resource: githubRepository
+          collection: githubRepositories
+        responses:
+          '200':
+            description: A page of GitHub records.
+            headers:
+              Link:
+                schema:
+                  type: string
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/builtinGithubRepository'
+    /repositories/{repository_id}/issues:
+      get:
+        parameters:
+        - name: repository_id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+        - name: state
+          in: query
+          schema:
+            type: string
+            enum:
+            - open
+            - closed
+            - all
+        - name: after
+          in: query
+          schema:
+            type: string
+        x-pagination:
+        - scheme: builtinGithubNextLink
+        x-crud:
+          action: list
+          resource: issue
+          collection: repositoryIssues
+        responses:
+          '200':
+            description: A page of GitHub records.
+            headers:
+              Link:
+                schema:
+                  type: string
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/issue'
