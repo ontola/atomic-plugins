@@ -763,12 +763,12 @@
     "bldg-geometry-kind": {
       "name": "Geometry kind",
       "datatype": "https://atomicdata.dev/datatypes/string",
-      "description": "Which shape the geometry JSON holds. One of: wallAxis, extrusion, opening, stair, mesh."
+      "description": "Which shape the geometry JSON holds. One of: wallAxis, extrusion, opening, stair, casework, mesh."
     },
     "bldg-geometry": {
       "name": "Geometry",
       "datatype": "https://atomicdata.dev/datatypes/json",
-      "description": "The shape, as JSON whose layout depends on the geometry kind. Metres, local to the storey, Z up; heights are above the storey floor. wallAxis {start: [x, y], end: [x, y], height, thickness, base?}: a straight wall centred on its axis. extrusion {polygon: [[x, y], ...], depth, base?}: a polygon pushed up by depth from base; base defaults to -depth for an IfcSlab (top flush with the floor) and to 0 otherwise. Floors, flat roofs with their overhang, columns, piers, chimneys, built-in furniture. opening {offset, width, height, sill}: a door or window in its host wall, offset metres from the wall start. stair {start: [x, y], direction, width, rise, risers, going, base?}: a straight flight starting at start, going direction degrees counter-clockwise from +X, climbing rise metres in risers equal steps over going metres. mesh {file?, at?: [x, y, z], rotation?}: a glTF/GLB File resource placed at at, rotated rotation degrees around Z; without file, the model file of the element type. Checked by the app, not by the server."
+      "description": "The shape, as JSON whose layout depends on the geometry kind. Metres, local to the storey, Z up; heights are above the storey floor. wallAxis {start: [x, y], end: [x, y], height, thickness, base?}: a straight wall centred on its axis. extrusion {polygon: [[x, y], ...], depth, base?}: a polygon pushed up by depth from base; base defaults to -depth for an IfcSlab (top flush with the floor) and to 0 otherwise. Floors, flat roofs with their overhang, columns, piers, chimneys, built-in furniture. opening {offset, width, height, sill}: a door or window in its host wall, offset metres from the wall start. stair {start: [x, y], direction, width, rise, risers, going, base?}: a straight flight starting at start, going direction degrees counter-clockwise from +X, climbing rise metres in risers equal steps over going metres. casework {start: [x, y], end: [x, y], depth, height, base?, module?}: a run of built-in cabinets (kitchen, wardrobe, shelving) with its back on the line from start to end and its depth to the left of it, divided into fronts of about module metres (default 0.6); material slots carcass, fronts, top and plinth. mesh {file?, at?: [x, y, z], rotation?}: a glTF/GLB File resource placed at at, rotated rotation degrees around Z; without file, the model file of the element type. Checked by the app, not by the server."
     },
     "bldg-material": {
       "name": "Material",
@@ -779,7 +779,7 @@
     "bldg-attributes": {
       "name": "Attributes",
       "datatype": "https://atomicdata.dev/datatypes/json",
-      "description": "Type-specific fields as a JSON object; on an Element they override those of its type. Known keys: windows and doors: frameMaterial (Material subject), frameWidth and frameDepth (m), panes [columns, rows], operation (fixed, casement, sliding, tilt-turn, pivot, hinged), swing (left, right); stairs: treadMaterial and stringerMaterial (Material subjects), open (true for open risers); railings: height (m). Unknown keys are kept."
+      "description": "Type-specific fields as a JSON object; on an Element they override those of its type. Known keys: windows and doors: frameMaterial (Material subject), frameWidth and frameDepth (m), panes [columns, rows], operation (fixed, casement, sliding, tilt-turn, pivot, hinged), swing (left, right); stairs: treadMaterial and stringerMaterial (Material subjects), open (true for open risers); railings: height (m); casework: open (true for shelving without fronts), worktop thickness (m), plinth height (m). Unknown keys are kept."
     },
     "bldg-origin": {
       "name": "Origin",
