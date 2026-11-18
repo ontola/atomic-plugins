@@ -3,6 +3,7 @@ import type { BrowserStatus } from './browser-status.js';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { SnapshotStore } from './snapshot-store.js';
+import type { BrowserPage } from './browser-index.js';
 import { SOURCE_ID, SOURCE_JSON } from './sync.js';
 import {
   indexJson,
@@ -19,7 +20,17 @@ export interface BrowserServer {
   url: string;
   close(): Promise<void>;
 }
-type BrowserStore = Pick<SnapshotStore, 'head' | 'resolveRevision' | 'list'>;
+type BrowserStore = Pick<SnapshotStore, 'head' | 'resolveRevision'> &
+  (
+    | {
+        browserPage(
+          revision: string,
+          query: string,
+          page: number,
+        ): Promise<BrowserPage | undefined>;
+      }
+    | Pick<SnapshotStore, 'list'>
+  );
 class BrowserError extends Error {
   constructor(
     readonly status: number,
@@ -27,6 +38,39 @@ class BrowserError extends Error {
   ) {
     super(message);
   }
+}
+
+async function legacyPage(
+  store: Pick<SnapshotStore, 'list'>,
+  scope: string,
+  revision: string,
+  query: string,
+  page: number,
+): Promise<BrowserPage> {
+  const rawRows = await store.list(scope, revision);
+  if (
+    rawRows.length > 50_000 ||
+    rawRows.reduce((sum, raw) => sum + Buffer.byteLength(raw), 0) >
+      32 * 1024 * 1024
+  )
+    throw new BrowserError(
+      413,
+      'This snapshot is too large for the simple browser. Use the CLI browser.',
+    );
+  const rows = rawRows
+    .map((raw) => ({ raw, data: JSON.parse(raw) as Record<string, unknown> }))
+    .filter(
+      ({ raw, data }) =>
+        Object.hasOwn(data, SOURCE_ID) &&
+        (!query || raw.toLowerCase().includes(query)),
+    )
+    .sort((a, b) =>
+      String(a.data[SOURCE_ID]).localeCompare(String(b.data[SOURCE_ID])),
+    );
+  return {
+    total: rows.length,
+    records: rows.slice((page - 1) * 25, page * 25).map(({ raw }) => raw),
+  };
 }
 
 /** Read-only loopback view of accepted local snapshots; no provider transport. */
@@ -213,31 +257,24 @@ export async function startBrowserServer(options: {
       const query = (url.searchParams.get('q') ?? '').trim().toLowerCase();
       if (query.length > 200)
         throw new BrowserError(400, 'Search is limited to 200 characters');
-      const rawRows = await options.store.list(collection.scope, revision);
-      if (
-        rawRows.length > 50_000 ||
-        rawRows.reduce((sum, raw) => sum + Buffer.byteLength(raw), 0) >
-          32 * 1024 * 1024
-      ) {
-        throw new BrowserError(
-          413,
-          'This snapshot is too large for the simple browser. Use the CLI browser.',
-        );
+      const result =
+        'browserPage' in options.store
+          ? await options.store.browserPage(revision, query, page)
+          : await legacyPage(
+              options.store,
+              collection.scope,
+              revision,
+              query,
+              page,
+            );
+      if (!result) {
+        send(202, JSON.stringify({ revision, preparing: true }));
+        return;
       }
-      const rows = rawRows
-        .map((raw) => ({
-          raw,
-          data: JSON.parse(raw) as Record<string, unknown>,
-        }))
-        .filter(
-          ({ raw, data }) =>
-            Object.hasOwn(data, SOURCE_ID) &&
-            (!query || raw.toLowerCase().includes(query)),
-        )
-        .sort((a, b) =>
-          String(a.data[SOURCE_ID]).localeCompare(String(b.data[SOURCE_ID])),
-        );
-      const selected = rows.slice((page - 1) * 25, page * 25);
+      const selected = result.records.map((raw) => ({
+        raw,
+        data: JSON.parse(raw) as Record<string, unknown>,
+      }));
       const records = await Promise.all(
         selected.map(async ({ raw, data }) => {
           const source = data[SOURCE_JSON];
@@ -271,9 +308,9 @@ export async function startBrowserServer(options: {
       );
       const body = JSON.stringify({
         revision,
-        total: rows.length,
+        total: result.total,
         page,
-        pages: Math.ceil(rows.length / 25),
+        pages: Math.ceil(result.total / 25),
         records,
       });
       if (Buffer.byteLength(body) > 8 * 1024 * 1024)

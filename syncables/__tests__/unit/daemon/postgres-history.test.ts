@@ -27,7 +27,11 @@ import {
 import { nodeHash } from '../../../src/postgres/json-graph.js';
 import { DaemonAuth } from '../../../src/daemon/auth.js';
 import { daemonCommand } from '../../../src/daemon/commands.js';
-import { prepareCollection } from '../../../src/daemon/sync.js';
+import {
+  prepareCollection,
+  SOURCE_ID,
+  SOURCE_JSON,
+} from '../../../src/daemon/sync.js';
 
 const database = process.env.SYNCABLES_TEST_DATABASE_URL;
 const prefix = 'snapshot-history-' + randomUUID();
@@ -93,6 +97,80 @@ describe.skipIf(!database)(
       });
       return { store, git, scope, owner, dir, snapshot };
     }
+    it('streams exact checkout bytes and indexes an immutable snapshot for paging and literal search', async () => {
+      const { store, scope, owner } = await fixture();
+      const resources = new Map<string, string>();
+      for (let i = 0; i < 501; i++) {
+        const subject = 'urn:example:' + i;
+        const id = String(500 - i).padStart(3, '0');
+        const title = i === 500 ? 'Exact%_Match' : 'Other';
+        resources.set(
+          subject,
+          `{"@id":"${subject}","${SOURCE_ID}":"${id}","${SOURCE_JSON}":{"title":"${title}","count":9007199254740993}}`,
+        );
+      }
+      resources.set(SUBJECT, raw('"schema"'));
+      const first = await store.commit({
+        scope,
+        context: { owner, resource: 'note' },
+        resources,
+      });
+      const firstRecord = await store.resource(scope, 'urn:example:500', first);
+      const lastRecord = await store.resource(scope, 'urn:example:0', first);
+      expect(firstRecord).toContain('9007199254740993');
+      const checkout = await store.checkout(scope, 'example/work/tasks');
+      expect(checkout?.revision).toBe(first);
+      expect(
+        await readFile(
+          join(
+            checkout!.directory,
+            'r-' + nodeHash('urn:example:500') + '.json',
+          ),
+          'utf8',
+        ),
+      ).toBe(firstRecord);
+      expect((await readdir(checkout!.directory)).length).toBe(504);
+
+      const concurrent = new PostgresHistoryStore(
+        archive.pool,
+        owner,
+        join(root, 'concurrent'),
+      );
+      await expect(store.browserPage(first, '', 1)).resolves.toBeUndefined();
+      await expect(
+        concurrent.browserPage(first, '', 1),
+      ).resolves.toBeUndefined();
+      await vi.waitFor(
+        async () => {
+          const sorted = await store.browserPage(first, '', 1);
+          expect(sorted?.total).toBe(501);
+          expect(sorted?.records[0]).toBe(firstRecord);
+        },
+        { timeout: 5000 },
+      );
+      expect(await concurrent.browserPage(first, '', 1)).toEqual(
+        await store.browserPage(first, '', 1),
+      );
+      const final = await store.browserPage(first, '', 21);
+      expect(final).toEqual({
+        total: 501,
+        records: [lastRecord],
+      });
+      expect(await store.browserPage(first, '%_match', 1)).toEqual({
+        total: 1,
+        records: [firstRecord],
+      });
+      await store.commit(
+        {
+          scope,
+          context: { owner },
+          resources: new Map([[SUBJECT, raw('"changed"')]]),
+        },
+        first,
+      );
+      expect(await store.browserPage(first, '', 21)).toEqual(final);
+    }, 30_000);
+
     it('shares hash-addressed JSON nodes, rejects stale heads and scopes reads by owner', async () => {
       const { store, scope, owner, snapshot } = await fixture();
       const one = await store.commit(

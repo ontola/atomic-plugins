@@ -7,6 +7,7 @@ import {
   type BrowserServer,
 } from '../../../src/daemon/browser-server.js';
 import { BROWSER_SCRIPT } from '../../../src/daemon/browser-ui.js';
+import type { BrowserPage } from '../../../src/daemon/browser-index.js';
 import type { BrowserStatus } from '../../../src/daemon/browser-status.js';
 import { SOURCE_ID, SOURCE_JSON } from '../../../src/daemon/sync.js';
 
@@ -32,7 +33,23 @@ async function fixture(records = rows, status?: () => Promise<BrowserStatus>) {
         throw new Error('Unknown revision');
       return at;
     }),
-    list: vi.fn(async () => records),
+    browserPage: vi.fn(
+      async (
+        _revision: string,
+        query: string,
+        page: number,
+      ): Promise<BrowserPage | undefined> => {
+        const matched = records.filter(
+          (raw) =>
+            Object.hasOwn(JSON.parse(raw), SOURCE_ID) &&
+            raw.toLowerCase().includes(query),
+        );
+        return {
+          total: matched.length,
+          records: matched.slice((page - 1) * 25, page * 25),
+        };
+      },
+    ),
   };
   const server = await startBrowserServer({
     store,
@@ -73,7 +90,7 @@ describe('local SyncD data browser', () => {
     expect(await response.json()).toEqual({
       collections: [{ alias: 'example/work/tasks', synced: true }],
     });
-    expect(f.store.list).not.toHaveBeenCalled();
+    expect(f.store.browserPage).not.toHaveBeenCalled();
   });
 
   it('pages through only source records and pins the revision across head changes', async () => {
@@ -100,7 +117,20 @@ describe('local SyncD data browser', () => {
     ).json();
     expect(second.records).toHaveLength(6);
     expect(second.records[0].id).toBe('25');
-    expect(f.store.list).toHaveBeenLastCalledWith(scope, revision);
+    expect(f.store.browserPage).toHaveBeenLastCalledWith(revision, '', 2);
+  });
+
+  it('reports that the saved revision is being prepared without keeping the request open', async () => {
+    const f = await fixture();
+    f.store.browserPage.mockResolvedValueOnce(undefined);
+    const response = await fetch(
+      f.origin + '/api/records?collection=example/work/tasks',
+      {
+        headers: f.headers,
+      },
+    );
+    expect(response.status).toBe(202);
+    expect(await response.json()).toEqual({ revision, preparing: true });
   });
 
   it('searches the snapshot and preserves exact large-number JSON', async () => {
@@ -130,7 +160,7 @@ describe('local SyncD data browser', () => {
       })
     ).json();
     expect(result.revision).toBeNull();
-    expect(f.store.list).not.toHaveBeenCalled();
+    expect(f.store.browserPage).not.toHaveBeenCalled();
     f.setHead(revision);
     const empty = await (
       await fetch(f.origin + '/api/records?collection=example/work/tasks', {
@@ -178,7 +208,7 @@ describe('local SyncD data browser', () => {
         })
       ).status,
     ).toBe(404);
-    expect(f.store.list).not.toHaveBeenCalled();
+    expect(f.store.browserPage).not.toHaveBeenCalled();
   });
 
   it('returns actionable revision/page errors and sanitizes storage failures', async () => {
@@ -200,7 +230,7 @@ describe('local SyncD data browser', () => {
         )
       ).status,
     ).toBe(400);
-    f.store.list.mockRejectedValueOnce(
+    f.store.browserPage.mockRejectedValueOnce(
       new Error('private database diagnostic'),
     );
     const response = await fetch(

@@ -16,6 +16,11 @@ import {
 import { snapshotLimits } from './snapshot-limits.js';
 import type { SnapshotStore } from './snapshot-store.js';
 import { materialize } from './materialize.js';
+import {
+  BROWSER_INDEX_SCHEMA,
+  SnapshotBrowserIndex,
+  type BrowserPage,
+} from './browser-index.js';
 
 export const HISTORY_SCHEMA = `
 CREATE TABLE IF NOT EXISTS syncables_cache.snapshot_revisions (
@@ -101,11 +106,27 @@ export function validateHistoryRef(name: string): void {
 
 /** PostgreSQL owns history; Git is needed only by the import/export adapter. */
 export class PostgresHistoryStore implements SnapshotStore {
+  private readonly browserIndex: SnapshotBrowserIndex;
   constructor(
     readonly pool: Pool,
     readonly owner: string,
     readonly checkoutDirectory: string,
-  ) {}
+  ) {
+    this.browserIndex = new SnapshotBrowserIndex(
+      pool,
+      owner,
+      (revision, db) => this.members(revision, db),
+      (roots) => this.renderBatch(roots),
+    );
+  }
+
+  async browserPage(
+    revision: string,
+    query: string,
+    page: number,
+  ): Promise<BrowserPage | undefined> {
+    return this.browserIndex.page(revision, query, page);
+  }
   async initialize(): Promise<void> {
     await this.transaction(async (client) => {
       await client.query(
@@ -122,9 +143,10 @@ export class PostgresHistoryStore implements SnapshotStore {
       if (current) {
         if (current.version !== 1)
           throw new Error('Unsupported snapshot history schema version');
+        await client.query(BROWSER_INDEX_SCHEMA);
         return;
       }
-      await client.query(HISTORY_SCHEMA);
+      await client.query(HISTORY_SCHEMA + BROWSER_INDEX_SCHEMA);
       await client.query(
         'INSERT INTO syncables_cache.snapshot_version VALUES(true,1)',
       );
@@ -411,28 +433,61 @@ export class PostgresHistoryStore implements SnapshotStore {
     const results: string[] = [];
     for (let offset = 0; offset < roots.length; offset += MEMBER_BATCH) {
       const batch = roots.slice(offset, offset + MEMBER_BATCH);
-      const nodes = await this.loadGraphBatch(batch);
-      results.push(
-        ...(await Promise.all(
-          batch.map((root) =>
-            renderJson(
-              root,
-              async (hash) => {
-                const bytes = nodes.get(hash);
-                if (bytes === undefined)
-                  throw new Error('Missing snapshot object');
-                return bytes;
-              },
-              { maxBytes: LIMIT },
-            ),
-          ),
-        )),
-      );
+      results.push(...(await this.renderBatch(batch)));
     }
     return results;
   }
 
-  private async loadGraphBatch(roots: string[]): Promise<Map<string, string>> {
+  private async renderBatch(
+    roots: string[],
+    db: Pick<Pool, 'query'> = this.pool,
+  ): Promise<string[]> {
+    const nodes = await this.loadGraphBatch(roots, db);
+    return Promise.all(
+      roots.map((root) =>
+        renderJson(
+          root,
+          async (hash) => {
+            const bytes = nodes.get(hash);
+            if (bytes === undefined) throw new Error('Missing snapshot object');
+            return bytes;
+          },
+          { maxBytes: LIMIT },
+        ),
+      ),
+    );
+  }
+
+  private async *members(
+    revision: string,
+    db: Pick<Pool, 'query'> = this.pool,
+  ): AsyncGenerator<{ subject: string; raw: string }[]> {
+    let after: string | null = null;
+    for (;;) {
+      const { rows } = await db.query<{ subject: string; root_hash: string }>(
+        `SELECT subject,root_hash FROM syncables_cache.snapshot_members
+         WHERE owner=$1 AND revision=$2 AND ($3::text IS NULL OR subject>$3)
+         ORDER BY subject LIMIT $4`,
+        [this.owner, revision, after, MEMBER_BATCH],
+      );
+      if (!rows.length) return;
+      const records = await this.renderBatch(
+        rows.map(({ root_hash }) => root_hash),
+        db,
+      );
+      yield rows.map(({ subject }, index) => ({
+        subject,
+        raw: records[index],
+      }));
+      if (rows.length < MEMBER_BATCH) return;
+      after = rows.at(-1)!.subject;
+    }
+  }
+
+  private async loadGraphBatch(
+    roots: string[],
+    db: Pick<Pool, 'query'>,
+  ): Promise<Map<string, string>> {
     const nodes = new Map<string, string>();
     let pending = new Set(roots);
     while (pending.size) {
@@ -440,7 +495,7 @@ export class PostgresHistoryStore implements SnapshotStore {
       pending = new Set();
       for (let offset = 0; offset < frontier.length; offset += MEMBER_BATCH) {
         const ids = frontier.slice(offset, offset + MEMBER_BATCH);
-        const result = await this.pool.query(
+        const result = await db.query(
           'SELECT hash,codec,raw_bytes,data FROM syncables_cache.json_nodes WHERE owner=$1 AND hash=ANY($2::text[])',
           [this.owner, ids],
         );
@@ -549,21 +604,33 @@ export class PostgresHistoryStore implements SnapshotStore {
   ): Promise<CheckoutResult | undefined> {
     const id = await this.head(scope);
     if (!id) return undefined;
-    const revision = await this.revision(id);
-    const files = new Map<string, string>();
-    for (const [subject, root] of Object.entries(revision.resources))
-      files.set('r-' + nodeHash(subject) + '.json', await this.render(root));
-    files.set('context.json', revision.context_text);
+    const {
+      rows: [revision],
+    } = await this.pool.query<{ context_text: string }>(
+      'SELECT context_text FROM syncables_cache.snapshot_revisions WHERE owner=$1 AND id=$2',
+      [this.owner, id],
+    );
+    if (!revision) throw new Error('Missing snapshot revision');
     const directory = await materialize(
       this.checkoutDirectory,
       collection,
       this.owner,
       scope,
       id,
-      files,
+      this.checkoutFiles(id, revision.context_text),
     );
     return { directory, revision: id };
   }
+  private async *checkoutFiles(
+    id: string,
+    context: string,
+  ): AsyncGenerator<[string, string]> {
+    for await (const batch of this.members(id))
+      for (const { subject, raw } of batch)
+        yield ['r-' + nodeHash(subject) + '.json', raw];
+    yield ['context.json', context];
+  }
+
   /** Publish an entire legacy DAG and its refs in one transaction. Re-running never rewinds newer PostgreSQL heads. */
   async importHistory(
     source: string,

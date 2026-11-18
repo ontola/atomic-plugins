@@ -809,8 +809,17 @@ async function loadRecords(reset = false) {
   if (state.revision) params.set('revision', state.revision);
   try {
     message('');
-    const result = await api('/api/records?' + params, controller.signal);
-    if (controller.signal.aborted) return;
+    let result;
+    do {
+      result = await api('/api/records?' + params, controller.signal);
+      if (controller.signal.aborted) return;
+      if (result.preparing) {
+        params.set('revision', result.revision);
+        loading.textContent = 'Preparing this saved snapshot for browsing…';
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (controller.signal.aborted) return;
+      }
+    } while (result.preparing);
     state.revision = result.revision;
     state.pages = result.pages;
     el('count').textContent = result.total.toLocaleString() + ' records';
