@@ -2411,6 +2411,70 @@ mod tests {
         assert_eq!(names, ["repository_id", "per_page", "page", "state"]);
     }
 
+    #[tokio::test]
+    #[ignore = "downloads the pinned GitHub OAD"]
+    async fn syncables_apps_catalog_declares_selected_github_collections() {
+        let catalog =
+            checked_in_platform("catalog/2026-11-18-syncables-apps.json", "github-issues").await;
+        let provider = catalog.oauth_provider("github-issues").unwrap();
+        assert!(provider.scopes.iter().any(|scope| scope == "read:org"));
+        for path in [
+            "/user",
+            "/user/orgs",
+            "/user/repos",
+            "/repositories/456/issues",
+        ] {
+            assert!(
+                catalog.allows("github-issues", "GET", path).is_some(),
+                "{path}"
+            );
+        }
+        assert!(catalog
+            .allows("github-issues", "POST", "/user/orgs")
+            .is_none());
+        let document: Value = serde_yaml::from_str(catalog.get("github-issues").unwrap()).unwrap();
+        let parameters = document["paths"]["/repositories/{repository_id}/issues"]["get"]
+            ["parameters"]
+            .as_array()
+            .unwrap();
+        let names: Vec<_> = parameters
+            .iter()
+            .map(|parameter| parameter["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            names,
+            ["repository_id", "per_page", "page", "state", "after"]
+        );
+        for (resource, collection, path) in [
+            ("githubOrganization", "githubOrganizations", "/user/orgs"),
+            ("githubRepository", "githubRepositories", "/user/repos"),
+            (
+                "issue",
+                "repositoryIssues",
+                "/repositories/{repository_id}/issues",
+            ),
+        ] {
+            assert_eq!(
+                document["components"]["crudResources"][resource]["collections"][collection]
+                    ["urlTemplate"],
+                path
+            );
+        }
+        assert_eq!(
+            document["components"]["crudResources"]["issue"]["collections"]["repositoryIssues"]
+                ["listQuery"]["state"],
+            "all"
+        );
+        assert_eq!(
+            catalog.selections["github-issues"]["query_overrides"],
+            serde_json::json!([
+                {"path": "/user/orgs", "values": {"per_page": 100}},
+                {"path": "/user/repos", "values": {"per_page": 100}},
+                {"path": "/repositories/{repository_id}/issues", "values": {"per_page": 100}}
+            ])
+        );
+    }
+
     /// The default Keep profile composes the full refreshed OAD, but exposes
     /// only the four note operations selected by its authentication profile.
     #[tokio::test]

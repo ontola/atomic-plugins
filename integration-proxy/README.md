@@ -448,6 +448,12 @@ Specification documents, each served from that same Pages folder. At startup
 the proxy downloads those HTTPS sources, applies each overlay's `update`
 actions in the listed order, and keeps the resulting YAML in memory.
 
+The opt-in `catalog/2026-11-18-syncables-apps.json` adds declared GitHub
+organization, repository and canonical Issues collections for clients using
+the Syncables selected-collection reader. Select it explicitly with
+`CATALOG_PATH`. The default remains unchanged so existing read-all clients
+do not silently start traversing repositories and their issues.
+
 This source default retains the previous auth-profiles catalog's nine entries
 and adds Google Keep with a refreshed OAD and auth, pagination and CRUD overlays.
 The Keep profile exposes list/get/create/delete notes; Google has no update

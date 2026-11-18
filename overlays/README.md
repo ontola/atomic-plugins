@@ -1,25 +1,25 @@
 # overlays
 OpenAPI Overlay files that complete existing OpenAPI files with Pagination Schemes and other additions
 
-## Bundled read models
+## GitHub collection discovery
 
-`@ontola/openapi-overlays` is a metadata-only package, installed from this
-repository's `overlays/` subdirectory at an exact Git commit. It has no
-installation scripts or executable modules. Its `./github-issues/read-model`
-export is an opt-in JSON Overlay for the built-in Atomic Sync app.
+The opt-in catalog `catalog/2026-11-18-syncables-apps.json` preserves the
+previous `2026-11-16-syncables-github.json` catalog and adds one standard
+OpenAPI Overlay to GitHub. The overlay declares CRUD Causality collections
+`githubOrganizations`, `githubRepositories` and `repositoryIssues`, with
+Pagination Schemes metadata. Issues define a complete history read with
+`state: all` and a stable numeric `repository_id` binding. The catalog
+selection chooses `per_page: 100` for all three list operations; page size
+is a consumer choice, separate from provider behavior.
+Existing dated catalogs and overlays remain unchanged.
 
-The app applies that bundled overlay to its configured proxy's composed GitHub
-OpenAPI document with `prepareDocument` from `syncables/browser`. The overlay
-declares `githubOrganizations`, `githubRepositories` and `repositoryIssues`,
-including their pagination schemes and fixed read queries. `readCollections`
-discovers and reads those collections, with a selected repository's stable ID
-supplied as `repository_id`. Atomic storage, presentation, host credentials and
-permission checks stay in Atomic Server. Missing or failed organization reads
-remain incomplete snapshots, rather than an empty successful directory.
-
-This asset does not change any dated proxy catalog or require a proxy
-redeployment. A proxy that lacks an operation can still refuse it; adding a
-local read declaration never grants additional proxy or provider authority.
+A client reads the proxy's composed OpenAPI document normally. The published
+`syncables/browser` reader can discover these collections and select one with
+`collectionNames`; supplying `repository_id` reads only the selected issue
+tracker. Atomic Server keeps its storage mapping, UI and permission checks.
+There is no separate metadata package or runtime client-side overlay patch.
+An integration proxy opts in by selecting this dated catalog through
+`CATALOG_PATH`.
 
 ## Where this lives and how it is published
 

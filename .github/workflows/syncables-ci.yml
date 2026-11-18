@@ -49,8 +49,8 @@ jobs:
           filters: |
             syncables:
               - 'syncables/**'
-              - 'overlays/package.json'
-              - 'overlays/APIs/github.com/github-issues/1.1.4/builtin-read-model-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.json'
+              - 'overlays/catalog/2026-11-18-syncables-apps.json'
+              - 'overlays/APIs/github.com/github-issues/1.1.4/builtin-read-model-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml'
               - '.github/workflows/syncables-ci.yml'
               - 'integration-proxy/tests/fixtures/device-contract.json'
 

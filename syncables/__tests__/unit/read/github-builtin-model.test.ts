@@ -1,19 +1,22 @@
 import { readFileSync } from 'node:fs';
+import { load } from 'js-yaml';
 import { describe, expect, it, vi } from 'vitest';
 import {
   describePlatform,
   prepareDocument,
   readCollections,
+  readPlatform,
   type OpenApiDocument,
   type OverlayDocument,
+  type QuerySelection,
   type Transport,
   type TransportResponse,
 } from '../../../src/browser.js';
 
-const overlay = JSON.parse(
+const overlay = load(
   readFileSync(
     new URL(
-      '../../../../overlays/APIs/github.com/github-issues/1.1.4/builtin-read-model-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.json',
+      '../../../../overlays/APIs/github.com/github-issues/1.1.4/builtin-read-model-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml',
       import.meta.url,
     ),
     'utf8',
@@ -32,7 +35,29 @@ const configuredDocument: OpenApiDocument = {
     },
   },
   components: {
+    schemas: {
+      issue: {
+        type: 'object',
+        properties: {
+          id: { type: 'integer' },
+          number: { type: 'integer' },
+          title: { type: 'string' },
+          state: { type: 'string' },
+          updated_at: { type: 'string', format: 'date-time' },
+        },
+      },
+    },
     crudResources: {
+      issue: {
+        schema: { $ref: '#/components/schemas/issue' },
+        identity: {
+          urlTemplate: '/repos/{owner}/{repo}/issues/{issue_number}',
+          bindings: { issue_number: { field: 'number' } },
+        },
+        collections: {
+          issues: { urlTemplate: '/repos/{owner}/{repo}/issues' },
+        },
+      },
       other: {
         identity: {
           urlTemplate: '/other/{workspace}/records/{record_id}',
@@ -46,6 +71,18 @@ const configuredDocument: OpenApiDocument = {
   },
 };
 
+const catalog = JSON.parse(
+  readFileSync(
+    new URL(
+      '../../../../overlays/catalog/2026-11-18-syncables-apps.json',
+      import.meta.url,
+    ),
+    'utf8',
+  ),
+) as { platforms: { name: string; selection: QuerySelection }[] };
+const selection = catalog.platforms.find(
+  (platform) => platform.name === 'github-issues',
+)!.selection;
 const document = prepareDocument(configuredDocument, [overlay]);
 const reply = (items: unknown[], next?: string): TransportResponse => ({
   status: 200,
@@ -66,13 +103,14 @@ const issue = (number: number): Record<string, unknown> => ({
   updated_at: '2026-11-18T10:00:00Z',
 });
 
-describe('bundled GitHub read model through the actual browser reader', () => {
+describe('catalog GitHub read model through the actual browser reader', () => {
   it('discovers opt-in collections without replacing the configured document', () => {
     expect(describePlatform(document).collections).toEqual([
+      'issues',
+      'repositoryIssues',
       'unrelated',
       'githubOrganizations',
       'githubRepositories',
-      'repositoryIssues',
     ]);
     expect(describePlatform(document).upstream).toBe('https://api.github.com/');
     expect(configuredDocument.paths['/user/orgs']).toBeUndefined();
@@ -88,6 +126,7 @@ describe('bundled GitHub read model through the actual browser reader', () => {
     );
     const result = await readCollections(document, {
       transport,
+      selection,
       collectionNames: ['githubRepositories'],
     });
     expect(result.errors).toEqual([]);
@@ -110,6 +149,7 @@ describe('bundled GitHub read model through the actual browser reader', () => {
     );
     const result = await readCollections(document, {
       transport,
+      selection,
       collectionNames: ['repositoryIssues'],
       constants: { repository_id: '456' },
     });
@@ -118,9 +158,31 @@ describe('bundled GitHub read model through the actual browser reader', () => {
     expect(result.collections[0]?.complete).toBe(true);
     expect(result.collections[0]?.items).toEqual([issue(1), issue(2)]);
     expect(transport.mock.calls.map(([request]) => request.url.href)).toEqual([
-      'https://api.github.com/repositories/456/issues?per_page=100&state=all',
+      'https://api.github.com/repositories/456/issues?state=all&per_page=100',
       next,
     ]);
+  });
+
+  it('reuses the declared issue entity and schema without requiring legacy owner/repo bindings', async () => {
+    const transport = vi.fn<Transport>(async () => reply([issue(1)]));
+    const result = await readPlatform(document, {
+      platform: 'github-issues',
+      transport,
+      selection,
+      collectionNames: ['repositoryIssues'],
+      constants: { repository_id: '456' },
+    });
+    expect(result.errors).toEqual([]);
+    expect(result.records[0]).toMatchObject({
+      resource: 'issue',
+      namespace: '456',
+      id: '1',
+    });
+    expect(document.components?.schemas?.builtinGithubIssue).toBeUndefined();
+    expect(transport).toHaveBeenCalledTimes(1);
+    expect(transport.mock.calls[0]?.[0].url.pathname).toBe(
+      '/repositories/456/issues',
+    );
   });
 
   it('discovers repository bindings only when a selected Issues read needs them', async () => {
@@ -129,6 +191,7 @@ describe('bundled GitHub read model through the actual browser reader', () => {
     );
     const result = await readCollections(document, {
       transport,
+      selection,
       collectionNames: ['repositoryIssues'],
     });
     expect(result.errors).toEqual([]);
@@ -149,6 +212,7 @@ describe('bundled GitHub read model through the actual browser reader', () => {
     );
     const result = await readCollections(document, {
       transport,
+      selection,
       collectionNames: ['githubRepositories'],
       limits: { maxRequests: 1 },
     });
@@ -164,6 +228,7 @@ describe('bundled GitHub read model through the actual browser reader', () => {
     );
     const result = await readCollections(document, {
       transport,
+      selection,
       collectionNames: ['githubRepositories'],
     });
     expect(transport).toHaveBeenCalledTimes(1);

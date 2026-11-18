@@ -1920,6 +1920,15 @@ const { records, ontology, errors } = await readPlatform(document, {
 });
 ```
 
+Both `readCollections` (raw snapshots) and `readPlatform` (typed records)
+accept `collectionNames` to restrict traversal to declared collection names.
+The reader includes only parent collections needed to fill missing path
+bindings. Supplying those bindings in `constants` reads the selected instance
+directly, without enumerating other accounts or repositories. Unknown names
+fail before any provider request. Catalog `selection.query_overrides` apply
+to the complete model before this restriction; a valid default for an
+unrelated collection does not make that collection part of the read.
+
 - **Collections** come from `components.crudResources` (the
   [CRUD Causality Extension](https://github.com/ontola/atomic-plugins/tree/main/openapi-extensions/spec/crud-causality),
   usually added by an overlay). A nested collection runs once per parent
@@ -2241,6 +2250,20 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
+- **0.28.0**: Selected collection reads and catalog defaults.
+  - **Added:** SyncD can inventory Dropbox, Google Drive and iCloud Drive using file
+    metadata alone. Cloud inventories resume from saved cursors and track
+    deletions. The stored inventory supports browsing, history and checksum
+    or name-and-size duplicate reports.
+  - **Added:** The browser reader accepts `collectionNames` in `readCollections` and
+    `readPlatform` to read selected declared collections. Only the parent
+    collections needed for missing path bindings are discovered; supplied
+    constants read a selected instance directly. Unknown names fail before
+    provider requests, and incomplete snapshots retain accepted records.
+  - **Fixed:** Selected collection reads now validate and apply catalog query defaults before
+    restricting the read model. A default for another declared collection no
+    longer prevents a selected read or requires unrelated path parameters, and
+    unknown or ambiguous defaults still fail before any request.
 - **0.27.0**: SyncD control panel for IAP grants and change notifications.
   - **Behaviour change:** Align the experimental native Atomic companion with the Atomic plugins
     candidate23 host and browser pin, including batched SYNC_PUSH persistence.

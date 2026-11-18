@@ -32,6 +32,16 @@ deployment with an explicit `CATALOG_PATH` must select the new catalog for
 organization discovery. The host can still group accessible repository owners
 when an older selected catalog has no organization endpoint.
 
+The built-in Sync app explicitly opts in to
+`catalog/2026-11-18-syncables-apps.json`. It adds GitHub organization,
+repository and stable repository-ID Issues collections through CRUD
+Causality and Pagination Schemes. Its selection chooses page sizes of 100;
+the Issues collection defines a complete history read with `state: all`.
+The proxy's existing default is unchanged: clients that read every declared
+collection must not silently begin enumerating repositories. A deployment
+selects this opt-in catalog with `CATALOG_PATH`; there is no separate bundled
+metadata package or runtime overlay patch in the client.
+
 ## Syncables browser reader contract
 
 The host should be able to supply:
