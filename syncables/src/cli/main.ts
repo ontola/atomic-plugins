@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
 import { DAEMON_HELP } from '../daemon/help.js';
+import { validateInteractiveGrantOptions } from '../daemon/interactive-grant.js';
 import { deviceLogin, listConnections, probeApi } from './auth.js';
 import {
   addConnection,
@@ -121,12 +122,14 @@ async function main(): Promise<void> {
   options.help = { type: 'boolean' };
   options.archive = { type: 'boolean' };
   options.interactive = { type: 'boolean' };
+  options['connection-grant-stdin'] = { type: 'boolean' };
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options,
   });
   const string = (key: string): string | undefined =>
     typeof values[key] === 'string' ? (values[key] as string) : undefined;
+  validateInteractiveGrantOptions(positionals[0], values);
   if (values.help || !positionals.length) {
     process.stdout.write(HELP + DAEMON_HELP);
     return;

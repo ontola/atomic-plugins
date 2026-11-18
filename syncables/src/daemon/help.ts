@@ -15,11 +15,13 @@ Local Syncables (experimental; PostgreSQL, Node 22.11+; Git for import/export on
   syncables delete ITEM_ID --collection ALIAS --at REVISION --config FILE
   syncables edits --collection ALIAS --config FILE
   syncables send --collection ALIAS --config FILE [--interactive]
+    [--connection-grant-stdin]
   syncables cancel-edit EDIT_UUID --collection ALIAS --config FILE
   syncables adopt-edit EDIT_UUID --created-id ITEM_ID --collection ALIAS --config FILE [--interactive]
   syncables keep-both EDIT_UUID --collection ALIAS --config FILE
   syncables logout --config FILE
   syncables sync --config FILE [--collections platform/account/name,...] [--interactive]
+    [--connection-grant-stdin]
     [--message "Why this sync is being run"]
   syncables daemon --config FILE [--collections platform/account/name,...] [--interactive]
     [--message "Intent attached to each successful snapshot in this process"]
@@ -52,6 +54,12 @@ are held for explicit adoption, never reposted. See docs/daemon-writes.md.
 
 login stores device tokens in macOS Keychain. --interactive performs a new
 browser-approved login and keeps tokens only in this foreground process.
+For IAP interactive sync/send, add --connection-grant-stdin and select exactly
+one remote connection. After approval, stderr prints SYNCABLES_CONNECTION_GRANT_BINDING
+plus public session/connection JSON. Pipe its matching owner-issued sealed grant
+on stdin (8 KiB, 30 seconds). No Keychain item is read or written, and this
+ephemeral session is revoked when the operation finishes or fails. send requests
+fresh write approval; sync remains read-only. Existing modes are unchanged.
 ui starts a read-only local data browser and prints its private browser link.
 It shows saved snapshots, search and record JSON, plus grant-approved connections
 and recorded sync times/errors. Existing login or --interactive enables discovery.

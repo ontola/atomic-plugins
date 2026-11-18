@@ -1,4 +1,9 @@
-import { proxyRequest, type Session, type Connection } from '../cli/auth.js';
+import {
+  proxyRequest,
+  isSealedConnectionGrant,
+  type Session,
+  type Connection,
+} from '../cli/auth.js';
 import type { Transport } from '../read/transport.js';
 
 /** One attempt, no redirects, replay cache, automatic retries or credential forwarding. */
@@ -7,7 +12,13 @@ export function proxyWriteTransport(
   connection: Connection,
   signal?: AbortSignal,
   fetchImpl: typeof fetch = globalThis.fetch,
+  connectionGrant?: string,
 ): Transport {
+  if (
+    connectionGrant !== undefined &&
+    !isSealedConnectionGrant(connectionGrant)
+  )
+    throw new Error('Invalid sealed connection grant');
   if (
     !session.scope?.split(' ').includes('proxy:write') ||
     !session.scope.split(' ').includes('proxy:read')
@@ -40,6 +51,9 @@ export function proxyWriteTransport(
       ]),
       headers: {
         authorization: `Bearer ${session.accessToken}`,
+        ...(connectionGrant === undefined
+          ? {}
+          : { 'x-connection-key': connectionGrant }),
         ...(input.body === undefined
           ? {}
           : { 'content-type': 'application/json' }),

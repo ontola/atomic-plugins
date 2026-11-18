@@ -334,8 +334,36 @@ response requires another explicit login, even if Keychain refuses deletion.
 A foreground in-memory grant cannot unblock stale saved credentials. `logout` removes local credentials and
 revokes the device session; revocation failure is reported. No owner key is
 requested. Persistent credential storage on other operating systems is deferred;
-`--interactive` remains available for compatible test issuers that need no
-separate connection-key grant.
+plain `--interactive` remains available for compatible test issuers that need no
+separate connection-key grant. IAP foreground reads can instead use
+`sync --interactive --connection-grant-stdin` as described below.
+
+### Foreground owner-to-client grant handoff
+
+An owner-side broker can launch `sync --interactive --connection-grant-stdin`
+with a pipe connected to stdin. Select exactly one remote connection with
+`--collections`; several collections using that same connection/platform are
+allowed. After a new browser-approved, read-only device login, stderr emits one
+line beginning `SYNCABLES_CONNECTION_GRANT_BINDING ` followed by JSON containing
+only `version`, `issuer`, `owner`, `clientId`, `sessionId`, `connectionId` and
+`platform`. The broker uses that public binding to obtain an owner-issued sealed
+grant, then pipes the matching eight-field import envelope into the waiting
+process. Input is limited to 8 KiB and 30 seconds after that binding is emitted;
+raw keys, expired grants and mismatched bindings fail before provider dispatch.
+
+This mode stores the opaque grant and device tokens in process memory only and
+never reads or writes Keychain. It attempts to revoke its own new device session
+on success or failure and drops its in-memory grant references. Revocation
+failure is reported; an interrupted process cannot guarantee issuer cleanup.
+Use a finite-lived grant. The existing persistent session and its permissions
+are unchanged. No owner key or grant belongs in arguments, environment variables,
+config, files or logs. The package does not implement an owner-side producer.
+
+The flag is accepted only with `--interactive` on `sync` or `send`; local sources,
+mixed connections, `--write` and `--manage` are rejected. For `send`, the existing
+fresh browser approval explicitly requests write permission; see
+[provider writes](daemon-writes.md). No background daemon or persistent write
+session is enabled by this handoff.
 
 IAP requires a sealed connection-key grant in addition to device approval.
 Approve the connection during persistent `syncables login`. The owner must

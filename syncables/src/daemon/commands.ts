@@ -17,6 +17,11 @@ import {
 import { validateCommitMessage } from './git-store.js';
 import { DaemonAuth, KeychainCredentials } from './auth.js';
 import { readConnectionGrant } from './connection-grants.js';
+import {
+  interactiveGrantConnection,
+  validateInteractiveGrantOptions,
+  withInteractiveConnectionGrant,
+} from './interactive-grant.js';
 import { DaemonRunner, jobStatuses } from './runner.js';
 import { inventoryFiles } from './file-inventory.js';
 import { findFileDuplicates, type FileLocation } from './file-duplicates.js';
@@ -151,6 +156,7 @@ export async function daemonCommand(
   const string = (key: string): string | undefined =>
     typeof values[key] === 'string' ? (values[key] as string) : undefined;
   const command = positionals[0];
+  validateInteractiveGrantOptions(command, values);
   const configPath = requireValue(string('config'), 'config');
   const config = await loadDaemonConfig(configPath).catch((error: unknown) => {
     if (command === 'import-connection-grant')
@@ -158,6 +164,16 @@ export async function daemonCommand(
     throw error;
   });
   const message = string('message');
+  const stdinConnection = values['connection-grant-stdin']
+    ? interactiveGrantConnection(
+        selectedCollections(
+          config,
+          command === 'send'
+            ? [requireValue(string('collection'), 'collection')]
+            : (string('collections')?.split(',') ?? []),
+        ),
+      )
+    : undefined;
   if (message !== undefined) {
     if (command !== 'sync' && command !== 'daemon')
       throw new Error('--message is supported by sync and daemon only');
@@ -513,6 +529,35 @@ export async function daemonCommand(
             );
         }
       }
+    }
+    if (command === 'sync' && stdinConnection) {
+      const selectors = string('collections')?.split(',') ?? [];
+      const results = await withInteractiveConnectionGrant(
+        {
+          config,
+          archive,
+          connection: stdinConnection,
+          write: false,
+          input: process.stdin,
+          report: (message) => process.stderr.write(message + '\n'),
+        },
+        async (auth) => {
+          const runner = new DaemonRunner(
+            config,
+            archive,
+            store,
+            auth,
+            globalThis.fetch,
+            message,
+          );
+          await runner.initialize();
+          return runner.sync(selectors, controller.signal);
+        },
+      );
+      write(results);
+      if (results.some((result) => result.error) || controller.signal.aborted)
+        process.exitCode = 1;
+      return;
     }
     const auth = new DaemonAuth(
       config,
