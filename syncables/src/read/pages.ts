@@ -40,9 +40,10 @@ import {
   windowWidth,
 } from '../pagination/window.js';
 import { isRecord } from './model.js';
-import { gatewayRetryDelay } from './gateway-retry.js';
+import { gatewayRetryDelay, readRetryBackoff } from './gateway-retry.js';
 import {
   lowerCaseHeaders,
+  TransientReadError,
   type ListMethod,
   type Transport,
   type PurposedRequest,
@@ -113,7 +114,7 @@ export class Budget {
     limits: Partial<ReadLimits> = {},
     private readonly sleep: (ms: number) => Promise<void> = defaultSleep,
     private readonly throttling?: ThrottlingDeclaration,
-    private readonly retryGatewayErrors = false,
+    private readonly retryTemporaryFailures = false,
   ) {
     this.limits = { ...DEFAULT_READ_LIMITS, ...limits };
     this.deadline = Date.now() + this.limits.timeoutMs;
@@ -125,6 +126,10 @@ export class Budget {
   }
 
   async send(request: PurposedRequest): Promise<TransportResponse> {
+    const retryTemporary =
+      this.retryTemporaryFailures &&
+      ((request.method === 'GET' && request.body === undefined) ||
+        (request.method === 'POST' && request.purpose === 'list'));
     for (let retries = 0; ; retries += 1) {
       if (Date.now() > this.deadline) {
         throw new BudgetExhausted('Read timed out');
@@ -135,7 +140,19 @@ export class Budget {
           `Read exceeds ${this.limits.maxRequests} requests; narrow its scope`,
         );
       }
-      const raw = await this.transport(request);
+      let raw: TransportResponse;
+      try {
+        raw = await this.transport(request);
+      } catch (error) {
+        if (
+          !retryTemporary ||
+          retries >= this.limits.maxRetries ||
+          !(error instanceof TransientReadError)
+        )
+          throw error;
+        await this.waitBeforeRetry(readRetryBackoff(retries));
+        continue;
+      }
       // A cache's answer asked nothing of the provider.
       if (raw.fromCache === true) this.requests -= 1;
       const receivedAt = Date.now();
@@ -151,11 +168,8 @@ export class Budget {
         receivedAt,
       });
       if (throttled?.meaning === 'blocked') return response;
-      const replayableList =
-        (request.method === 'GET' && request.body === undefined) ||
-        (request.method === 'POST' && request.purpose === 'list');
       const gatewayDelay =
-        this.retryGatewayErrors && replayableList && response.fromCache !== true
+        retryTemporary && response.fromCache !== true
           ? gatewayRetryDelay(
               response.status,
               retries,
@@ -173,13 +187,16 @@ export class Budget {
         (throttled?.retryAt ?? 0) - Date.now(),
         gatewayDelay ?? 0,
       );
-      if (Date.now() + delay > this.deadline) {
-        throw new RetryBeyondDeadline(
-          'API retry delay exceeds the remaining read time',
-        );
-      }
-      await this.sleep(delay);
+      await this.waitBeforeRetry(delay);
     }
+  }
+
+  private async waitBeforeRetry(delay: number): Promise<void> {
+    if (Date.now() + delay > this.deadline)
+      throw new RetryBeyondDeadline(
+        'API retry delay exceeds the remaining read time',
+      );
+    await this.sleep(delay);
   }
 }
 

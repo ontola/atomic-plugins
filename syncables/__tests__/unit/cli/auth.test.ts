@@ -8,6 +8,8 @@ import {
   proxyRequest,
 } from '../../../src/cli/auth.js';
 
+import { TransientReadError } from '../../../src/read/transport.js';
+
 const issuer = 'http://127.0.0.1:11872';
 
 function fixture(results: Array<{ status: number; body: unknown }>): {
@@ -335,6 +337,68 @@ describe('CLI device authorization', () => {
       'HTTP 403',
     );
     expect(refused.requests).toHaveLength(1);
+  });
+
+  it('repeats discovery after a recognized connection reset', async () => {
+    let calls = 0;
+    const fetchImpl: typeof fetch = async () => {
+      if (++calls === 1)
+        throw new TypeError('invented private transport message', {
+          cause: { code: 'ECONNRESET' },
+        });
+      return Response.json({ owner: 'owner', connections: [] });
+    };
+    await expect(
+      listConnections({ issuer, accessToken: 'demo' }, fetchImpl, true),
+    ).resolves.toEqual({ owner: 'owner', connections: [] });
+    expect(calls).toBe(2);
+  });
+
+  it('classifies interrupted response bodies without forwarding error details', async () => {
+    const fetchImpl: typeof fetch = async () =>
+      new Response(
+        new ReadableStream({
+          start(controller): void {
+            controller.error(
+              new TypeError('invented private body diagnostic', {
+                cause: { code: 'UND_ERR_SOCKET' },
+              }),
+            );
+          },
+        }),
+      );
+    const session = { issuer, accessToken: 'demo' };
+    const connection = { connection_id: 'demo', platform: 'example' };
+    const request = proxyRequest(session, connection, '/items');
+    const error = await proxyReadTransport(
+      session,
+      connection,
+      fetchImpl,
+    )(request).catch((value: unknown) => value);
+    expect(error).toBeInstanceOf(TransientReadError);
+    expect(error).toEqual(new TransientReadError());
+  });
+
+  it('keeps an authorization refusal when its body is interrupted', async () => {
+    const fetchImpl: typeof fetch = async () =>
+      new Response(
+        new ReadableStream({
+          start(controller): void {
+            controller.error(
+              new TypeError('connection interrupted', {
+                cause: { code: 'UND_ERR_SOCKET' },
+              }),
+            );
+          },
+        }),
+        { status: 401 },
+      );
+    const session = { issuer, accessToken: 'demo' };
+    const connection = { connection_id: 'demo', platform: 'example' };
+    const request = proxyRequest(session, connection, '/items');
+    await expect(
+      proxyReadTransport(session, connection, fetchImpl)(request),
+    ).resolves.toMatchObject({ status: 401, body: '' });
   });
 
   it('does not follow token-bearing redirects or expose transport errors', async () => {

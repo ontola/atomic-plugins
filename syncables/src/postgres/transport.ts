@@ -1,4 +1,8 @@
-import type { Transport, TransportResponse } from '../read/transport.js';
+import {
+  TransientReadError,
+  type Transport,
+  type TransportResponse,
+} from '../read/transport.js';
 import { PostgresArchive, type ResponseHead } from './archive.js';
 import {
   cleanHeaders,
@@ -117,8 +121,9 @@ export function createCachingTransport(options: {
       let response: TransportResponse;
       try {
         response = await options.upstream(request);
-      } catch {
+      } catch (error) {
         await options.archive.failure(attempt);
+        if (error instanceof TransientReadError) throw new TransientReadError();
         throw new Error('Recorded upstream read failed');
       }
       // Persist before returning; a persistence failure leaves a pending attempt, never an applied observation.

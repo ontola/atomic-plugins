@@ -5,6 +5,13 @@
  * fetch-shaped. Nothing under `src/read/` calls `fetch` itself.
  */
 
+/** A temporary interrupted exchange, with no provider or credential detail. */
+export class TransientReadError extends Error {
+  constructor() {
+    super('Local Thought request failed (network, timeout or redirect)');
+  }
+}
+
 export type ListMethod = 'GET' | 'POST';
 export type HttpMethod = ListMethod | 'PUT' | 'PATCH' | 'DELETE';
 

@@ -16,7 +16,10 @@ import { ConnectionGrantAuthError } from '../../../src/daemon/sync-errors.js';
 import { DaemonRunner, jobStatuses } from '../../../src/daemon/runner.js';
 import { itemSubject, type DaemonConfig } from '../../../src/daemon/config.js';
 import type { Session } from '../../../src/cli/auth.js';
-import type { Transport } from '../../../src/read/transport.js';
+import {
+  TransientReadError,
+  type Transport,
+} from '../../../src/read/transport.js';
 import type { OpenApiDocument } from '../../../src/openapi/types.js';
 const database = process.env.SYNCABLES_TEST_DATABASE_URL;
 const prefix = 'daemon-runtime-' + randomUUID();
@@ -439,26 +442,31 @@ describe.skipIf(!database)(
         expect(method).toBe('POST');
         expect(JSON.parse(body!)).toEqual({ cursor: 't1' });
         if (continued.mock.calls.length === 1) return response('', 502);
+        if (continued.mock.calls.length === 2) throw new TransientReadError();
         return response('{"items":[{"id":"b"}],"more":false,"cursor":"t2"}');
       });
       const delta = await h.sync(continued);
-      expect(continued).toHaveBeenCalledTimes(2);
+      expect(continued).toHaveBeenCalledTimes(3);
       expect(
-        Number(
-          (
-            await archive.pool.query(
-              'SELECT count(*) FROM syncables_cache.attempts WHERE owner=$1 AND run=$2 AND status=502',
-              [h.config.owner, delta.run],
-            )
-          ).rows[0].count,
-        ),
-      ).toBe(1);
+        (
+          await archive.pool.query(
+            'SELECT sequence,status,outcome FROM syncables_cache.attempts WHERE owner=$1 AND run=$2 ORDER BY sequence',
+            [h.config.owner, delta.run],
+          )
+        ).rows,
+      ).toEqual([
+        { sequence: 0, status: 502, outcome: 'response' },
+        { sequence: 1, status: null, outcome: 'error' },
+        { sequence: 2, status: 200, outcome: 'response' },
+      ]);
       expect(delta).toMatchObject({ strategy: 'delta', records: 2 });
       expect(await h.store.context(h.prepared.scope)).toMatchObject({
         syncToken: 't2',
       });
       h.prepared.source.readLimits = { maxRequests: 1 };
-      const unavailable = vi.fn<Transport>(async () => response('', 502));
+      const unavailable = vi.fn<Transport>(async () => {
+        throw new TransientReadError();
+      });
       await expect(h.sync(unavailable)).rejects.toThrow(
         'Read exceeds 1 requests',
       );
@@ -467,7 +475,7 @@ describe.skipIf(!database)(
       expect(await h.store.context(h.prepared.scope)).toMatchObject({
         syncToken: 't2',
       });
-    });
+    }, 15_000);
     it('retains an exhausted provider retry deadline and never retries a declared blocked response', async () => {
       const h = await setup();
       const start = Date.now();

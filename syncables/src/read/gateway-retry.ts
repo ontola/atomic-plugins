@@ -1,5 +1,9 @@
 import { headerTime } from '../throttling/throttling.js';
 
+export function readRetryBackoff(retries: number): number {
+  return 1000 * 2 ** Math.min(retries, 2);
+}
+
 /** Minimum delay for repeating a read after a temporary gateway failure. */
 export function gatewayRetryDelay(
   status: number,
@@ -12,8 +16,5 @@ export function gatewayRetryDelay(
   const retryAt = retryAfter
     ? headerTime(retryAfter, 'deltaSecondsOrHttpDate', receivedAt, date)
     : undefined;
-  return Math.max(
-    1000 * 2 ** Math.min(retries, 2),
-    (retryAt ?? 0) - receivedAt,
-  );
+  return Math.max(readRetryBackoff(retries), (retryAt ?? 0) - receivedAt);
 }
