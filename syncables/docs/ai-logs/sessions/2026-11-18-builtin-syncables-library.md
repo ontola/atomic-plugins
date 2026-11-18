@@ -31,7 +31,9 @@ account identity reads, UI and permission checks remain in Atomic Server.
 Added a metadata-only `@ontola/openapi-overlays` package and the GitHub read
 model. Fixed a selected-read ordering bug exposed by reusing catalog defaults:
 selection is validated on the complete model before unrelated collections are
-removed. The tests demonstrate scoped reads, stable repository-ID binding,
+removed. The shared CI path filter also includes the metadata package and read model,
+so future metadata-only changes run the reader and browser checks. The tests
+demonstrate scoped reads, stable repository-ID binding,
 fixed query values, cursor pagination, partial row retention and refusal of a
 cross-origin continuation through the actual shared browser reader.
 
