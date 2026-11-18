@@ -648,7 +648,9 @@ Use the explicit export above when you want `git log`, `git diff` or a Git branc
 Snapshot data and bundled schemas are `r-<subject-hash>.json` files;
 `context.json` records source context. `checkout.directory` identifies the folder.
 `syncables checkout --config FILE` materializes saved PostgreSQL snapshots without
-logging in or refetching. Existing Git users must migrate first. The original
+logging in or refetching. PostgreSQL checkout reconstructs records in batches
+and streams them into the staging folder, preserving exact JSON bytes without
+retaining every decoded record in memory. Existing Git users must migrate first. The original
 `data/` worktrees and archive remain usable until exports have been verified.
 
 Checkout also adds document-scoped API classes to older generic snapshots in

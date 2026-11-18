@@ -31,7 +31,7 @@ export async function materialize(
   owner: string,
   scope: string,
   revision: string,
-  files: Map<string, string>,
+  files: Iterable<[string, string]> | AsyncIterable<[string, string]>,
 ): Promise<string> {
   const parts = collection.split('/');
   if (
@@ -130,7 +130,7 @@ export async function materialize(
       revision,
       files: Object.create(null),
     };
-    for (const [name, text] of files) {
+    for await (const [name, text] of files) {
       if (!fileName(name)) throw new Error('Invalid snapshot filename');
       await writeFile(resolve(stage, name), text, { flag: 'wx', mode: 0o600 });
       manifest.files[name] = nodeHash(text);

@@ -53,11 +53,19 @@ opening its new link. Host/origin checks, no-store responses and a restrictive
 content policy keep the local data out of other websites and frames. No
 provider credential or database connection string is sent to the page.
 
-This simple browser enumerates a snapshot using the existing store interface.
-It refuses snapshots over 50,000 resources or 32 MiB of decoded resource JSON,
-and pages over 8 MiB of serialized response JSON, rather than truncating them.
-For larger data, use `syncables browse` or export the collection. Missing or
-inaccessible snapshots produce an explicit refresh/error message.
+PostgreSQL snapshots are indexed locally on first use. The page shows a
+preparation message while SyncD reads saved records in batches; no provider
+requests are made. A completed index is reused for that immutable revision.
+Index preparation is atomic, and concurrent viewers share the work. Search
+text stays in PostgreSQL; preparation retains only record identities and
+subjects for sorting. Each page reconstructs at most 25 saved records rather
+than loading the entire snapshot. Index storage grows with saved JSON size;
+search scans that local text and can take longer on large snapshots.
+
+Pages over 8 MiB of serialized response JSON are refused rather than
+truncated. Stores using the legacy list interface retain the 50,000-resource
+and 32 MiB decoded-resource limits. Missing or inaccessible snapshots produce
+an explicit refresh/error message.
 
 ## Remote connections and sync status
 
