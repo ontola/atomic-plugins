@@ -1,0 +1,32 @@
+# Source: https://developers.google.com/workspace/drive/api/reference/rest/v3/files/list
+overlay: 1.0.0
+info:
+  title: Google Drive metadata authentication profile and incomplete search
+  version: 1.0.0
+  x-requires:
+  - anyOf:
+    - file-metadata-a7dd2d8b4f5f50794e51afd84c539c2e61a182fc-overlay.yaml
+  - anyOf:
+    - pagination-v2-a7dd2d8b4f5f50794e51afd84c539c2e61a182fc-overlay.yaml
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/a7dd2d8b4f5f50794e51afd84c539c2e61a182fc/APIs/googleapis.com/drive/v3/openapi.yaml
+actions:
+- target: $.components
+  update:
+    x-authentication-profiles:
+      driveMetadata:
+        securityScheme: driveMetadata
+- target: $.paths['/files'].get
+  update:
+    x-pagination:
+    - scheme: forwardPages
+      overrides:
+        request:
+          queryParameters:
+            pageSize:
+              role: pageSize
+        response:
+          envelope:
+            itemsField: files
+          incomplete:
+            field: incompleteSearch
+            equals: true
