@@ -9,6 +9,44 @@ import {
 } from '../../../src/daemon/config.js';
 
 describe('configured daemon scope', () => {
+  it.each([
+    [undefined, 'https://integrations.atomic.place'],
+    ['https://proxy.example', 'https://proxy.example'],
+    ['http://127.0.0.1:11872', 'http://127.0.0.1:11872'],
+    ['https://localthought.io', 'https://localthought.io'],
+  ])(
+    'uses issuer %s without retargeting explicit configurations',
+    async (issuer, expected) => {
+      const dir = await mkdtemp(join(tmpdir(), 'syncables-issuer-'));
+      try {
+        const file = join(dir, 'config.json');
+        await writeFile(
+          file,
+          JSON.stringify({
+            version: 1,
+            owner: 'invented-owner',
+            ...(issuer === undefined ? {} : { issuer }),
+            collections: [
+              {
+                platform: 'example',
+                account: 'work',
+                name: 'entries',
+                connection: 'existing-connection',
+                document: 'source.json',
+                collection: 'entries',
+              },
+            ],
+          }),
+        );
+        const config = await loadDaemonConfig(file);
+        expect(config.issuer).toBe(expected);
+        expect(config.collections[0].connection).toBe('existing-connection');
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it('resolves local files relative to config and scopes checkpoints to definition/query, not polling', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'syncables-config-'));
     try {

@@ -207,12 +207,12 @@ no provider API call:
 
 ```sh
 node build/src/cli/main.js auth-test \
-  --issuer https://localthought.io --client-id syncables-cli \
+  --issuer https://integrations.atomic.place --client-id syncables-cli \
   --scope 'connections:read proxy:read'
 ```
 
 Open the complete approval link printed by the CLI and compare its user code
-with the terminal. At `localthought.io/device`, click **Continue to owner
+with the terminal. At `integrations.atomic.place/device`, click **Continue to owner
 approval** to open the configured local bridge, normally
 `http://127.0.0.1:11873/`. The public `/device` page is an instruction/link page,
 not a form; the local bridge has the **User code** input and **Review request**
@@ -229,7 +229,7 @@ For the previously tested `ontola/usertest-findings` repository, change:
 | Config field                 | Value for the real GitHub test                  |
 | ---------------------------- | ----------------------------------------------- |
 | `owner`                      | `owner` from connection discovery               |
-| `issuer`                     | `https://localthought.io`                       |
+| `issuer`                     | `https://integrations.atomic.place`             |
 | `clientId`                   | `syncables-cli`                                 |
 | `collections[0].connection`  | Approved `github-issues` connection ID          |
 | `collections[0].account`     | `ontola` (local account label)                  |
@@ -254,17 +254,22 @@ cli() {
   node build/src/cli/main.js "$@" \
     --config "$HOME/.local/share/syncables-live/config.json"
 }
-cli sync --collections github-issues/ontola/usertest-findings --interactive \
+cli login
+# Import an owner-issued sealed grant as described below before the first read.
+cli sync --collections github-issues/ontola/usertest-findings \
   --message "First snapshot of the real repository"
 cli browse github-issues/ontola/usertest-findings
 cli history --collection github-issues/ontola/usertest-findings
 ```
 
-This fetches the configured collection, not just one page. To check access
-before that full fetch, use `auth-test --path` as shown in the [CLI guide](cli.md).
-`--interactive` uses a fresh approval for each foreground process. After the
-first successful read, use `cli login` to save a separately approved session in
-macOS Keychain and run `cli sync`/`cli daemon` without `--interactive`.
+Before the first read, import a sealed grant for the saved device session as
+described in [Commands and credential lifecycle](#commands-and-credential-lifecycle).
+This fetches the configured collection, not just one page. For a bounded first
+read, set the collection's `readLimits.maxRecords` and `readLimits.maxRequests`
+in the private config. An incomplete read retains the previous published
+snapshot. `auth-test` lists approved connections without provider access;
+its `--path` probe cannot use imported IAP grants. Use the persistent login for
+IAP reads, since `--interactive` creates a separate session each time.
 
 Paths in the config resolve relative to the config file. Restart the foreground
 daemon after editing its config or composed documents. For Dropbox, Google Drive
@@ -296,10 +301,23 @@ change source identity. Config supports up to 100 collections. OpenAPI reads def
 records, 1,000 requests and 120 seconds. Each response is capped at 8 MiB
 and each OpenAPI snapshot at 16 MiB. Incomplete reads retain the previous published snapshot.
 
-On macOS, with the existing approval bridge running:
+## Commands and credential lifecycle
+
+The default issuer is `https://integrations.atomic.place` when `issuer` is
+omitted. Explicit HTTPS and loopback HTTP issuers remain supported. Existing
+LocalThought sessions and connection IDs are not migrated or replayed at IAP.
+To migrate, create the provider connection at IAP, set `issuer` and its new
+connection ID in the private config, run a fresh `login`, and import an
+owner-issued grant for that session. Keep existing local history and data;
+changing the connection creates a new source scope. Keychain credentials and
+grants remain bound to their exact issuer and device session.
+
+On macOS, with the existing approval bridge running, log in, import the grant
+as described below, then run the reads:
 
 ```sh
 syncables login --config /absolute/path/config.json
+# Import the owner-issued sealed grant before syncing.
 syncables sync --config /absolute/path/config.json
 syncables sync --config /absolute/path/config.json --collections github-issues/work/issues
 syncables daemon --config /absolute/path/config.json
@@ -316,10 +334,13 @@ response requires another explicit login, even if Keychain refuses deletion.
 A foreground in-memory grant cannot unblock stale saved credentials. `logout` removes local credentials and
 revokes the device session; revocation failure is reported. No owner key is
 requested. Persistent credential storage on other operating systems is deferred;
-`--interactive` remains available for foreground experiments.
+`--interactive` remains available for compatible test issuers that need no
+separate connection-key grant.
 
-For an issuer that requires a sealed connection key grant for device reads,
-approve the connection during persistent `syncables login`. Pipe the JSON from
+IAP requires a sealed connection-key grant in addition to device approval.
+Approve the connection during persistent `syncables login`. The owner must
+issue the grant separately: the device authorization endpoints do not return
+one. Pipe the JSON from
 the trusted owner-side grant producer directly to
 `syncables import-connection-grant --config FILE`. The command reads one
 version-1 object from standard input, up to 8 KiB within 30 seconds:
@@ -354,7 +375,7 @@ installation, IPC/attaching to a running job, and service management are deferre
 ## Add a Google Keep trial
 
 Use the same daemon and private config directory. A Google Keep provider
-connection must already exist at `localthought.io`, under the same Atomic owner
+connection must already exist at `integrations.atomic.place`, under the same Atomic owner
 as your GitHub connection. The device approval page must offer it for selection.
 Google Keep API access is for a Google Workspace account; use the account that
 owns the notes you intend to read. The CLI's `connections:read proxy:read`
@@ -367,7 +388,7 @@ Keep" off. If the platform is unavailable or OAuth configuration is missing,
 the authenticated local worker must finish the provider setup first: Keep API
 enabled, Workspace authorization, the `OAUTH_GOOGLE_KEEP_CLIENT_ID` and
 `OAUTH_GOOGLE_KEEP_CLIENT_SECRET` server settings, redirect
-`https://localthought.io/oauth/google-keep/callback`, and a catalog containing
+`https://integrations.atomic.place/oauth/google-keep/callback`, and a catalog containing
 `google-keep`. Preserve existing platforms when selecting a catalog. No owner
 key or Google client secret belongs in the daemon config. This guide does not
 establish that the deployed Keep setup has been completed.
@@ -407,23 +428,15 @@ connection placeholder with the approved `google-keep` connection ID:
 }
 ```
 
-To probe one page before importing the account's full note collection, approve
-the Keep connection for this command (select it explicitly with `--connection`
-if you approve multiple connections):
+Before importing the account's full note collection, set
+`query.pageSize` to `"1"` and `readLimits` to
+`{"maxRecords":1,"maxRequests":1}` for a bounded first check. Complete a fresh
+persistent login selecting Keep, then import an owner-issued sealed grant for
+that connection and session. A successful device login alone does not establish
+Google API access. Using the real `cli` helper defined above, fetch and inspect:
 
 ```sh
-node build/src/cli/main.js auth-test \
-  --issuer https://localthought.io --client-id syncables-cli \
-  --scope 'connections:read proxy:read' \
-  --path '/v1/notes?pageSize=1'
-```
-
-This prints status and response size, not note contents. A successful device
-login alone does not establish successful Google API access. Using the real
-`cli` helper defined above, fetch and inspect:
-
-```sh
-cli sync --collections google-keep/workspace/notes --interactive \
+cli sync --collections google-keep/workspace/notes \
   --message "First read-only Google Keep snapshot"
 cli browse google-keep/workspace/notes --filter '/title="My test list"'
 cli history --collection google-keep/workspace/notes
@@ -468,7 +481,7 @@ bytes in catalog order. The composition test requires the example to equal
 that result exactly.
 
 For a second history entry, make an intentional change to a chosen issue/note
-in its provider UI, then rerun that collection's `cli sync --interactive` with
+in its provider UI, then rerun that collection's `cli sync` with
 a new `--message`. The daemon observes that change; it never performs it.
 Inspect `cli history ITEM_ID --collection ...` and use `--at FULL_COMMIT_ID`
 to compare the old and new local resources. After Keychain login, omit

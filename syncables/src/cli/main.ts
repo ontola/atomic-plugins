@@ -29,9 +29,10 @@ Backend options:
   remotestorage: --address user@host --module MODULE
 
 auth-test performs device login and lists provider connections. With --path it
-also tests a read-only provider API request. Tokens remain in memory and are
-never printed or saved. Device flow depends on atomic-plugins#565; endpoint
-overrides are available until its discovery contract is deployed.
+also tests a read-only provider API request when the issuer needs no separate
+connection-key grant. The default issuer is https://integrations.atomic.place;
+use persistent login and import-connection-grant for its provider reads.
+Tokens remain in memory and are never printed or saved.
 
 Replication commands save/list non-secret configuration only. Authentication
 and runtime replication for all three backends are NOT implemented yet.
@@ -217,9 +218,7 @@ async function main(): Promise<void> {
     throw new Error('Unknown command; run syncables --help');
   const clientId = string('client-id');
   if (!clientId)
-    throw new Error(
-      'Supply the public --client-id published by atomic-plugins#565',
-    );
+    throw new Error('Supply the public --client-id registered by the issuer');
   const scope = string('scope');
   const deviceEndpoint = string('device-endpoint');
   const tokenEndpoint = string('token-endpoint');
@@ -240,7 +239,7 @@ async function main(): Promise<void> {
     );
   const session = await deviceLogin(
     {
-      issuer: string('issuer') ?? 'https://localthought.io',
+      issuer: string('issuer') ?? 'https://integrations.atomic.place',
       clientId,
       ...(scope ? { scope } : {}),
       ...(deviceEndpoint ? { deviceEndpoint } : {}),

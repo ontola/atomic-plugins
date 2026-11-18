@@ -8,9 +8,9 @@ run the CLI or read CLI configuration.
 **SyncD** is Michiel's shorthand for the standalone **Syncables Daemon**;
 its command remains `syncables daemon` in the existing `syncables` package.
 
-The CLI tests device authorization, connection discovery and a GET through
-Local Thought, and saves replication definitions. The [SyncD daemon
-guide](daemon.md) covers configured syncing, foreground polling/webhooks,
+The CLI tests device authorization and connection discovery through IAP
+(`https://integrations.atomic.place`), and saves replication definitions.
+The [SyncD daemon guide](daemon.md) covers configured syncing, foreground polling/webhooks,
 macOS Keychain sessions, PostgreSQL revision-pinned browsing, legacy Git migration
 and optional Git subtree exports. Remote replication
 and outgoing writes remain planned. The [cache guide](postgres-cache.md)
@@ -73,7 +73,7 @@ production authorization server.
 The default mock port avoids the previous pilot's 11870/11871 ports. Override
 it with `SYNCABLES_MOCK_PORT` if needed and use that origin in the CLI command.
 
-## Test the real Local Thought deployment
+## Test the real IAP deployment
 
 The device-flow contract is implemented in integration-proxy 0.4.0; its
 [device-auth guide](../../integration-proxy/DEVICE_AUTH.md) publishes client ID
@@ -88,39 +88,50 @@ npm ci
 npm run build:release
 ```
 
-This first live test does not require PostgreSQL. Request only read access,
-approve the existing GitHub connection in the browser, and test one issue:
+This first live test does not require PostgreSQL. Request only read access
+and approve an existing IAP connection in the browser:
 
 ```sh
 node build/src/cli/main.js auth-test \
-  --issuer https://localthought.io \
+  --issuer https://integrations.atomic.place \
   --client-id syncables-cli \
-  --scope 'connections:read proxy:read' \
-  --path '/repos/ontola/usertest-findings/issues?state=all&per_page=1'
+  --scope 'connections:read proxy:read'
 ```
 
-If more than one connection is returned, add
-`--connection '<approved-github-connection-id>'`. These are Local Thought
-provider connection IDs, distinct from the named replication destinations.
-Omit
-`--path` to test login and list connections without making a provider request.
-The command sends GET only; success logging does not imply write access.
+IAP is also the default when `--issuer` is omitted. An explicit custom issuer,
+including a loopback mock, remains supported. These are IAP provider connection
+IDs, distinct from named replication destinations. This command tests login and
+lists approved connections without reading provider data.
+
+IAP provider reads additionally require an owner-issued sealed connection-key
+grant. `auth-test` has no grant-import step, so its optional `--path` probe is
+for compatible test issuers that do not require one. For IAP reads, use
+persistent `syncables login --config FILE`, then pipe the trusted owner's grant
+to `syncables import-connection-grant --config FILE` before syncing. See the
+[daemon guide](daemon.md#commands-and-credential-lifecycle) for that workflow.
+Device approval alone does not issue the sealed grant; keep the owner's signing
+key and raw connection key out of the CLI.
+
+Existing LocalThought device sessions cannot be replayed at IAP. Create the
+provider connection at IAP, update the private daemon config with its issuer and
+new connection ID, complete a new device login, and import a grant for that
+session. Explicit legacy issuers are preserved; no token or connection ID is
+automatically converted to IAP.
 
 The CLI prints the complete approval URL containing `user_code` when the server
-supplies one. The public `localthought.io/device` page has no paste field: click
-**Continue to owner approval** to reach the existing local bridge. Compare its
+supplies one. The public `integrations.atomic.place/device` page has no paste
+field: click **Continue to owner approval** to reach the configured owner
+bridge. Compare its
 prefilled code with the terminal, or paste into that bridge's **User code**
 field, then **Review request**, select connections and approve. If the bridge
 is unavailable, restart the existing bridge through the authenticated local
 worker. Do not export an owner key to the CLI. Keep the requesting CLI running;
 if the request expires, start it again and use its new code.
 
-Success means the command prints the authenticated owner and accessible
-connections, then `apiAccess: verified`, `status: 200`, JSON content type and
-the response byte count. That is evidence of an actual GitHub API read through
-the selected connection. The private repository also requires the GitHub App
-installation to include `ontola/usertest-findings`; device login alone does not
-grant that upstream access.
+Success means the command prints the authenticated owner and approved
+connections. It does not establish provider access. A subsequent bounded daemon
+read with an imported grant verifies that access; use disposable test data and
+check upstream account permissions as well as the proxy's device approval.
 
 If it fails, share the terminal error/status only. The CLI does not print tokens
 or the provider response body. A discovery 404 means the contract is not yet
@@ -149,7 +160,7 @@ No provider credential is requested by or returned to the CLI.
 
 ## Configure replication destinations
 
-Local Thought provider connections and replication destinations are separate.
+IAP provider connections and replication destinations are separate.
 Each replication definition names its backend, destination and explicit local
 collection scope. These examples use invented identifiers; substitute real
 values when a backend is implemented:

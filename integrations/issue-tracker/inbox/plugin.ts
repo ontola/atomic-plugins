@@ -25,9 +25,10 @@
  * full sync (the drive app) is to mark it so. Until then the subscription
  * stays reconciling: deliveries are still stored and acknowledged.
  *
- * It never holds a credential. The host signs every request as this
- * installation's node agent, which the integration proxy accepts as a
- * runtime of the app the GitHub connection is delegated to.
+ * This unpublished pilot expects a test receiver accepting the historical
+ * runtime-signed protocol. It has no host connection-key handoff required
+ * by production IAP. Do not embed a connection key in this plugin's code,
+ * manifest or configuration.
  *
  * This module runs inside atomic-server's QuickJS sandbox: no `URL`,
  * `Buffer`, `TextDecoder` or `fetch`; `ctx.http` is synchronous, and the
@@ -73,7 +74,7 @@ declare const __INBOX_PROXY_ORIGIN__: string | undefined;
 export const PROXY_ORIGIN =
   typeof __INBOX_PROXY_ORIGIN__ === 'string'
     ? __INBOX_PROXY_ORIGIN__
-    : 'https://localthought.io';
+    : undefined;
 
 export const PLATFORM = 'github-issues';
 
@@ -147,7 +148,7 @@ export const manifest = {
   version: '0.1.0',
   description:
     'Keep GitHub issue webhook deliveries from the integration proxy, before acknowledging them.',
-  operations: operations(PROXY_ORIGIN),
+  operations: PROXY_ORIGIN ? operations(PROXY_ORIGIN) : [],
   // The platform whose connection the Installation page connects and
   // delegates to this installation, and whose id the host hands over as
   // `ctx.connections['github-issues']`. No `atomic-proxy:` operation uses it
@@ -370,6 +371,11 @@ export type Output =
   | { kind: 'complete' };
 
 export async function run(ctx: Ctx): Promise<Output> {
+  if (!PROXY_ORIGIN) {
+    throw new Error(
+      'Build this unpublished webhook inbox with an explicit --proxy-origin test receiver; production IAP requires a host connection-key handoff.',
+    );
+  }
   if (ctx.phase === 'action') {
     throw new Error('The webhook inbox has no actions');
   }
