@@ -1189,6 +1189,53 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    #[ignore = "downloads the pinned OAD sources; set the fixture Google Drive OAuth variables"]
+    async fn drive_metadata_catalog_allows_consent_and_only_the_declared_reads() {
+        let mut s = state(None);
+        s.catalog = crate::catalog::Catalog::load_checked_in_file(
+            &s.http_client,
+            "catalog/2026-11-18-storage-metadata.json",
+        )
+        .await
+        .unwrap();
+        assert_eq!(s.catalog.names().len(), 17);
+        let provider = Provider::configured(&s.catalog, "google-drive").unwrap();
+        assert_eq!(
+            provider.provider.scopes,
+            ["https://www.googleapis.com/auth/drive.metadata.readonly"]
+        );
+        for path in [
+            "/drive/v3/files",
+            "/drive/v3/changes",
+            "/drive/v3/changes/startPageToken",
+        ] {
+            assert!(
+                s.catalog.allows("google-drive", "GET", path).is_some(),
+                "{path}"
+            );
+        }
+        for (method, path) in [
+            ("GET", "/drive/v3/about"),
+            ("GET", "/drive/v3/files/example"),
+            ("POST", "/drive/v3/files"),
+            ("POST", "/drive/v3/changes/watch"),
+        ] {
+            assert!(
+                s.catalog.allows("google-drive", method, path).is_none(),
+                "{method} {path}"
+            );
+        }
+        let request = Request {
+            platform: "google-drive".into(),
+            redirect_uri: "http://127.0.0.1:48889/callback".into(),
+            ..request()
+        };
+        let (status, body) = get_body(s, &connect_uri(&request)).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.contains("http://127.0.0.1:48889"));
+    }
+
     async fn get_body(s: AppState, uri: &str) -> (StatusCode, String) {
         let response = crate::router(s)
             .oneshot(
