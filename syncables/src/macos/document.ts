@@ -20,6 +20,11 @@ export function macDocument(
     modifiedTime: string,
     localStatus: { ...string, readOnly: true },
     uploadStatus: { ...string, readOnly: true },
+    uploadError: {
+      type: 'object',
+      readOnly: true,
+      properties: { domain: string, code: { type: 'integer' } },
+    },
   };
   const document: OpenApiDocument = {
     openapi: '3.1.0',

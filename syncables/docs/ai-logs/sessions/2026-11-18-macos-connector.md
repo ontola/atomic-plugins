@@ -93,3 +93,8 @@ now consumes an already-written atomic terminal response even if waiting for
 the exited app fails. It never repeats a write to recover that wait error.
 Native metadata access and serialization are explicitly isolated to the main
 actor.
+
+Completed the generated OpenAPI contract with required path parameters, local
+authentication and the binary staging operation. Recovery testing also verifies
+that read-only upload error evidence does not prevent adoption of a successful
+write after a lost response.

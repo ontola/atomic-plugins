@@ -513,6 +513,63 @@ describe.skipIf(!process.env.SYNCABLES_TEST_DATABASE_URL)(
       );
       expect(receipt[0].state).toBe('confirmed');
       expect(receipt[0].created_id).toBe(operationId);
+      const recoveryId = randomUUID();
+      f.native.mockImplementation(async (request) =>
+        request.operation === 'write'
+          ? { localStatus: 'written' }
+          : {
+              item: {
+                uploaded: true,
+                uploadError: { domain: 'NSCocoaErrorDomain', code: 4355 },
+              },
+            },
+      );
+      await withEditLock(archive.pool, owner, destination, (edits) =>
+        edits.enqueue({
+          action: 'create',
+          id: recoveryId,
+          desired: {
+            operationId: recoveryId,
+            path: 'recovered-folder',
+            kind: 'directory',
+          },
+        }),
+      );
+      const uncertain = await withEditLock(
+        archive.pool,
+        owner,
+        destination,
+        (edits) =>
+          edits.send(
+            async (request) => {
+              await localTransport(transfer)(request);
+              throw new Error('Lost successful response');
+            },
+            undefined,
+            { connection_id: transfer.connection, platform: transfer.platform },
+          ),
+      );
+      expect(uncertain.find((edit) => edit.id === recoveryId)?.state).toBe(
+        'uncertain',
+      );
+      await withEditLock(archive.pool, owner, destination, (edits) =>
+        edits.adopt(
+          recoveryId,
+          recoveryId,
+          localTransport(transfer),
+          undefined,
+          { connection_id: transfer.connection, platform: transfer.platform },
+        ),
+      );
+      const adopted = await withEditLock(
+        archive.pool,
+        owner,
+        destination,
+        (edits) => edits.list(),
+      );
+      expect(adopted.find((edit) => edit.id === recoveryId)?.state).toBe(
+        'confirmed',
+      );
     });
   },
 );
