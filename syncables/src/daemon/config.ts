@@ -241,7 +241,7 @@ export async function loadDaemonConfig(file: string): Promise<DaemonConfig> {
     return collection;
   });
   const issuer = safeUrl(
-    text(data.issuer ?? 'https://localthought.io', 'issuer'),
+    text(data.issuer ?? 'https://integrations.atomic.place', 'issuer'),
   );
   if (issuer.pathname !== '/' || issuer.search)
     throw new Error('Issuer must be an origin');

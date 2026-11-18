@@ -26,9 +26,13 @@ rows and the checkpoint is resumed by the host from its saved session. If
 it is not resumed, a later run fetches the same events again and finds
 their rows by delivery id. Both cases are covered by `plugin.test.ts`.
 
-It holds no credential. The host signs every request as the installation's
-node agent, and the proxy accepts that agent as a runtime of the app the
-GitHub connection is delegated to (on the Installation page, Connections).
+It holds no credential. This unpublished pilot expects a test receiver
+that accepts the historical node-agent runtime signature. Production IAP
+requires a client-held connection key and a request signature that binds
+its header. This sandbox has no host mechanism to obtain or attach that
+key. It is not a verified migrated IAP client. Do not embed a key in its
+bundle, manifest or stored configuration; a host key handoff is a separate
+dependency before any production use.
 
 The three classes (`schema.ts`) stay in this folder for the pilot. This is
 a coordinator decision of 2026-10-12, and it is reversible. They are not
@@ -89,8 +93,11 @@ runner exists (docs/design/pieces.md D2/D5).
   stops the schedule). Both need a person.
 - **The proxy is reached by its absolute URL**, which atomic-server signs
   but logs as deprecated. `build.mjs` bakes the origin in
-  (`--proxy-origin`, default `https://localthought.io`). Every such place
-  carries `TODO(ontola/atomic-server#2228)`.
+  (`--proxy-origin`, required). There is no implicit public proxy: an
+  omitted receiver fails before building, and running unconfigured source
+  fails before network access. Explicit custom and loopback receivers are
+  retained for offline/mock tests. Every such place carries
+  `TODO(ontola/atomic-server#2228)`.
 - **There is no "Set up" for the destination.** The host's set-up of a
   manifest `destination` exists only for file importers. The tables,
   classes and properties have to be created with `provisionDestination`
@@ -108,7 +115,7 @@ runner exists (docs/design/pieces.md D2/D5).
 ```sh
 node integrations/tooling/link-atomic-server.mjs
 ./browser/node_modules/.bin/vitest run --config integrations/issue-tracker/vitest.config.ts inbox
-node integrations/issue-tracker/inbox/build.mjs --out /tmp/inbox-plugin.js
+node integrations/issue-tracker/inbox/build.mjs --proxy-origin http://127.0.0.1:8090 --out /tmp/inbox-plugin.js
 ```
 
 The e2e is `integrations/issue-tracker/e2e/inbox.spec.ts`, in the

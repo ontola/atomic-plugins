@@ -53,7 +53,7 @@
  *
  * Options (all optional):
  *   --proxy <url>      real integration-proxy to take document.yaml from
- *                      (default https://localthought.io)
+ *                      (default https://integrations.atomic.place)
  *   --limit <n>        page size sent as `limit` (default 3)
  *   --max-pages <n>    stop after this many pages per collection (default 3)
  *   --completed-task <id>
@@ -107,6 +107,8 @@ import {
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const API = 'https://api.todoist.com/api/v1';
+
+export const DEFAULT_PROXY = 'https://integrations.atomic.place';
 
 /**
  * The redaction list. Every string in a recorded body is either kept
@@ -640,7 +642,7 @@ export async function recordApi({
   limit,
   maxPages,
   lookups = {},
-  proxy = 'https://localthought.io',
+  proxy = DEFAULT_PROXY,
 }) {
   checkTaskIds(lookups);
   const apiDir = new URL('api/', dir);
@@ -763,7 +765,7 @@ async function main() {
   // Every option is read before anything is fetched, so one without a
   // value stops the script first.
   checkArgv();
-  const proxy = arg('proxy', 'https://localthought.io');
+  const proxy = arg('proxy', DEFAULT_PROXY);
   const limit = positiveInteger('limit', arg('limit', '3'));
   const maxPages = positiveInteger('max-pages', arg('max-pages', '3'));
   const lookups = {};

@@ -4,6 +4,12 @@
 #
 #   sh server.sh <base-domain> [<atomic-server sha>]
 #   USERTEST_PLUGIN_ROUTES=read-write sh server.sh <base-domain> [<sha>]
+#   ATOMIC_INTEGRATION_PROXY_URL=http://127.0.0.1:8090 sh server.sh <base-domain> <sha>
+#
+# The default proxy is IAP. Its client-held connection keys require the host
+# browser changes from ontola/atomic-server#2490 (a450e20fc). The old pinned
+# host is refused before stopping the current container; custom test proxies
+# remain available for the historical host.
 #
 # It runs the published e2e image of the pinned commit, which is built with
 # VITE_E2E: that keeps /app/dev-drive (a drive without signup) and also
@@ -43,6 +49,14 @@ else
   exit 1
 fi
 ROUTES=${USERTEST_PLUGIN_ROUTES:-off}
+PROXY=${ATOMIC_INTEGRATION_PROXY_URL:-https://integrations.atomic.place}
+case "$SHA:$PROXY" in
+  30994948b5adadd765ecfcdccdf0aad14ef5be1a:https://integrations.atomic.place | \
+  30994948b5adadd765ecfcdccdf0aad14ef5be1a:https://integrations.atomic.place/)
+    echo 'This pinned host lacks IAP connection-key auth. Choose and test a host containing atomic-server#2490 (a450e20fc) before deploying with IAP.' >&2
+    exit 1
+    ;;
+esac
 
 IMAGE=ghcr.io/ontola/atomic-server-e2e:$SHA
 set --
@@ -72,7 +86,7 @@ docker run -d --name atomic-plugins --restart unless-stopped --init \
   -p 127.0.0.1:8080:80 -v atomic-plugins-store:/data \
   -e ATOMIC_DOMAIN="plugins.$BASE_DOMAIN" -e ATOMIC_PORT=80 \
   -e ATOMIC_HOST_MODE=open \
-  -e ATOMIC_INTEGRATION_PROXY_URL=https://localthought.io \
+  -e ATOMIC_INTEGRATION_PROXY_URL="$PROXY" \
   -e SENTRY_DSN="https://usertest@logs.$BASE_DOMAIN/1" \
   -e SENTRY_DSN_BROWSER="https://usertest@logs.$BASE_DOMAIN/2" \
   -e SENTRY_ENVIRONMENT=usertest \

@@ -1,5 +1,11 @@
 // @wc-ignore-file
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+
+// Source tests opt in to an invented receiver, like build.mjs's required
+// --proxy-origin. The source has no production endpoint by default.
+vi.hoisted(() => {
+  Object.assign(globalThis, { __INBOX_PROXY_ORIGIN__: 'https://inbox.test' });
+});
 
 import { config, FakeHost, FakeInbox } from './fake-host.js';
 import {
@@ -493,7 +499,7 @@ describe('the declared operations', () => {
   };
 
   it('cover every consumer request, each under its own id', () => {
-    const declared = operations(PROXY_ORIGIN);
+    const declared = operations(PROXY_ORIGIN!);
     expect(manifest.operations).toEqual(declared);
     expect(manifest.proxy).toEqual(['github-issues']);
 
@@ -510,7 +516,7 @@ describe('the declared operations', () => {
       const operation = declared.find(o => o.id === id)!;
       expect(operation.method).toBe(method);
       expect(operation.effect).toBe('read');
-      const pattern = operation.url.slice(PROXY_ORIGIN.length);
+      const pattern = operation.url.slice(PROXY_ORIGIN!.length);
       expect(matches(pattern, path)).toBe(true);
     }
 

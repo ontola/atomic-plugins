@@ -139,6 +139,11 @@ describe('record.mjs against a fake Todoist', () => {
     });
 
     expect(stopped).toBeNull();
+    // The proxy supplies public metadata only; provider data goes directly
+    // to Todoist with TODOIST_TOKEN, without proxy connection credentials.
+    expect(meta.document_source).toBe(
+      'https://integrations.atomic.place/catalog/todoist.yaml',
+    );
     expect(meta.pages).toEqual({ '/projects': 1, '/tasks': 2 });
     expect(meta.truncated).toBe(false);
     expect(meta.truncated_collections).toEqual([]);
@@ -178,8 +183,12 @@ describe('record.mjs against a fake Todoist', () => {
       token: TOKEN,
       limit: 2,
       maxPages: 2,
+      proxy: 'http://127.0.0.1:8090',
     });
 
+    expect(meta.document_source).toBe(
+      'http://127.0.0.1:8090/catalog/todoist.yaml',
+    );
     expect(meta.truncated).toBe(true);
     expect(meta.truncated_collections).toEqual(['/tasks']);
     expect(meta.pages['/tasks']).toBe(2);

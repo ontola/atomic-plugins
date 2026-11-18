@@ -202,6 +202,20 @@ describe.skipIf(!database)(
         ).rowCount,
       ).toBe(0);
     });
+    it('rejects legacy issuer credentials before refresh or use at IAP', async () => {
+      const h = setup();
+      h.config.issuer = 'https://integrations.atomic.place';
+      const fetchImpl = vi.fn<typeof fetch>();
+      await h.vault.set({
+        ...h.value()!,
+        issuer: 'https://localthought.io',
+        tokenEndpoint: 'https://localthought.io/oauth/device/token',
+        expiresAt: Date.now() + 600_000,
+      });
+      const auth = new DaemonAuth(h.config, archive, h.vault, fetchImpl);
+      await expect(auth.session()).rejects.toThrow('Login required');
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
     it('rejects a cross-owner or cross-origin vault entry and revokes only the stored device session', async () => {
       const h = setup();
       const fetchImpl = vi.fn<typeof fetch>(
