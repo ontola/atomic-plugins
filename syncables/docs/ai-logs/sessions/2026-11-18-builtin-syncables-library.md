@@ -134,3 +134,9 @@ sets its OpenAPI info.title and x-logo.url to a versioned public image stored in
 atomic-plugins. Atomic's installer reads provider branding generically and stores
 the image as an ordinary File under the App. No provider logo is bundled into
 Atomic Server. The mark is attributed to Font Awesome Free 6 under CC BY 4.0.
+
+The collection browser also derives labels from ordinary OpenAPI 3.0 schema
+titles and singleton-enum oneOf branch titles. The unpublished read overlay
+provides those labels for organizations and repositories; no executable view
+definition or Atomic-only API response field is added. The ordinary composed
+OpenAPI validator and four catalog composition checks pass with these fields.
