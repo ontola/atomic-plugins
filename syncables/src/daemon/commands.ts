@@ -16,6 +16,7 @@ import {
 } from './config.js';
 import { validateCommitMessage } from './git-store.js';
 import { DaemonAuth, KeychainCredentials } from './auth.js';
+import { readConnectionGrant } from './connection-grants.js';
 import { DaemonRunner, jobStatuses } from './runner.js';
 import { inventoryFiles } from './file-inventory.js';
 import { findFileDuplicates, type FileLocation } from './file-duplicates.js';
@@ -149,10 +150,13 @@ export async function daemonCommand(
 ): Promise<void> {
   const string = (key: string): string | undefined =>
     typeof values[key] === 'string' ? (values[key] as string) : undefined;
-  const config = await loadDaemonConfig(
-    requireValue(string('config'), 'config'),
-  );
   const command = positionals[0];
+  const configPath = requireValue(string('config'), 'config');
+  const config = await loadDaemonConfig(configPath).catch((error: unknown) => {
+    if (command === 'import-connection-grant')
+      throw new Error('Could not load the daemon configuration');
+    throw error;
+  });
   const message = string('message');
   if (message !== undefined) {
     if (command !== 'sync' && command !== 'daemon')
@@ -163,6 +167,32 @@ export async function daemonCommand(
     throw new Error('--subject is supported by history only');
   if (string('projection-contract') !== undefined && command !== 'atomic-peer')
     throw new Error('--projection-contract is supported by atomic-peer only');
+  if (command === 'import-connection-grant') {
+    if (
+      positionals.length !== 1 ||
+      Object.keys(values).some((key) => key !== 'config')
+    )
+      throw new Error(
+        'Use syncables import-connection-grant --config FILE with JSON on stdin',
+      );
+    if (process.stdin.isTTY)
+      throw new Error('Pipe connection grant JSON through stdin');
+    const grant = await readConnectionGrant(process.stdin);
+    const archive = localArchive();
+    try {
+      await archive.initialize();
+      const auth = new DaemonAuth(
+        config,
+        archive,
+        new KeychainCredentials(config),
+      );
+      await auth.importConnectionGrant(grant);
+      write({ connectionGrant: 'imported' });
+    } finally {
+      await archive.close();
+    }
+    return;
+  }
   const archive = localArchive();
   const store = new PostgresHistoryStore(
     archive.pool,
