@@ -45,6 +45,8 @@ class GitHubSyncablesCatalogTests(unittest.TestCase):
         self.assertEqual(sorted(findings("github-issues", self.document) - KNOWN), [])
 
     def test_discovery_and_canonical_issue_collections_are_standard_metadata(self):
+        self.assertEqual(self.document["info"]["title"], "GitHub")
+        self.assertEqual(self.document["info"]["x-logo"]["url"], "https://ontola.github.io/atomic-plugins/overlays/assets/github-mark-1.svg")
         resources = self.document["components"]["crudResources"]
         expected = [
             ("githubOrganization", "githubOrganizations", "/user/orgs"),

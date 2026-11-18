@@ -125,3 +125,12 @@ selected-collection/continuation reader cases and the proxy's actual pinned
 November 18 catalog-loader regression. The server's iframe/profile tests pass
 all forty cases with the regenerated v2 fixture. The coordinating agent records the
 subsequent exact-head CI and publication outcomes.
+
+## Provider App branding
+
+The user requested a generic native SyncableCollection view and a provider App
+resource with the integration icon. The unpublished GitHub read-model overlay now
+sets its OpenAPI info.title and x-logo.url to a versioned public image stored in
+atomic-plugins. Atomic's installer reads provider branding generically and stores
+the image as an ordinary File under the App. No provider logo is bundled into
+Atomic Server. The mark is attributed to Font Awesome Free 6 under CC BY 4.0.

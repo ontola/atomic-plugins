@@ -4,6 +4,11 @@ info:
   title: GitHub organization, repository and canonical Issues collections
   version: 1.0.0
 actions:
+- target: $.info
+  update:
+    title: GitHub
+    x-logo:
+      url: https://ontola.github.io/atomic-plugins/overlays/assets/github-mark-1.svg
 - target: $.components
   update:
     paginationSchemes:
