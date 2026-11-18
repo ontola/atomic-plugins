@@ -101,6 +101,7 @@ export declare const properties: {
   readonly 'bldg-view-time': PropertyTerm;
   readonly 'bldg-render': PropertyTerm;
   readonly 'bldg-material-slots': PropertyTerm;
+  readonly 'bldg-model-file': PropertyTerm;
 };
 
 export declare const classes: {

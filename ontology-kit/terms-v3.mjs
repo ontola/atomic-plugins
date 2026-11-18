@@ -199,7 +199,7 @@ export const properties = Object.freeze({
   'bldg-model': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-model',
-    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+    datatype: 'https://atomicdata.dev/datatypes/string',
   }),
   'bldg-model-version': Object.freeze({
     subject:
@@ -462,6 +462,11 @@ export const properties = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material-slots',
     datatype: 'https://atomicdata.dev/datatypes/json',
   }),
+  'bldg-model-file': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-model-file',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
+  }),
 });
 
 export const classes = Object.freeze({
@@ -673,7 +678,7 @@ export const classes = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-product',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-load-bearing',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-is-external',
-      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-model',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-model-file',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material-slots',
     ]),
   }),

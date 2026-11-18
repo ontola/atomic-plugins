@@ -162,7 +162,8 @@
         "bldg-camera",
         "bldg-view-time",
         "bldg-render",
-        "bldg-material-slots"
+        "bldg-material-slots",
+        "bldg-model-file"
       ]
     }
   },
@@ -444,7 +445,7 @@
         "bldg-product",
         "bldg-load-bearing",
         "bldg-is-external",
-        "bldg-model",
+        "bldg-model-file",
         "bldg-material-slots"
       ]
     },
@@ -767,7 +768,7 @@
     "bldg-geometry": {
       "name": "Geometry",
       "datatype": "https://atomicdata.dev/datatypes/json",
-      "description": "The shape, as JSON whose layout depends on the geometry kind. Metres, local to the storey, Z up; heights are above the storey floor. wallAxis {start: [x, y], end: [x, y], height, thickness, base?}: a straight wall centred on its axis. extrusion {polygon: [[x, y], ...], depth, base?}: a polygon pushed up by depth from base; base defaults to -depth for an IfcSlab (top flush with the floor) and to 0 otherwise. Floors, flat roofs with their overhang, columns, piers, chimneys, built-in furniture. opening {offset, width, height, sill}: a door or window in its host wall, offset metres from the wall start. stair {start: [x, y], direction, width, rise, risers, going, base?}: a straight flight starting at start, going direction degrees counter-clockwise from +X, climbing rise metres in risers equal steps over going metres. mesh {file?, at?: [x, y, z], rotation?}: a glTF/GLB File resource placed at at, rotated rotation degrees around Z; without file, the model of the element type. Checked by the app, not by the server."
+      "description": "The shape, as JSON whose layout depends on the geometry kind. Metres, local to the storey, Z up; heights are above the storey floor. wallAxis {start: [x, y], end: [x, y], height, thickness, base?}: a straight wall centred on its axis. extrusion {polygon: [[x, y], ...], depth, base?}: a polygon pushed up by depth from base; base defaults to -depth for an IfcSlab (top flush with the floor) and to 0 otherwise. Floors, flat roofs with their overhang, columns, piers, chimneys, built-in furniture. opening {offset, width, height, sill}: a door or window in its host wall, offset metres from the wall start. stair {start: [x, y], direction, width, rise, risers, going, base?}: a straight flight starting at start, going direction degrees counter-clockwise from +X, climbing rise metres in risers equal steps over going metres. mesh {file?, at?: [x, y, z], rotation?}: a glTF/GLB File resource placed at at, rotated rotation degrees around Z; without file, the model file of the element type. Checked by the app, not by the server."
     },
     "bldg-material": {
       "name": "Material",
@@ -839,8 +840,8 @@
     },
     "bldg-model": {
       "name": "Model",
-      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
-      "description": "The 3D model of a furniture or fixture type: a File resource holding a glTF/GLB, in real-world metres, Z or Y up as glTF says, its origin on the floor at the middle of its footprint. Elements of the type place it with mesh geometry."
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "Name of the AI model that ran."
     },
     "bldg-model-version": {
       "name": "Model version",
@@ -1094,6 +1095,11 @@
       "name": "Material slots",
       "datatype": "https://atomicdata.dev/datatypes/json",
       "description": "Which Material goes on each named part of a model, as JSON {slot: Material subject}; a slot is the name of a material in the model (for example \"fabric\", \"legs\"). On a type it sets the default finish, on an element it overrides it, so one model gives many variants."
+    },
+    "bldg-model-file": {
+      "name": "Model file",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The 3D model of a furniture or fixture type: a File resource holding a glTF/GLB, in real-world metres, Z or Y up as glTF says, its origin on the floor at the middle of its footprint. Elements of the type place it with mesh geometry."
     }
   }
 }
