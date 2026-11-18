@@ -14,7 +14,7 @@ from test_crud_reads_in_catalogs import KNOWN, findings
 
 
 CATALOG = ROOT / "catalog/2026-11-18-syncables-apps.json"
-PREVIOUS = ROOT / "catalog/2026-11-16-syncables-github.json"
+PREVIOUS = ROOT / "catalog/2026-11-16-storage-metadata.json"
 
 
 class GitHubSyncablesCatalogTests(unittest.TestCase):
@@ -31,8 +31,15 @@ class GitHubSyncablesCatalogTests(unittest.TestCase):
         github = platform_config("github-issues", without_additions)
         added = github["overlays"].pop()
         self.assertTrue(added.endswith("/builtin-read-model-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml"))
+        discovery = github["overlays"].pop()
+        self.assertTrue(discovery.endswith("/syncables-discovery-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml"))
         github["selection"].pop("query_overrides")
+        self.assertEqual(len(previous["platforms"]), 17)
         self.assertEqual(without_additions, previous)
+        patch = self.document["paths"]["/repos/{owner}/{repo}/issues/{issue_number}"]["patch"]
+        self.assertEqual(patch["x-crud"]["patchFormat"], "jsonMergePatch")
+        create = self.document["paths"]["/repos/{owner}/{repo}/issues"]["post"]
+        self.assertEqual(create["x-crud"]["addedFields"]["number"]["source"], "generated")
 
     def test_composition_has_only_previously_known_crud_findings(self):
         self.assertEqual(sorted(findings("github-issues", self.document) - KNOWN), [])

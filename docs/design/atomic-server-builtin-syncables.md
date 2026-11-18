@@ -33,7 +33,9 @@ organization discovery. The host can still group accessible repository owners
 when an older selected catalog has no organization endpoint.
 
 The built-in Sync app explicitly opts in to
-`catalog/2026-11-18-syncables-apps.json`. It adds GitHub organization,
+`catalog/2026-11-18-syncables-apps.json`. It preserves all 17 providers and
+their selections from `2026-11-16-storage-metadata.json`, including GitHub's
+CRUD v2 metadata, then appends discovery and read-model overlays. It adds organization,
 repository and stable repository-ID Issues collections through CRUD
 Causality and Pagination Schemes. Its selection chooses page sizes of 100;
 the Issues collection defines a complete history read with `state: all`.

@@ -448,7 +448,9 @@ Specification documents, each served from that same Pages folder. At startup
 the proxy downloads those HTTPS sources, applies each overlay's `update`
 actions in the listed order, and keeps the resulting YAML in memory.
 
-The opt-in `catalog/2026-11-18-syncables-apps.json` adds declared GitHub
+The opt-in `catalog/2026-11-18-syncables-apps.json` retains the 17-provider
+`2026-11-16-storage-metadata.json` baseline and its GitHub CRUD v2 metadata,
+then adds GitHub discovery and declared GitHub
 organization, repository and canonical Issues collections for clients using
 the Syncables selected-collection reader. Select it explicitly with
 `CATALOG_PATH`. The default remains unchanged so existing read-all clients

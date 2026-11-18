@@ -3,9 +3,10 @@ OpenAPI Overlay files that complete existing OpenAPI files with Pagination Schem
 
 ## GitHub collection discovery
 
-The opt-in catalog `catalog/2026-11-18-syncables-apps.json` preserves the
-previous `2026-11-16-syncables-github.json` catalog and adds one standard
-OpenAPI Overlay to GitHub. The overlay declares CRUD Causality collections
+The opt-in catalog `catalog/2026-11-18-syncables-apps.json` preserves all 17
+providers and existing selections from `2026-11-16-storage-metadata.json`,
+including GitHub's CRUD Causality v2 overlay. It appends the GitHub discovery
+and read-model OpenAPI Overlays. The read model declares CRUD Causality collections
 `githubOrganizations`, `githubRepositories` and `repositoryIssues`, with
 Pagination Schemes metadata. Issues define a complete history read with
 `state: all` and a stable numeric `repository_id` binding. The catalog

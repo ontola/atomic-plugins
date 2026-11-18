@@ -101,3 +101,27 @@ non-network catalog tests pass; the new GitHub catalog, unchanged default
 GitHub catalog and main's Dropbox continuation composition regressions also
 pass when explicitly enabled. Python checks pass four actual catalog
 composition tests, fourteen OAD-pin tests and three pinned-fetch tests.
+
+## Preserve the deployed catalog baseline
+
+Before publication, the coordinator found that the deployed proxy selects
+`2026-11-16-storage-metadata.json`, with 17 providers and GitHub CRUD Causality
+v2. The new opt-in catalog initially copied an older ten-provider profile.
+Corrected only the unpublished November 18 catalog to preserve the deployed
+storage baseline exactly, then append the existing GitHub discovery overlay,
+the new read-model overlay and the three consumer page-size selections.
+Historic catalogs, published overlays and the global default remain unchanged.
+
+The preservation regression now removes both appended overlays and query
+overrides and compares all 17 complete platform profiles with the storage
+baseline. It also checks GitHub's v2 `jsonMergePatch` and generated-field
+semantics survive composition. Updated the baseline notes and regenerated the
+two Atomic Server test fixtures through the actual catalog composition helper,
+retaining source hashes and the full provider schema. No production reader
+code or server code changed in this correction.
+
+Focused validation passes four actual catalog composition cases, eighteen
+selected-collection/continuation reader cases and the proxy's actual pinned
+November 18 catalog-loader regression. The server's iframe/profile tests pass
+all forty cases with the regenerated v2 fixture. The coordinating agent records the
+subsequent exact-head CI and publication outcomes.
