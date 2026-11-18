@@ -301,7 +301,7 @@ describe.skipIf(!database)(
         read(async () =>
           ++calls === 1
             ? response(JSON.stringify(pages[0]))
-            : response('unavailable', 503),
+            : response('unavailable', 500),
         ),
       ).rejects.toThrow();
       await expect(
@@ -322,7 +322,7 @@ describe.skipIf(!database)(
         h.sync(async () =>
           ++requests === 1
             ? response('{"items":[{"id":"b"}],"next":"page-2"}')
-            : response('unavailable', 503),
+            : response('unavailable', 500),
         ),
       ).rejects.toThrow();
       expect(requests).toBe(2);
@@ -434,13 +434,36 @@ describe.skipIf(!database)(
         h.sync(async () => response('{"items":[],"more":false}')),
       ).rejects.toThrow('nonempty cursor');
       expect(await h.store.head(h.prepared.scope)).toBe(initial.revision);
-      const delta = await h.sync(async ({ url, method, body }) => {
+      const continued = vi.fn<Transport>(async ({ url, method, body }) => {
         expect(url.pathname).toBe('/entries/continue');
         expect(method).toBe('POST');
         expect(JSON.parse(body!)).toEqual({ cursor: 't1' });
+        if (continued.mock.calls.length === 1) return response('', 502);
         return response('{"items":[{"id":"b"}],"more":false,"cursor":"t2"}');
       });
+      const delta = await h.sync(continued);
+      expect(continued).toHaveBeenCalledTimes(2);
+      expect(
+        Number(
+          (
+            await archive.pool.query(
+              'SELECT count(*) FROM syncables_cache.attempts WHERE owner=$1 AND run=$2 AND status=502',
+              [h.config.owner, delta.run],
+            )
+          ).rows[0].count,
+        ),
+      ).toBe(1);
       expect(delta).toMatchObject({ strategy: 'delta', records: 2 });
+      expect(await h.store.context(h.prepared.scope)).toMatchObject({
+        syncToken: 't2',
+      });
+      h.prepared.source.readLimits = { maxRequests: 1 };
+      const unavailable = vi.fn<Transport>(async () => response('', 502));
+      await expect(h.sync(unavailable)).rejects.toThrow(
+        'Read exceeds 1 requests',
+      );
+      expect(unavailable).toHaveBeenCalledTimes(1);
+      expect(await h.store.head(h.prepared.scope)).toBe(delta.revision);
       expect(await h.store.context(h.prepared.scope)).toMatchObject({
         syncToken: 't2',
       });

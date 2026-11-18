@@ -159,6 +159,65 @@ describe('every request syncables makes sets a purpose', () => {
   });
 });
 
+describe('temporary gateway retries', () => {
+  it('honors Retry-After and stops at the retry limit', async () => {
+    const delays: number[] = [];
+    let attempts = 0;
+    const budget = new Budget(
+      async () => {
+        attempts++;
+        return { status: 503, headers: { 'retry-after': '5' }, body: '' };
+      },
+      { maxRetries: 2 },
+      async (ms) => {
+        delays.push(ms);
+      },
+      undefined,
+      true,
+    );
+    const response = await budget.send({
+      url: new URL('https://api.example.com/pets'),
+      method: 'GET',
+      headers: {},
+      purpose: 'list',
+    });
+    expect(response.status).toBe(503);
+    expect(attempts).toBe(3);
+    expect(delays).toEqual([5000, 5000]);
+  });
+
+  it.each([
+    { status: 403, method: 'GET', purpose: 'list' },
+    { status: 502, method: 'POST', purpose: 'write' },
+  ] as const)(
+    'does not gateway-retry $method $purpose with HTTP $status',
+    async ({ status, method, purpose }) => {
+      let attempts = 0;
+      const budget = new Budget(
+        async () => {
+          attempts++;
+          return { status, headers: {}, body: '' };
+        },
+        {},
+        async () => {
+          throw new Error('Unexpected retry');
+        },
+        undefined,
+        true,
+      );
+      await expect(
+        budget.send({
+          url: new URL('https://api.example.com/pets'),
+          method,
+          headers: {},
+          purpose,
+        }),
+      ).resolves.toMatchObject({ status });
+      expect(attempts).toBe(1);
+    },
+  );
+});
+
 describe('a response a cache answered', () => {
   it('does not classify cached throttling or blocked answers', async () => {
     const declaration = declaredThrottling(

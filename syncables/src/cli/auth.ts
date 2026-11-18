@@ -1,4 +1,6 @@
 /** Device-flow scaffold. Tokens live only for the duration of auth-test. */
+import { setTimeout as sleep } from 'node:timers/promises';
+import { gatewayRetryDelay } from '../read/gateway-retry.js';
 import type { Transport, TransportRequest } from '../read/transport.js';
 export interface AuthOptions {
   issuer: string;
@@ -269,15 +271,29 @@ export async function deviceLogin(
 export async function listConnections(
   session: Session,
   fetchImpl: typeof fetch = globalThis.fetch,
+  retryGatewayErrors = false,
 ): Promise<{ owner: string; connections: Connection[] }> {
-  const response = await request(
-    fetchImpl,
-    new URL('/connections', session.issuer).href,
-    {
-      method: 'GET',
-      headers: { authorization: `Bearer ${session.accessToken}` },
-    },
-  );
+  const url = new URL('/connections', session.issuer).href;
+  const init = {
+    method: 'GET',
+    headers: { authorization: `Bearer ${session.accessToken}` },
+  };
+  const retryDeadline = Date.now() + 10_000;
+  let response = await request(fetchImpl, url, init);
+  for (let retries = 0; retryGatewayErrors && retries < 3; retries += 1) {
+    const now = Date.now();
+    const delay = gatewayRetryDelay(
+      response.status,
+      retries,
+      now,
+      response.headers.get('retry-after') ?? undefined,
+      response.headers.get('date') ?? undefined,
+    );
+    if (delay === undefined || now + delay >= retryDeadline) break;
+    await response.body?.cancel();
+    await sleep(delay);
+    response = await request(fetchImpl, url, init);
+  }
   if (!response.ok)
     throw Object.assign(
       new Error(`Connection discovery refused (HTTP ${response.status})`),

@@ -511,6 +511,7 @@ export async function syncCollection(
           });
         },
         declaredThrottling(document),
+        true,
       );
       const resources =
         token && expected

@@ -40,6 +40,7 @@ import {
   windowWidth,
 } from '../pagination/window.js';
 import { isRecord } from './model.js';
+import { gatewayRetryDelay } from './gateway-retry.js';
 import {
   lowerCaseHeaders,
   type ListMethod,
@@ -112,6 +113,7 @@ export class Budget {
     limits: Partial<ReadLimits> = {},
     private readonly sleep: (ms: number) => Promise<void> = defaultSleep,
     private readonly throttling?: ThrottlingDeclaration,
+    private readonly retryGatewayErrors = false,
   ) {
     this.limits = { ...DEFAULT_READ_LIMITS, ...limits };
     this.deadline = Date.now() + this.limits.timeoutMs;
@@ -148,14 +150,29 @@ export class Budget {
         body: response.body,
         receivedAt,
       });
-      // A blocked answer (Throttling 0.4.0) has no retry time either: it is
-      // returned, and the read fails on it.
-      if (!throttled || throttled.retryAt === undefined) {
+      if (throttled?.meaning === 'blocked') return response;
+      const replayableList =
+        (request.method === 'GET' && request.body === undefined) ||
+        (request.method === 'POST' && request.purpose === 'list');
+      const gatewayDelay =
+        this.retryGatewayErrors && replayableList && response.fromCache !== true
+          ? gatewayRetryDelay(
+              response.status,
+              retries,
+              receivedAt,
+              response.headers['retry-after'],
+              response.headers.date,
+            )
+          : undefined;
+      if (throttled?.retryAt === undefined && gatewayDelay === undefined)
         return response;
-      }
-      // Never earlier than the response asks (the spec's MUST); a read
-      // that cannot wait that long stops instead.
-      const delay = Math.max(0, throttled.retryAt - Date.now());
+      // Never earlier than the response asks. A read that cannot wait that
+      // long stops instead.
+      const delay = Math.max(
+        0,
+        (throttled?.retryAt ?? 0) - Date.now(),
+        gatewayDelay ?? 0,
+      );
       if (Date.now() + delay > this.deadline) {
         throw new RetryBeyondDeadline(
           'API retry delay exceeds the remaining read time',
