@@ -328,6 +328,8 @@ export interface PaginateOptions {
    * `response.incomplete` marks), with `reason`.
    */
   outcome?: WalkOutcome;
+  /** Resume a continuation scheme with a cursor from the same listing scope. */
+  checkpoint?: string;
 }
 
 /**
@@ -371,6 +373,9 @@ export async function paginate(
       : {}),
     ...(options.range ? { range: options.range } : {}),
     ...(options.outcome ? { outcome: options.outcome } : {}),
+    ...(options.checkpoint === undefined
+      ? {}
+      : { checkpoint: options.checkpoint }),
     identity: (item) => asText(item[options.idField ?? 'id']),
   })) {
     items.push(...page.items);

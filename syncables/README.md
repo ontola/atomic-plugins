@@ -2250,7 +2250,9 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
 
 ## Changelog
 
-- **0.28.0**: Selected collection reads and catalog defaults.
+- **0.28.0**: Selected collection reads, catalog defaults and scoped daemon connections.
+  - **Added:** Syncables can import a sealed device connection grant through stdin and keep it
+    in macOS Keychain for its approved connection and current device session.
   - **Added:** SyncD can inventory Dropbox, Google Drive and iCloud Drive using file
     metadata alone. Cloud inventories resume from saved cursors and track
     deletions. The stored inventory supports browsing, history and checksum
@@ -2260,6 +2262,9 @@ Not verified against a real provider: no overlay declares `x-produces` yet.
     collections needed for missing path bindings are discovered; supplied
     constants read a selected instance directly. Unknown names fail before
     provider requests, and incomplete snapshots retain accepted records.
+  - **Fixed:** The daemon preserves the HTTP method and JSON body of a declared POST list
+    when reading through an integration proxy, including when pagination
+    switches to a cursor continuation operation.
   - **Fixed:** Selected collection reads now validate and apply catalog query defaults before
     restricting the read model. A default for another declared collection no
     longer prevents a selected read or requires unrelated path parameters, and

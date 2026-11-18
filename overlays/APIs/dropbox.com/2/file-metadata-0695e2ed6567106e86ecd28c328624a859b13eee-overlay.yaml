@@ -1,0 +1,72 @@
+{
+  "overlay": "1.0.0",
+  "info": {
+    "title": "Dropbox file inventory",
+    "version": "1.0.0"
+  },
+  "extends": "https://raw.githubusercontent.com/ontola/openapi-directory/0695e2ed6567106e86ecd28c328624a859b13eee/APIs/dropbox.com/2/openapi.yaml",
+  "actions": [
+    {
+      "target": "$.components.securitySchemes.dropboxOAuth",
+      "update": {
+        "x-oauth-authentication-details": {
+          "authorizationServerMetadata": {
+            "token_endpoint_auth_methods_supported": [
+              "client_secret_post"
+            ],
+            "code_challenge_methods_supported": [
+              "S256"
+            ]
+          },
+          "authorizationCode": {
+            "pkce": {
+              "requirement": "optional"
+            },
+            "profile": {
+              "parameters": [
+                {
+                  "parameter": {
+                    "name": "token_access_type",
+                    "in": "query",
+                    "schema": {
+                      "type": "string",
+                      "enum": [
+                        "offline"
+                      ]
+                    }
+                  },
+                  "value": "offline"
+                }
+              ],
+              "capabilities": [
+                "offlineAccess"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "target": "$.paths['/files/list_folder'].post.responses['200']",
+      "update": {
+        "links": {
+          "continueListing": {
+            "operationId": "continueListFolder",
+            "description": "Continue until has_more is false. Save the terminal cursor for subsequent change polls."
+          }
+        }
+      }
+    },
+    {
+      "target": "$.paths['/files/list_folder/continue'].post.responses['200']",
+      "update": {
+        "links": {
+          "continueListing": {
+            "operationId": "continueListFolder",
+            "description": "Continue until has_more is false. Save the terminal cursor for subsequent change polls."
+          }
+        }
+      }
+    }
+  ]
+}

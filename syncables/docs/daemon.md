@@ -318,6 +318,33 @@ revokes the device session; revocation failure is reported. No owner key is
 requested. Persistent credential storage on other operating systems is deferred;
 `--interactive` remains available for foreground experiments.
 
+For an issuer that requires a sealed connection key grant for device reads,
+approve the connection during persistent `syncables login`. Pipe the JSON from
+the trusted owner-side grant producer directly to
+`syncables import-connection-grant --config FILE`. The command reads one
+version-1 object from standard input, up to 8 KiB within 30 seconds:
+
+```json
+{
+  "version": 1,
+  "issuer": "https://integrations.atomic.place",
+  "owner": "atomic:agent:OWNER_ID",
+  "clientId": "CLIENT_ID",
+  "sessionId": "CURRENT_DEVICE_SESSION_ID",
+  "connectionId": "APPROVED_CONNECTION_ID",
+  "grant": "s1.SEALED_GRANT",
+  "expiresAt": 1795046400
+}
+```
+
+`expiresAt` is an integer Unix timestamp in seconds. Use the sealed grant's
+expiry, within 30 days of import. The issuer, owner, client and session must
+match the saved device login, and the issuer must list the connection for that
+session. Each grant has its own Keychain item, tied to that session and
+connection. A refreshed OAuth access token keeps the same session. A new
+device login needs a fresh import. Keep the grant out of command arguments,
+environment variables, config, and files.
+
 The daemon runs in the foreground until SIGINT/SIGTERM. A second daemon for
 the owner refuses to start. One-shot and daemon reads share collection locks;
 a concurrent one-shot reports an already-running collection. Losing the daemon's

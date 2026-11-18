@@ -12,6 +12,7 @@ import {
   syncCollection,
   SyncRetryError,
 } from '../../../src/daemon/sync.js';
+import { ConnectionGrantAuthError } from '../../../src/daemon/sync-errors.js';
 import { DaemonRunner, jobStatuses } from '../../../src/daemon/runner.js';
 import { itemSubject, type DaemonConfig } from '../../../src/daemon/config.js';
 import type { Session } from '../../../src/cli/auth.js';
@@ -110,7 +111,10 @@ describe.skipIf(!database)(
         directories.map((dir) => rm(dir, { recursive: true, force: true })),
       );
     });
-    async function setup(incremental = false): Promise<{
+    async function setup(
+      incremental = false,
+      sourceDocument = document(incremental),
+    ): Promise<{
       config: DaemonConfig;
       store: PostgresHistoryStore;
       prepared: Awaited<ReturnType<typeof prepareCollection>>;
@@ -123,7 +127,7 @@ describe.skipIf(!database)(
       const directory = await mkdtemp(join(tmpdir(), 'syncables-runtime-'));
       directories.push(directory);
       const file = join(directory, 'source.json');
-      await writeFile(file, JSON.stringify(document(incremental)));
+      await writeFile(file, JSON.stringify(sourceDocument));
       const config: DaemonConfig = {
         version: 1,
         owner: prefix + randomUUID(),
@@ -401,6 +405,46 @@ describe.skipIf(!database)(
         return response('{"items":[],"checkpoint":"new-grant"}');
       }, 'grant-2');
     });
+    it('publishes a continuation checkpoint atomically with its records', async () => {
+      const h = await setup();
+      const doc = h.prepared.document;
+      doc.paths['/entries/continue'] = {
+        post: { operationId: 'continueEntries', responses: {} },
+      };
+      doc.components!.paginationSchemes!.pages = {
+        type: 'pageToken',
+        autoDetect: false,
+        'x-syncables-incremental': true,
+        continuation: {
+          operationId: 'continueEntries',
+          request: { bodyFields: { cursor: { role: 'cursor' } } },
+          hasMoreField: 'more',
+        },
+        response: {
+          envelope: { itemsField: 'items' },
+          bodyFields: { cursor: { role: 'nextCursor' } },
+        },
+      };
+      const initial = await h.sync(async ({ url }) => {
+        expect(url.pathname).toBe('/entries');
+        return response('{"items":[{"id":"a"}],"more":false,"cursor":"t1"}');
+      });
+      expect(initial).toMatchObject({ strategy: 'bootstrap', records: 1 });
+      await expect(
+        h.sync(async () => response('{"items":[],"more":false}')),
+      ).rejects.toThrow('nonempty cursor');
+      expect(await h.store.head(h.prepared.scope)).toBe(initial.revision);
+      const delta = await h.sync(async ({ url, method, body }) => {
+        expect(url.pathname).toBe('/entries/continue');
+        expect(method).toBe('POST');
+        expect(JSON.parse(body!)).toEqual({ cursor: 't1' });
+        return response('{"items":[{"id":"b"}],"more":false,"cursor":"t2"}');
+      });
+      expect(delta).toMatchObject({ strategy: 'delta', records: 2 });
+      expect(await h.store.context(h.prepared.scope)).toMatchObject({
+        syncToken: 't2',
+      });
+    });
     it('retains an exhausted provider retry deadline and never retries a declared blocked response', async () => {
       const h = await setup();
       const start = Date.now();
@@ -420,6 +464,214 @@ describe.skipIf(!database)(
       const transport = vi.fn<Transport>(async () => response('', 403));
       await expect(h.sync(transport)).rejects.toMatchObject({ blocked: true });
       expect(transport).toHaveBeenCalledTimes(1);
+    });
+    it('sends both pages of a declared POST list through the approved proxy connection', async () => {
+      const sourceDocument = document();
+      sourceDocument.servers = [{ url: 'https://api.example/v2' }];
+      sourceDocument.paths = {
+        '/entries': {
+          post: {
+            'x-pagination': [{ scheme: 'pages' }],
+            responses: { '200': { description: 'Entries' } },
+          },
+        },
+        '/entries/continue': {
+          post: {
+            operationId: 'continueEntries',
+            responses: { '200': { description: 'More entries' } },
+          },
+        },
+      };
+      sourceDocument.components = {
+        paginationSchemes: {
+          pages: {
+            type: 'pageToken',
+            autoDetect: false,
+            'x-syncables-incremental': true,
+            response: {
+              envelope: { itemsField: 'items' },
+              bodyFields: { cursor: { role: 'nextCursor' } },
+            },
+            continuation: {
+              operationId: 'continueEntries',
+              request: { bodyFields: { cursor: { role: 'cursor' } } },
+              hasMoreField: 'has_more',
+            },
+          },
+        },
+        crudResources: {
+          entry: {
+            identity: {
+              urlTemplate: '/entries/{entryId}',
+              bindings: { entryId: { field: 'id' } },
+            },
+            collections: {
+              entries: {
+                urlTemplate: '/entries',
+                envelope: { itemsField: 'items' },
+                listMethod: 'POST',
+                listBody: { path: '', recursive: true },
+              },
+            },
+          },
+        },
+      };
+      const h = await setup(false, sourceDocument);
+      const initialSession = {
+        issuer: h.config.issuer,
+        accessToken: 'invented',
+        sessionId: 'first-session',
+      };
+      let currentSession = initialSession;
+      let continuationSession = { ...initialSession, accessToken: 'refreshed' };
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        switch (new URL(String(input)).pathname) {
+          case '/connections':
+            return Response.json({
+              owner: h.config.owner,
+              connections: [
+                { connection_id: 'test-connection', platform: 'example' },
+              ],
+            });
+          case '/proxy/test-connection/example/v2/entries':
+            currentSession = continuationSession;
+            return Response.json({
+              items: [{ id: 'first' }],
+              cursor: 'page-2',
+              has_more: true,
+            });
+          case '/proxy/test-connection/example/v2/entries/continue':
+            return Response.json({
+              items: [{ id: 'second' }],
+              cursor: 'done',
+              has_more: false,
+            });
+          default:
+            return new Response(null, { status: 404 });
+        }
+      });
+      const grant = 's1.c2VhbGVk';
+      const auth = {
+        session: async () => currentSession,
+        authorizationContext: vi.fn(async () => 'legacy-context'),
+        connectionGrant: vi.fn(async () => grant),
+      };
+      const runner = new DaemonRunner(
+        h.config,
+        archive,
+        h.store,
+        auth,
+        fetchImpl,
+      );
+      await runner.initialize();
+      expect((await runner.sync())[0]).toMatchObject({
+        result: { records: 2 },
+      });
+      expect(auth.connectionGrant.mock.calls).toEqual([
+        ['test-connection', initialSession],
+        ['test-connection', continuationSession],
+      ]);
+      expect(auth.authorizationContext).not.toHaveBeenCalled();
+      expect(
+        new Headers(fetchImpl.mock.calls[0][1]?.headers).has(
+          'x-connection-key',
+        ),
+      ).toBe(false);
+      expect(
+        fetchImpl.mock.calls.slice(1).map(([url, init]) => {
+          const headers = new Headers(init?.headers);
+          return {
+            url,
+            method: init?.method,
+            body: JSON.parse(String(init?.body)),
+            contentType: headers.get('content-type'),
+            authorization: headers.get('authorization'),
+            grant: headers.get('x-connection-key'),
+          };
+        }),
+      ).toEqual([
+        {
+          url: h.config.issuer + '/proxy/test-connection/example/v2/entries',
+          method: 'POST',
+          body: { path: '', recursive: true },
+          contentType: 'application/json',
+          authorization: 'Bearer invented',
+          grant,
+        },
+        {
+          url:
+            h.config.issuer +
+            '/proxy/test-connection/example/v2/entries/continue',
+          method: 'POST',
+          body: { cursor: 'page-2' },
+          contentType: 'application/json',
+          authorization: 'Bearer refreshed',
+          grant,
+        },
+      ]);
+
+      const published = await h.store.head(h.prepared.scope);
+      const checkpoint = await h.store.context(h.prepared.scope);
+      expect(published).toBeDefined();
+      expect(checkpoint).toMatchObject({
+        authorizationContext: initialSession.sessionId,
+        syncToken: 'done',
+      });
+
+      currentSession = initialSession;
+      continuationSession = {
+        ...continuationSession,
+        sessionId: 'replacement-session',
+      };
+      auth.connectionGrant.mockClear();
+      fetchImpl.mockClear();
+      const [interrupted] = await runner.sync([], undefined, false, true);
+      expect(interrupted.result).toBeUndefined();
+      expect(interrupted.error).toContain('Authorization needs attention');
+      expect(auth.connectionGrant.mock.calls).toEqual([
+        ['test-connection', initialSession],
+      ]);
+      expect(
+        fetchImpl.mock.calls.map(([url]) => new URL(String(url)).pathname),
+      ).toEqual(['/connections', '/proxy/test-connection/example/v2/entries']);
+      expect(await h.store.head(h.prepared.scope)).toBe(published);
+      expect(await h.store.context(h.prepared.scope)).toEqual(checkpoint);
+    });
+    it('records sanitized connection grant failures as authorization errors', async () => {
+      const h = await setup();
+      const fetchImpl = vi.fn<typeof fetch>(async () =>
+        Response.json({
+          owner: h.config.owner,
+          connections: [
+            { connection_id: 'test-connection', platform: 'example' },
+          ],
+        }),
+      );
+      const error = new ConnectionGrantAuthError('expired');
+      const runner = new DaemonRunner(
+        h.config,
+        archive,
+        h.store,
+        {
+          session: async (): Promise<Session> => ({
+            issuer: h.config.issuer,
+            accessToken: 'invented',
+          }),
+          authorizationContext: async (): Promise<string> => 'grant-session',
+          connectionGrant: async (): Promise<string> => {
+            throw error;
+          },
+        },
+        fetchImpl,
+      );
+      await runner.initialize();
+      expect((await runner.sync())[0].error).toBe(error.message);
+      expect((await jobStatuses(archive, h.config.owner))[0]).toMatchObject({
+        error_kind: 'auth',
+        last_error: error.message,
+      });
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      expect(await h.store.head(h.prepared.scope)).toBeUndefined();
     });
     it('records attempts, unchanged successful syncs and distinct failures, preserving success until scope changes', async () => {
       const h = await setup();

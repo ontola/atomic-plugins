@@ -4,6 +4,8 @@ import {
   deviceLogin,
   listConnections,
   probeApi,
+  proxyReadTransport,
+  proxyRequest,
 } from '../../../src/cli/auth.js';
 
 const issuer = 'http://127.0.0.1:11872';
@@ -234,9 +236,9 @@ describe('CLI device authorization', () => {
     );
     expect(result.status).toBe(200);
     expect(fake.requests.at(-1)?.init.method).toBe('GET');
-    expect(fake.requests.at(-1)?.init.headers).toEqual({
-      authorization: 'Bearer invented-access-token',
-    });
+    expect(
+      new Headers(fake.requests.at(-1)?.init.headers).get('authorization'),
+    ).toBe('Bearer invented-access-token');
     expect(fake.requests.every((item) => item.init.redirect === 'error')).toBe(
       true,
     );
@@ -329,6 +331,89 @@ describe('CLI device authorization', () => {
       ),
     ).rejects.toThrow('escapes');
     expect(fake.requests).toHaveLength(0);
+  });
+
+  it('rejects writes and requests outside the approved proxy connection', async () => {
+    const fake = fixture([]);
+    const session = { issuer, accessToken: 'demo' };
+    const connection = { connection_id: 'demo', platform: 'example' };
+    const request = proxyRequest(session, connection, '/items');
+    const transport = proxyReadTransport(
+      session,
+      connection,
+      fake.fetch,
+      's1.c2VhbGVk',
+    );
+    for (const input of [
+      { ...request, method: 'POST' as const, body: '{}' },
+      { ...request, method: 'PATCH' as const, body: '{}' },
+      {
+        ...request,
+        url: new URL(request.url.pathname, 'https://other.example'),
+      },
+      { ...request, url: new URL('/proxy/other/example/items', issuer) },
+    ]) {
+      await expect(transport(input)).rejects.toThrow('escapes');
+    }
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it('sends only the stored sealed grant on an approved proxy request', async () => {
+    const fake = fixture([
+      { status: 200, body: [] },
+      { status: 200, body: [] },
+    ]);
+    const session = { issuer, accessToken: 'demo' };
+    const connection = { connection_id: 'demo', platform: 'example' };
+    const request = {
+      ...proxyRequest(session, connection, '/items'),
+      headers: { 'X-Connection-Key': 'caller-value' },
+    };
+    const grant = 's1.c2VhbGVk';
+    await proxyReadTransport(session, connection, fake.fetch, grant)(request);
+    await proxyReadTransport(session, connection, fake.fetch)(request);
+    expect(
+      fake.requests.map(({ init }) =>
+        new Headers(init.headers).get('x-connection-key'),
+      ),
+    ).toEqual([grant, null]);
+  });
+
+  it('rejects malformed or oversized grants before making a request', async () => {
+    const fake = fixture([]);
+    const session = { issuer, accessToken: 'demo' };
+    const connection = { connection_id: 'demo', platform: 'example' };
+    const request = proxyRequest(session, connection, '/items');
+    for (const grant of [
+      'k1.c2VhbGVk',
+      's1.',
+      's1.abc=',
+      's1.' + 'a'.repeat(2046),
+    ]) {
+      await expect(
+        proxyReadTransport(session, connection, fake.fetch, grant)(request),
+      ).rejects.toThrow(/^Invalid sealed connection grant$/);
+    }
+    expect(fake.requests).toHaveLength(0);
+  });
+
+  it('keeps the sealed grant out of transport errors', async () => {
+    const session = { issuer, accessToken: 'demo' };
+    const connection = { connection_id: 'demo', platform: 'example' };
+    const grant = 's1.c2VhbGVk';
+    const fetchImpl: typeof fetch = async () => {
+      throw new Error(grant);
+    };
+    await expect(
+      proxyReadTransport(
+        session,
+        connection,
+        fetchImpl,
+        grant,
+      )(proxyRequest(session, connection, '/items')),
+    ).rejects.toThrow(
+      /^Local Thought request failed \(network, timeout or redirect\)$/,
+    );
   });
 
   it('checks denied API access rather than treating successful login as access proof', async () => {

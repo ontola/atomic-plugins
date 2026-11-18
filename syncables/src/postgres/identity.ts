@@ -48,6 +48,7 @@ export interface ArchivedRequest {
   method: 'GET' | 'POST';
   headers: Record<string, string>;
   body?: string;
+  bodyHash?: string;
 }
 
 function dropboxMetadataRead(request: TransportRequest): boolean {
@@ -81,6 +82,26 @@ function dropboxMetadataRead(request: TransportRequest): boolean {
   );
 }
 
+function jsonListRead(request: TransportRequest): boolean {
+  if (
+    request.method !== 'POST' ||
+    request.purpose !== 'list' ||
+    request.body === undefined ||
+    !Object.entries(request.headers).some(
+      ([name, value]) =>
+        name.toLowerCase() === 'content-type' &&
+        value.toLowerCase() === 'application/json',
+    )
+  )
+    return false;
+  try {
+    const body: unknown = JSON.parse(request.body);
+    return body !== null && typeof body === 'object' && !Array.isArray(body);
+  } catch {
+    return false;
+  }
+}
+
 export function requestIdentity(request: TransportRequest): {
   key: string;
   cacheKey: string;
@@ -88,10 +109,11 @@ export function requestIdentity(request: TransportRequest): {
 } {
   if (
     (request.method !== 'GET' || request.body !== undefined) &&
-    !dropboxMetadataRead(request)
+    !dropboxMetadataRead(request) &&
+    !jsonListRead(request)
   )
     throw new Error(
-      'This archive stage accepts bodyless GET reads and Dropbox inventory listings only',
+      'This archive stage accepts bodyless GET reads and JSON POST list reads only',
     );
   if (request.url.username || request.url.password || request.url.hash)
     throw new Error(
@@ -114,7 +136,11 @@ export function requestIdentity(request: TransportRequest): {
     url: request.url.href,
     method: request.method as ArchivedRequest['method'],
     headers,
-    ...(request.body === undefined ? {} : { body: request.body }),
+    ...(request.body === undefined
+      ? {}
+      : dropboxMetadataRead(request)
+        ? { body: request.body }
+        : { bodyHash: digest(request.body) }),
   };
   return {
     key: digest(JSON.stringify(data)),

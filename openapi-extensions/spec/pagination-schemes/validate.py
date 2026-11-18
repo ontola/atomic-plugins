@@ -208,6 +208,46 @@ def operation_parameters(document, item, operation):
     return found
 
 
+def _continuation_problem(document, scheme):
+    continuation = scheme.get("continuation")
+    if continuation is None:
+        return None
+    response = scheme["response"]
+    roles = [field.get("role") for field in response["bodyFields"].values()]
+    headers = [field.get("role") for field in response.get("headers", {}).values()]
+    cursors = {"nextCursor", "nextPageToken"}
+    if sum(role in cursors for role in roles) != 1 or cursors.intersection(headers) or "nextLink" in roles + headers:
+        return "requires exactly one body response cursor and no next link"
+    if any(field.get("fromLastItem") for fields in scheme.get("request", {}).values()
+           if isinstance(fields, dict) for field in fields.values() if isinstance(field, dict)):
+        return "cannot use an item cursor"
+    matches = [entry for entry in operations(document)
+               if entry[3].get("operationId") == continuation["operationId"]]
+    if len(matches) != 1:
+        return "operationId must identify exactly one operation"
+    path, method, item, operation = matches[0]
+    if method not in ("get", "post") or not path.startswith("/") or re.search(r"[{}?#\\]", path) or any(
+        re.fullmatch(r"(?:\.|%2e){1,2}", part, re.IGNORECASE) for part in path.split("/")
+    ):
+        return "target must be a GET or POST operation with a fixed path"
+    mapping = continuation["request"]
+    if "queryParameters" in mapping:
+        name, = mapping["queryParameters"]
+        if ("query", name) not in operation_parameters(document, item, operation):
+            return f"target has no query parameter {name!r}"
+    elif method != "post":
+        return "a body cursor requires a POST target"
+    else:
+        request = _deref(document, operation.get("requestBody")) or {}
+        schema = request.get("content", {}).get("application/json", {}).get("schema")
+        name, = mapping["bodyFields"]
+        for segment in re.findall(r'\["([^"]+)"\]|([^.[\]]+)', name):
+            schema = (_deref(document, schema) or {}).get("properties", {}).get(next(part for part in segment if part))
+        if (_deref(document, schema) or {}).get("type") != "string":
+            return f"target has no JSON string field {name!r}"
+    return None
+
+
 def validate(document):
     """Raise ValueError listing every violation found; return None when valid."""
     errors = []
@@ -227,6 +267,9 @@ def validate(document):
             if problem:
                 errors.append(f"{location}.request: {problem}")
         if not found:
+            problem = _continuation_problem(document, scheme)
+            if problem:
+                errors.append(f"{location}.continuation: {problem}")
             for field, resolution in _link_fields(scheme):
                 if resolution.get("base") == "declared":
                     problem = _declared_url_problem(resolution["url"])
@@ -269,6 +312,12 @@ def validate(document):
             errors += found
             if found:
                 continue
+            if "continuation" in merged:
+                if len(applications) != 1:
+                    errors.append(f"{where}: continuation must be the only applied scheme")
+                problem = _continuation_problem(document, merged)
+                if problem:
+                    errors.append(f"{where}.continuation: {problem}")
             errors += [f"{where}(merged).{problem}" for problem in _short_page_problems(merged, applied=True)]
             errors += [f"{where}(merged).{problem}" for problem in _advance_problems(merged)]
             errors += [f"{where}(merged).{problem}" for problem in _item_cursor_problems(merged)]

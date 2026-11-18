@@ -319,28 +319,51 @@ export function proxyRequest(
   return { url, method: 'GET', headers: {}, purpose: 'item' };
 }
 
+export function isSealedConnectionGrant(value: unknown): value is string {
+  // Match the integration proxy's sealed grant header limit.
+  return (
+    typeof value === 'string' &&
+    value.length <= 2048 &&
+    /^s1\.[A-Za-z0-9_-]+$/u.test(value)
+  );
+}
+
 export function proxyReadTransport(
   session: Session,
   connection: Connection,
   fetchImpl: typeof fetch = globalThis.fetch,
+  connectionGrant?: string,
 ): Transport {
   const prefix = proxyPrefix(connection);
   return async (input) => {
+    // Only the reader can issue a list POST. The proxy separately checks
+    // whether the catalog authorizes that operation for the device grant.
+    const read =
+      (input.method === 'GET' && input.body === undefined) ||
+      (input.method === 'POST' && input.purpose === 'list');
     if (
-      input.method !== 'GET' ||
-      input.body !== undefined ||
+      !read ||
       input.url.origin !== session.issuer ||
+      input.url.username ||
+      input.url.password ||
+      input.url.hash ||
       !input.url.pathname.startsWith(prefix)
     )
       throw new Error(
         'Read-only transport request escapes the approved connection',
       );
+    const headersForProxy = new Headers(input.headers);
+    headersForProxy.set('authorization', `Bearer ${session.accessToken}`);
+    headersForProxy.delete('x-connection-key');
+    if (connectionGrant !== undefined) {
+      if (!isSealedConnectionGrant(connectionGrant))
+        throw new Error('Invalid sealed connection grant');
+      headersForProxy.set('x-connection-key', connectionGrant);
+    }
     const response = await request(fetchImpl, input.url.href, {
-      method: 'GET',
-      headers: {
-        ...input.headers,
-        authorization: `Bearer ${session.accessToken}`,
-      },
+      method: input.method,
+      headers: headersForProxy,
+      ...(input.body === undefined ? {} : { body: input.body }),
     });
     const chunks: Uint8Array[] = [];
     let size = 0;

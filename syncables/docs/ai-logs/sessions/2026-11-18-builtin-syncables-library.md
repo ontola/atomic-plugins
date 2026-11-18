@@ -72,3 +72,32 @@ catalog regression and the unchanged default catalog regression.
 The coordinating agent records cross-repository browser tests, required CI,
 merge and npm publication outcomes in the paired PRs. This delegated subtask
 has not committed, pushed, merged, published or deployed anything.
+
+## Main-branch integration before publication
+
+The coordinating agent delegated merging current `origin/main` into the paired
+branch to resolve PR #734's conflict, with review and commit left to the
+coordinator. The merge includes main through `3481ef90`. Its sole textual
+conflict joined adjacent catalog tests; both GitHub catalog regressions and
+main's Dropbox continuation/read-permission regression are retained. The
+automatic reader merge keeps selected collection options and main's additive
+pagination checkpoint/resume support. The opt-in catalog and unchanged global
+default are preserved.
+
+The npm registry and main still report version 0.27.0, so 0.28.0 remains
+available. Main's two new valid daemon fragments were folded into the prepared
+0.28.0 entry using the repository's `changelog.release` tool, regenerating all
+five release fragments in a temporary directory. No package version was
+changed again. The added release notes cover sealed device connection grants
+and POST cursor continuation reads; their consumed fragments are removed.
+
+Post-merge validation: the full library run passed 2,005 tests and skipped 82
+optional cases. Three Git-backed daemon cases reached the existing five-second
+timeout under concurrent compilation/check load; their three complete test
+files then passed all 16 cases with one worker and unchanged timeouts. There
+were no assertion failures. TypeScript, complete lint (zero errors, 21 existing
+warnings), formatting and changelog checks pass. Rust formatting and all 28
+non-network catalog tests pass; the new GitHub catalog, unchanged default
+GitHub catalog and main's Dropbox continuation composition regressions also
+pass when explicitly enabled. Python checks pass four actual catalog
+composition tests, fourteen OAD-pin tests and three pinned-fetch tests.
