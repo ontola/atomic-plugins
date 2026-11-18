@@ -31,3 +31,7 @@ Added tests for retrying a cursor-bearing POST without changing its body,
 archiving the failed response, preserving the published snapshot and
 checkpoint when a retry exceeds the budget, and retrying discovery 502
 without retrying discovery 403.
+
+The Node 22, 24 and 26 CI matrix timed out in the same native source
+integration scenario, which does not call the proxy. Increased only that
+PostgreSQL-heavy scenario's test timeout from 5 to 20 seconds.
