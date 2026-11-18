@@ -240,6 +240,8 @@ export async function prepareCollection(
     adaptIncremental(
       await loadOpenApiDocument(parseYaml(original) as Record<string, unknown>),
     );
+  if (source.local && upstreamOf(document).origin !== source.local.url)
+    throw new Error('Document and local connector origins differ');
   return {
     source,
     document,
@@ -351,6 +353,9 @@ export async function publishCollection(
         itemClass: sourceClass(prepared),
         documentHash: prepared.documentHash,
         ...(nextToken ? { syncToken: nextToken } : {}),
+        ...(source.snapshotLimits
+          ? { snapshotLimits: source.snapshotLimits }
+          : {}),
         ...(source.fileInventory
           ? { profile: 'file-inventory-v1', records }
           : {}),

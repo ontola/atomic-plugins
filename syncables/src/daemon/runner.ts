@@ -11,6 +11,7 @@ import {
   proxyRequest,
   type Session,
 } from '../cli/auth.js';
+import { localTransport } from './local-transport.js';
 import { upstreamOf } from '../read/model.js';
 import { syncFileInventory } from './file-inventory.js';
 import {
@@ -372,6 +373,23 @@ export class DaemonRunner {
     dueOnly: boolean,
     forceFull: boolean,
   ): Promise<CollectionSyncResult> {
+    if (p.source.local)
+      return syncCollection({
+        prepared: p,
+        forceFull,
+        archive: this.archive,
+        store: this.store,
+        auth: {
+          owner: this.config.owner,
+          connection: p.source.connection,
+          authorizationContext:
+            'local:' + p.source.local.url + ':' + p.documentHash,
+        },
+        upstream: localTransport(p.source, signal),
+        signal,
+        trigger: dueOnly ? 'scheduled' : 'manual',
+        ...(this.message === undefined ? {} : { message: this.message }),
+      });
     const session = await this.auth.session();
     const connections = await listConnections(session, this.fetchImpl);
     if (connections.owner !== this.config.owner)

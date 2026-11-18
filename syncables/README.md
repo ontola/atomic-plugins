@@ -81,6 +81,9 @@ This README describes current source, including unreleased changes, which
 are listed in [`changes/`](changes/) until a release folds them into the
 changelog; the guide explains how to run that source before an npm release.
 
+The [macOS connector](docs/macos.md) exposes iCloud Drive source and destination
+operations and a PhotoKit metadata inventory through the shared SyncD pipeline.
+
 ## Usage
 
 The source includes an experimental **standalone CLI and foreground daemon**

@@ -65,7 +65,7 @@ describe('local SyncD data browser', () => {
       "frame-ancestors 'none'",
     );
     expect(shell.headers.get('cache-control')).toBe('no-store');
-    expect(await shell.text()).toContain('Remote connections');
+    expect(await shell.text()).toContain('Connections');
     expect((await fetch(f.origin + '/api/collections')).status).toBe(401);
     const response = await fetch(f.origin + '/api/collections', {
       headers: f.headers,

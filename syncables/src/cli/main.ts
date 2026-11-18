@@ -89,8 +89,13 @@ async function main(): Promise<void> {
         'input',
         'edit-id',
         'created-id',
+        'directory',
+        'connector-port',
+        'source-collection',
+        'source-path',
       ].map((key) => [key, { type: 'string' as const }]),
     );
+  options.photos = { type: 'boolean' };
   options.write = { type: 'boolean' };
   options.manage = { type: 'boolean' };
   options.owned = { type: 'boolean' };
@@ -107,6 +112,11 @@ async function main(): Promise<void> {
     process.stdout.write(HELP + DAEMON_HELP);
     return;
   }
+  if (positionals[0] === 'macos') {
+    const { macosCommand } = await import('../macos/command.js');
+    await macosCommand(values);
+    return;
+  }
   if (positionals[0] === 'ui') {
     if (positionals.length !== 1) throw new Error('Unexpected UI arguments');
     const { browserCommand } = await import('../daemon/browser-command.js');
@@ -121,6 +131,7 @@ async function main(): Promise<void> {
   }
   if (
     [
+      'copy',
       'create',
       'edit',
       'delete',

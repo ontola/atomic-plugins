@@ -44,7 +44,8 @@ export class WriteModel {
       throw new Error('Sending requires one scalar identity field');
     // Refuse unsupported addressing before a non-idempotent create is dispatched.
     this.id({ [field]: 'syncables-validation' });
-    this.itemPath('syncables-validation', 'delete');
+    if (document.paths[template]?.delete)
+      this.itemPath('syncables-validation', 'delete');
     const creates = Object.entries(document.paths).filter(([, path]) => {
       const crud = path.post?.['x-crud'];
       return (

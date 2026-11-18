@@ -1,3 +1,4 @@
+import { snapshotLimits } from './snapshot-limits.js';
 import { spawn } from 'node:child_process';
 import {
   lstat,
@@ -333,14 +334,22 @@ export class GitAtomicStore {
     if (current !== expected)
       throw new Error('Data snapshot changed; refresh before publishing');
     const files: [string, string][] = [];
-    if (snapshot.resources.size > 50_000)
+    const limits =
+      snapshot.context.snapshotLimits === undefined
+        ? { maxRecords: 50_000, maxBytes: 16 * 1024 * 1024 }
+        : snapshotLimits(snapshot.context.snapshotLimits);
+    if (snapshot.resources.size > limits.maxRecords)
       throw new Error('Data snapshot exceeds resource limit');
     let totalBytes = 0;
     for (const [subject, text] of snapshot.resources) {
       if (signal?.aborted) throw new Error('Data snapshot publication stopped');
       totalBytes += Buffer.byteLength(text);
-      if (totalBytes > 16 * 1024 * 1024)
-        throw new Error('Data snapshot exceeds the 16 MiB stage limit');
+      if (totalBytes > limits.maxBytes)
+        throw new Error(
+          snapshot.context.snapshotLimits
+            ? 'Data snapshot exceeds its configured byte limit'
+            : 'Data snapshot exceeds the 16 MiB stage limit',
+        );
       if (!/^(https?:\/\/|urn:)/.test(subject))
         throw new Error('Atomic subject must be an absolute IRI');
       // Validation never reserializes through Number; graph decoding is lossless.

@@ -27,14 +27,14 @@ export interface BrowserConnectionStatus {
   id: string;
   platform: string;
   label: string;
-  availability: 'approved' | 'not-approved' | 'unknown';
+  availability: 'approved' | 'not-approved' | 'unknown' | 'local';
   collections: BrowserCollectionStatus[];
   lastSyncedAt: string | null;
 }
 export interface BrowserStatus {
   checkedAt: string;
   discovery: {
-    state: 'available' | 'auth-required' | 'unavailable';
+    state: 'available' | 'auth-required' | 'unavailable' | 'local';
     message: string | null;
   };
   connections: BrowserConnectionStatus[];
@@ -129,26 +129,35 @@ export async function loadBrowserStatus(options: {
   let discovery: BrowserStatus['discovery'];
   const remote: { connection_id: string; platform: string; label?: string }[] =
     [];
-  try {
-    const session = await options.session();
-    const found = await listConnections(session, options.fetch);
-    if (found.owner !== options.owner)
-      throw new Error('Login required: owner mismatch');
-    remote.push(...found.connections);
-    discovery = { state: 'available', message: null };
-  } catch (error) {
-    discovery = isSyncAuthError(error)
-      ? {
-          state: 'auth-required',
-          message:
-            'Sign in with syncables login --config FILE, or restart the UI with --interactive. Only connections approved for SyncD are available.',
-        }
-      : {
-          state: 'unavailable',
-          message:
-            'Could not check remote connections. Local snapshots are still available. Retry to check again.',
-        };
-  }
+  const localOnly =
+    options.collections.length > 0 &&
+    options.collections.every((source) => source.local || source.fileInventory);
+  if (localOnly)
+    discovery = {
+      state: 'local',
+      message: 'Local sources use permissions configured on this Mac.',
+    };
+  else
+    try {
+      const session = await options.session();
+      const found = await listConnections(session, options.fetch);
+      if (found.owner !== options.owner)
+        throw new Error('Login required: owner mismatch');
+      remote.push(...found.connections);
+      discovery = { state: 'available', message: null };
+    } catch (error) {
+      discovery = isSyncAuthError(error)
+        ? {
+            state: 'auth-required',
+            message:
+              'Sign in with syncables login --config FILE, or restart the UI with --interactive. Only connections approved for SyncD are available.',
+          }
+        : {
+            state: 'unavailable',
+            message:
+              'Could not check remote connections. Local snapshots are still available. Retry to check again.',
+          };
+    }
   const entries = new Map<string, BrowserConnectionStatus>();
   const key = (id: string, platform: string): string =>
     JSON.stringify([id, platform]);
@@ -168,8 +177,15 @@ export async function loadBrowserStatus(options: {
         id: collection.connectionId,
         platform: collection.platform,
         label: collection.platform,
-        availability:
-          discovery.state === 'available' ? 'not-approved' : 'unknown',
+        availability: options.collections.some(
+          (source) =>
+            source.connection === collection.connectionId &&
+            (source.local || source.fileInventory),
+        )
+          ? 'local'
+          : discovery.state === 'available'
+            ? 'not-approved'
+            : 'unknown',
         collections: [],
         lastSyncedAt: null,
       });

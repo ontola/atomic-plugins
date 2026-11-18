@@ -75,11 +75,15 @@ export async function browserCommand(
       store,
       collections,
       port: Number(port),
-      management: {
-        issuer: config.issuer,
-        request: async (action) =>
-          manageAccess(await auth.session(), config.owner, action),
-      },
+      ...(selected.every((source) => source.local || source.fileInventory)
+        ? {}
+        : {
+            management: {
+              issuer: config.issuer,
+              request: async (action: Parameters<typeof manageAccess>[2]) =>
+                manageAccess(await auth.session(), config.owner, action),
+            },
+          }),
       status: () =>
         loadBrowserStatus({
           owner: config.owner,

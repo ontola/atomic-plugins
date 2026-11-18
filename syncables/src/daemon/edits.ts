@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { isRecord } from '../read/model.js';
 import { sameJson, replaceOf, replaceBlock } from '../client/replace.js';
-import type { Transport } from '../read/transport.js';
+import { upstreamOf } from '../read/model.js';
+import type { Transport, TransportRequest } from '../read/transport.js';
 import { proxyRequest, type Session, type Connection } from '../cli/auth.js';
 import type { PreparedCollection } from './sync.js';
 import { WriteModel, mergeEdit } from './write-model.js';
@@ -256,15 +257,30 @@ export class LocalEdits {
       error: 'Both items retained by explicit user resolution',
     });
   }
+  private request(
+    session: Session | undefined,
+    connection: Connection,
+    path: string,
+  ): TransportRequest {
+    if (this.prepared.source.local)
+      return {
+        url: new URL(path, upstreamOf(this.prepared.document)),
+        method: 'GET',
+        headers: {},
+        purpose: 'precondition',
+      };
+    if (!session) throw new Error('Remote session required');
+    return proxyRequest(session, connection, path);
+  }
   private async read(
     transport: Transport,
-    session: Session,
+    session: Session | undefined,
     connection: Connection,
     id: string,
   ): Promise<Value | undefined> {
     this.signal.throwIfAborted();
     const response = await transport({
-      ...proxyRequest(session, connection, this.model.itemPath(id, 'get')),
+      ...this.request(session, connection, this.model.itemPath(id, 'get')),
       purpose: 'precondition',
     });
     if ([404, 410].includes(response.status)) return undefined;
@@ -277,12 +293,16 @@ export class LocalEdits {
       throw new Error('Precondition read returned a different identity');
     return value;
   }
-  private destination(session: Session, connection: Connection): void {
+  private destination(
+    session: Session | undefined,
+    connection: Connection,
+  ): void {
     if (
       connection.connection_id !== this.prepared.source.connection ||
       connection.platform !== this.prepared.source.platform ||
-      !session.scope?.split(' ').includes('proxy:read') ||
-      !session.scope.split(' ').includes('proxy:write')
+      (!this.prepared.source.local &&
+        (!session?.scope?.split(' ').includes('proxy:read') ||
+          !session.scope.split(' ').includes('proxy:write')))
     )
       throw new Error(
         'Read/write grant for the configured connection required',
@@ -293,7 +313,7 @@ export class LocalEdits {
     id: string,
     createdId: string,
     transport: Transport,
-    session: Session,
+    session: Session | undefined,
     connection: Connection,
   ): Promise<void> {
     this.enabled();
@@ -325,7 +345,7 @@ export class LocalEdits {
   }
   async send(
     transport: Transport,
-    session: Session,
+    session: Session | undefined,
     connection: Connection,
   ): Promise<LocalEdit[]> {
     this.enabled();
@@ -422,7 +442,7 @@ export class LocalEdits {
       try {
         this.signal.throwIfAborted();
         response = await transport({
-          ...proxyRequest(session, connection, this.model.createPath),
+          ...this.request(session, connection, this.model.createPath),
           method: 'POST',
           body: JSON.stringify(sent),
           purpose: 'write',
@@ -489,7 +509,7 @@ export class LocalEdits {
   private async retire(
     edit: LocalEdit,
     transport: Transport,
-    session: Session,
+    session: Session | undefined,
     connection: Connection,
   ): Promise<void> {
     try {
@@ -526,7 +546,7 @@ export class LocalEdits {
       }
       this.signal.throwIfAborted();
       const response = await transport({
-        ...proxyRequest(
+        ...this.request(
           session,
           connection,
           this.model.itemPath(edit.target!, 'delete'),
