@@ -308,6 +308,35 @@ describe('CLI device authorization', () => {
     ).rejects.toThrow('#565');
   });
 
+  it('retries temporary connection discovery errors only when opted in', async () => {
+    const session = { issuer, accessToken: 'demo' };
+    const unavailable = { status: 502, body: null };
+    const accepted = { status: 200, body: { owner: 'owner', connections: [] } };
+    const retried = fixture([unavailable, accepted]);
+    await expect(
+      listConnections(session, retried.fetch, true),
+    ).resolves.toEqual({
+      owner: 'owner',
+      connections: [],
+    });
+    expect(retried.requests.map(({ init }) => init.method)).toEqual([
+      'GET',
+      'GET',
+    ]);
+
+    const defaultTransport = fixture([unavailable, accepted]);
+    await expect(
+      listConnections(session, defaultTransport.fetch),
+    ).rejects.toThrow('HTTP 502');
+    expect(defaultTransport.requests).toHaveLength(1);
+
+    const refused = fixture([{ status: 403, body: null }, accepted]);
+    await expect(listConnections(session, refused.fetch, true)).rejects.toThrow(
+      'HTTP 403',
+    );
+    expect(refused.requests).toHaveLength(1);
+  });
+
   it('does not follow token-bearing redirects or expose transport errors', async () => {
     const fetchImpl = (async (): Promise<Response> => {
       throw new Error('invented-access-token');

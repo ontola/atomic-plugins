@@ -398,7 +398,7 @@ export class DaemonRunner<SessionType extends RunnerSession = RunnerSession> {
         ...(this.message === undefined ? {} : { message: this.message }),
       });
     const session = await this.auth.session();
-    const connections = await listConnections(session, this.fetchImpl);
+    const connections = await listConnections(session, this.fetchImpl, true);
     if (connections.owner !== this.config.owner)
       throw new Error('Login required: owner mismatch');
     const connection = connections.connections.find(

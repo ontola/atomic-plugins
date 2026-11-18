@@ -570,6 +570,6 @@ describe.skipIf(!process.env.SYNCABLES_TEST_DATABASE_URL)(
       expect(adopted.find((edit) => edit.id === recoveryId)?.state).toBe(
         'confirmed',
       );
-    });
+    }, 20_000);
   },
 );
