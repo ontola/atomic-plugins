@@ -34,6 +34,19 @@ systems, `send --interactive` or `adopt-edit --interactive` performs a foregroun
 write login and keeps the token in memory. The deployed proxy must support the
 new grant; the command cannot add privileges to an old session.
 
+For per-send IAP consent, an owner-side broker can launch
+`send --interactive --connection-grant-stdin --collection ALIAS --config FILE`
+with piped stdin. Each invocation requests a fresh read/write device approval.
+After approval, the public stderr binding described in the
+[foreground handoff](daemon.md#foreground-owner-to-client-grant-handoff) lets the
+broker pipe in a matching owner-issued sealed connection grant. The bounded
+eight-field import stays in memory, never touches Keychain, and is limited to
+the explicitly selected remote connection/platform. A valid grant never adds
+write scope: read-only device approval still cannot send. Existing collection
+write permissions, operation/catalog guards and replacement consent still apply.
+The ephemeral session is revoked on completion or failure, with cleanup failure
+reported. Persistent daemon sessions are not changed or expanded.
+
 ## Queue and inspect local intent
 
 First run `sync` and obtain a revision from `browse` or `history`. Input files

@@ -15,6 +15,11 @@ import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { proxyWriteTransport } from './write-transport.js';
 import { isRecord } from '../read/model.js';
+import {
+  interactiveGrantConnection,
+  validateInteractiveGrantOptions,
+  withInteractiveConnectionGrant,
+} from './interactive-grant.js';
 
 export const EDIT_COMMANDS = [
   'copy',
@@ -43,6 +48,7 @@ export async function editCommand(
     return value;
   };
   const command = positionals[0];
+  validateInteractiveGrantOptions(command, values);
   const needsId = [
     'edit',
     'delete',
@@ -53,6 +59,9 @@ export async function editCommand(
   if (positionals.length !== (needsId ? 2 : 1))
     throw new Error('Unexpected edit arguments; run syncables --help');
   const source = selectedCollections(config, [required('collection')])[0];
+  const stdinConnection = values['connection-grant-stdin']
+    ? interactiveGrantConnection([source])
+    : undefined;
   const prepared = await prepareCollection(config.owner, source);
   const output = await withEditLock(
     archive.pool,
@@ -123,6 +132,29 @@ export async function editCommand(
         return edits.send(transport, undefined, connection);
       }
       if (command === 'send' || command === 'adopt-edit') {
+        if (stdinConnection)
+          return withInteractiveConnectionGrant(
+            {
+              config,
+              archive,
+              connection: stdinConnection,
+              write: true,
+              input: process.stdin,
+              report: (message) => process.stderr.write(message + '\n'),
+            },
+            async (_auth, session, connection, grant) =>
+              edits.send(
+                proxyWriteTransport(
+                  session,
+                  connection,
+                  lockedSignal,
+                  globalThis.fetch,
+                  grant,
+                ),
+                session,
+                connection,
+              ),
+          );
         const auth = new DaemonAuth(
           config,
           archive,

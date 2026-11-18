@@ -82,6 +82,7 @@ export class KeychainCredentials implements CredentialStore {
 export class DaemonAuth {
   private value: DeviceCredentials | undefined;
   private refreshing: Promise<DeviceCredentials> | undefined;
+  private pendingEphemeralRevocation: string | undefined;
   constructor(
     private readonly config: DaemonConfig,
     private readonly archive: PostgresArchive,
@@ -92,7 +93,11 @@ export class DaemonAuth {
       | undefined = credentials instanceof KeychainCredentials
       ? new KeychainConnectionGrants()
       : undefined,
-  ) {}
+    private readonly retainEphemeralRevocation = false,
+  ) {
+    if (retainEphemeralRevocation && credentials)
+      throw new Error('Ephemeral cleanup cannot use persistent credentials');
+  }
   async login(
     report: (message: string) => void,
     write = false,
@@ -116,6 +121,10 @@ export class DaemonAuth {
         report,
         onAuthorized: (fields) => {
           grant = fields;
+          // This token must remain revocable if later consent/discovery checks
+          // fail. It never becomes a usable session before owner verification.
+          if (this.retainEphemeralRevocation)
+            this.pendingEphemeralRevocation = fields.refreshToken;
         },
       },
     );
@@ -143,6 +152,7 @@ export class DaemonAuth {
           [this.config.owner, this.config.issuer, this.config.clientId],
         );
       this.value = value;
+      this.pendingEphemeralRevocation = undefined;
     });
   }
   private validate(value: DeviceCredentials | undefined): DeviceCredentials {
@@ -293,7 +303,7 @@ export class DaemonAuth {
     const store = this.grants;
     if (!store)
       throw new Error(
-        'Connection grant import requires persistent credentials',
+        'Connection grant import requires a configured grant store',
       );
     const { issuer, owner, clientId } = this.config;
     if (
@@ -353,6 +363,12 @@ export class DaemonAuth {
     return (await this.session()).sessionId;
   }
   async logout(): Promise<void> {
+    // No persistent session exists in this opt-in mode. Cleanup must still
+    // reach the issuer if the local archive/lock service has just failed.
+    if (this.retainEphemeralRevocation) {
+      await this.logoutLocked();
+      return;
+    }
     await this.withAuthLock(async (client) => {
       if (this.credentials)
         await client.query(
@@ -364,9 +380,11 @@ export class DaemonAuth {
   }
   private async logoutLocked(): Promise<void> {
     const value = this.credentials ? await this.credentials.get() : this.value;
+    const token = value?.refreshToken ?? this.pendingEphemeralRevocation;
     this.value = undefined;
+    this.pendingEphemeralRevocation = undefined;
     await this.credentials?.delete();
-    if (value) {
+    if (token) {
       const response = await this.fetchImpl(
         new URL('/oauth/device/revoke', this.config.issuer),
         {
@@ -375,7 +393,7 @@ export class DaemonAuth {
           signal: AbortSignal.timeout(10_000),
           body: new URLSearchParams({
             client_id: this.config.clientId,
-            token: value.refreshToken,
+            token,
           }),
         },
       );

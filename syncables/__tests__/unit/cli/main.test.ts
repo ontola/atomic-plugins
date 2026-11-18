@@ -17,6 +17,28 @@ describe('CLI issuer selection', () => {
   });
 
   it.each([
+    ['daemon', '--interactive'],
+    ['send'],
+    ['sync', '--interactive', '--write'],
+    ['sync', '--interactive', '--manage'],
+  ])(
+    'rejects invalid grant-stdin arguments before authentication: %j',
+    async (...args) => {
+      vi.resetModules();
+      vi.clearAllMocks();
+      const error = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
+      process.argv = ['node', 'syncables', ...args, '--connection-grant-stdin'];
+      await import('../../../src/cli/main.js');
+      await vi.waitFor(() => expect(error).toHaveBeenCalledOnce());
+      expect(error.mock.calls[0][0]).toContain(
+        'requires interactive sync or send',
+      );
+      expect(auth.deviceLogin).not.toHaveBeenCalled();
+      expect(auth.listConnections).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
     [undefined, 'https://integrations.atomic.place'],
     ['https://proxy.example', 'https://proxy.example'],
     ['http://127.0.0.1:11872', 'http://127.0.0.1:11872'],
