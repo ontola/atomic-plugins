@@ -106,6 +106,7 @@
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-option-status",
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-camera",
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-view-time",
-    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-render"
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-render",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material-slots"
   ]
 }

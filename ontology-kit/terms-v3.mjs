@@ -199,7 +199,7 @@ export const properties = Object.freeze({
   'bldg-model': Object.freeze({
     subject:
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-model',
-    datatype: 'https://atomicdata.dev/datatypes/string',
+    datatype: 'https://atomicdata.dev/datatypes/atomicURL',
   }),
   'bldg-model-version': Object.freeze({
     subject:
@@ -457,6 +457,11 @@ export const properties = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-render',
     datatype: 'https://atomicdata.dev/datatypes/atomicURL',
   }),
+  'bldg-material-slots': Object.freeze({
+    subject:
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material-slots',
+    datatype: 'https://atomicdata.dev/datatypes/json',
+  }),
 });
 
 export const classes = Object.freeze({
@@ -541,6 +546,7 @@ export const classes = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-geometry-kind',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-geometry',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material-slots',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-hosted-by',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-attributes',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-option',
@@ -667,6 +673,8 @@ export const classes = Object.freeze({
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-product',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-load-bearing',
       'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-is-external',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-model',
+      'https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material-slots',
     ]),
   }),
   'building-design-option-v1': Object.freeze({

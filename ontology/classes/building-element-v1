@@ -18,6 +18,7 @@
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-geometry-kind",
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-geometry",
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material-slots",
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-hosted-by",
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-attributes",
     "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-option",

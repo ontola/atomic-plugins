@@ -100,6 +100,7 @@ export declare const properties: {
   readonly 'bldg-camera': PropertyTerm;
   readonly 'bldg-view-time': PropertyTerm;
   readonly 'bldg-render': PropertyTerm;
+  readonly 'bldg-material-slots': PropertyTerm;
 };
 
 export declare const classes: {

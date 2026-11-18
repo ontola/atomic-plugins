@@ -6,6 +6,6 @@
   "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
   "https://atomicdata.dev/properties/shortname": "bldg-model",
   "https://atomicdata.dev/properties/name": "Model",
-  "https://atomicdata.dev/properties/description": "Name of the AI model that ran.",
-  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/string"
+  "https://atomicdata.dev/properties/description": "The 3D model of a furniture or fixture type: a File resource holding a glTF/GLB, in real-world metres, Z or Y up as glTF says, its origin on the floor at the middle of its footprint. Elements of the type place it with mesh geometry.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/atomicURL"
 }
