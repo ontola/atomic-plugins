@@ -183,6 +183,77 @@ impl Catalog {
         }
         Some(server_url)
     }
+    /// Whether this POST is explicitly declared to read a collection.
+    /// Ambiguous path matches receive no read grant, even if the ordinary
+    /// allowlist would accept one of the matches.
+    pub(crate) fn is_read_post(&self, platform: &str, path: &str) -> bool {
+        let classify = || -> Option<bool> {
+            let document: Value = serde_yaml::from_str(self.documents.get(platform)?).ok()?;
+            let server = document["servers"].as_array()?.first()?["url"].as_str()?;
+            let server_url = url::Url::parse(server).ok()?;
+            let relative = path.strip_prefix(server_url.path().trim_end_matches('/'))?;
+            // Avoid URI aliases that a provider might resolve differently from
+            // our path matcher. Literal trailing slashes must match too.
+            if !relative.starts_with('/')
+                || relative.contains(['%', '\\', '?', '#', ';'])
+                || relative.contains("//")
+                || relative
+                    .split('/')
+                    .any(|segment| matches!(segment, "." | ".."))
+                || relative.chars().any(|character| character.is_control())
+            {
+                return None;
+            }
+            let paths = document["paths"].as_object()?;
+            let mut matches = paths
+                .iter()
+                .filter(|(template, _)| path_matches(template, relative));
+            let (template, item) = matches.next()?;
+            if matches.next().is_some() || template.ends_with('/') != relative.ends_with('/') {
+                return None;
+            }
+            let operation = &item["post"];
+            if !operation.is_object() || !self.profile_covers(platform, &document, operation) {
+                return None;
+            }
+            let collections = read_collection_operations(&document);
+            if collections
+                .iter()
+                .any(|(path, method)| *path == template && *method == "post")
+            {
+                return Some(true);
+            }
+            let operation_id = operation["operationId"]
+                .as_str()
+                .filter(|id| !id.is_empty())?;
+            if operation.get("x-crud").is_some()
+                || template.contains(['{', '}'])
+                || paths
+                    .values()
+                    .flat_map(|item| {
+                        [
+                            "get", "post", "put", "patch", "delete", "head", "options", "trace",
+                        ]
+                        .into_iter()
+                        .map(|method| &item[method])
+                    })
+                    .filter(|operation| operation["operationId"].as_str() == Some(operation_id))
+                    .count()
+                    != 1
+            {
+                return None;
+            }
+            Some(collections.iter().any(|&(source, method)| {
+                let initial = &document["paths"][source][method];
+                source != template
+                    && self.profile_covers(platform, &document, initial)
+                    && continuation_target(&document, initial, item, operation).as_deref()
+                        == Some(operation_id)
+            }))
+        };
+        classify().unwrap_or(false)
+    }
+
     /// The path of the platform's first server URL, without a trailing
     /// `/`: the prefix of every allowlisted request path.
     pub(crate) fn server_base_path(&self, platform: &str) -> Option<String> {
@@ -613,6 +684,146 @@ fn insert_document(
         return Err(format!("duplicate platform name {name:?}"));
     }
     Ok(())
+}
+
+/// Resolve only standardized collection fields, never inferred or legacy
+/// metadata, when using an operation to grant permission to a device.
+fn read_collection_operations(document: &Value) -> Vec<(&str, &str)> {
+    let Some(resources) = document["components"]["crudResources"].as_object() else {
+        return Vec::new();
+    };
+    resources
+        .iter()
+        .filter_map(|(resource_name, resource)| {
+            Some((resource_name, resource["collections"].as_object()?))
+        })
+        .flat_map(|(resource_name, collections)| {
+            collections
+                .iter()
+                .map(move |(collection_name, collection)| {
+                    (resource_name, collection_name, collection)
+                })
+        })
+        .filter_map(|(resource_name, collection_name, collection)| {
+            let path = collection["urlTemplate"].as_str()?;
+            let method = match collection.get("listMethod") {
+                None => "get",
+                Some(method) if method.as_str() == Some("GET") => "get",
+                Some(method) if method.as_str() == Some("POST") => "post",
+                Some(_) => return None,
+            };
+            let operation = document["paths"][path][method].as_object()?;
+            // A competing causality declaration cannot confer permission.
+            if operation.get("x-crud").is_some_and(|crud| {
+                crud["action"] != "list"
+                    || crud["resource"].as_str() != Some(resource_name.as_str())
+                    || crud["collection"].as_str() != Some(collection_name.as_str())
+            }) {
+                return None;
+            }
+            Some((path, method))
+        })
+        .collect()
+}
+
+/// A continuation applies only when a list operation explicitly selects one
+/// page-token scheme. An unapplied scheme never grants access to its target.
+fn continuation_target(
+    document: &Value,
+    source: &Value,
+    target_path_item: &Value,
+    target: &Value,
+) -> Option<String> {
+    let [application] = source["x-pagination"].as_array()?.as_slice() else {
+        return None;
+    };
+    let mut scheme =
+        document["components"]["paginationSchemes"][application["scheme"].as_str()?].clone();
+    if !scheme.is_object() {
+        return None;
+    }
+    if let Some(overrides) = application.get("overrides") {
+        if !overrides.is_object() {
+            return None;
+        }
+        merge(&mut scheme, overrides.clone());
+    }
+    if scheme["type"].as_str()? != "pageToken" {
+        return None;
+    }
+    let response = &scheme["response"];
+    response["envelope"]["itemsField"]
+        .as_str()
+        .filter(|path| !path.is_empty())?;
+    let is_cursor =
+        |field: &Value| matches!(field["role"].as_str(), Some("nextCursor" | "nextPageToken"));
+    let body_fields = response["bodyFields"].as_object()?;
+    if body_fields
+        .values()
+        .filter(|field| is_cursor(field))
+        .count()
+        != 1
+        || body_fields
+            .values()
+            .any(|field| field["role"] == "nextLink")
+        || response["headers"]
+            .as_object()
+            .into_iter()
+            .flat_map(|headers| headers.values())
+            .any(|field| is_cursor(field) || field["role"] == "nextLink")
+    {
+        return None;
+    }
+    let continuation = &scheme["continuation"];
+    // A continuation identifies its pagination flag and exactly one cursor
+    // input, as required by the operation-switching pagination draft.
+    continuation["hasMoreField"]
+        .as_str()
+        .filter(|path| !path.is_empty())?;
+    let request = continuation["request"].as_object()?;
+    let (location, fields) = request.iter().next()?;
+    let fields = fields.as_object()?;
+    let (cursor_name, cursor) = fields.iter().next()?;
+    if request.len() != 1
+        || fields.len() != 1
+        || cursor_name.is_empty()
+        || cursor["role"].as_str() != Some("cursor")
+    {
+        return None;
+    }
+    let target_declares_cursor = match location.as_str() {
+        "queryParameters" => [target, target_path_item]
+            .into_iter()
+            .filter_map(|item| item["parameters"].as_array())
+            .flatten()
+            .filter_map(|parameter| local_reference(document, parameter))
+            .any(|parameter| {
+                parameter["in"] == "query"
+                    && parameter["name"].as_str() == Some(cursor_name.as_str())
+            }),
+        "bodyFields" => {
+            let body = local_reference(document, &target["requestBody"])?;
+            let mut schema = &body["content"]["application/json"]["schema"];
+            for part in cursor_name.split('.') {
+                schema = local_reference(document, schema)?
+                    .get("properties")?
+                    .get(part)?;
+            }
+            local_reference(document, schema)?["type"] == "string"
+        }
+        _ => false,
+    };
+    if !target_declares_cursor {
+        return None;
+    }
+    Some(continuation["operationId"].as_str()?.to_owned())
+}
+
+fn local_reference<'a>(document: &'a Value, value: &'a Value) -> Option<&'a Value> {
+    match value.get("$ref") {
+        Some(reference) => document.pointer(reference.as_str()?.strip_prefix('#')?),
+        None => Some(value),
+    }
 }
 
 fn path_matches(template: &str, path: &str) -> bool {
@@ -2292,6 +2503,21 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    #[tokio::test]
+    #[ignore = "downloads the pinned Dropbox OAD"]
+    async fn storage_catalog_dropbox_declares_read_post_and_continuation() {
+        let mut catalog =
+            checked_in_platform("catalog/2026-11-16-storage-metadata.json", "dropbox").await;
+        // Optionally run the same classifier against the composed document
+        // served by a deployed proxy while keeping CI independent of it.
+        if let Ok(url) = std::env::var("TEST_COMPOSED_DROPBOX_DOCUMENT_URL") {
+            let live_document = fetch_yaml(&crate::build_http_client(), &url).await.unwrap();
+            catalog.documents.insert("dropbox".into(), live_document);
+        }
+        assert!(catalog.is_read_post("dropbox", "/2/files/list_folder"));
+        assert!(catalog.is_read_post("dropbox", "/2/files/list_folder/continue"));
     }
 
     /// The default Keep profile composes the full refreshed OAD, but exposes

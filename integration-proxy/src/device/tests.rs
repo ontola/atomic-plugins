@@ -596,7 +596,12 @@ async fn permissions_expiry_and_unregistered_client_are_enforced() {
     let principal = store::authenticate(&f.security, token, &f.state.base_url)
         .await
         .unwrap();
-    assert!(!store::may_request(&principal, &f.connection, &Method::GET));
+    assert!(!store::may_request(
+        &principal,
+        &f.connection,
+        &Method::GET,
+        false
+    ));
     let read = f.grant("proxy:read").await;
     let token = read["access_token"].as_str().unwrap();
     assert_eq!(
@@ -1110,13 +1115,201 @@ fn read_and_write_grants_are_independent_and_connection_scoped() {
                 false
             };
             assert_eq!(
-                store::may_request(&principal, "approved", &method),
+                store::may_request(&principal, "approved", &method, false),
                 expected,
                 "{scope}: {method}"
             );
-            assert!(!store::may_request(&principal, "other", &method));
+            assert!(!store::may_request(&principal, "other", &method, false));
         }
     }
+}
+
+fn read_post_document(server: &str) -> Value {
+    json!({
+        "servers": [{"url": server}],
+        "components": {
+            "securitySchemes": {"auth": {"type": "http", "scheme": "bearer"}},
+            "crudResources": {"record": {"collections": {
+                "records": {"urlTemplate": "/records/list", "listMethod": "POST"}
+            }}},
+            "paginationSchemes": {"listing": {
+                "type": "pageToken",
+                "response": {
+                    "envelope": {"itemsField": "records"},
+                    "bodyFields": {"next_cursor": {"role": "nextCursor"}}
+                },
+                "continuation": {
+                    "operationId": "continueListing",
+                    "request": {"bodyFields": {"cursor": {"role": "cursor"}}},
+                    "hasMoreField": "more"
+                }
+            }}
+        },
+        "security": [{"auth": []}],
+        "paths": {
+            "/records": {"get": {}, "head": {}, "post": {}},
+            "/records/list": {"post": {"x-pagination": [{"scheme": "listing"}]}},
+            "/records/continue": {"post": {
+                "operationId": "continueListing",
+                "requestBody": {"required": true, "content": {
+                    "application/json": {"schema": {"type": "object", "properties": {
+                        "cursor": {"type": "string"}
+                    }}}
+                }}
+            }}
+        }
+    })
+}
+
+#[test]
+fn device_read_post_requires_unambiguous_nonmutating_catalog_declarations() {
+    let document = read_post_document("https://api.example/v1");
+    let catalog =
+        |document| crate::catalog::Catalog::from_test_document("service", document, json!({}));
+    let normal = catalog(document.clone());
+    assert!(normal.is_read_post("service", "/v1/records/list"));
+    assert!(normal.is_read_post("service", "/v1/records/continue"));
+    for path in [
+        "/records/list",
+        "/v1/records",
+        "/v1/records/list/",
+        "/v1/records/%6cist",
+    ] {
+        assert!(!normal.is_read_post("service", path), "{path}");
+    }
+
+    for action in ["create", "update", "delete", "read"] {
+        let mut mutating = document.clone();
+        mutating["paths"]["/records/list"]["post"]["x-crud"] = json!({"action": action});
+        let mutating = catalog(mutating);
+        assert!(!mutating.is_read_post("service", "/v1/records/list"));
+        assert!(!mutating.is_read_post("service", "/v1/records/continue"));
+    }
+
+    let mut annotated = document.clone();
+    annotated["paths"]["/records/list"]["post"]["x-crud"] =
+        json!({"action": "list", "resource": "record", "collection": "records"});
+    assert!(catalog(annotated.clone()).is_read_post("service", "/v1/records/list"));
+    annotated["paths"]["/records/list"]["post"]["x-crud"]["collection"] = json!("other");
+    assert!(!catalog(annotated).is_read_post("service", "/v1/records/list"));
+
+    let mut ambiguous = document.clone();
+    ambiguous["paths"]["/records/{action}"] = json!({"post": {}});
+    let ambiguous = catalog(ambiguous);
+    assert!(!ambiguous.is_read_post("service", "/v1/records/list"));
+    assert!(!ambiguous.is_read_post("service", "/v1/records/continue"));
+
+    for (pointer, invalid) in [
+        (
+            "/paths/~1records~1continue/post/operationId",
+            json!("unrelated"),
+        ),
+        (
+            "/paths/~1records~1continue/post/x-crud",
+            json!({"action": "delete"}),
+        ),
+        (
+            "/paths/~1records~1list/post/x-crud",
+            json!({"action": "create"}),
+        ),
+        ("/paths/~1records~1list/post/x-pagination", json!([])),
+        (
+            "/components/paginationSchemes/listing/continuation/hasMoreField",
+            Value::Null,
+        ),
+        (
+            "/components/paginationSchemes/listing/continuation/request",
+            json!({}),
+        ),
+        (
+            "/paths/~1records~1continue/post/requestBody",
+            json!({"content": {"application/json": {"schema": {"type": "object"}}}}),
+        ),
+    ] {
+        let mut invalid_document = document.clone();
+        let (parent, name) = pointer.rsplit_once('/').unwrap();
+        invalid_document.pointer_mut(parent).unwrap()[name] = invalid;
+        assert!(
+            !catalog(invalid_document).is_read_post("service", "/v1/records/continue"),
+            "{pointer}"
+        );
+    }
+    let mut invalid = document;
+    invalid["paths"]["/records"]["get"]["operationId"] = json!("continueListing");
+    assert!(!catalog(invalid).is_read_post("service", "/v1/records/continue"));
+}
+
+#[tokio::test]
+#[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+async fn read_grant_reaches_declared_post_list_and_continuation() {
+    let mut f = Fixture::new(215).await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = Router::new().fallback(
+        |method: Method, uri: axum::http::Uri, headers: HeaderMap, body: Bytes| async move {
+            assert_eq!(
+                headers[header::AUTHORIZATION],
+                "Bearer invented-provider-value"
+            );
+            match (method.as_str(), uri.path()) {
+                ("POST", "/v1/records/list") => {
+                    Json(json!({"records": [1], "next_cursor": "page-2", "more": true}))
+                }
+                ("POST", "/v1/records/continue") => {
+                    assert_eq!(
+                        serde_json::from_slice::<Value>(&body).unwrap(),
+                        json!({"cursor": "page-2"})
+                    );
+                    Json(json!({"records": [2], "next_cursor": "checkpoint", "more": false}))
+                }
+                ("GET" | "HEAD", "/v1/records") => Json(json!({})),
+                _ => panic!("unexpected upstream request"),
+            }
+        },
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+    f.state.catalog = crate::catalog::Catalog::from_test_document(
+        "service",
+        read_post_document(&format!("http://{address}/v1")),
+        json!({}),
+    );
+    let grant = f.grant("proxy:read").await;
+    let token = grant["access_token"].as_str().unwrap();
+    let path = format!("/proxy/{}/service/v1/records", f.connection);
+    for method in ["GET", "HEAD"] {
+        assert_eq!(
+            f.bearer(token, method, &path).await.status(),
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        f.bearer(token, "POST", &path).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let first = f.bearer(token, "POST", &format!("{path}/list")).await;
+    assert_eq!(first.status(), StatusCode::OK);
+    let first = body_json(first).await;
+    assert_eq!(first["records"], json!([1]));
+    let next = f
+        .send(
+            Request::builder()
+                .method("POST")
+                .uri(format!("{path}/continue"))
+                .header(header::AUTHORIZATION, format!("Bearer {token}"))
+                .header(header::CONTENT_TYPE, "application/json")
+                .header(
+                    crate::connection_key::HEADER,
+                    test_support::test_connection_key(),
+                )
+                .body(Body::from(
+                    json!({"cursor": first["next_cursor"]}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(next.status(), StatusCode::OK);
+    assert_eq!(body_json(next).await["records"], json!([2]));
+    server.abort();
 }
 
 #[tokio::test]
@@ -1232,7 +1425,8 @@ async fn management_grants_are_explicit_connection_scoped_and_owner_scoped() {
     assert!(!store::may_request(
         &principal(&f.state, token).await.unwrap(),
         &f.connection,
-        &Method::GET
+        &Method::GET,
+        false,
     ));
     let list = body_json(f.bearer(token, "GET", "/connections").await).await;
     assert_eq!(list["connections"].as_array().unwrap().len(), 1);
