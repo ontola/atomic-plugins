@@ -247,7 +247,7 @@ function linkTargets(
   }
   return result;
 }
-function anonymous(
+export function operationAllowsAnonymous(
   document: OpenApiDocument,
   operation: OperationObject,
 ): boolean {
@@ -345,7 +345,7 @@ function entrypoints(
           method: 'GET',
           operationId: op.operationId,
           inputs: pathInputs(document, path, op),
-          allowsAnonymous: anonymous(document, op),
+          allowsAnonymous: operationAllowsAnonymous(document, op),
           link: linked.name,
         };
         if (
@@ -445,13 +445,13 @@ export function describeCollections(
       ...collection,
       relationships: relationships(doc, collection),
       entrypoints: entrypoints(doc, collection),
-      allowsAnonymous: anonymous(
+      allowsAnonymous: operationAllowsAnonymous(
         doc,
         listOperation(doc, collection.url, collection.method) ?? {
           responses: {},
         },
       ),
-      requiresAuthentication: !anonymous(
+      requiresAuthentication: !operationAllowsAnonymous(
         doc,
         listOperation(doc, collection.url, collection.method) ?? {
           responses: {},
