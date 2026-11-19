@@ -57,6 +57,56 @@
         "mastery-source",
         "mastery-updated-at"
       ]
+    },
+    "v3": {
+      "name": "Learning tree v3",
+      "description": "Deck, cohort, assignment, submission, grade, question, assessment and attempt classes for teaching with learning trees (Leerboom). Property names follow schema.org LRMI where one fits: teaches, assesses, license. Credentials (Open Badges) are not part of this release. Declared, not verified.",
+      "classes": [
+        "deck-v1",
+        "cohort-v1",
+        "assignment-v1",
+        "submission-v1",
+        "grade-v1",
+        "question-v1",
+        "assessment-v1",
+        "attempt-v1"
+      ],
+      "properties": [
+        "deck-slides",
+        "deck-teaches",
+        "cohort-members",
+        "cohort-teachers",
+        "cohort-goals",
+        "assignment-cohort",
+        "assignment-lesson",
+        "submission-work",
+        "submission-submitted-at",
+        "submission-status",
+        "grade-value",
+        "grade-scale",
+        "grade-weight",
+        "grade-evidence",
+        "question-prompt",
+        "question-type",
+        "question-options",
+        "question-answer",
+        "question-explanation",
+        "assessment-assesses",
+        "assessment-questions",
+        "assessment-pass-score",
+        "assessment-kind",
+        "assessment-draw",
+        "assessment-app",
+        "attempt-score",
+        "attempt-answers",
+        "attempt-seed",
+        "learner",
+        "assessment",
+        "assignment",
+        "skill",
+        "license",
+        "generated-with"
+      ]
     }
   },
   "classes": {
@@ -159,6 +209,89 @@
       "description": "How well one learner masters one skill. Private data, kept in the learner's own drive. Not a credential: nobody attests it.",
       "requires": ["mastery-skill", "mastery-level"],
       "recommends": ["mastery-source", "mastery-updated-at"]
+    },
+    "deck-v1": {
+      "name": "Deck",
+      "description": "An ordered list of slides, each an ordinary resource. Used as the content of a lesson (lesson-format slides) or on its own.",
+      "requires": ["https://atomicdata.dev/properties/name", "deck-slides"],
+      "recommends": ["deck-teaches"]
+    },
+    "cohort-v1": {
+      "name": "Cohort",
+      "description": "A group of learners with their teachers and the skills they work towards. Access follows the usual drive rights; the class adds no permission model.",
+      "requires": ["https://atomicdata.dev/properties/name"],
+      "recommends": ["cohort-members", "cohort-teachers", "cohort-goals"]
+    },
+    "assignment-v1": {
+      "name": "Assignment",
+      "description": "Work given to a cohort on a skill, with an optional lesson and a due date (the task/v1 due-date, so a calendar or task view shows it). It does not extend a task: it has no status of its own, learners' progress lives in submissions.",
+      "requires": ["assignment-cohort", "skill"],
+      "recommends": [
+        "https://atomicdata.dev/properties/name",
+        "https://atomicdata.dev/properties/description",
+        "assignment-lesson",
+        "https://atomicdata.dev/task/v1/due-date"
+      ]
+    },
+    "submission-v1": {
+      "name": "Submission",
+      "description": "One learner's handing in of the work for one assignment.",
+      "requires": ["assignment", "learner"],
+      "recommends": [
+        "submission-work",
+        "submission-submitted-at",
+        "submission-status"
+      ]
+    },
+    "grade-v1": {
+      "name": "Grade",
+      "description": "A teacher's judgment of one learner on an assignment or assessment, with scale and weight. Not mastery (what a learner can do) and not an Open Badge or other credential.",
+      "requires": ["learner", "grade-value", "grade-scale"],
+      "recommends": [
+        "assignment",
+        "assessment",
+        "grade-weight",
+        "https://atomicdata.dev/properties/description",
+        "grade-evidence",
+        "https://atomicdata.dev/properties/createdAt"
+      ]
+    },
+    "question-v1": {
+      "name": "Question",
+      "description": "One question of an assessment, a row in a question table. Also usable as a slide in a deck.",
+      "requires": ["question-prompt", "question-type"],
+      "recommends": [
+        "question-options",
+        "question-answer",
+        "question-explanation",
+        "skill"
+      ]
+    },
+    "assessment-v1": {
+      "name": "Assessment",
+      "description": "A set of questions that checks skills, for practice or as attested evidence.",
+      "requires": [
+        "https://atomicdata.dev/properties/name",
+        "assessment-assesses"
+      ],
+      "recommends": [
+        "assessment-questions",
+        "assessment-pass-score",
+        "assessment-kind",
+        "assessment-draw",
+        "assessment-app"
+      ]
+    },
+    "attempt-v1": {
+      "name": "Attempt",
+      "description": "One try at an assessment by one learner. Append-only, kept in the learner's own drive. Comparable to the result of an xAPI statement.",
+      "requires": ["assessment", "attempt-score"],
+      "recommends": [
+        "learner",
+        "attempt-answers",
+        "https://atomicdata.dev/properties/createdAt",
+        "attempt-seed"
+      ]
     }
   },
   "properties": {
@@ -348,6 +481,204 @@
       "name": "Updated at",
       "datatype": "https://atomicdata.dev/datatypes/timestamp",
       "description": "When the level was last set, milliseconds since the Unix epoch."
+    },
+    "deck-slides": {
+      "name": "Slides",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "The slides, in presentation order (the array order is the order). A slide is any existing resource: a document fragment, a canvas, a file, a question, a plugin view."
+    },
+    "deck-teaches": {
+      "name": "Teaches",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "Skills this deck helps with. Same meaning as lesson-teaches, for a deck that is used as the content of a lesson. Maps to schema.org teaches Points at skill-v1."
+    },
+    "cohort-members": {
+      "name": "Members",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "The agents (learners) in this cohort.",
+      "classtype": "https://atomicdata.dev/classes/Agent"
+    },
+    "cohort-teachers": {
+      "name": "Teachers",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "The agents who guide this cohort and may read its learners' shared mastery and write grades.",
+      "classtype": "https://atomicdata.dev/classes/Agent"
+    },
+    "cohort-goals": {
+      "name": "Goals",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "Skills this cohort works towards Points at skill-v1."
+    },
+    "assignment-cohort": {
+      "name": "Cohort",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The cohort this assignment is for.",
+      "classtype": "cohort-v1"
+    },
+    "assignment-lesson": {
+      "name": "Lesson",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The lesson to use for the assignment. Optional Points at lesson-v1."
+    },
+    "submission-work": {
+      "name": "Work",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The submitted work: any resource, for example a document, a file or a canvas."
+    },
+    "submission-submitted-at": {
+      "name": "Submitted at",
+      "datatype": "https://atomicdata.dev/datatypes/timestamp",
+      "description": "When the work was handed in, milliseconds since the Unix epoch."
+    },
+    "submission-status": {
+      "name": "Status",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "Where the submission is in its life. A view shows a value it does not know as plain text.",
+      "classtype": "https://atomicdata.dev/classes/Tag",
+      "allowsOnly": ["todo", "in-progress", "submitted", "reviewed"]
+    },
+    "grade-value": {
+      "name": "Value",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "The grade as written on its scale, for example 7.5, 85, B or pass. A string, so that every scale fits."
+    },
+    "grade-scale": {
+      "name": "Scale",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "How to read the grade value.",
+      "classtype": "https://atomicdata.dev/classes/Tag",
+      "allowsOnly": [
+        {
+          "id": "1-10",
+          "name": "1-10"
+        },
+        "percent",
+        {
+          "id": "a-f",
+          "name": "A-F"
+        },
+        {
+          "id": "pass-fail",
+          "name": "Pass/fail"
+        }
+      ]
+    },
+    "grade-weight": {
+      "name": "Weight",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Weight of this grade in an average. Absent: 1."
+    },
+    "grade-evidence": {
+      "name": "Evidence",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The attempt or submission that was judged."
+    },
+    "question-prompt": {
+      "name": "Prompt",
+      "datatype": "https://atomicdata.dev/datatypes/markdown",
+      "description": "The question as shown to the learner."
+    },
+    "question-type": {
+      "name": "Type",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "How the question is answered.",
+      "classtype": "https://atomicdata.dev/classes/Tag",
+      "allowsOnly": ["choice", "numeric", "short-text"]
+    },
+    "question-options": {
+      "name": "Options",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "For a choice question, the options as a JSON array of strings. Core has no string array datatype, and a tag resource per option would cost a resource per answer text."
+    },
+    "question-answer": {
+      "name": "Answer",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "The correct answer: for a choice question the text of the right option, for numeric a number written as text, for short-text the accepted text. Used for practice with direct feedback; an attested assessment keeps its key elsewhere."
+    },
+    "question-explanation": {
+      "name": "Explanation",
+      "datatype": "https://atomicdata.dev/datatypes/markdown",
+      "description": "Shown after answering."
+    },
+    "assessment-assesses": {
+      "name": "Assesses",
+      "datatype": "https://atomicdata.dev/datatypes/resourceArray",
+      "description": "Skills this assessment checks. Maps to schema.org assesses Points at skill-v1."
+    },
+    "assessment-questions": {
+      "name": "Questions",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The question bank: a table whose rows are question-v1 resources."
+    },
+    "assessment-pass-score": {
+      "name": "Pass score",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Score from 0 to 1 at which the assessed skills count as mastered."
+    },
+    "assessment-kind": {
+      "name": "Kind",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "Practice is for learning with direct feedback; attested is a test whose result may count as evidence.",
+      "classtype": "https://atomicdata.dev/classes/Tag",
+      "allowsOnly": ["practice", "attested"]
+    },
+    "assessment-draw": {
+      "name": "Questions per attempt",
+      "datatype": "https://atomicdata.dev/datatypes/integer",
+      "description": "How many questions each attempt draws from the bank, so a learner can test themselves again without getting the same questions. Draws prefer questions this learner has not answered, then those answered longest ago. Absent: every question in the bank."
+    },
+    "assessment-app": {
+      "name": "App",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "A drive app that runs this assessment instead of, or next to, the question bank: it can generate questions (procedural, seeded) and check answers with its own logic, and records each try as an attempt-v1. A score the learner's own browser computes suits practice; an attested assessment needs a check the learner does not control."
+    },
+    "attempt-score": {
+      "name": "Score",
+      "datatype": "https://atomicdata.dev/datatypes/float",
+      "description": "Result of the attempt, 0 to 1."
+    },
+    "attempt-answers": {
+      "name": "Answers",
+      "datatype": "https://atomicdata.dev/datatypes/json",
+      "description": "The learner's answers as JSON, keyed by the subject of each question. Its keys are the questions this attempt drew."
+    },
+    "attempt-seed": {
+      "name": "Seed",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "The seed that generated or drew this attempt's questions, so the same questions can be shown again for review."
+    },
+    "learner": {
+      "name": "Learner",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The learner this is about: who handed in a submission, received a grade or made an attempt.",
+      "classtype": "https://atomicdata.dev/classes/Agent"
+    },
+    "assessment": {
+      "name": "Assessment",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The assessment this is about: the one that was graded or attempted.",
+      "classtype": "assessment-v1"
+    },
+    "assignment": {
+      "name": "Assignment",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The assignment this is about: the one that was handed in or graded.",
+      "classtype": "assignment-v1"
+    },
+    "skill": {
+      "name": "Skill",
+      "datatype": "https://atomicdata.dev/datatypes/atomicURL",
+      "description": "The skill this is about: what an assignment practises or a question checks. Points at skill-v1."
+    },
+    "license": {
+      "name": "License",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "The license of a creative work (a lesson, deck, question bank), as an SPDX identifier or a URL. Maps to schema.org license."
+    },
+    "generated-with": {
+      "name": "Generated with",
+      "datatype": "https://atomicdata.dev/datatypes/string",
+      "description": "The tool or model that generated the material, if any, for example the model name. Fits any resource."
     }
   }
 }

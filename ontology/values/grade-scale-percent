@@ -1,0 +1,9 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/values/grade-scale-percent",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Tag"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/properties/grade-scale",
+  "https://atomicdata.dev/properties/shortname": "percent",
+  "https://atomicdata.dev/properties/name": "Percent"
+}

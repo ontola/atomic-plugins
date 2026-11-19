@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/assessment-app",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "assessment-app",
+  "https://atomicdata.dev/properties/name": "App",
+  "https://atomicdata.dev/properties/description": "A drive app that runs this assessment instead of, or next to, the question bank: it can generate questions (procedural, seeded) and check answers with its own logic, and records each try as an attempt-v1. A score the learner's own browser computes suits practice; an attested assessment needs a check the learner does not control.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/atomicURL"
+}

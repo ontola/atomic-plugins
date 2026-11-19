@@ -1,0 +1,17 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/deck-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "deck-v1",
+  "https://atomicdata.dev/properties/name": "Deck",
+  "https://atomicdata.dev/properties/description": "An ordered list of slides, each an ordinary resource. Used as the content of a lesson (lesson-format slides) or on its own.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://atomicdata.dev/properties/name",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/deck-slides"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/deck-teaches"
+  ]
+}

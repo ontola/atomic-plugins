@@ -1,0 +1,19 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/submission-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "submission-v1",
+  "https://atomicdata.dev/properties/name": "Submission",
+  "https://atomicdata.dev/properties/description": "One learner's handing in of the work for one assignment.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/assignment",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/learner"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://ontola.github.io/atomic-plugins/ontology/properties/submission-work",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/submission-submitted-at",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/submission-status"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/attempt-answers",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "attempt-answers",
+  "https://atomicdata.dev/properties/name": "Answers",
+  "https://atomicdata.dev/properties/description": "The learner's answers as JSON, keyed by the subject of each question. Its keys are the questions this attempt drew.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/json"
+}
