@@ -1,6 +1,31 @@
 # overlays
 OpenAPI Overlay files that complete existing OpenAPI files with Pagination Schemes and other additions
 
+## Canonical GitHub provider ID
+
+`catalog/2026-11-19-github.json` selects the canonical provider ID `github`.
+It differs from `2026-11-19-collection-navigation.json` only in that entry's
+`name`: all 17 provider profiles, OpenAPI pins, overlay order and query
+selections are otherwise identical. The visible document title remains
+GitHub, with the same principal, Organizations, Repositories, Issues and pull
+requests, and comments metadata.
+
+The new catalog contains no `github-issues` provider entry or compatibility
+alias. Existing dated catalogs and revision overlays stay immutable. The
+maintainer explicitly chose uninstall/reinstall for the existing installation;
+there is no provider-ID migration. Switching an integration proxy's catalog
+is a separate deployment choice; this addition changes no default or running
+service. No Syncables release is needed.
+
+The fixture generator accepts exact catalog IDs without provider-specific
+aliases. Historical defaults remain unchanged; select this profile explicitly:
+
+```sh
+python3 overlays/tests/generate_identity_catalog_fixtures.py \
+  --catalog overlays/catalog/2026-11-19-github.json --platform github \
+  --output /tmp/github-catalog-fixtures
+```
+
 ## Catalog collection navigation
 
 `catalog/2026-11-19-collection-navigation.json` preserves every other platform

@@ -1,4 +1,4 @@
-"""Compose exactly the catalog-pinned Google and GitHub OADs and overlays.
+"""Compose selected catalog-pinned OADs and overlays (historical identity defaults).
 
 Outputs are reproducible snapshots for integration-proxy tests. The manifest
 records every URL and SHA-256 used to produce them.
@@ -92,13 +92,20 @@ def compose(name, cache, catalog=None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True, type=pathlib.Path)
+    parser.add_argument("--catalog", type=pathlib.Path, default=ROOT / "catalog/2026-10-02.json",
+                        help="Dated catalog to compose; historical default remains unchanged")
+    parser.add_argument("--platform", action="append", dest="platforms",
+                        help="Exact catalog provider ID; repeat to select several")
     parser.add_argument("--cache", type=pathlib.Path, default=pathlib.Path(".cache/identity-catalog"))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
     args.cache.mkdir(parents=True, exist_ok=True)
-    manifest = {"catalog": {"path": "catalog/2026-10-02.json", "sha256": hashlib.sha256((ROOT / "catalog/2026-10-02.json").read_bytes()).hexdigest()}, "platforms": {}}
-    for name in IDENTITY_PLATFORMS:
-        document, provenance = compose(name, args.cache)
+    catalog = json.loads(args.catalog.read_text())
+    catalog_path = args.catalog.resolve()
+    catalog_name = str(catalog_path.relative_to(ROOT.resolve())) if catalog_path.is_relative_to(ROOT.resolve()) else str(catalog_path)
+    manifest = {"catalog": {"path": catalog_name, "sha256": hashlib.sha256(args.catalog.read_bytes()).hexdigest()}, "platforms": {}}
+    for name in args.platforms or IDENTITY_PLATFORMS:
+        document, provenance = compose(name, args.cache, catalog)
         (args.output / f"{name}-composed.yaml").write_text(yaml.safe_dump(document, sort_keys=False))
         manifest["platforms"][name] = provenance
     (args.output / "sources.json").write_text(json.dumps(manifest, indent=2) + "\n")
