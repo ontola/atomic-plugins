@@ -77,4 +77,13 @@ describe('resolveRefs', () => {
     expect(resolved['x-vendor-policy']).toEqual({ $ref: '../policies.yaml' });
     expect(resolved.target).toEqual({ type: 'string' });
   });
+  it('preserves reserved JSON own keys as data through nested resolution', () => {
+    const document = JSON.parse(
+      '{"fixed":{"__proto__":{},"constructor":{"name":"value"}}}',
+    );
+    const resolved = resolveRefs(document);
+    expect(Object.hasOwn(resolved.fixed, '__proto__')).toBe(true);
+    expect(Object.getPrototypeOf(resolved.fixed)).toBe(Object.prototype);
+    expect(JSON.stringify(resolved)).toBe(JSON.stringify(document));
+  });
 });

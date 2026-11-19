@@ -57,11 +57,11 @@ export function resolveRefs<T>(document: T): T {
         return result;
       }
 
-      const result: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(obj)) {
-        result[key] = walk(value);
-      }
-      return result;
+      // Preserve every JSON own key, including __proto__, as data rather
+      // than invoking Object.prototype's legacy prototype setter.
+      return Object.fromEntries(
+        Object.entries(obj).map(([key, value]) => [key, walk(value)]),
+      );
     }
 
     return node;

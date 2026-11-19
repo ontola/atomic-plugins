@@ -161,3 +161,33 @@ describe('readPlatform', () => {
     ]);
   });
 });
+
+it('recommends required nullable properties because Atomic scalar null is omitted', () => {
+  const document: OpenApiDocument = {
+    openapi: '3.1.0',
+    info: { title: 'Nullable', version: '1' },
+    paths: {},
+    components: {
+      crudResources: {
+        person: {
+          schema: {
+            type: 'object',
+            required: ['id', 'middle', 'nickname'],
+            properties: {
+              id: { type: 'integer' },
+              middle: { type: 'string', nullable: true },
+              nickname: { type: ['string', 'null'] },
+            },
+          },
+        },
+      },
+    },
+  };
+  const ontology = deriveOntology(document);
+  const person = ontology.terms.find((term) => term.kind === 'class')!;
+  expect(person.requires).toEqual(['nullable/property/id']);
+  expect(person.recommends).toEqual([
+    'nullable/property/middle',
+    'nullable/property/nickname',
+  ]);
+});

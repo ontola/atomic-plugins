@@ -1,6 +1,41 @@
 # overlays
 OpenAPI Overlay files that complete existing OpenAPI files with Pagination Schemes and other additions
 
+## Catalog collection navigation
+
+`catalog/2026-11-19-collection-navigation.json` preserves every other platform
+of `2026-11-18-syncables-apps.json` and selects an explicit GitHub read-navigation
+profile: it omits the legacy mutation/owner-path CRUD overlay, retaining the
+existing builtin read model and canonical path aliases, then adds one immutable
+navigation overlay and the org-repository page-size selection. Old catalogs
+and their mutation profiles remain unchanged. It retains numeric organization
+and repository identities. `githubOrganization.references.byLogin` binds the
+record's `login` to a non-enumerable `githubOrganizationAddress` resource at
+`/orgs/{org}`. The documented detail GET's successful response has an ordinary
+OpenAPI Response Link binding its returned `login` to `GET /orgs/{org}/repos`.
+`organizationRepositories` is a CRUD collection of `githubRepository`, with
+fixed `type: all`, its normal pagination scheme and stable numeric item IDs.
+The address resource supplies transport routing only; it is not another stored
+organization or an asserted authenticated principal. A public repository-detail
+address `/repos/{owner}/{repo}` also links its actual response's numeric `id`
+to the single canonical Issues collection. The new profile has one canonical
+Issues collection and one canonical issue-comments collection, avoiding duplicate
+owner/name and numeric child tables. Documented public GETs and their existing
+canonical aliases have explicit anonymous security alternatives; `/user`,
+`/user/orgs` and `/user/repos` remain authenticated.
+
+The canonical repository collection is presented as **Issues and pull requests**,
+matching GitHub's REST Issues API. Its schema retains the optional
+`pull_request` object, so a stored row can distinguish a pull request from an
+ordinary issue. The generic reader stores both; no provider-specific filter
+removes pull requests.
+
+The chain uses existing CRUD Reference Objects and OAS Response Link Objects;
+no new relationship extension is introduced. See
+[endpoint and semantic evidence](tests/COLLECTION_NAVIGATION_PROVENANCE.md).
+Composition and synthetic consumer tests validate the declarations. No live
+account read, proxy default change or deployment is implied.
+
 ## GitHub collection discovery
 
 The opt-in catalog `catalog/2026-11-18-syncables-apps.json` preserves all 17

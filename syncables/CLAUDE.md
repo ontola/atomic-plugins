@@ -802,6 +802,18 @@ qualifies, but falls back to today's single-request behavior otherwise.
 
 ### Browser read path (`src/read/`, `src/browser.ts`)
 
+`read/principal.ts` consumes Authenticated Principal 0.1.0 (fixed authenticated
+HTTPS GET subset), preserving string versus safe-integer subjects and client
+scope. `read/navigation.ts` describes collections and presentation/inputs,
+materializes direct identity-bound or CRUD-reference/Response-Link navigation,
+and reads one concrete collection without sibling enumeration. Response Links
+are evaluated against actual detail responses, never implicitly against list
+items. The pure validators constrain principal, navigation and collection
+requests; the host owns credentials and grants. `projectReadRecord` in
+`read/read.ts` shares the reader's scalar validation and projection with raw
+snapshot consumers. See `docs/catalog-navigation-api.md` for the supported
+subset and public interfaces; keep both entrypoints' exports in step.
+
 `package.json` exports a second entry, `syncables/browser` (`src/browser.ts`).
 It holds the reader and local-first core for browser and iframe plugins. `read/model.ts`
 discovers collections from `components.crudResources`, a read-only port of

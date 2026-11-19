@@ -3,7 +3,7 @@ import {
   type OverlayDocument,
 } from '../openapi/apply-overlay.js';
 import { resolveRefs } from '../openapi/resolve-refs.js';
-import type { OpenApiDocument } from '../openapi/types.js';
+import type { OpenApiDocument, SchemaObject } from '../openapi/types.js';
 import {
   asText,
   describeModel,
@@ -12,10 +12,16 @@ import {
   upstreamOf,
   type PlatformDescription,
   type QuerySelection,
+  type ReadCollection,
+  crudResourcesOf,
+  isRecord,
 } from './model.js';
 import {
   DATATYPES,
   deriveOntology,
+  datatypeOf,
+  nullableSchema,
+  flattenSchema,
   ontologyShortname,
   type Ontology,
 } from './ontology.js';
@@ -163,17 +169,105 @@ export interface ReadResult {
 const TIMESTAMP =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/i;
 
+function validDate(value: string): boolean {
+  const date = value.slice(0, 10);
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return (
+    Number.isFinite(parsed.getTime()) &&
+    parsed.toISOString().slice(0, 10) === date
+  );
+}
+
 function typedValue(value: unknown, datatype: string): unknown {
-  if (value === null || value === undefined) {
-    return undefined;
-  }
+  if (value === null || value === undefined) return undefined;
   if (datatype === DATATYPES.timestamp) {
-    if (typeof value !== 'string' || !TIMESTAMP.test(value)) {
+    if (
+      typeof value !== 'string' ||
+      !TIMESTAMP.test(value) ||
+      !validDate(value) ||
+      !Number.isFinite(Date.parse(value))
+    )
       throw new Error('Invalid provider timestamp');
-    }
     return Date.parse(value);
   }
+  if (
+    (datatype === DATATYPES.string && typeof value !== 'string') ||
+    (datatype === DATATYPES.date &&
+      (typeof value !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(value) ||
+        !validDate(value))) ||
+    (datatype === DATATYPES.boolean && typeof value !== 'boolean') ||
+    (datatype === DATATYPES.integer &&
+      (typeof value !== 'number' || !Number.isSafeInteger(value))) ||
+    (datatype === DATATYPES.float &&
+      (typeof value !== 'number' || !Number.isFinite(value)))
+  )
+    throw new Error('Invalid provider value for declared datatype');
   return value;
+}
+
+export interface ProjectReadRecordOptions {
+  collection: ReadCollection;
+  record: Record<string, unknown>;
+  context?: Record<string, string>;
+  /** Reuse a derived ontology when projecting a whole snapshot. */
+  ontology?: Ontology;
+}
+
+/** Pure projection shared by readPlatform and consumers of raw snapshots. */
+export function projectReadRecord(
+  document: OpenApiDocument,
+  options: ProjectReadRecordOptions,
+): ReadRecord {
+  const ontology = options.ontology ?? deriveOntology(resolved(document));
+  const properties = new Map(
+    ontology.terms
+      .filter((t) => t.kind === 'property')
+      .map((t) => [t.shortname, t.datatype]),
+  );
+  const { collection, record: value } = options;
+  const definition = crudResourcesOf(resolved(document))[collection.resource];
+  const schema =
+    isRecord(definition) && isRecord(definition['schema'])
+      ? flattenSchema(definition['schema'] as SchemaObject)
+      : undefined;
+  for (const field of schema?.required ?? []) {
+    const fieldSchema = schema?.properties?.[field];
+    if (
+      value[field] === undefined ||
+      (value[field] === null && !nullableSchema(fieldSchema))
+    )
+      throw new Error(`Missing or null required provider field ${field}`);
+  }
+  const values: Record<string, unknown> = {};
+  for (const [field, raw] of Object.entries(value)) {
+    const shortname = ontologyShortname(field);
+    const datatype = properties.get(shortname);
+    if (!datatype) continue;
+    const declared = datatypeOf(schema?.properties?.[field]);
+    if (declared && declared !== datatype) typedValue(raw, declared);
+    const typed = typedValue(raw, datatype);
+    if (typed !== undefined) values[shortname] = typed;
+  }
+  const name = [value['title'], value['summary'], value['name']].find(
+    (v): v is string => typeof v === 'string' && v !== '',
+  );
+  const rawId = value[collection.idField];
+  if (
+    !(typeof rawId === 'string' && rawId.length > 0) &&
+    !(typeof rawId === 'number' && Number.isSafeInteger(rawId))
+  )
+    throw new Error('Invalid provider record identity');
+  const id = asText(rawId);
+  return {
+    resource: ontologyShortname(collection.resource),
+    namespace: collection.contextParams
+      .map((p) => options.context?.[p] ?? '')
+      .join('/'),
+    id,
+    name: name ?? id,
+    values,
+  };
 }
 
 /**
@@ -197,35 +291,17 @@ export async function readPlatform(
   const ontology: Ontology = options.probe
     ? { description: '', terms: [] }
     : deriveOntology(doc);
-  const properties = new Map<string, string>(
-    ontology.terms
-      .filter((t) => t.kind === 'property')
-      .map((t) => [t.shortname, t.datatype]),
-  );
   const records: ReadRecord[] = [];
   const byItem = new Map<Record<string, unknown>, ReadRecord>();
   const result = await readCollections(doc, {
     ...options,
     onRecord(value, collection, path): void {
-      const values: Record<string, unknown> = {};
-      for (const [field, raw] of Object.entries(value)) {
-        const shortname = ontologyShortname(field);
-        const datatype = properties.get(shortname);
-        if (!datatype) continue;
-        const typed = typedValue(raw, datatype);
-        if (typed !== undefined) values[shortname] = typed;
-      }
-      const name = [value['title'], value['summary'], value['name']].find(
-        (v): v is string => typeof v === 'string' && v !== '',
-      );
-      const id = asText(value[collection.idField]);
-      const record: ReadRecord = {
-        resource: ontologyShortname(collection.resource),
-        namespace: collection.contextParams.map((p) => path[p] ?? '').join('/'),
-        id,
-        name: name ?? id,
-        values,
-      };
+      const record = projectReadRecord(doc, {
+        collection,
+        record: value,
+        context: path,
+        ontology,
+      });
       records.push(record);
       byItem.set(value, record);
     },

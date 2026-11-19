@@ -28,6 +28,8 @@ export type HttpMethod = ListMethod | 'PUT' | 'PATCH' | 'DELETE';
  *   or source read, or resolving an unknown outcome), which must be fresh;
  * - `write`: a create, update, delete or follow-up;
  * - `inbox`: a webhook inbox consumer request.
+ * - `navigation`: a declared source detail GET for a collection Link.
+ * - `principal`: the authenticated principal lookup; must use current credentials.
  */
 export type RequestPurpose =
   | 'list'
@@ -37,7 +39,9 @@ export type RequestPurpose =
   | 'zone'
   | 'precondition'
   | 'write'
-  | 'inbox';
+  | 'inbox'
+  | 'principal'
+  | 'navigation';
 
 export interface TransportRequest {
   /** Absolute URL under the document's `servers[0].url`. */
