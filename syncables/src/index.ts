@@ -240,3 +240,43 @@ export type {
 } from './inbox/consumer.js';
 export { decodeBase64Utf8, pathSegment, scopedReads } from './inbox/reads.js';
 export type { ScopedRead } from './inbox/reads.js';
+
+export {
+  validatePrincipalRead,
+  describeAuthenticatedPrincipals,
+  resolveAuthenticatedPrincipal,
+} from './read/principal.js';
+export type {
+  PrincipalIdentifier,
+  AuthenticatedPrincipalDescription,
+  AuthenticatedPrincipal,
+  ResolveAuthenticatedPrincipalOptions,
+} from './read/principal.js';
+export {
+  describeCollections,
+  bindCollection,
+  bindCollectionNavigation,
+  relatedCollectionReads,
+  resolveCollectionNavigation,
+  readBoundCollection,
+  validateCollectionRead,
+  validateCollectionNavigationRead,
+  validateCollectionEntryRead,
+} from './read/navigation.js';
+export type {
+  CollectionEntrypoint,
+  BindCollectionNavigationOptions,
+  ValidateCollectionEntryReadOptions,
+  CollectionColumn,
+  CollectionRelationship,
+  CollectionDescription,
+  CollectionInput,
+  BoundCollection,
+  CollectionNavigation,
+  BindCollectionOptions,
+  RelatedCollectionOptions,
+  BoundCollectionReadOptions,
+} from './read/navigation.js';
+export { projectReadRecord } from './read/read.js';
+export type { ProjectReadRecordOptions } from './read/read.js';
+export type { ReadCollection } from './read/model.js';

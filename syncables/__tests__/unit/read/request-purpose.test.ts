@@ -106,6 +106,8 @@ describe('every request syncables makes sets a purpose', () => {
       'daemon/file-inventory-sources.ts': 3,
       'inbox/client.ts': 1,
       'read/pages.ts': 3,
+      'read/principal.ts': 1,
+      'read/navigation.ts': 1,
       'read/runtime-schemas.ts': 1,
       'read/time-zone.ts': 1,
     });

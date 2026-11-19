@@ -3,6 +3,13 @@ import { load } from 'js-yaml';
 import { describe, expect, it, vi } from 'vitest';
 import {
   describePlatform,
+  relatedCollectionReads,
+  resolveCollectionNavigation,
+  readBoundCollection,
+  bindCollection,
+  bindCollectionNavigation,
+  describeCollections,
+  validateCollectionEntryRead,
   prepareDocument,
   readCollections,
   readPlatform,
@@ -235,5 +242,110 @@ describe('catalog GitHub read model through the actual browser reader', () => {
     expect(result.collections[0]?.items).toEqual([repo(456)]);
     expect(result.collections[0]?.complete).toBe(false);
     expect(result.errors[0]).toContain('left the API origin');
+  });
+});
+
+const navigationOverlay = load(
+  readFileSync(
+    new URL(
+      '../../../../overlays/APIs/github.com/github-issues/1.1.4/collection-navigation-9c5cfb87b3f8b64e11069373a73e3fc85de0de5e-overlay.yaml',
+      import.meta.url,
+    ),
+    'utf8',
+  ),
+) as OverlayDocument;
+it('traverses the published organization address reference and actual response Link without owner grouping', async () => {
+  const doc = prepareDocument(document as unknown as Record<string, unknown>, [
+    navigationOverlay,
+  ]);
+  const parent = { id: 123, login: 'example-org' };
+  const navigations = relatedCollectionReads(doc, {
+    resource: 'githubOrganization',
+    record: parent,
+  });
+  expect(navigations).toHaveLength(1);
+  expect(navigations[0]).toMatchObject({
+    kind: 'responseLink',
+    source: { path: '/orgs/example-org' },
+  });
+  const calls: string[] = [];
+  const transport: Transport = async (request) => {
+    calls.push(request.url.href);
+    return request.purpose === 'navigation'
+      ? { status: 200, headers: {}, body: JSON.stringify(parent) }
+      : reply([repo(456)]);
+  };
+  const child = await resolveCollectionNavigation(doc, navigations[0]!, {
+    transport,
+  });
+  const selected = bindCollection(doc, {
+    collection: child.collection,
+    context: child.pathParams,
+    selection: {
+      query_overrides: [
+        { path: '/orgs/{org}/repos', values: { per_page: 100 } },
+      ],
+    },
+  });
+  const result = await readBoundCollection(doc, selected, { transport });
+  expect(result.errors).toEqual([]);
+  expect(calls).toEqual([
+    'https://api.github.com/orgs/example-org',
+    'https://api.github.com/orgs/example-org/repos?type=all&per_page=100',
+  ]);
+  expect(result.collections[0]?.collection.idField).toBe('id');
+  const issueChildren = relatedCollectionReads(doc, {
+    resource: 'githubRepository',
+    record: repo(456),
+  });
+  expect(issueChildren).toContainEqual(
+    expect.objectContaining({
+      kind: 'direct',
+      collection: 'repositoryIssues',
+      bound: expect.objectContaining({ path: '/repositories/456/issues' }),
+    }),
+  );
+});
+
+it('resolves a public owner/name entrypoint into one numeric bound Issues identity before reading the list', async () => {
+  const configured = structuredClone(document);
+  // The real published canonical-paths overlay supplies this operationId.
+  configured.paths['/repositories/{repository_id}/issues']!.get!.operationId =
+    'issues-list-for-repo-by-repository-id';
+  const doc = prepareDocument(
+    configured as unknown as Record<string, unknown>,
+    [navigationOverlay],
+  );
+  const description = describeCollections(doc).find(
+    (c) => c.name === 'repositoryIssues',
+  )!;
+  expect(description.allowsAnonymous).toBe(true);
+  const entrypoint = description.entrypoints.find(
+    (entry) => entry.sourcePath === '/repos/{owner}/{repo}',
+  )!;
+  expect(entrypoint.inputs.map((input) => input.name)).toEqual([
+    'owner',
+    'repo',
+  ]);
+  expect(entrypoint.allowsAnonymous).toBe(true);
+  const nav = bindCollectionNavigation(doc, {
+    collection: 'repositoryIssues',
+    sourcePath: entrypoint.sourcePath,
+    context: { owner: 'example', repo: 'project' },
+  });
+  const calls: string[] = [];
+  const transport: Transport = async (request) => {
+    expect(
+      validateCollectionEntryRead(doc, request, { publicOnly: true }),
+    ).toBe(true);
+    calls.push(request.url.pathname);
+    return { status: 200, headers: {}, body: JSON.stringify(repo(456)) };
+  };
+  const bound = await resolveCollectionNavigation(doc, nav, { transport });
+  expect(calls).toEqual(['/repos/example/project']);
+  expect(bound).toMatchObject({
+    collection: 'repositoryIssues',
+    path: '/repositories/456/issues',
+    pathParams: { repository_id: '456' },
   });
 });

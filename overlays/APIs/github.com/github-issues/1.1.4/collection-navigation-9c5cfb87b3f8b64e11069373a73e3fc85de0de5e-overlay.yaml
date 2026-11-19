@@ -1,0 +1,320 @@
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/9c5cfb87b3f8b64e11069373a73e3fc85de0de5e/APIs/github.com/github-issues/1.1.4/openapi.yaml
+info:
+  title: GitHub collection navigation through declared references and response links
+  version: 1.0.0
+actions:
+- target: $.components
+  update:
+    crudResources:
+      githubOrganization:
+        references:
+          byLogin:
+            resource: githubOrganizationAddress
+            bindings:
+              org:
+                field: login
+        schema:
+          $ref: '#/components/schemas/catalogGithubOrganization'
+      githubOrganizationAddress:
+        description: A mutable transport address for an existing organization. Not
+          an enumerable entity or a separate stored parent. The canonical organization
+          identity remains its numeric id.
+        identity:
+          urlTemplate: /orgs/{org}
+          bindings:
+            org:
+              field: login
+      githubRepository:
+        collections:
+          organizationRepositories:
+            urlTemplate: /orgs/{org}/repos
+            listQuery:
+              type: all
+            envelope:
+              itemsField: ''
+      githubRepositoryAddress:
+        description: An owner/name transport address for public repository navigation;
+          not an enumerable entity or another stored repository.
+        identity:
+          urlTemplate: /repos/{owner}/{repo}
+          bindings:
+            owner:
+              field: owner.login
+            repo:
+              field: name
+      issue:
+        schema:
+          $ref: '#/components/schemas/issue'
+        identity:
+          urlTemplate: /repositories/{repository_id}/issues/{issue_number}
+          bindings:
+            issue_number:
+              field: number
+        description: A repository issue or pull request from the REST Issues API,
+          identified by its per-repository number. This collection includes both issues
+          and pull requests; pull_request marks the latter.
+        collections:
+          repositoryIssues:
+            description: Issues and pull requests for one repository, including open
+              and closed rows.
+      issueComment:
+        schema:
+          $ref: '#/components/schemas/issue-comment'
+        identity:
+          urlTemplate: /repositories/{repository_id}/issues/comments/{comment_id}
+          bindings:
+            comment_id:
+              field: id
+        collections:
+          issueComments:
+            urlTemplate: /repositories/{repository_id}/issues/{issue_number}/comments
+            envelope:
+              itemsField: ''
+    schemas:
+      catalogGithubOrganization:
+        type: object
+        title: Organizations
+        description: An organization returned by GitHub organization reads. Its numeric
+          id is the canonical identity; login is its current transport address.
+        required:
+        - id
+        - login
+        properties:
+          id:
+            type: integer
+            format: int64
+            title: ID
+          login:
+            type: string
+            title: Organization
+          avatar_url:
+            type: string
+            format: uri
+            title: Avatar
+          description:
+            type: string
+            nullable: true
+            title: Description
+      issue:
+        title: Issues and pull requests
+        description: A repository issue or pull request returned by GitHub's REST
+          Issues API. A present pull_request object distinguishes a pull request;
+          this collection includes both kinds without filtering.
+        properties:
+          pull_request:
+            type: object
+            title: Pull request
+            description: Present when this Issues API row represents a pull request.
+              Absent for an ordinary issue.
+            properties:
+              url:
+                type: string
+                format: uri
+              html_url:
+                type: string
+                format: uri
+              diff_url:
+                type: string
+                format: uri
+              patch_url:
+                type: string
+                format: uri
+- target: $.paths
+  update:
+    /orgs/{org}:
+      get:
+        operationId: orgs-get-for-collection-navigation
+        summary: Get an organization by its current login
+        security:
+        - githubOAuth:
+          - read:org
+        - {}
+        parameters:
+        - &id001
+          name: org
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Organization login; mutable transport address, not its numeric
+            identity.
+        x-crud:
+          action: read
+          resource: githubOrganizationAddress
+        responses:
+          '200':
+            description: An organization, including its current login.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/catalogGithubOrganization'
+            links:
+              repositories:
+                operationId: repos-list-for-org
+                parameters:
+                  org: $response.body#/login
+                description: List repositories using the organization login returned
+                  by this actual response.
+    /orgs/{org}/repos:
+      get:
+        operationId: repos-list-for-org
+        summary: List organization repositories
+        security:
+        - githubOAuth:
+          - repo
+        - {}
+        parameters:
+        - *id001
+        - name: per_page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 30
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum:
+            - all
+            - public
+            - private
+            - forks
+            - sources
+            - member
+            default: all
+        x-crud:
+          action: list
+          resource: githubRepository
+          collection: organizationRepositories
+        x-pagination:
+        - scheme: builtinGithubNextLink
+        responses:
+          '200':
+            description: A page of repositories visible to the credentials for this
+              organization.
+            headers:
+              Link:
+                schema:
+                  type: string
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/builtinGithubRepository'
+    /repos/{owner}/{repo}:
+      get:
+        operationId: repos-get-for-collection-navigation
+        summary: Get a repository by owner and name
+        security:
+        - githubOAuth:
+          - repo
+        - {}
+        parameters:
+        - name: owner
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Repository owner
+        - name: repo
+          in: path
+          required: true
+          schema:
+            type: string
+            title: Repository name
+        x-crud:
+          action: read
+          resource: githubRepositoryAddress
+        responses:
+          '200':
+            description: The repository, including its stable numeric id.
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/builtinGithubRepository'
+            links:
+              issues:
+                operationId: issues-list-for-repo-by-repository-id
+                parameters:
+                  repository_id: $response.body#/id
+    /repos/{owner}/{repo}/issues:
+      get:
+        security:
+        - githubOAuth:
+          - repo
+        - {}
+    /repos/{owner}/{repo}/issues/{issue_number}:
+      get:
+        security:
+        - githubOAuth:
+          - repo
+        - {}
+    /repos/{owner}/{repo}/issues/{issue_number}/comments:
+      get:
+        security:
+        - githubOAuth:
+          - repo
+        - {}
+    /repos/{owner}/{repo}/issues/comments/{comment_id}:
+      get:
+        security:
+        - githubOAuth:
+          - repo
+        - {}
+    /repositories/{repository_id}/issues:
+      get:
+        security:
+        - githubOAuth:
+          - repo
+        - {}
+        summary: List issues and pull requests for a repository
+    /repositories/{repository_id}/issues/{issue_number}:
+      get:
+        security:
+        - githubOAuth:
+          - repo
+        - {}
+        x-crud:
+          action: read
+          resource: issue
+    /repositories/{repository_id}/issues/{issue_number}/comments:
+      get:
+        security:
+        - githubOAuth:
+          - repo
+        - {}
+        x-crud:
+          action: list
+          resource: issueComment
+          collection: issueComments
+        x-pagination:
+        - scheme: builtinGithubNextLink
+    /repositories/{repository_id}/issues/comments/{comment_id}:
+      get:
+        security:
+        - githubOAuth:
+          - repo
+        - {}
+        x-crud:
+          action: read
+          resource: issueComment
+    /user/orgs:
+      get:
+        responses:
+          '200':
+            content:
+              application/json:
+                schema:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/catalogGithubOrganization'

@@ -60,6 +60,14 @@ function scalarType(schema: SchemaObject | undefined): string | undefined {
     : undefined;
 }
 
+/** Whether a field may represent JSON null (OAS3.0 or JSON Schema typing). */
+export function nullableSchema(schema: SchemaObject | undefined): boolean {
+  return (
+    schema?.['nullable'] === true ||
+    (Array.isArray(schema?.type) && schema.type.includes('null'))
+  );
+}
+
 export function datatypeOf(
   schema: SchemaObject | undefined,
 ): Datatype | undefined {
@@ -178,9 +186,10 @@ export function deriveOntology(document: OpenApiDocument): Ontology {
         (terms[index] as Term).datatype = DATATYPES.json;
       }
 
-      (required.has(field) ? requires : recommends).push(
-        (terms[index] as Term).path,
-      );
+      (required.has(field) && !nullableSchema(fieldSchema)
+        ? requires
+        : recommends
+      ).push((terms[index] as Term).path);
     }
 
     terms.push({

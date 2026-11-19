@@ -2251,6 +2251,18 @@ class or lens, and maps no record.
 
 Not verified against a real provider: no overlay declares `x-produces` yet.
 
+## Catalog principal and collection navigation
+
+The browser and Node entrypoints expose metadata-driven principal discovery,
+individual bound collection reads and stored child-navigation descriptors.
+`describeCollections` includes resolved schemas, input and presentation metadata;
+`projectReadRecord` shares `readPlatform`'s typed projection with raw-snapshot
+consumers. No provider names, credential acquisition or host UI are embedded in
+these helpers. See [API contract and supported standards](docs/catalog-navigation-api.md)
+for the interfaces, identity type/scope rules, request validators, and the
+reference/address/actual-response Link chain. Materializing a descriptor makes
+no request; the host chooses when an explicit Sync resolves and reads it.
+
 ## Changelog
 
 - **0.28.0**: Selected collection reads, catalog defaults and scoped daemon connections.
