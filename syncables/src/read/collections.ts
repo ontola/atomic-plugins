@@ -87,6 +87,12 @@ export interface CollectionReadOptions {
     collection: ReadCollection,
     path: Record<string, string>,
   ) => WindowRange | undefined;
+  /** Optional canonical identity for duplicate/window detection; defaults to the legacy item id. */
+  recordIdentity?: (
+    value: Record<string, unknown>,
+    collection: ReadCollection,
+    path: Record<string, string>,
+  ) => string;
   /** Called per accepted record, before it is added to its collection. */
   onRecord?: (
     value: Record<string, unknown>,
@@ -418,6 +424,9 @@ export async function readCollections(
               });
             }
           }
+          const recordIdentity = (value: Record<string, unknown>): string =>
+            options.recordIdentity?.(value, collection, path) ??
+            asText(value[collection.idField]);
           const outcome: WalkOutcome = { complete: true };
           for await (const page of walkPages({
             document: doc,
@@ -435,7 +444,7 @@ export async function readCollections(
             ...(collection.emptyWhenAbsent ? { emptyWhenAbsent: true } : {}),
             ...(range ? { range } : {}),
             ...(windowValue ? { windowValue } : {}),
-            identity: (value) => asText(value[collection.idField]),
+            identity: recordIdentity,
             outcome,
           })) {
             if (options.probe) throw new ProbeDone();
@@ -444,7 +453,7 @@ export async function readCollections(
               const key = JSON.stringify([
                 collection.resource,
                 collection.contextParams.map((p) => path[p]),
-                id,
+                recordIdentity(value),
               ]);
               // A list tombstone reports a deletion and is not a member
               // (§4.5); one without an identity names no object. Its

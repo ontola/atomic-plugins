@@ -280,3 +280,30 @@ export type {
 export { projectReadRecord } from './read/read.js';
 export type { ProjectReadRecordOptions } from './read/read.js';
 export type { ReadCollection } from './read/model.js';
+
+export {
+  describeEntityTypes,
+  resolveEntityIdentity,
+  parseReadSelection,
+  readSelectionKey,
+  compileReadSelection,
+  projectEntityObservation,
+  readSelection,
+} from './read/flat-selection.js';
+export type {
+  IdentityValue,
+  TypedReadContext,
+  EntityIdentity,
+  EntityTypeDescription,
+  OriginRecord,
+  RelationshipSelector,
+  ReadSelection,
+  FieldEvidence,
+  ReadProvenance,
+  EntityObservation,
+  SelectionPartition,
+  SelectionReadResult,
+  CompileReadSelectionOptions,
+  CompiledReadSelection,
+  ReadSelectionOptions,
+} from './read/flat-selection.js';
