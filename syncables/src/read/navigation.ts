@@ -423,6 +423,65 @@ function relationships(
   }
   return result;
 }
+function presentation(
+  flat: SchemaObject,
+  fallback: string,
+  datatypes: Map<string, Datatype>,
+): CollectionDescription['presentation'] {
+  return {
+    title: typeof flat['title'] === 'string' ? flat['title'] : fallback,
+    columns: Object.entries(flat.properties ?? {}).flatMap(
+      ([field, property]) => {
+        const shortname = ontologyShortname(field);
+        const datatype = datatypes.get(shortname);
+        if (!datatype) return [];
+        const labels: Record<string, string> = {};
+        if (Array.isArray(property.oneOf))
+          for (const option of property.oneOf) {
+            if (
+              Array.isArray(option.enum) &&
+              option.enum.length === 1 &&
+              typeof option['title'] === 'string'
+            )
+              labels[String(option.enum[0])] = option['title'];
+          }
+        return [
+          {
+            field,
+            property: shortname,
+            label:
+              typeof property['title'] === 'string' ? property['title'] : field,
+            datatype,
+            ...(typeof property.format === 'string'
+              ? { format: property.format }
+              : {}),
+            ...(Object.keys(labels).length ? { labels } : {}),
+          },
+        ];
+      },
+    ),
+  };
+}
+
+/** Schema presentation for a declared reference-only target, without inventing an API read. */
+export function describeResourcePresentation(
+  document: OpenApiDocument,
+  resource: string,
+): CollectionDescription['presentation'] {
+  const raw = crudResourcesOf(document)[resource];
+  const flat = flattenSchema(
+    isRecord(raw) && isRecord(raw['schema'])
+      ? (raw['schema'] as SchemaObject)
+      : undefined,
+  );
+  const datatypes = new Map(
+    deriveOntology(document)
+      .terms.filter((term) => term.kind === 'property')
+      .map((term) => [term.shortname, term.datatype]),
+  );
+  return presentation(flat, resource, datatypes);
+}
+
 /** Full public collection metadata; no network or global first-provider guessing. */
 export function describeCollections(
   document: OpenApiDocument,
@@ -457,42 +516,7 @@ export function describeCollections(
           responses: {},
         },
       ),
-      presentation: {
-        title:
-          typeof flat['title'] === 'string' ? flat['title'] : collection.name,
-        columns: Object.entries(flat.properties ?? {}).flatMap(
-          ([field, property]) => {
-            const shortname = ontologyShortname(field);
-            const datatype = datatypes.get(shortname);
-            if (!datatype) return [];
-            const labels: Record<string, string> = {};
-            if (Array.isArray(property.oneOf))
-              for (const option of property.oneOf) {
-                if (
-                  Array.isArray(option.enum) &&
-                  option.enum.length === 1 &&
-                  typeof option['title'] === 'string'
-                )
-                  labels[String(option.enum[0])] = option['title'];
-              }
-            return [
-              {
-                field,
-                property: shortname,
-                label:
-                  typeof property['title'] === 'string'
-                    ? property['title']
-                    : field,
-                datatype,
-                ...(typeof property.format === 'string'
-                  ? { format: property.format }
-                  : {}),
-                ...(Object.keys(labels).length ? { labels } : {}),
-              },
-            ];
-          },
-        ),
-      },
+      presentation: presentation(flat, collection.name, datatypes),
       inputs: pathInputs(
         doc,
         collection.url,

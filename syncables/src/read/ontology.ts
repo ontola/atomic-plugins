@@ -156,9 +156,14 @@ export function deriveOntology(document: OpenApiDocument): Ontology {
     const requires: string[] = [];
     const recommends: string[] = [];
 
-    for (const [field, fieldSchema] of Object.entries(
-      schema.properties ?? {},
-    )) {
+    // A declared stored nested field has its own stable projection property.
+    // Its raw parent object and all ordinary API property datatypes stay intact.
+    const fields = new Map(Object.entries(schema.properties ?? {}));
+    const supplied = def['x-embeddedResources'];
+    if (isRecord(supplied))
+      for (const field of Object.keys(supplied))
+        if (!fields.has(field)) fields.set(field, {});
+    for (const [field, fieldSchema] of fields) {
       // No term can name it, and readPlatform keeps no value for it.
       if (ontologyShortname(field) === '') continue;
       const shortname = claim(propertyNames, field);

@@ -10,6 +10,11 @@ import {
   listOperation,
   type QuerySelection,
 } from './model.js';
+import {
+  describeResourceFields,
+  type ResourceFieldDescription,
+} from './resource-fields.js';
+import { resolveReference } from './references.js';
 import { fieldValue, validateIdentityTemplate } from './identity-path.js';
 import { resolveEffectiveScheme } from '../pagination/autodetect.js';
 import { operationAllowsAnonymous } from './navigation.js';
@@ -29,6 +34,7 @@ import { projectReadRecord, type ReadRecord } from './read.js';
 import {
   bindCollection,
   describeCollections,
+  describeResourcePresentation,
   relatedCollectionReads,
   resolveCollectionNavigation,
   readBoundCollection,
@@ -60,6 +66,7 @@ export interface EntityTypeDescription {
     bindings: Record<string, { field: string }>;
   };
   collections: CollectionDescription[];
+  resourceFields?: ResourceFieldDescription[];
   relationships: {
     resource: string;
     via: RelationshipSelector;
@@ -144,7 +151,7 @@ export interface CompiledReadSelection {
   observe(
     request: TransportRequest,
     response: TransportResponse,
-  ): Promise<void>;
+  ): Promise<EntityObservation[]>;
 }
 export interface ReadSelectionOptions extends CompileReadSelectionOptions {
   transport: Transport;
@@ -152,7 +159,7 @@ export interface ReadSelectionOptions extends CompileReadSelectionOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-function scalar(value: unknown): IdentityValue {
+export function scalar(value: unknown): IdentityValue {
   if (
     (typeof value === 'string' && !segmentProblem(value)) ||
     (typeof value === 'number' && Number.isSafeInteger(value))
@@ -174,13 +181,16 @@ function identityDefinition(
   if (
     !isRecord(identity) ||
     typeof identity['urlTemplate'] !== 'string' ||
-    !isRecord(identity['bindings'])
+    (identity['bindings'] !== undefined && !isRecord(identity['bindings']))
   )
     throw new Error(`Resource ${resource} has no canonical CRUD identity`);
   const template = identity['urlTemplate'];
   validateIdentityTemplate(template, resource, 'Entity');
   if (/[?#]/.test(template)) throw new Error('Entity identity must be a path');
-  return { template, bindings: identity['bindings'] };
+  return {
+    template,
+    bindings: (identity['bindings'] ?? {}) as Record<string, unknown>,
+  };
 }
 /** A context variable's declared path schema supplies its transport type. */
 function contextValue(
@@ -249,6 +259,13 @@ export function resolveEntityIdentity(
 ): EntityIdentity {
   return entityIdentity(resolveRefs(document), options);
 }
+/** Internal prepared-document path for repeated declared field resolution. */
+export function preparedEntityIdentity(
+  document: OpenApiDocument,
+  options: Parameters<typeof resolveEntityIdentity>[1],
+): EntityIdentity {
+  return entityIdentity(document, options);
+}
 function entityIdentity(
   doc: OpenApiDocument,
   options: {
@@ -256,8 +273,13 @@ function entityIdentity(
     record: Record<string, unknown>;
     context?: TypedReadContext;
   },
+  referenceBindings?: Record<string, unknown>,
 ): EntityIdentity {
-  const { template, bindings } = identityDefinition(doc, options.resource);
+  const { template, bindings: ownBindings } = identityDefinition(
+    doc,
+    options.resource,
+  );
+  const bindings = referenceBindings ?? ownBindings;
   const names = [...template.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]!);
   if (!names.length || new Set(names).size !== names.length)
     throw new Error('Invalid canonical identity variables');
@@ -266,7 +288,13 @@ function entityIdentity(
     if (binding !== undefined) {
       if (!isRecord(binding) || typeof binding['field'] !== 'string')
         throw new Error('Invalid canonical identity binding');
-      return [name, scalar(fieldValue(options.record, binding['field']))];
+      const value = fieldValue(options.record, binding['field']);
+      return [
+        name,
+        referenceBindings && ownBindings[name] === undefined
+          ? contextValue(doc, template, name, value, options.resource)
+          : scalar(value),
+      ];
     }
     return [
       name,
@@ -288,12 +316,55 @@ function entityIdentity(
     key: canonicalJson([options.resource, template, values]),
   };
 }
+/** Resolve explicit Reference Object bindings into the same typed identity as a full target record. */
+export function resolveReferenceEntityIdentity(
+  document: OpenApiDocument,
+  options: {
+    sourceResource: string;
+    reference: string;
+    record: Record<string, unknown>;
+    context?: TypedReadContext;
+  },
+): EntityIdentity | undefined {
+  const doc = document;
+  const context = options.context ?? {};
+  const target = resolveReference(
+    doc,
+    options.sourceResource,
+    options.reference,
+    options.record,
+    strings(context),
+  );
+  if (!target) return undefined;
+  const source = crudResourcesOf(doc)[options.sourceResource];
+  const refs = isRecord(source) ? source['references'] : undefined;
+  const ref = isRecord(refs) ? refs[options.reference] : undefined;
+  if (!isRecord(ref) || !isRecord(ref['bindings']))
+    throw new Error('Invalid declared Reference Object');
+  return entityIdentity(
+    doc,
+    { resource: target.resource, record: options.record, context },
+    ref['bindings'],
+  );
+}
+
 export function describeEntityTypes(
   document: OpenApiDocument,
 ): EntityTypeDescription[] {
   const doc = resolveRefs(document);
   const collections = describeCollections(doc);
-  return [...new Set(collections.map((c) => c.resource))].map((resource) => {
+  const resourceFields = new Map(
+    Object.keys(crudResourcesOf(doc)).map((resource) => [
+      resource,
+      describeResourceFields(doc, resource),
+    ]),
+  );
+  const referenced = [...resourceFields.values()].flatMap((fields) =>
+    fields.flatMap((field) => field.targets.map((target) => target.resource)),
+  );
+  return [
+    ...new Set([...collections.map((c) => c.resource), ...referenced]),
+  ].map((resource) => {
     const group = collections.filter((c) => c.resource === resource);
     const raw = crudResourcesOf(doc)[resource];
     const identity =
@@ -301,6 +372,9 @@ export function describeEntityTypes(
     return {
       resource,
       collections: group,
+      ...(resourceFields.get(resource)?.length
+        ? { resourceFields: resourceFields.get(resource)! }
+        : {}),
       relationships: collections.flatMap((c) =>
         c.relationships
           .filter((r) => r.parentResource === resource)
@@ -315,7 +389,8 @@ export function describeEntityTypes(
             },
           })),
       ),
-      presentation: group[0]!.presentation,
+      presentation:
+        group[0]?.presentation ?? describeResourcePresentation(doc, resource),
       ...(isRecord(raw) && isRecord(raw['schema'])
         ? { schema: structuredClone(raw['schema']) }
         : {}),
@@ -988,6 +1063,7 @@ export function compileReadSelection(
   }
   seed(selection);
   const journal = new Map<string, TransportResponse>();
+  const emitted = new Map<string, string>();
   let observing = false;
   let frontier = new Set<string>();
   function declaredQuery(
@@ -1029,7 +1105,7 @@ export function compileReadSelection(
     resource: selection.resource,
     selection: structuredClone(selection),
     allows,
-    async observe(request, response): Promise<void> {
+    async observe(request, response): Promise<EntityObservation[]> {
       if (observing || !allows(request))
         throw new Error('Response outside selected read authority');
       if (
@@ -1046,7 +1122,7 @@ export function compileReadSelection(
         journal.set(signature(request), structuredClone(response));
         const next: Scope[] = [];
         const nextFrontier = new Set<string>();
-        await execute(
+        const result = await execute(
           doc,
           selection,
           {
@@ -1068,6 +1144,23 @@ export function compileReadSelection(
         );
         scopes = next;
         frontier = nextFrontier;
+        const observed: EntityObservation[] = [];
+        for (const observation of result.observations) {
+          const key = canonicalJson([
+            observation.entity.key,
+            observation.representationKey,
+            observation.partitionKey,
+          ]);
+          const stamp = canonicalJson([
+            observation.raw,
+            observation.context,
+            observation.fields,
+          ]);
+          if (emitted.get(key) === stamp) continue;
+          emitted.set(key, stamp);
+          observed.push(structuredClone(observation));
+        }
+        return observed;
       } finally {
         observing = false;
       }
