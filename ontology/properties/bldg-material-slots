@@ -1,0 +1,11 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material-slots",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Property"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "bldg-material-slots",
+  "https://atomicdata.dev/properties/name": "Material slots",
+  "https://atomicdata.dev/properties/description": "Which Material goes on each named part of a model, as JSON {slot: Material subject}; a slot is the name of a material in the model (for example \"fabric\", \"legs\"). On a type it sets the default finish, on an element it overrides it, so one model gives many variants.",
+  "https://atomicdata.dev/properties/datatype": "https://atomicdata.dev/datatypes/json"
+}

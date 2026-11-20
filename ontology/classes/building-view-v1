@@ -1,0 +1,21 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/building-view-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "building-view-v1",
+  "https://atomicdata.dev/properties/name": "View",
+  "https://atomicdata.dev/properties/description": "A saved camera on the home, with the moment it shows, for renders and walkthroughs.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://atomicdata.dev/properties/name",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-home"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://atomicdata.dev/properties/description",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-camera",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-view-time",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-design-option",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-render"
+  ]
+}

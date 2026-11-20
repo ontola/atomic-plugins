@@ -1,0 +1,29 @@
+{
+  "@id": "https://ontola.github.io/atomic-plugins/ontology/classes/building-material-v1",
+  "https://atomicdata.dev/properties/isA": [
+    "https://atomicdata.dev/classes/Class"
+  ],
+  "https://atomicdata.dev/properties/parent": "https://ontola.github.io/atomic-plugins/ontology/v3",
+  "https://atomicdata.dev/properties/shortname": "building-material-v1",
+  "https://atomicdata.dev/properties/name": "Material",
+  "https://atomicdata.dev/properties/description": "A material as a designer and a builder both need it: how it looks (colour, roughness, texture, pattern) and what it is (category, product, thermal and mass properties). Types and elements link to it; it is shared by everything in the home made of it.",
+  "https://atomicdata.dev/properties/requires": [
+    "https://atomicdata.dev/properties/name"
+  ],
+  "https://atomicdata.dev/properties/recommends": [
+    "https://atomicdata.dev/properties/description",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-home",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-material-category",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-color",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-roughness",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-metalness",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-opacity",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-texture",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-pattern",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-module-size",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-joint-width",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-thermal-conductivity",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-density",
+    "https://ontola.github.io/atomic-plugins/ontology/properties/bldg-product"
+  ]
+}
