@@ -29,6 +29,7 @@ include = [
     "/SECURITY.md",
     "/DEVICE_AUTH.md",
     "/MANAGEMENT.md",
+    "/ADMIN_APPROVAL.md",
     "/LICENSE",
 ]
 

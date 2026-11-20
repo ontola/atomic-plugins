@@ -125,6 +125,8 @@ fn fill(template: &str, values: &[(&str, &str)]) -> String {
 pub enum ConnectKind<'a> {
     /// Continue to the provider's own authorization.
     OAuth,
+    /// The selected OAuth scheme declares guidance before leaving the proxy.
+    OAuthWithHelp { summary: &'a str, path: &'a str },
     /// Paste an API key here.
     ApiKey(ApiKeyHelp<'a>),
     /// Nothing: the platform's document requires no security.
@@ -182,7 +184,7 @@ pub fn render_platform_connect(
             api_key_field(platform, help),
             format!("Connect {}", escape(&platform_label(platform))),
         ),
-        ConnectKind::OAuth | ConnectKind::NoCredential => (
+        ConnectKind::OAuth | ConnectKind::OAuthWithHelp { .. } | ConnectKind::NoCredential => (
             String::new(),
             format!(
                 "Use {} to sync {} with this destination",
@@ -201,6 +203,14 @@ pub fn render_platform_connect(
     } else {
         "an operator it does not name".to_owned()
     };
+    let authorization_help = match kind {
+        ConnectKind::OAuthWithHelp { summary, path } => format!(
+            r#"<aside class="authorization-help"><p>{}</p><a href="{}" target="_blank" rel="noopener noreferrer">Work account needs approval? Get help for your admin</a><p class="secret-help">If approval takes time, return to your app and start a new connection afterward.</p></aside>"#,
+            escape(summary),
+            escape(path)
+        ),
+        _ => String::new(),
+    };
     let body = format!(
         r#"
         <div class="card">
@@ -208,6 +218,7 @@ pub fn render_platform_connect(
           <p class="operator">Integration proxy <strong>{host}</strong>, run by {run_by}.</p>
           <p>Destination: <span class="email">{destination}</span></p>
           <p class="secret-help">{what} The destination finishes connecting by signing with your Atomic key; it becomes the connection's owner.</p>
+          {authorization_help}
           <form method="post" action="/connect/authorize">
             <input type="hidden" name="csrf" value="{csrf}" />
             {api_key_field}
@@ -225,9 +236,83 @@ pub fn render_platform_connect(
     );
     page(
         operator,
-        &format!("Connect {}", platform_label(platform)),
+        &escape(&format!("Connect {}", platform_label(platform))),
         "",
         &body,
+    )
+}
+
+/// A stable help page with public registration details, never attempt state.
+pub fn render_authorization_help(
+    operator: &Operator,
+    platform: &str,
+    provider: &crate::providers::Provider,
+    client_id: &str,
+    origin: &str,
+) -> String {
+    let help = provider.authorization_help.as_ref().expect("declared help");
+    let label = platform_label(platform);
+    let mut details = String::new();
+    if let Some(admin) = &help.admin_approval {
+        let scopes = provider
+            .scopes
+            .iter()
+            .map(|name| {
+                let description = &provider.scope_descriptions[name];
+                format!("- {name}: {description}")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let request = format!(
+            "Please review access to {label} through {origin} for my work account.\n\nOAuth client ID: {client_id}\nRequested scopes:\n{scopes}\n\n{}\n\nProvider documentation: {}\n\nPlease confirm whether this OAuth app and these scopes are approved for my account. I will start a fresh connection from my app after your review.",
+            admin.description, admin.documentation_url
+        );
+        details = format!(
+            r#"
+          <h2>Ask your administrator</h2>
+          <p>Copy this request and share it with your organization's administrator. It names this app and its exact requested permissions. Nothing is sent automatically.</p>
+          <p><a href="{url}" target="_blank" rel="noopener noreferrer">Provider's approval instructions</a> (opens in a new tab)</p>
+          <label for="admin-request">Request to share with your administrator</label>
+          <textarea id="admin-request" rows="14" readonly spellcheck="false">{request}</textarea>
+          <button id="copy-admin-request" class="button" type="button" hidden>Copy request for admin</button>
+          <p id="copy-status" class="secret-help" role="status" aria-live="polite">Select and copy the text to share it. It contains public registration details only.</p>
+          <script>{script}</script>
+        "#,
+            url = escape(&admin.documentation_url),
+            request = escape(&request),
+            script = ADMIN_COPY_SCRIPT,
+        );
+    }
+    page(
+        operator,
+        &escape(&format!("Connect {label}: account approval")),
+        "",
+        &format!(
+            r#"
+        <main class="card help-card">
+          <h1>Connect {label}: account approval</h1>
+          <p>{summary}</p>
+          <p>Your organization decides which apps and permissions it permits. This page cannot check or grant approval.</p>
+          {details}
+          <h2>After approval</h2>
+          <p>Return to your app and choose Connect {label} again, then sign in with your work account. Start a new connection; an old sign-in link may have expired.</p>
+          <p>If the provider still blocks you, share its error message with your administrator. Keep passwords, verification codes and sign-in links private.</p>
+          <p class="secret-help">You can close this help page. Opening it has not created a connection or sent a request to your administrator.</p>
+        </main>"#,
+            label = escape(&label),
+            summary = escape(&help.summary),
+        ),
+    )
+}
+
+pub(crate) const ADMIN_COPY_SCRIPT: &str = r#"(function(){var b=document.getElementById('copy-admin-request'),t=document.getElementById('admin-request'),s=document.getElementById('copy-status');if(!b||!t||!s)return;b.hidden=false;b.addEventListener('click',async function(){try{if(!navigator.clipboard)throw new Error();await navigator.clipboard.writeText(t.value);s.textContent='Copied. Share this request with your administrator.';}catch(e){t.focus();t.select();s.textContent='Copy the selected text using your browser or keyboard.';}});})();"#;
+
+pub(crate) fn admin_copy_script_hash() -> String {
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use sha2::{Digest, Sha256};
+    format!(
+        "'sha256-{}'",
+        STANDARD.encode(Sha256::digest(ADMIN_COPY_SCRIPT.as_bytes()))
     )
 }
 
@@ -399,6 +484,14 @@ fn page(operator: &Operator, heading: &str, head: &str, body: &str) -> String {
     .problem {{ color: #b3261e; font-weight: 600; }}
     .operator {{ overflow-wrap: anywhere; }}
     .operator a {{ color: inherit; }}
+    .authorization-help {{ margin: 1.25rem 0; padding: 0.75rem; border: 1px solid #9aa0a6; border-radius: 8px; text-align: left; }}
+    .help-card {{ max-width: 38rem; text-align: left; margin: 1rem; min-width: 0; }}
+    .help-card h1 {{ font-size: 1.5rem; }}
+    .help-card h2 {{ font-size: 1.1rem; margin-top: 1.5rem; }}
+    .help-card p {{ line-height: 1.5; }}
+    .help-card textarea {{ box-sizing: border-box; width: 100%; margin-top: 0.5rem; padding: 0.75rem; font: inherit; font-size: 0.85rem; overflow-wrap: anywhere; }}
+    .help-card a, .authorization-help a {{ overflow-wrap: anywhere; color: #1967d2; }}
+    [hidden] {{ display: none !important; }}
     .button {{
       display: inline-block;
       margin-top: 1rem;
@@ -419,6 +512,7 @@ fn page(operator: &Operator, heading: &str, head: &str, body: &str) -> String {
       .email {{ color: #9aa0a6; }}
       .secret-help {{ color: #9aa0a6; }}
       .problem {{ color: #f2b8b5; }}
+      .help-card a, .authorization-help a {{ color: #8ab4f8; }}
     }}
   </style>
 </head>

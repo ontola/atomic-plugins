@@ -370,6 +370,7 @@ fn consent_page(
     problem: Option<&str>,
 ) -> Response {
     let request = &consent.request;
+    let help_path = format!("/oauth/{}/help", request.platform);
     let mut response = protected((
         jar,
         Html(templates::render_platform_connect(
@@ -378,7 +379,15 @@ fn consent_page(
             &destination_label(target),
             &consent.csrf,
             match scheme {
-                crate::providers::SecurityScheme::OAuth(_) => templates::ConnectKind::OAuth,
+                crate::providers::SecurityScheme::OAuth(provider) => {
+                    match &provider.authorization_help {
+                        Some(help) => templates::ConnectKind::OAuthWithHelp {
+                            summary: &help.summary,
+                            path: &help_path,
+                        },
+                        None => templates::ConnectKind::OAuth,
+                    }
+                }
                 crate::providers::SecurityScheme::ApiKey(scheme) => {
                     templates::ConnectKind::ApiKey(templates::ApiKeyHelp {
                         description: scheme.description.as_deref(),
