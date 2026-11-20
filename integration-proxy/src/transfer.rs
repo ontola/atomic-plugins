@@ -322,6 +322,7 @@ mod tests {
                         &old.id(),
                         &serde_json::to_vec(&crate::proxy::StoredCredential::OAuth {
                             provider: "github-issues".into(),
+                            client_id: None,
                             access_token: "token".into(),
                             refresh_token: None,
                             expires_at: None,

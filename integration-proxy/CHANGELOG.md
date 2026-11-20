@@ -5,6 +5,11 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
 ## Unreleased
 
+- OAuth connections and pending authorizations bind the client ID that issued
+  them. Operators can retain previous registrations and an explicit legacy
+  fallback while rotating the active client, without sending old refresh tokens
+  with new client credentials. See the README's OAuth client rotation notes.
+
 - Authorized expired-connection reads can distinguish missing renewal
   credentials, provider refusal and unavailable renewal via an optional fixed
   `reason`. HTTP 401 and `credential_refresh_failed` remain unchanged; provider

@@ -389,6 +389,7 @@ Nothing in the process reads `.env` files; export the variables, or load a
 | `WEBHOOK_INBOX_MAX_BYTES` | no | The deployment's inbox budget in bytes, payloads plus a stated per-row overhead. Defaults to `1073741824` (1 GiB); at least `268435456` (the per-owner budget). Read only with `WEBHOOKS_ENABLED=true`: with the inbox off it is ignored, even when invalid. Unreleased. |
 | `TRUST_FORWARDED_FOR` | no; `heroku` on Heroku | Where the key-check limit and the webhook per-network limit (`WEBHOOK_INGRESS_LIMIT_PER_NETWORK`) find the client address: `none` (default) uses the TCP peer and ignores `X-Forwarded-For`; `heroku` (synonym `rightmost`) uses only the right-most `X-Forwarded-For` entry, which Heroku's router (or one reverse proxy in front) appends, and never an entry to its left; when that entry is missing or not an address, one shared bucket. Set `heroku` only behind such a proxy: without one, a client writes that entry itself. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `OAUTH_<PLATFORM>_CLIENT_SECRET`, `OAUTH_<PLATFORM>_CLIENT_AUTH_METHOD` | per OAuth platform | See below. |
+| `OAUTH_<PLATFORM>_PREVIOUS_CLIENTS`, `OAUTH_<PLATFORM>_LEGACY_CLIENT_ID` | when rotating an OAuth registration | Retained registrations and the fixed fallback for old unbound connections and pending authorizations; see [OAuth client rotation](#oauth-client-rotation-unreleased). |
 
 OAuth credentials are provider-specific. For a catalog platform named
 `google-calendar`, configure `OAUTH_GOOGLE_CALENDAR_CLIENT_ID` and
@@ -874,6 +875,63 @@ require no scopes; unsupported authentication combinations fail closed.
 When that metadata is absent, the proxy retains `client_secret_post` for compatibility, except when a referenced token or refresh operation requires HTTP Basic authentication: it then uses `client_secret_basic`. Explicit overrides must still be supported by the metadata and token operations; an invalid override is an error, not a request to auto-select.
 
 For example, Notion advertises only `client_secret_basic`, so its `_CLIENT_AUTH_METHOD` setting can be omitted. For `["private_key_jwt", "none", "client_secret_basic"]`, the proxy skips the unimplemented JWT method and chooses `none`. Array order is this proxy's default-selection policy, not an assertion of provider preference or the client's registered method. Set the override when your client registration requires a different advertised method. Public clients use `none` and do not load or send a secret; confidential methods require `_CLIENT_SECRET`. Missing credentials cause an error and do not trigger selection of another method. Authorization uses S256 PKCE unless trusted metadata explicitly declares PKCE unsupported.
+
+### OAuth client rotation (unreleased)
+
+New OAuth credentials record the client ID used for their code exchange inside
+the credential's existing encrypted envelope. Pending authorizations bind the
+selected client ID in their existing sealed browser context too. The callback
+and later renewal use that registration, even when new connections now use a
+different active client. The proxy still opens credentials only after caller,
+access-policy, connection-key and platform checks; it stores no connection key.
+
+The existing `_CLIENT_ID`, `_CLIENT_SECRET` and `_CLIENT_AUTH_METHOD` settings
+select the active registration for new authorizations. To retain older clients,
+set `_PREVIOUS_CLIENTS` to a JSON array of registrations. Each entry has only
+`client_id`, optional `client_secret`, and required `client_auth_method`. For
+example, using placeholder values for a generic platform named `example`:
+
+```sh
+OAUTH_EXAMPLE_CLIENT_ID=new-client
+OAUTH_EXAMPLE_CLIENT_SECRET=replace-with-new-client-secret
+OAUTH_EXAMPLE_LEGACY_CLIENT_ID=old-client
+OAUTH_EXAMPLE_PREVIOUS_CLIENTS='[{"client_id":"old-client","client_secret":"replace-with-old-client-secret","client_auth_method":"client_secret_post"}]'
+```
+
+Each retained method must be compatible with the provider's current declared
+token operations and supported methods. A public client uses `none` and omits
+its secret; confidential methods require a nonempty secret. The registry permits
+at most 16 retained clients and 64 KiB of JSON. Unknown fields, duplicate IDs,
+an entry shadowing the active client, or invalid registration data make this
+provider unavailable with fixed errors that never include the input values.
+Keep this secret-bearing setting in private deployment configuration, outside
+the catalog, source control, URLs and logs.
+
+Connections and pending contexts created before client binding lack an ID.
+`_LEGACY_CLIENT_ID` selects their original registration and must name either the
+active or a retained client. A nonempty retained registry requires this explicit
+legacy fallback. With no rotation settings, old data retains the existing
+active-client behavior. After a successful legacy renewal, the proxy records
+the selected ID while resealing with the same request-supplied connection key.
+A present but unknown ID never falls back to another registration or sends a
+refresh token upstream.
+
+The legacy fallback assumes those unbound records used that one registration.
+If registrations were already mixed before binding existed, their issuers
+cannot be inferred from old records; owners reconnect when the original
+registration is unknown.
+
+Deploy this build to every instance before rotating registrations. Capture the
+old ID in `_LEGACY_CLIENT_ID` while it is still active, then atomically install
+the new active pair and retain the old pair/method in `_PREVIOUS_CLIENTS` before
+restarting. Keep the legacy fallback unchanged while any pre-binding rows or
+pending flows can remain, and retain old registration secrets while their
+connections need renewal. Older binaries ignore these binding semantics: a
+rollback after rotation must account for both old and newly issued connections,
+not merely replace the executable. This configuration does not change scopes,
+provider grants or stored ownership, and does not revoke or reconnect users.
+
+### Supported authentication metadata
 
 The proxy implements a bounded subset of
 **x-oauth-authentication-details**. It reads inline

@@ -46,6 +46,10 @@ pub(crate) enum StoredCredential {
     #[serde(rename = "oauth")]
     OAuth {
         provider: String,
+        /// Public registration identifier, protected by the same envelope as
+        /// the tokens. Absent in credentials created before client binding.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client_id: Option<String>,
         access_token: String,
         refresh_token: Option<String>,
         expires_at: Option<u64>,
@@ -177,6 +181,7 @@ async fn refresh_token(
 ) -> Result<(), RefreshFailure> {
     let StoredCredential::OAuth {
         provider,
+        client_id,
         access_token,
         refresh_token,
         expires_at,
@@ -186,8 +191,12 @@ async fn refresh_token(
         return Ok(());
     };
     let refresh_token_value = refresh_token.as_deref().ok_or(RefreshFailure::Refused)?;
-    let configured = crate::providers::Provider::configured(&state.catalog, provider)
-        .map_err(|_| RefreshFailure::Unavailable)?;
+    let configured = crate::providers::Provider::configured_for_client(
+        &state.catalog,
+        provider,
+        client_id.as_deref(),
+    )
+    .map_err(|_| RefreshFailure::Unavailable)?;
     #[cfg(test)]
     let configured = {
         let mut configured = configured;
@@ -232,6 +241,7 @@ async fn refresh_token(
         .await
         .map_err(|_| RefreshFailure::Unavailable)?;
     *access_token = token.access_token;
+    *client_id = Some(configured.client_id);
     if token.refresh_token.is_some() {
         *refresh_token = token.refresh_token;
     }
@@ -1164,6 +1174,230 @@ fn upstream_request(
 mod tests {
     use super::*;
 
+    #[test]
+    fn legacy_oauth_credentials_remain_readable_and_binding_is_not_debugged() {
+        let original = serde_json::json!({"kind":"oauth","provider":"example","access_token":"fake-access","refresh_token":"fake-refresh","expires_at":0});
+        let mut credential: StoredCredential = serde_json::from_value(original.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&credential).unwrap(), original);
+        if let StoredCredential::OAuth { client_id, .. } = &mut credential {
+            assert!(client_id.is_none());
+            *client_id = Some("fake-client".into());
+        }
+        assert_eq!(
+            serde_json::to_value(&credential).unwrap()["client_id"],
+            "fake-client"
+        );
+        let debug = format!("{credential:?}");
+        for value in ["fake-client", "fake-access", "fake-refresh"] {
+            assert!(!debug.contains(value));
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs it"]
+    async fn postgres_oauth_refresh_stays_with_its_bound_or_legacy_registration() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let mut registration = crate::test_support::OAuthTestEnvironment::new();
+        registration.set("CLIENT_ID", "new-client");
+        registration.set("CLIENT_SECRET", "new-secret");
+        registration.set("LEGACY_CLIENT_ID", "old-client");
+        registration.set("PREVIOUS_CLIENTS", &json!([
+            {"client_id":"old-client","client_secret":"old-secret","client_auth_method":"client_secret_basic"},
+            {"client_id":"old-public-client","client_auth_method":"none"}
+        ]).to_string());
+        let requests = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let token_count = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = token_count.clone();
+        let upstream = axum::Router::new()
+            .route(
+                "/token",
+                axum::routing::post(move |headers: HeaderMap, body: Bytes| {
+                    let recorded = recorded.clone();
+                    let counted = counted.clone();
+                    async move {
+                        counted.fetch_add(1, Ordering::SeqCst);
+                        let form: std::collections::HashMap<_, _> =
+                            url::form_urlencoded::parse(&body).into_owned().collect();
+                        recorded.lock().await.push((
+                            headers
+                                .get(AUTHORIZATION)
+                                .and_then(|v| v.to_str().ok())
+                                .map(str::to_owned),
+                            form,
+                        ));
+                        axum::Json(json!({"access_token":"renewed-access","expires_in":3600}))
+                    }
+                }),
+            )
+            .route(
+                "/items",
+                axum::routing::get(|headers: HeaderMap| async move {
+                    assert_eq!(headers.get(AUTHORIZATION).unwrap(), "Bearer renewed-access");
+                    axum::Json(json!([{"id":"synthetic-item"}]))
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let security = security().await;
+        let owner = Agent::new(126);
+        let mut s = state(Some(security.clone()));
+        s.test_upstream = Some(url.clone());
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            &registration.platform,
+            json!({
+                "servers":[{"url":url}],"components":{"securitySchemes":{"oauth":{"type":"oauth2","flows":{"authorizationCode":{
+                    "authorizationUrl":"https://auth.example/authorize","tokenUrl":"https://auth.example/token","scopes":{"read":"Read"}
+                }}}}},"security":[{"oauth":["read"]}],"paths":{"/items":{"get":{}}}
+            }),
+            json!({}),
+        );
+        for (binding, expected) in [
+            (None, "old-client"),
+            (Some("old-client"), "old-client"),
+            (Some("new-client"), "new-client"),
+            (Some("old-public-client"), "old-public-client"),
+        ] {
+            let id = security
+                .create_connection(
+                    &registration.platform,
+                    &owner.id(),
+                    &serde_json::to_vec(&StoredCredential::OAuth {
+                        provider: registration.platform.clone(),
+                        client_id: binding.map(str::to_owned),
+                        access_token: "expired-access".into(),
+                        refresh_token: Some("original-refresh".into()),
+                        expires_at: Some(0),
+                    })
+                    .unwrap(),
+                )
+                .await
+                .unwrap();
+            let path = format!("/proxy/{id}/{}/items", registration.platform);
+            let wrong_key = format!(
+                "k1.{}",
+                base64::Engine::encode(
+                    &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+                    [99u8; 32]
+                )
+            );
+            for request in [
+                signed_request(&s, &Agent::new(127), "GET", &path, vec![]),
+                crate::test_support::signed_request_with_key(
+                    &s,
+                    &owner,
+                    "GET",
+                    &path,
+                    vec![],
+                    None,
+                ),
+                crate::test_support::signed_request_with_key(
+                    &s,
+                    &owner,
+                    "GET",
+                    &path,
+                    vec![],
+                    Some(&wrong_key),
+                ),
+            ] {
+                let before = token_count.load(Ordering::SeqCst);
+                let response = crate::router(s.clone()).oneshot(request).await.unwrap();
+                assert_ne!(response.status(), StatusCode::OK);
+                let body = body_json(response).await;
+                assert!(body.get("reason").is_none());
+                assert_eq!(token_count.load(Ordering::SeqCst), before);
+            }
+            let response = crate::router(s.clone())
+                .oneshot(signed_request(&s, &owner, "GET", &path, vec![]))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let (auth, form) = requests.lock().await.pop().unwrap();
+            assert_eq!(
+                form.get("refresh_token").map(String::as_str),
+                Some("original-refresh")
+            );
+            match expected {
+                "old-client" => {
+                    assert_eq!(
+                        auth,
+                        Some(format!(
+                            "Basic {}",
+                            base64::Engine::encode(
+                                &base64::engine::general_purpose::STANDARD,
+                                b"old-client:old-secret"
+                            )
+                        ))
+                    );
+                    assert!(!form.contains_key("client_id"));
+                    assert!(!form.contains_key("client_secret"));
+                }
+                "new-client" => {
+                    assert!(auth.is_none());
+                    assert_eq!(form.get("client_id").unwrap(), "new-client");
+                    assert_eq!(form.get("client_secret").unwrap(), "new-secret");
+                }
+                _ => {
+                    assert!(auth.is_none());
+                    assert_eq!(form.get("client_id").unwrap(), "old-public-client");
+                    assert!(!form.contains_key("client_secret"));
+                }
+            }
+            let record = security.load_connection(&id).await.unwrap().unwrap();
+            match stored_credential(&security, &record, &ConnectionKey::for_tests()).unwrap() {
+                StoredCredential::OAuth {
+                    client_id,
+                    refresh_token,
+                    ..
+                } => {
+                    assert_eq!(client_id.as_deref(), Some(expected));
+                    assert_eq!(refresh_token.as_deref(), Some("original-refresh"));
+                }
+                _ => panic!("expected OAuth credential"),
+            }
+        }
+        let before = token_count.load(Ordering::SeqCst);
+        let id = security
+            .create_connection(
+                &registration.platform,
+                &owner.id(),
+                &serde_json::to_vec(&StoredCredential::OAuth {
+                    provider: registration.platform.clone(),
+                    client_id: Some("unknown-client".into()),
+                    access_token: "expired-access".into(),
+                    refresh_token: Some("original-refresh".into()),
+                    expires_at: Some(0),
+                })
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+        let response = crate::router(s.clone())
+            .oneshot(signed_request(
+                &s,
+                &owner,
+                "GET",
+                &format!("/proxy/{id}/{}/items", registration.platform),
+                vec![],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = body_json(response).await;
+        assert_eq!(body["reason"], "unavailable");
+        for marker in [
+            "unknown-client",
+            "original-refresh",
+            "new-secret",
+            "old-secret",
+        ] {
+            assert!(!body.to_string().contains(marker));
+        }
+        assert_eq!(token_count.load(Ordering::SeqCst), before);
+        server.abort();
+    }
+
     /// An OAuth connection on a stand-in provider: `/items` answers 200
     /// only for `Bearer new-token`; the token endpoint answers from
     /// `token_answers` in turn (then 200 with `new-token`). When the
@@ -1185,6 +1419,7 @@ mod tests {
         let security = security().await;
         let credential = serde_json::to_vec(&StoredCredential::OAuth {
             provider: "github-issues".into(),
+            client_id: None,
             access_token: "old-token".into(),
             refresh_token: Some("a-refresh-token".into()),
             expires_at,
@@ -1308,6 +1543,7 @@ mod tests {
                         &owner.id(),
                         &serde_json::to_vec(&StoredCredential::OAuth {
                             provider: "github-issues".into(),
+                            client_id: None,
                             access_token: "expired-access".into(),
                             refresh_token: None,
                             expires_at: Some(0),
@@ -1391,6 +1627,7 @@ mod tests {
         *store_on_old.lock().await = Some(
             serde_json::to_vec(&StoredCredential::OAuth {
                 provider: "github-issues".into(),
+                client_id: None,
                 access_token: "new-token".into(),
                 refresh_token: Some("a-refresh-token".into()),
                 expires_at: Some(far),
@@ -2050,6 +2287,7 @@ mod tests {
             },
             StoredCredential::OAuth {
                 provider: "service".into(),
+                client_id: None,
                 access_token: "pat-secret".into(),
                 refresh_token: Some("user-secret".into()),
                 expires_at: None,
@@ -2744,6 +2982,7 @@ mod tests {
         };
         let user = connect(StoredCredential::OAuth {
             provider: "mixed".into(),
+            client_id: None,
             access_token: "user-token".into(),
             refresh_token: None,
             expires_at: None,
@@ -3583,6 +3822,7 @@ mod tests {
         state.test_upstream = Some(format!("http://{address}"));
         let mut credential = StoredCredential::OAuth {
             provider: "github-issues".into(),
+            client_id: None,
             access_token: "expired-access".into(),
             refresh_token: None,
             expires_at: Some(0),
@@ -3671,6 +3911,7 @@ mod tests {
         let owner = Agent::new(47);
         let credential = serde_json::to_vec(&StoredCredential::OAuth {
             provider: "github-issues".into(),
+            client_id: None,
             access_token: "stale-token".into(),
             refresh_token: Some("a-refresh-token".into()),
             expires_at: Some(0),
