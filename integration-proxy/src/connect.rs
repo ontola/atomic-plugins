@@ -370,7 +370,7 @@ fn consent_page(
     problem: Option<&str>,
 ) -> Response {
     let request = &consent.request;
-    let help_path = format!("/oauth/help/{}", request.platform);
+    let help_path = format!("/oauth/{}/help", request.platform);
     let mut response = protected((
         jar,
         Html(templates::render_platform_connect(

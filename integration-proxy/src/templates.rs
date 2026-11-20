@@ -270,7 +270,7 @@ pub fn render_authorization_help(
         details = format!(
             r#"
           <h2>Ask your administrator</h2>
-          <p>{description}</p>
+          <p>Copy this request and share it with your organization's administrator. It names this app and its exact requested permissions. Nothing is sent automatically.</p>
           <p><a href="{url}" target="_blank" rel="noopener noreferrer">Provider's approval instructions</a> (opens in a new tab)</p>
           <label for="admin-request">Request to share with your administrator</label>
           <textarea id="admin-request" rows="14" readonly spellcheck="false">{request}</textarea>
@@ -278,7 +278,6 @@ pub fn render_authorization_help(
           <p id="copy-status" class="secret-help" role="status" aria-live="polite">Select and copy the text to share it. It contains public registration details only.</p>
           <script>{script}</script>
         "#,
-            description = escape(&admin.description),
             url = escape(&admin.documentation_url),
             request = escape(&request),
             script = ADMIN_COPY_SCRIPT,

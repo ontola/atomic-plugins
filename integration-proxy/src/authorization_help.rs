@@ -111,7 +111,7 @@ mod tests {
             .expect("fixture OAuth credentials");
         let response = get(
             state,
-            "/oauth/help/github-issues?state=attempt-private&code=secret-code&email=person-private",
+            "/oauth/github-issues/help?state=attempt-private&code=secret-code&email=person-private",
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -172,7 +172,7 @@ mod tests {
         .unwrap();
         assert!(html.contains("Work accounts may need approval &lt;before&gt; connecting."));
         assert!(html.contains(
-            "href=\"/oauth/help/github-issues\" target=\"_blank\" rel=\"noopener noreferrer\""
+            "href=\"/oauth/github-issues/help\" target=\"_blank\" rel=\"noopener noreferrer\""
         ));
         assert!(!html.contains("provider.example/authorize"));
         assert!(html.contains("action=\"/connect/authorize\""));
@@ -181,14 +181,28 @@ mod tests {
     #[tokio::test]
     async fn unavailable_or_undeclared_help_is_not_found() {
         for (state, uri) in [
-            (state(), "/oauth/help/missing"),
+            (state(), "/oauth/missing/help"),
             (
                 crate::test_support::state(None),
-                "/oauth/help/github-issues",
+                "/oauth/github-issues/help",
             ),
         ] {
             assert_eq!(get(state, uri).await.status(), StatusCode::NOT_FOUND);
         }
+    }
+
+    #[tokio::test]
+    async fn a_provider_named_help_keeps_its_oauth_callback_route() {
+        let mut state = crate::test_support::state(None);
+        state.catalog = crate::catalog::Catalog::for_test("help");
+        let response = get(
+            state,
+            "/oauth/help/callback?error=access_denied&state=unused",
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = to_bytes(response.into_body(), 1024).await.unwrap();
+        assert_eq!(&body[..], b"OAuth request could not be completed");
     }
 
     #[test]

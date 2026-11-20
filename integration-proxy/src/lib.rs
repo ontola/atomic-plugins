@@ -465,7 +465,7 @@ fn router(state: AppState) -> Router {
             axum::routing::any(proxy::forward),
         )
         .route("/oauth/:provider/callback", get(oauth::callback))
-        .route("/oauth/help/:provider", get(authorization_help::page))
+        .route("/oauth/:provider/help", get(authorization_help::page))
         .route("/catalog", get(catalog::list))
         .route("/catalog/apps", get(catalog::apps))
         .route("/catalog/:file", get(catalog::document))

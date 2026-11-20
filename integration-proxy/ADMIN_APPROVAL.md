@@ -17,14 +17,15 @@ x-oauth-authorization-help:
 `summary` is required, nonempty plain text. `adminApproval` is optional; when
 present, both its nonempty plain-text `description` and a credential-free
 HTTPS `documentationUrl` without a fragment are required. Unknown fields and
-invalid declarations fail catalog loading. Author provider-specific text in an
+invalid declarations are refused when resolving the selected OAuth scheme.
+Author provider-specific text in an
 immutable overlay, never in the proxy runtime. This is a presentation extension:
 it does not grant permissions, alter scopes or make approval mandatory for every
 account. It belongs on the selected OAuth scheme, including when selected by an
 authentication profile.
 
 The connect page shows the summary and a help link **before** starting OAuth.
-`GET /oauth/help/{provider}` is a public, reusable page: it needs no pending
+`GET /oauth/{provider}/help` is a public, reusable page: it needs no pending
 connection, cookie or query string. For configured providers with admin help it
 includes a copyable request containing the public client ID, proxy origin,
 exact requested scopes and their descriptions, and the declared instructions

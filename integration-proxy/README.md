@@ -124,7 +124,7 @@ which needs no storage but changes with the agent key (see
 ### Routes
 
 Work accounts that need administrator review can use the public
-`GET /oauth/help/{provider}` page linked before sign-in. It offers a copyable
+`GET /oauth/{provider}/help` page linked before sign-in. It offers a copyable
 request with public app details and exact scopes, and explains how to retry
 after approval. See [ADMIN_APPROVAL.md](ADMIN_APPROVAL.md) for the declarative
 provider metadata and privacy boundaries.
