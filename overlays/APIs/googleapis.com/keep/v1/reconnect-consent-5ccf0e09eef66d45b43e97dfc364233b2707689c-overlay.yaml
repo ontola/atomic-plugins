@@ -1,0 +1,31 @@
+# Offline access alone can omit a refresh token after previous authorization.
+# Each new sealed connection needs its own token; request fresh consent.
+# https://developers.google.com/identity/protocols/oauth2/web-server#offline
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/5ccf0e09eef66d45b43e97dfc364233b2707689c/APIs/googleapis.com/keep/v1/openapi.yaml
+info:
+  title: google-keep fresh consent for independently sealed connections
+  version: 1.0.0
+actions:
+- target: $.components.securitySchemes.googleKeepOAuth
+  update:
+    x-oauth-authentication-details:
+      authorizationCode:
+        profile:
+          parameters:
+          - parameter:
+              name: access_type
+              in: query
+              schema:
+                type: string
+                enum:
+                - offline
+            value: offline
+          - parameter:
+              name: prompt
+              in: query
+              schema:
+                type: string
+                enum:
+                - consent
+            value: consent

@@ -242,4 +242,39 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn explicit_consent_preserves_the_generated_oauth_parameters() {
+        let mut doc = document("required");
+        doc["paths"] = serde_json::json!({"/records":{"get":{}}});
+        doc.pointer_mut("/components/securitySchemes/auth/x-oauth-authentication-details/authorizationCode/profile/parameters")
+            .unwrap().as_array_mut().unwrap().push(serde_json::json!({
+                "parameter":{"name":"prompt","in":"query","schema":{"type":"string","enum":["consent"]}},
+                "value":"consent"
+            }));
+        let provider = Provider::from_document(&doc, None).unwrap();
+        let mut url = Url::parse("https://auth.example/authorize?client_id=fixture-client&redirect_uri=https%3A%2F%2Fproxy.example%2Foauth%2Fexample%2Fcallback&response_type=code&scope=read&state=fixture-state").unwrap();
+        let before: Vec<_> = url.query_pairs().into_owned().collect();
+        append_provider_authorization(&mut url, &provider, "fixture-challenge");
+        let pairs: Vec<_> = url.query_pairs().into_owned().collect();
+        for pair in before {
+            assert_eq!(pairs.iter().filter(|value| **value == pair).count(), 1);
+        }
+        for pair in [
+            ("access_type", "offline"),
+            ("prompt", "consent"),
+            ("code_challenge", "fixture-challenge"),
+            ("code_challenge_method", "S256"),
+        ] {
+            assert_eq!(
+                pairs
+                    .iter()
+                    .filter(|(name, value)| name == pair.0 && value == pair.1)
+                    .count(),
+                1
+            );
+        }
+        assert_eq!(pairs.len(), 9);
+        assert_eq!(provider.scopes, ["read"]);
+    }
 }

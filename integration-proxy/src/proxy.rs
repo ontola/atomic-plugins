@@ -3468,6 +3468,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn refresh_absence_fails_safely_and_omitted_rotation_keeps_the_previous_token() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let calls = std::sync::Arc::new(AtomicUsize::new(0));
+        let counter = calls.clone();
+        let upstream = axum::Router::new().route(
+            "/token",
+            axum::routing::post(move |body: Bytes| {
+                let counter = counter.clone();
+                async move {
+                    let form: std::collections::HashMap<_, _> =
+                        url::form_urlencoded::parse(&body).into_owned().collect();
+                    assert_eq!(
+                        form.get("grant_type").map(String::as_str),
+                        Some("refresh_token")
+                    );
+                    assert_eq!(
+                        form.get("refresh_token").map(String::as_str),
+                        Some("original-refresh")
+                    );
+                    counter.fetch_add(1, Ordering::SeqCst);
+                    axum::Json(
+                        serde_json::json!({"access_token":"renewed-access","expires_in":3600}),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, upstream).await.unwrap();
+        });
+        let mut state = crate::test_support::state(None);
+        state.test_upstream = Some(format!("http://{address}"));
+        let mut credential = StoredCredential::OAuth {
+            provider: "github-issues".into(),
+            access_token: "expired-access".into(),
+            refresh_token: None,
+            expires_at: Some(0),
+        };
+        assert!(matches!(
+            refresh_token(&state, &mut credential).await,
+            Err(RefreshFailure::Refused)
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        if let StoredCredential::OAuth { refresh_token, .. } = &mut credential {
+            *refresh_token = Some("original-refresh".into());
+        }
+        for expected in 1..=2 {
+            assert!(refresh_token(&state, &mut credential).await.is_ok());
+            assert_eq!(calls.load(Ordering::SeqCst), expected);
+            match &credential {
+                StoredCredential::OAuth {
+                    access_token,
+                    refresh_token,
+                    expires_at,
+                    ..
+                } => {
+                    assert_eq!(access_token, "renewed-access");
+                    assert_eq!(refresh_token.as_deref(), Some("original-refresh"));
+                    assert!(expires_at.unwrap() > crate::now_secs());
+                }
+                _ => panic!("expected an OAuth credential"),
+            }
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
     #[ignore = "requires TEST_DATABASE_URL and fixture OAuth credentials; CI runs it"]
     async fn postgres_concurrent_requests_refresh_an_expired_token_once() {
         use std::sync::atomic::{AtomicUsize, Ordering};
