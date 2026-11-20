@@ -38,6 +38,7 @@ import type { ListMethod, Transport } from './transport.js';
 import { readCollections, type CollectionReadOptions } from './collections.js';
 import { captureReadResponses, type StoreReadResponse } from './responses.js';
 import { declaredThrottling } from '../throttling/throttling.js';
+import type { FieldEvidence } from './flat-selection.js';
 import type { RuntimeDescriber, RuntimeMembers } from './runtime-schemas.js';
 import type { CollectionCoverage } from '../client/client.js';
 
@@ -204,6 +205,47 @@ function typedValue(value: unknown, datatype: string): unknown {
   )
     throw new Error('Invalid provider value for declared datatype');
   return value;
+}
+
+const partialProperties = new WeakMap<object, Map<string, string>>();
+
+/** Partial supplied objects carry evidence only for known fields, never full-record requirements. */
+export function projectPartialResourceFields(
+  document: OpenApiDocument,
+  resource: string,
+  record: Record<string, unknown>,
+): Record<string, FieldEvidence> {
+  const doc = resolved(document);
+  const definition = crudResourcesOf(doc)[resource];
+  if (!isRecord(definition) || !isRecord(definition['schema']))
+    throw new Error('Partial target has no declared object schema');
+  const schema = flattenSchema(definition['schema'] as SchemaObject);
+  let properties = partialProperties.get(doc);
+  if (!properties) {
+    properties = new Map(
+      deriveOntology(doc)
+        .terms.filter((term) => term.kind === 'property')
+        .map((term) => [term.shortname, term.datatype]),
+    );
+    partialProperties.set(doc, properties);
+  }
+  return Object.fromEntries(
+    Object.entries(schema.properties ?? {}).flatMap(
+      ([field, fieldSchema]): [string, FieldEvidence][] => {
+        const property = ontologyShortname(field),
+          datatype = properties.get(property);
+        if (!datatype) return [];
+        const raw = Object.hasOwn(record, field) ? record[field] : undefined;
+        if (raw === undefined) return [[property, { kind: 'absent' }]];
+        if (raw === null) return [[property, { kind: 'null' }]];
+        const declared = datatypeOf(fieldSchema);
+        if (declared && declared !== datatype) typedValue(raw, declared);
+        return [
+          [property, { kind: 'value', value: typedValue(raw, datatype) }],
+        ];
+      },
+    ),
+  );
 }
 
 export interface ProjectReadRecordOptions {

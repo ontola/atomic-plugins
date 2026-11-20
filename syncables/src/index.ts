@@ -307,3 +307,22 @@ export type {
   CompiledReadSelection,
   ReadSelectionOptions,
 } from './read/flat-selection.js';
+
+export {
+  embeddedResourcesOf,
+  resolveEmbeddedResource,
+} from './read/embedded-resources.js';
+export type {
+  EmbeddedResourceDeclaration,
+  EmbeddedResourceResolution,
+  ResolvedEmbeddedObject,
+} from './read/embedded-resources.js';
+export {
+  describeResourceFields,
+  resolveResourceField,
+} from './read/resource-fields.js';
+export type {
+  ResourceFieldDescription,
+  ResourceFieldResolution,
+  ResolvedResourceFieldObject,
+} from './read/resource-fields.js';

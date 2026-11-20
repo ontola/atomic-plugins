@@ -2263,8 +2263,99 @@ for the interfaces, identity type/scope rules, request validators, and the
 reference/address/actual-response Link chain. Materializing a descriptor makes
 no request; the host chooses when an explicit Sync resolves and reads it.
 
+Declared linked fields use the existing experimental
+[Embedded Resources extension](../openapi-extensions/spec/embedded-resources/README.md).
+`describeResourceFields(document, resource)` describes supplied objects,
+object arrays, explicit discriminator maps and scalar fields associated with
+CRUD Reference Objects. `resolveResourceField(document, descriptor, record,
+context)` returns typed canonical target identities and supplied partial field
+evidence. It makes no request and performs no recursive expansion. Absent,
+null, unresolved and resolved fields remain distinct; one invalid array item
+leaves the whole link field unresolved. Unknown discriminators have no guessed
+fallback. Ordinary objects without a declaration remain ordinary JSON.
+
+`describeEntityTypes` includes these descriptors and concrete reference-only
+target types without fabricating enumerable collections. Existing raw API
+projection and ontology datatypes remain compatible; an Atomic consumer chooses
+link properties and stores partial target resources according to its own scope,
+permissions and completeness rules. The compiled read guard's `observe` method
+returns only new or changed observations reconstructed from its actual response
+journal, allowing a host to materialize supplied records without accepting
+iframe-submitted evidence or widening the iframe's write root.
+
+The daemon's Atomic table projector also validates these descriptors. Its
+existing fixed-object links remain supported, including explicit object
+representations. Polymorphic and identity-only forms currently retain their
+inline JSON/scalar values with a bounded projection diagnostic in that projector;
+it does not guess a target or abort startup merely because the catalog uses a
+supported extended declaration. Browser consumers can use the complete shared
+resolver to materialize those links. Older consumers that only implement the
+strict 0.1 fixed-object form must upgrade before selecting this catalog.
+
 ## Changelog
 
+- **0.31.0**: Catalog-declared linked records and typed supplied summaries.
+  - **Fixed:** The daemon's Atomic table projector accepts validated extended
+    linked-record metadata without aborting the new catalog. Fixed supplied
+    objects retain normal linking; polymorphic and identity-only declarations
+    stay inline with a diagnostic until that projector supports their targets.
+  - **Behaviour change:** Typed record projection now rejects values that contradict declared scalar
+    types, unsafe integer identities and invalid calendar dates or timestamps.
+    This also applies to `readPlatform`, which uses the same pure projection as
+    `projectReadRecord`. Providers returning malformed fields leave the collection
+    incomplete instead of passing values with the wrong type to downstream stores.
+    Required provider fields must be present, and nonnullable required nulls fail
+    projection. Required nullable properties are recommended rather than required
+    in derived Atomic classes; nullable null remains omitted for managed-value
+    clearing.
+  - **Behaviour change:** The CLI and daemon now use `https://integrations.atomic.place` when no
+    issuer is configured. Explicit issuers, including loopback test servers,
+    are preserved. Existing LocalThought sessions and connection IDs are not
+    migrated: connect providers at IAP, update the configured issuer and
+    connection IDs, complete a fresh device login, and import an owner-issued
+    sealed connection grant before provider reads. Keychain issuer/session
+    binding prevents legacy credentials or grants from being reused at the
+    new origin.
+  - **Added:** Browser-safe catalog APIs discover and resolve authenticated principals while
+    preserving the subject's JSON type and client scope, describe collections,
+    inputs and field presentation, bind individual reads, and materialize child
+    navigation through declared CRUD identity/reference bindings and standard
+    OpenAPI Response Links. Source detail reads evaluate actual responses before
+    binding a child; direct identity bindings need no parent enumeration. Pure
+    request validators cover principal, navigation and bound list scopes.
+    `projectReadRecord` shares the reader's typed projection with consumers of
+    raw collection snapshots. Public source entrypoints bind explicit path inputs
+    through actual-response Links into canonical collection contexts before storage. Both library entrypoints export the APIs and types.
+  - **Added:** Added browser-safe canonical typed entity identity, grouped entity descriptions,
+    saved bound/related/fanout read selections, host-local response-proof permission
+    guards and shared selection execution. Observations retain explicit null versus
+    absent field evidence and partition completeness while reusing existing paging
+    and typed projection. Overlapping collection scopes can share one entity table
+    without putting mutable transport bindings into durable row identity.
+  - **Added:** Interactive `sync` and `send` can opt into `--connection-grant-stdin` for
+    an owner-issued sealed IAP grant bound to one selected remote connection
+    and a fresh device session. The bounded handoff stays in process memory,
+    never touches Keychain, and revokes the ephemeral session on completion or
+    failure. Send still requires fresh write consent; sync remains read-only.
+  - **Added:** Add a macOS storage connector consumed through ordinary OpenAPI collections,
+    PostgreSQL history and the durable edit outbox. It inventories iCloud Drive
+    and Photos metadata, stages content for explicit transfers into iCloud
+    Drive, and reports local writes separately from cloud upload status. Local
+    sources show their own access status in the data browser. Generic collection
+    publication budgets are configurable with bounded snapshotLimits settings.
+  - **Added:** Catalog-declared linked fields now resolve supplied objects, ordered object
+    arrays, discriminator-selected targets and explicit scalar CRUD references to
+    typed canonical identities and partial field evidence without additional
+    requests. Browser consumers can discover reference-only target types and
+    consume new observations from the compiled guard's actual response journal;
+    raw API projection and existing fixed-target daemon behavior remain compatible.
+  - **Fixed:** SyncD retries short gateway outages during connection discovery and paged
+    metadata reads. Each page retry uses the original request and counts
+    toward the read budget. Snapshots still require a complete read.
+  - **Fixed:** SyncD retries interrupted metadata reads after recognized network resets
+    and request timeouts, within the same limits as gateway retries. The
+    archive records each interruption before a retry. A proxy page has
+    enough time to receive the proxy's upstream timeout response.
 - **0.28.0**: Selected collection reads, catalog defaults and scoped daemon connections.
   - **Added:** Syncables can import a sealed device connection grant through stdin and keep it
     in macOS Keychain for its approved connection and current device session.

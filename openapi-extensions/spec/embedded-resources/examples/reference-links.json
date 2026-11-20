@@ -1,0 +1,220 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Invented typed record relationships",
+    "version": "1"
+  },
+  "paths": {},
+  "components": {
+    "schemas": {
+      "PersonShape": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "LabelShape": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "TeamShape": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "MilestoneShape": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "project_code": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "crudResources": {
+      "issue": {
+        "schema": {
+          "type": "object",
+          "properties": {
+            "labels": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/LabelShape"
+              }
+            },
+            "assignee_id": {
+              "type": "integer"
+            },
+            "milestone_id": {
+              "type": "integer"
+            },
+            "project_code": {
+              "type": "string"
+            },
+            "owner": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "example": {
+            "assignee_id": 7,
+            "milestone_id": 12,
+            "project_code": "p-9",
+            "owner": {
+              "type": "Team",
+              "id": 5,
+              "name": "Build"
+            },
+            "labels": [
+              {
+                "id": 9,
+                "name": "Urgent"
+              }
+            ]
+          }
+        },
+        "x-embeddedResources": {
+          "assignee_id": {
+            "representation": "identity",
+            "cardinality": "one",
+            "reference": "assignee"
+          },
+          "milestone_id": {
+            "representation": "identity",
+            "cardinality": "one",
+            "reference": "milestone"
+          },
+          "owner": {
+            "representation": "object",
+            "cardinality": "one",
+            "discriminator": {
+              "field": "type",
+              "mapping": {
+                "Person": "person",
+                "Team": "team"
+              }
+            }
+          },
+          "labels": {
+            "representation": "object",
+            "cardinality": "many",
+            "resource": "label"
+          }
+        },
+        "references": {
+          "assignee": {
+            "resource": "person",
+            "bindings": {
+              "personId": {
+                "field": "assignee_id"
+              }
+            }
+          },
+          "milestone": {
+            "resource": "milestone",
+            "bindings": {
+              "projectCode": {
+                "field": "project_code"
+              },
+              "milestoneId": {
+                "field": "milestone_id"
+              }
+            }
+          }
+        }
+      },
+      "person": {
+        "schema": {
+          "$ref": "#/components/schemas/PersonShape"
+        },
+        "identity": {
+          "urlTemplate": "/people/{personId}",
+          "bindings": {
+            "personId": {
+              "field": "id"
+            }
+          }
+        }
+      },
+      "label": {
+        "schema": {
+          "$ref": "#/components/schemas/LabelShape"
+        },
+        "identity": {
+          "urlTemplate": "/labels/{labelId}",
+          "bindings": {
+            "labelId": {
+              "field": "id"
+            }
+          }
+        }
+      },
+      "team": {
+        "schema": {
+          "$ref": "#/components/schemas/TeamShape"
+        },
+        "identity": {
+          "urlTemplate": "/teams/{teamId}",
+          "bindings": {
+            "teamId": {
+              "field": "id"
+            }
+          }
+        }
+      },
+      "milestone": {
+        "schema": {
+          "$ref": "#/components/schemas/MilestoneShape"
+        },
+        "identity": {
+          "urlTemplate": "/workspaces/{workspaceId}/projects/{projectCode}/milestones/{milestoneId}",
+          "bindings": {
+            "projectCode": {
+              "field": "project_code"
+            },
+            "milestoneId": {
+              "field": "id"
+            }
+          }
+        }
+      }
+    }
+  }
+}

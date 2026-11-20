@@ -11,6 +11,75 @@ def document():
 
 
 class MetadataTests(unittest.TestCase):
+    def test_all_worked_examples(self):
+        for path in (Path(__file__).parent / "examples").glob("*.json"):
+            with self.subTest(path=path.name):
+                validate(json.loads(path.read_text()))
+
+    def test_explicit_object_and_discriminated_targets(self):
+        doc = document()
+        entries = doc["components"]["crudResources"]["issue"]["x-embeddedResources"]
+        entries["user"] = {
+            "representation": "object", "cardinality": "one",
+            "discriminator": {"field": "kind", "mapping": {"Person": "person", "Label": "label"}},
+        }
+        entries["labels"]["representation"] = "object"
+        validate(doc)
+
+    def test_identity_reference_uses_source_bindings_and_composite_target(self):
+        doc = document()
+        source = doc["components"]["crudResources"]["issue"]
+        source["references"] = {"labelById": {
+            "resource": "label", "bindings": {"labelId": {"field": "label_id"}},
+        }}
+        source["x-embeddedResources"] = {"label_id": {
+            "representation": "identity", "cardinality": "one", "reference": "labelById",
+        }}
+        validate(doc)  # owner/repo are inherited context, never source guesses.
+        source["references"]["labelById"]["bindings"]["wrong"] = {"field": "id"}
+        with self.assertRaisesRegex(ValueError, "not an identity template variable"):
+            validate(doc)
+
+    def test_reference_requires_explicit_bindings_even_when_context_only(self):
+        doc = document()
+        source = doc["components"]["crudResources"]["issue"]
+        source["references"] = {"personRef": {"resource": "person", "bindings": {}}}
+        source["x-embeddedResources"] = {"person_id": {
+            "representation": "identity", "cardinality": "one", "reference": "personRef",
+        }}
+        validate(doc)
+        for bindings in [None, [], "id"]:
+            with self.subTest(bindings=bindings):
+                source["references"]["personRef"]["bindings"] = bindings
+                with self.assertRaisesRegex(ValueError, "bindings must be an object"):
+                    validate(doc)
+        del source["references"]["personRef"]["bindings"]
+        with self.assertRaisesRegex(ValueError, "bindings must be an object"):
+            validate(doc)
+
+    def test_new_variants_fail_closed_on_ambiguous_or_unsupported_metadata(self):
+        entries = [
+            {"representation": "guessed", "resource": "person", "cardinality": "one"},
+            {"representation": "identity", "reference": "missing", "cardinality": "one"},
+            {"representation": "identity", "reference": "personRef", "cardinality": "many"},
+            {"representation": "identity", "reference": "personRef", "resource": "person", "cardinality": "one"},
+            {"representation": "object", "reference": "personRef", "resource": "person", "cardinality": "one"},
+            {"resource": "person", "discriminator": {"field": "kind", "mapping": {"Person": "person"}}, "cardinality": "one"},
+            {"discriminator": {"field": "kind", "mapping": {}}, "cardinality": "one"},
+            {"discriminator": {"field": "kind..bad", "mapping": {"Person": "person"}}, "cardinality": "one"},
+            {"discriminator": {"field": "kind", "mapping": {"Person": "missing"}}, "cardinality": "one"},
+            {"discriminator": {"field": "kind", "mapping": {"": "person"}}, "cardinality": "one"},
+            {"discriminator": {"field": "kind", "mapping": {"Person": "person"}, "fallback": "person"}, "cardinality": "one"},
+        ]
+        for entry in entries:
+            with self.subTest(entry=entry):
+                doc = document()
+                source = doc["components"]["crudResources"]["issue"]
+                source["references"] = {"personRef": {"resource": "person", "bindings": {"personId": {"field": "user_id"}}}}
+                source["x-embeddedResources"] = {"user": entry}
+                with self.assertRaises(ValueError):
+                    validate(doc)
+
     def test_invented_document_and_empty_declaration(self):
         doc = document()
         validate(doc)

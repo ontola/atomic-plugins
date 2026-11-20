@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { loadOpenApiDocument } from '../../../src/openapi/load.js';
 import { fileURLToPath } from 'node:url';
 import {
@@ -233,6 +233,156 @@ function referenced(
   );
 }
 describe('explicit Atomic embedded resources', () => {
+  // Exact pinned OAD + ordered local overlays from catalog/2026-11-20-reference-links.json.
+  // Generated with overlays/tests/compose_catalog_platform.py; no provider data or requests.
+  async function githubSource(collection: string): Promise<PreparedCollection> {
+    const source = prepared(collection, 'audit', 'github');
+    source.document = await loadOpenApiDocument(
+      fileURLToPath(
+        new URL(
+          '../../fixtures/real-world/github-reference-links-2026-11-20.json',
+          import.meta.url,
+        ),
+      ),
+    );
+    source.documentHash = nodeHash(JSON.stringify(source.document));
+    source.source.bindings = { repository_id: '456', issue_number: '1' };
+    return source;
+  }
+
+  it.each(['User', 'Organization'])(
+    'keeps the actual GitHub catalog polymorphic %s owner inline with a diagnostic',
+    async (type) => {
+      const source = await githubSource('githubRepositories');
+      const owner = { id: 7, login: 'team', type, name: 'Supplied summary' };
+      const f = fixture([
+        {
+          prepared: source,
+          rows: [JSON.stringify({ id: 456, name: 'repo', owner })],
+        },
+      ]);
+      const fetch = vi.spyOn(globalThis, 'fetch');
+      try {
+        const result = await atomicTablesProjection(f.store, f.sources);
+        const row = projectionRows(result).find(
+          (entry) => JSON.parse(entry.key)[0] === 'row',
+        )!;
+        expect(fieldValue(result, row, 'Owner', 'json')).toEqual({
+          type: 'json',
+          value: owner,
+        });
+        expect(referenced(result, 'githubUser')).toEqual([]);
+        expect(referenced(result, 'githubOrganization')).toEqual([]);
+        const diagnostics = result.resources.flatMap(
+          (entry) =>
+            fieldValue(result, entry, 'Projection diagnostics', 'json')
+              ?.value ?? [],
+        );
+        expect(diagnostics).toEqual([
+          'owner: Atomic table linking does not support polymorphic object references; retained inline',
+        ]);
+        expect(fetch).not.toHaveBeenCalled();
+      } finally {
+        fetch.mockRestore();
+      }
+    },
+  );
+
+  it.each(['repositoryIssues', 'issueComments'])(
+    'links fixed authors from the actual GitHub catalog %s without provider requests',
+    async (collection) => {
+      const source = await githubSource(collection);
+      const f = fixture([
+        {
+          prepared: source,
+          rows: [
+            JSON.stringify({
+              id: 15,
+              number: 1,
+              user: { id: 7, login: 'alice' },
+            }),
+          ],
+        },
+      ]);
+      const fetch = vi.spyOn(globalThis, 'fetch');
+      try {
+        const result = await atomicTablesProjection(f.store, f.sources);
+        const target = referenced(result, 'githubUser');
+        expect(target).toHaveLength(1);
+        const row = projectionRows(result).find(
+          (entry) => JSON.parse(entry.key)[0] === 'row',
+        )!;
+        expect(fieldValue(result, row, 'User', 'atomicURL')).toEqual({
+          type: 'resource',
+          value: { local: target[0].key },
+        });
+        expect(fetch).not.toHaveBeenCalled();
+      } finally {
+        fetch.mockRestore();
+      }
+    },
+  );
+
+  it('rejects malformed modern metadata rather than treating it as an unsupported inline field', async () => {
+    const source = await githubSource('githubRepositories');
+    const resource = (
+      source.document.components!.crudResources as Record<
+        string,
+        Record<string, unknown>
+      >
+    ).githubRepository;
+    (
+      resource['x-embeddedResources'] as Record<string, Record<string, unknown>>
+    ).owner.resource = 'githubUser';
+    const f = fixture([{ prepared: source, rows: [] }]);
+    await expect(atomicTablesProjection(f.store, f.sources)).rejects.toThrow(
+      'cannot have a fixed target fallback',
+    );
+  });
+
+  it('validates identity-only references but retains their scalar values inline with bounded diagnostics', async () => {
+    const { source, options } = embeddingSource();
+    const update = options.projectionContracts![0].overlay.actions[0]
+      .update as Record<string, Record<string, unknown>>;
+    update.record.references = {
+      assignedUser: {
+        resource: 'user',
+        bindings: { username: { field: 'user_id' } },
+      },
+    };
+    update.record['x-embeddedResources'] = {
+      user_id: {
+        representation: 'identity',
+        cardinality: 'one',
+        reference: 'assignedUser',
+      },
+    };
+    const schema =
+      source.document.paths['/items'].get!.responses!['200'].content![
+        'application/json'
+      ].schema!.items!;
+    schema.properties!.user_id = { type: 'string' };
+    source.documentHash = nodeHash(JSON.stringify(source.document));
+    options.projectionContracts![0].sourceDocumentHash = source.documentHash;
+    const f = fixture([
+      { prepared: source, rows: ['{"id":1,"user_id":"alice"}'] },
+    ]);
+    const result = await atomicTablesProjection(f.store, f.sources, options);
+    expect(
+      fieldValue(result, projectionRows(result)[0], 'User id', 'string'),
+    ).toEqual({ type: 'string', value: 'alice' });
+    expect(referenced(result, 'user')).toEqual([]);
+    const diagnostics = result.resources.flatMap(
+      (entry) =>
+        fieldValue(result, entry, 'Projection diagnostics', 'json')?.value ??
+        [],
+    );
+    expect(diagnostics).toEqual([
+      'user_id: Atomic table linking does not support identity-only references; retained inline',
+    ]);
+    expect((diagnostics[0] as string).length).toBeLessThanOrEqual(500);
+  });
+
   it('deduplicates repeated targets, preserves reference occurrences and comments, and retains source row/table keys', async () => {
     const { source, options } = embeddingSource();
     const rows = [0, 1].map((id) =>

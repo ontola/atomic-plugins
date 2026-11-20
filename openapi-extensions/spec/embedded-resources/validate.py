@@ -1,4 +1,4 @@
-"""Validate experimental Embedded Resources 0.1.0-draft metadata; no requests.
+"""Validate experimental Embedded Resources 0.2.0-draft metadata; no requests.
 
 Runtime record values and persistence/merging policy are outside this validator.
 """
@@ -62,7 +62,17 @@ def _identity(identity, where):
     return errors
 
 
-def _declaration(document, resources, raw, where):
+def _target(document, resources, name, where):
+    target = resources.get(name) if isinstance(name, str) else None
+    if not isinstance(target, dict):
+        return [f"{where}.resource must name a declared CRUD resource"]
+    errors = []
+    if not _object_schema(document, target.get("schema")):
+        errors.append(f"{where}: {name}.schema must be a resolvable object schema")
+    return errors + _identity(target.get("identity"), f"{where}: {name}")
+
+
+def _declaration(document, resources, source, raw, where):
     if not isinstance(raw, dict):
         return [f"{where}: expected an object"]
     errors = []
@@ -79,18 +89,59 @@ def _declaration(document, resources, raw, where):
             errors.append(f"{at}: expected an object")
             continue
         for key in entry:
-            if key not in ("resource", "cardinality") and not key.startswith("x-"):
+            if key not in ("representation", "resource", "cardinality", "discriminator", "reference") and not (isinstance(key, str) and key.startswith("x-")):
                 errors.append(f"{at}.{key}: unknown field")
         if entry.get("cardinality") not in ("one", "many"):
             errors.append(f"{at}.cardinality must be one or many")
-        target_name = entry.get("resource")
-        target = resources.get(target_name) if isinstance(target_name, str) else None
-        if not isinstance(target, dict):
-            errors.append(f"{at}.resource must name a declared CRUD resource")
+        representation = entry.get("representation", "object")
+        if representation not in ("object", "identity"):
+            errors.append(f"{at}.representation must be object or identity")
             continue
-        if not _object_schema(document, target.get("schema")):
-            errors.append(f"{at}: {target_name}.schema must be a resolvable object schema")
-        errors += _identity(target.get("identity"), f"{at}: {target_name}")
+        if representation == "identity":
+            if entry.get("cardinality") != "one":
+                errors.append(f"{at}: identity representation supports cardinality one only")
+            if "resource" in entry or "discriminator" in entry:
+                errors.append(f"{at}: identity representation uses reference only")
+            references = source.get("references", {})
+            name = entry.get("reference")
+            reference = references.get(name) if isinstance(references, dict) and isinstance(name, str) else None
+            if not isinstance(reference, dict):
+                errors.append(f"{at}.reference must name a declared source CRUD reference")
+                continue
+            target_name = reference.get("resource")
+            errors += _target(document, resources, target_name, at)
+            target = resources.get(target_name) if isinstance(target_name, str) else None
+            identity = target.get("identity") if isinstance(target, dict) else None
+            if isinstance(identity, dict):
+                errors += _identity({"urlTemplate": identity.get("urlTemplate"),
+                                     "bindings": reference.get("bindings")}, f"{at}.reference {name}")
+            continue
+        if "reference" in entry:
+            errors.append(f"{at}: object representation cannot use reference")
+        if ("resource" in entry) == ("discriminator" in entry):
+            errors.append(f"{at}: object representation requires exactly one of resource or discriminator")
+            continue
+        if "resource" in entry:
+            errors += _target(document, resources, entry["resource"], at)
+            continue
+        discriminator = entry["discriminator"]
+        if not isinstance(discriminator, dict):
+            errors.append(f"{at}.discriminator must be an object")
+            continue
+        for key in discriminator:
+            if key not in ("field", "mapping") and not (isinstance(key, str) and key.startswith("x-")):
+                errors.append(f"{at}.discriminator.{key}: unknown field")
+        path = discriminator.get("field")
+        if not isinstance(path, str) or not DOT_PATH.fullmatch(path):
+            errors.append(f"{at}.discriminator.field: expected a dot-path")
+        mapping = discriminator.get("mapping")
+        if not isinstance(mapping, dict) or not mapping:
+            errors.append(f"{at}.discriminator.mapping must be a nonempty object")
+            continue
+        for variant, target in mapping.items():
+            if not isinstance(variant, str) or not variant:
+                errors.append(f"{at}.discriminator.mapping: variants must be nonempty strings")
+            errors += _target(document, resources, target, f"{at}.discriminator.mapping.{variant}")
     return errors
 
 
@@ -123,7 +174,7 @@ def validate(document):
                 continue
             allowed.add(id(resource))
             if FIELD in resource:
-                errors += _declaration(document, resources, resource[FIELD],
+                errors += _declaration(document, resources, resource, resource[FIELD],
                                        f"components.crudResources.{name}.{FIELD}")
     _misplaced(document, "", allowed, errors)
     if errors:

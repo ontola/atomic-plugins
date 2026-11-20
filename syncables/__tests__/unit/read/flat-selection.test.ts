@@ -591,3 +591,64 @@ describe('flat catalog selections', () => {
     expect(() => parseReadSelection(invalid)).toThrow(/identity/);
   });
 });
+
+describe('trusted response journal observations', () => {
+  it('returns only new accepted target observations, retains raw values and ignores forged projection metadata', async () => {
+    const doc = fixture(),
+      guard = compileReadSelection(doc, bound(doc, 'myWorkspaces'));
+    const raw = {
+      id: 42,
+      name: 'Actual provider value',
+      owner: { id: 7 },
+      projected: { values: { name: 'forged' } },
+    };
+    const observed = await guard.observe(
+      request('/me/workspaces'),
+      response([raw]),
+    );
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toMatchObject({
+      raw,
+      projected: { values: { name: 'Actual provider value' } },
+      entity: { resource: 'workspace' },
+    });
+    expect(
+      await guard.observe(request('/me/workspaces'), response([raw])),
+    ).toEqual([]);
+    expect(
+      await guard.observe(
+        request('/me/workspaces'),
+        response([{ ...raw, name: 'Changed' }]),
+      ),
+    ).toHaveLength(1);
+    await expect(
+      guard.observe(request('/me/accounts'), response([{ id: 8 }])),
+    ).rejects.toThrow('authority');
+  });
+});
+
+it('returns a journal page delta without re-emitting earlier roots or exposing mutable authority state', async () => {
+  const doc = fixture(),
+    guard = compileReadSelection(doc, bound(doc, 'myWorkspaces'));
+  const first = await guard.observe(request('/me/workspaces'), {
+    ...response([{ id: 42 }]),
+    headers: {
+      link: '<https://api.example.test/v2/me/workspaces?page=2>; rel="next"',
+    },
+  });
+  expect(first).toHaveLength(1);
+  first[0]!.raw.id = 999;
+  first[0]!.entity.values[0]![1] = 999;
+  const next = await guard.observe(
+    request('/me/workspaces?page=2'),
+    response([{ id: 43 }]),
+  );
+  expect(next.map((item) => item.raw.id)).toEqual([43]);
+  expect(next[0]!.entity.values).toEqual([['workspace_id', 43]]);
+  await expect(
+    guard.observe(
+      { ...request('/me/workspaces'), method: 'DELETE' },
+      response([{ id: 99 }]),
+    ),
+  ).rejects.toThrow('authority');
+});
