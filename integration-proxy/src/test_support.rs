@@ -168,6 +168,49 @@ pub fn unique_now_ms() -> u64 {
     crate::now_ms() - 60_000 + OFFSET.fetch_add(1, std::sync::atomic::Ordering::SeqCst) % 60_000
 }
 
+/// Synthetic OAuth registrations with a different environment prefix per
+/// fixture, so tests never rotate another test's or an operator's registration.
+pub struct OAuthTestEnvironment {
+    pub platform: String,
+    prefix: String,
+    previous: std::collections::BTreeMap<String, Option<std::ffi::OsString>>,
+}
+
+impl OAuthTestEnvironment {
+    pub fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let platform = format!(
+            "client-binding-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        Self {
+            prefix: crate::config::Config::provider_env_prefix(&platform).unwrap(),
+            platform,
+            previous: Default::default(),
+        }
+    }
+
+    pub fn set(&mut self, suffix: &str, value: &str) {
+        let name = format!("{}_{}", self.prefix, suffix);
+        self.previous
+            .entry(name.clone())
+            .or_insert_with(|| std::env::var_os(&name));
+        std::env::set_var(name, value);
+    }
+}
+
+impl Drop for OAuthTestEnvironment {
+    fn drop(&mut self) {
+        for (name, previous) in &self.previous {
+            match previous {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+}
+
 /// The same request again, headers and all. Only for requests built by this
 /// module, whose bodies are known: the clone carries the original's body.
 pub fn clone_request(

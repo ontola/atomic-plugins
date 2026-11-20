@@ -68,6 +68,10 @@ pub struct OAuthContext {
     /// Random value also stored in a cookie, binding the callback to the
     /// browser that approved the consent screen.
     pub binding: String,
+    /// The registration used by the authorization start. Older sealed contexts
+    /// omit this and use the configured legacy registration at callback time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 }
 
 /// What a handoff code redeems to.
@@ -876,13 +880,9 @@ pub async fn authorize(
             let context = OAuthContext {
                 request: consent.request.clone(),
                 binding: random(),
+                client_id: None,
             };
-            let Ok(sealed_context) =
-                security.seal(&serde_json::to_vec(&context).unwrap(), OAUTH_CONTEXT_AAD)
-            else {
-                return error("Could not start connection");
-            };
-            let url = match oauth::begin(&state, &consent.request.platform, sealed_context).await {
+            let url = match oauth::begin(&state, &consent.request.platform, &context).await {
                 Ok(url) => url,
                 Err(()) => return error("Could not start platform authorization"),
             };
@@ -3537,6 +3537,259 @@ mod tests {
             .any(|(k, v)| k == "error" && v == "access_denied"));
         assert!(!target.query_pairs().any(|(k, _)| k == "connection_code"));
         assert_eq!(cancelled.headers()[header::CACHE_CONTROL], "no-store");
+    }
+
+    /// Both new and pre-binding pending authorizations survive client rotation
+    /// while retaining state, cookie, PKCE and handoff ownership checks.
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_pending_authorization_keeps_its_registration_across_rotation() {
+        async fn start(s: &AppState, platform: &str) -> (String, String) {
+            let mut request = request();
+            request.platform = platform.into();
+            let consent = Consent {
+                request,
+                csrf: random(),
+                expires: crate::now_secs() + 600,
+            };
+            let jar = PrivateCookieJar::new(s.key.clone()).add(private_cookie(
+                CONSENT_COOKIE,
+                serde_json::to_string(&consent).unwrap(),
+            ));
+            let response = authorize(
+                State(s.clone()),
+                None,
+                jar,
+                HeaderMap::new(),
+                Form(Approval {
+                    csrf: consent.csrf,
+                    api_key: None,
+                    username: None,
+                }),
+            )
+            .await;
+            let cookie = set_cookie(&response, "platform_oauth").unwrap();
+            let destination = continue_page(response).await;
+            let state = destination
+                .query_pairs()
+                .find(|(k, _)| k == "state")
+                .unwrap()
+                .1
+                .into_owned();
+            let client = destination
+                .query_pairs()
+                .find(|(k, _)| k == "client_id")
+                .unwrap()
+                .1
+                .into_owned();
+            let expected = crate::providers::Provider::configured(&s.catalog, platform)
+                .unwrap()
+                .client_id;
+            assert_eq!(client, expected);
+            (state, cookie)
+        }
+        let mut registration = crate::test_support::OAuthTestEnvironment::new();
+        registration.set("CLIENT_ID", "old-client");
+        registration.set("CLIENT_SECRET", "old-secret");
+        registration.set("CLIENT_AUTH_METHOD", "client_secret_basic");
+        let requests = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::new()));
+        let recorded = requests.clone();
+        let upstream=axum::Router::new().route("/token",axum::routing::post(move |headers: HeaderMap,body: Bytes|{
+            let recorded=recorded.clone();async move {
+                let form:std::collections::HashMap<_,_>=url::form_urlencoded::parse(&body).into_owned().collect();
+                assert_eq!(form.get("grant_type").map(String::as_str),Some("authorization_code"));
+                assert_eq!(form.get("code_verifier").map(String::len),Some(43));
+                recorded.lock().await.push((headers.get(header::AUTHORIZATION).and_then(|v|v.to_str().ok()).map(str::to_owned),form));
+                Json(serde_json::json!({"access_token":"synthetic-access","refresh_token":"synthetic-refresh","expires_in":3600}))
+            }
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, upstream).await.unwrap() });
+        let security = crate::test_support::security().await;
+        let mut s = state(Some(security.clone()));
+        s.test_upstream = Some(upstream_url.clone());
+        s.catalog = crate::catalog::Catalog::from_test_document(
+            &registration.platform,
+            serde_json::json!({
+                "servers":[{"url":upstream_url}],"components":{"securitySchemes":{"oauth":{"type":"oauth2","flows":{"authorizationCode":{
+                    "authorizationUrl":"https://auth.example/authorize","tokenUrl":"https://auth.example/token","scopes":{"read":"Read"}
+                }}}}},"security":[{"oauth":["read"]}],"paths":{"/items":{"get":{}}}
+            }),
+            serde_json::json!({}),
+        );
+        let pending = start(&s, &registration.platform).await;
+        let cancelled = start(&s, &registration.platform).await;
+        let foreign = start(&s, &registration.platform).await;
+        registration.set("CLIENT_ID", "new-client");
+        registration.set("CLIENT_SECRET", "new-secret");
+        registration.set("CLIENT_AUTH_METHOD", "client_secret_post");
+        registration.set("LEGACY_CLIENT_ID", "old-client");
+        registration.set("PREVIOUS_CLIENTS",&serde_json::json!([
+            {"client_id":"old-client","client_secret":"old-secret","client_auth_method":"client_secret_basic"}
+        ]).to_string());
+        // Browser binding and one-use state still precede registration lookup/exchange.
+        let path = format!(
+            "/oauth/{}/callback?state={}&code=synthetic-code",
+            registration.platform, foreign.0
+        );
+        let rejected = crate::router(s.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(&path)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        let replay = crate::router(s.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(path)
+                    .header(header::COOKIE, foreign.1)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(replay.status(), StatusCode::BAD_REQUEST);
+        assert!(requests.lock().await.is_empty());
+        let cancelled = crate::router(s.clone())
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri(format!(
+                        "/oauth/{}/callback?state={}&error=access_denied",
+                        registration.platform, cancelled.0
+                    ))
+                    .header(header::COOKIE, cancelled.1)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cancelled.status(), StatusCode::SEE_OTHER);
+        assert!(cancelled.headers()[header::LOCATION]
+            .to_str()
+            .unwrap()
+            .contains("error=access_denied"));
+        assert!(requests.lock().await.is_empty());
+        let active = start(&s, &registration.platform).await;
+        // A pending context from a pre-binding deployment is still readable and
+        // resolves through the explicit, retained legacy registration.
+        let legacy_state = random();
+        let binding = random();
+        let mut legacy_request = request();
+        legacy_request.platform = registration.platform.clone();
+        let context = serde_json::json!({"request":legacy_request,"binding":binding});
+        security
+            .store_connect_state(
+                &legacy_state,
+                &crate::security::ConnectState {
+                    platform: registration.platform.clone(),
+                    verifier: random(),
+                    context: security
+                        .seal(&serde_json::to_vec(&context).unwrap(), OAUTH_CONTEXT_AAD)
+                        .unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let legacy_response = (
+            PrivateCookieJar::new(s.key.clone()).add(private_cookie(PROVIDER_COOKIE, binding)),
+            StatusCode::NO_CONTENT,
+        )
+            .into_response();
+        let legacy = (
+            legacy_state,
+            set_cookie(&legacy_response, "platform_oauth").unwrap(),
+        );
+        for ((provider_state, cookie), expected) in [
+            (pending, "old-client"),
+            (active, "new-client"),
+            (legacy, "old-client"),
+        ] {
+            let response = crate::router(s.clone())
+                .oneshot(
+                    axum::http::Request::builder()
+                        .uri(format!(
+                            "/oauth/{}/callback?state={provider_state}&code=synthetic-code",
+                            registration.platform
+                        ))
+                        .header(header::COOKIE, cookie)
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SEE_OTHER);
+            let destination =
+                Url::parse(response.headers()[header::LOCATION].to_str().unwrap()).unwrap();
+            assert_eq!(
+                destination.origin().ascii_serialization(),
+                "https://hub.example"
+            );
+            let code = destination
+                .query_pairs()
+                .find(|(k, _)| k == "connection_code")
+                .unwrap()
+                .1
+                .into_owned();
+            let response = redeem_as(&s, &Agent::new(125), &code, &"a".repeat(43)).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = body_json(response).await;
+            let record = security
+                .load_connection(body["connection_id"].as_str().unwrap())
+                .await
+                .unwrap()
+                .unwrap();
+            let credential: crate::proxy::StoredCredential = serde_json::from_slice(
+                &security
+                    .open_credential(&record, &crate::security::ConnectionKey::for_tests())
+                    .unwrap(),
+            )
+            .unwrap();
+            match credential {
+                crate::proxy::StoredCredential::OAuth {
+                    client_id,
+                    access_token,
+                    refresh_token,
+                    ..
+                } => {
+                    assert_eq!(client_id.as_deref(), Some(expected));
+                    assert_eq!(access_token, "synthetic-access");
+                    assert_eq!(refresh_token.as_deref(), Some("synthetic-refresh"));
+                }
+                _ => panic!("expected OAuth credential"),
+            }
+            let (auth, form) = requests.lock().await.pop().unwrap();
+            assert_eq!(
+                form.get("redirect_uri").unwrap(),
+                &format!(
+                    "https://proxy.example/oauth/{}/callback",
+                    registration.platform
+                )
+            );
+            if expected == "old-client" {
+                assert_eq!(
+                    auth,
+                    Some(format!(
+                        "Basic {}",
+                        base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            b"old-client:old-secret"
+                        )
+                    ))
+                );
+                assert!(!form.contains_key("client_id"));
+                assert!(!form.contains_key("client_secret"));
+            } else {
+                assert!(auth.is_none());
+                assert_eq!(form.get("client_id").unwrap(), "new-client");
+                assert_eq!(form.get("client_secret").unwrap(), "new-secret");
+            }
+        }
+        server.abort();
     }
 
     /// The whole flow a data browser runs, against a mocked provider:

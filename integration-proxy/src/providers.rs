@@ -913,24 +913,139 @@ impl Provider {
     }
 
     pub fn configured(catalog: &Catalog, name: &str) -> Result<ConfiguredProvider, String> {
+        Ok(Self::configured_clients(catalog, name)?.active)
+    }
+
+    /// Resolve the registration bound into an opened credential or OAuth context.
+    /// An absent binding is legacy data; a present, unknown binding never falls
+    /// back to the active registration.
+    pub(crate) fn configured_for_client(
+        catalog: &Catalog,
+        name: &str,
+        client_id: Option<&str>,
+    ) -> Result<ConfiguredProvider, String> {
+        Self::configured_clients(catalog, name)?.select(client_id)
+    }
+
+    fn configured_clients(catalog: &Catalog, name: &str) -> Result<ClientRegistrations, String> {
         let provider = catalog.oauth_provider(name)?;
         let prefix = Config::provider_env_prefix(name)?;
-        let client_id = env::var(format!("{prefix}_CLIENT_ID"))
-            .map_err(|_| format!("{prefix}_CLIENT_ID must be set"))?;
-        let method = env::var(format!("{prefix}_CLIENT_AUTH_METHOD")).ok();
+        ClientRegistrations::load(provider, &prefix, |key| env::var(key).ok())
+    }
+}
+
+/// Deployment registration data, separate from provider-authored metadata.
+/// Neither this registry nor its errors format credentials or JSON input.
+struct ClientRegistrations {
+    active: ConfiguredProvider,
+    previous: BTreeMap<String, ConfiguredProvider>,
+    legacy_client_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreviousClient {
+    client_id: String,
+    #[serde(default)]
+    client_secret: Option<String>,
+    client_auth_method: String,
+}
+
+impl ClientRegistrations {
+    fn load(
+        provider: Provider,
+        prefix: &str,
+        get: impl Fn(&str) -> Option<String>,
+    ) -> Result<Self, String> {
+        let client_id = get(&format!("{prefix}_CLIENT_ID"))
+            .ok_or_else(|| format!("{prefix}_CLIENT_ID must be set"))?;
+        let method = get(&format!("{prefix}_CLIENT_AUTH_METHOD"));
         let client_auth = provider.select_client_auth(method.as_deref())?;
         let client_secret = if client_auth == ClientAuth::None {
             String::new()
         } else {
-            env::var(format!("{prefix}_CLIENT_SECRET"))
-                .map_err(|_| format!("{prefix}_CLIENT_SECRET must be set"))?
+            get(&format!("{prefix}_CLIENT_SECRET"))
+                .ok_or_else(|| format!("{prefix}_CLIENT_SECRET must be set"))?
         };
-        Ok(ConfiguredProvider {
+        let active = ConfiguredProvider {
             provider,
             client_id,
             client_secret,
             client_auth,
+        };
+        let invalid = || format!("{prefix}_PREVIOUS_CLIENTS is invalid");
+        let previous: Vec<PreviousClient> = match get(&format!("{prefix}_PREVIOUS_CLIENTS")) {
+            Some(value) if value.len() <= 64 * 1024 => {
+                serde_json::from_str(&value).map_err(|_| invalid())?
+            }
+            Some(_) => return Err(invalid()),
+            None => Vec::new(),
+        };
+        if previous.len() > 16 {
+            return Err(invalid());
+        }
+        let mut clients = BTreeMap::new();
+        for old in previous {
+            if old.client_id.is_empty()
+                || old.client_id.len() > 4096
+                || old.client_id.chars().any(char::is_control)
+                || old.client_id == active.client_id
+                || clients.contains_key(&old.client_id)
+            {
+                return Err(invalid());
+            }
+            let client_auth = active
+                .provider
+                .select_client_auth(Some(&old.client_auth_method))
+                .map_err(|_| invalid())?;
+            let client_secret = match (client_auth.clone(), old.client_secret) {
+                (ClientAuth::None, None) => String::new(),
+                (ClientAuth::None, Some(secret)) if secret.is_empty() => String::new(),
+                (ClientAuth::None, Some(_)) => return Err(invalid()),
+                (_, Some(secret)) if !secret.is_empty() => secret,
+                _ => return Err(invalid()),
+            };
+            clients.insert(
+                old.client_id.clone(),
+                ConfiguredProvider {
+                    provider: active.provider.clone(),
+                    client_id: old.client_id,
+                    client_secret,
+                    client_auth,
+                },
+            );
+        }
+        let legacy_client_id = get(&format!("{prefix}_LEGACY_CLIENT_ID"));
+        if !clients.is_empty() && legacy_client_id.is_none() {
+            return Err(format!(
+                "{prefix}_LEGACY_CLIENT_ID is required with previous clients"
+            ));
+        }
+        if legacy_client_id
+            .as_ref()
+            .is_some_and(|id| id != &active.client_id && !clients.contains_key(id))
+        {
+            return Err(format!("{prefix}_LEGACY_CLIENT_ID is not registered"));
+        }
+        Ok(Self {
+            active,
+            previous: clients,
+            legacy_client_id,
         })
+    }
+
+    fn select(self, client_id: Option<&str>) -> Result<ConfiguredProvider, String> {
+        let selected = client_id
+            .or(self.legacy_client_id.as_deref())
+            .unwrap_or(&self.active.client_id);
+        if selected == self.active.client_id {
+            Ok(self.active)
+        } else {
+            self.previous
+                .get(selected)
+                .cloned()
+                .ok_or_else(|| "OAuth client registration is unavailable".into())
+        }
     }
 }
 
@@ -1454,12 +1569,19 @@ impl ClientAuth {
         }
     }
 }
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct ConfiguredProvider {
     pub provider: Provider,
     pub client_id: String,
     pub client_secret: String,
     pub client_auth: ClientAuth,
+}
+impl std::fmt::Debug for ConfiguredProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfiguredProvider")
+            .field("client_auth", &self.client_auth)
+            .finish_non_exhaustive()
+    }
 }
 impl ConfiguredProvider {
     pub fn token_request(
@@ -1520,6 +1642,153 @@ mod tests {
             "authorizationUrl":"https://auth.example/authorize","tokenUrl":"https://auth.example/token",
             "scopes":{"read":"Read","write":"Write","unused":"Optional"}}}}}},
             "security":[{"auth":["read"]}],"paths":{"/records":{"get":{},"post":{"security":[{"auth":["write"]}]}}}})
+    }
+
+    fn client_settings() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("OAUTH_EXAMPLE_CLIENT_ID".into(), "active-client".into()),
+            ("OAUTH_EXAMPLE_CLIENT_SECRET".into(), "active-secret".into()),
+        ])
+    }
+
+    fn load_clients(settings: &BTreeMap<String, String>) -> Result<ClientRegistrations, String> {
+        ClientRegistrations::load(
+            Provider::from_document(&document(), None).unwrap(),
+            "OAUTH_EXAMPLE",
+            |key| settings.get(key).cloned(),
+        )
+    }
+
+    #[test]
+    fn oauth_registration_bindings_select_current_retained_and_explicit_legacy_clients() {
+        let mut settings = client_settings();
+        // No rotation configuration preserves the previous unbound-row behavior.
+        assert_eq!(
+            load_clients(&settings)
+                .unwrap()
+                .select(None)
+                .unwrap()
+                .client_id,
+            "active-client"
+        );
+        settings.insert(
+            "OAUTH_EXAMPLE_PREVIOUS_CLIENTS".into(),
+            serde_json::json!([
+                {"client_id":"older-client", "client_secret":"older-secret", "client_auth_method":"client_secret_basic"},
+                {"client_id":"legacy-public-client", "client_auth_method":"none"}
+            ]).to_string(),
+        );
+        settings.insert(
+            "OAUTH_EXAMPLE_LEGACY_CLIENT_ID".into(),
+            "older-client".into(),
+        );
+        let older = load_clients(&settings).unwrap().select(None).unwrap();
+        assert_eq!(older.client_id, "older-client");
+        assert_eq!(older.client_secret, "older-secret");
+        assert_eq!(older.client_auth, ClientAuth::SecretBasic);
+        assert_eq!(
+            load_clients(&settings)
+                .unwrap()
+                .select(Some("older-client"))
+                .unwrap()
+                .client_id,
+            "older-client"
+        );
+        let public = load_clients(&settings)
+            .unwrap()
+            .select(Some("legacy-public-client"))
+            .unwrap();
+        assert_eq!(public.client_auth, ClientAuth::None);
+        assert!(public.client_secret.is_empty());
+        let current = load_clients(&settings)
+            .unwrap()
+            .select(Some("active-client"))
+            .unwrap();
+        assert_eq!(current.client_secret, "active-secret");
+        assert_eq!(current.client_auth, ClientAuth::SecretPost);
+        assert!(load_clients(&settings)
+            .unwrap()
+            .select(Some("unknown-client"))
+            .is_err());
+        let debug = format!("{current:?}");
+        assert!(!debug.contains("active-secret"));
+        assert!(!debug.contains("active-client"));
+    }
+
+    #[test]
+    fn invalid_oauth_registration_configuration_never_echoes_credential_values() {
+        let marker = "do-not-echo-registration-secret";
+        let valid = serde_json::json!({"client_id":"retired-client","client_secret":marker,"client_auth_method":"client_secret_post"});
+        let invalid_registries = [
+            serde_json::json!({"unexpected":marker}),
+            serde_json::json!([{"client_id":"retired-client","client_secret":marker,"client_auth_method":"client_secret_post","unknown":true}]),
+            serde_json::json!([valid.clone(), valid.clone()]),
+            serde_json::json!([{"client_id":"active-client","client_secret":marker,"client_auth_method":"client_secret_post"}]),
+            serde_json::json!([{"client_id":"","client_secret":marker,"client_auth_method":"client_secret_post"}]),
+            serde_json::json!([{"client_id":"retired-client","client_auth_method":"client_secret_post"}]),
+            serde_json::json!([{"client_id":"retired-client","client_secret":marker,"client_auth_method":"none"}]),
+            serde_json::json!([{"client_id":"retired-client","client_secret":marker,"client_auth_method":"private_key_jwt"}]),
+            serde_json::json!(vec![valid.clone(); 17]),
+        ];
+        for registry in invalid_registries {
+            let mut settings = client_settings();
+            settings.insert(
+                "OAUTH_EXAMPLE_PREVIOUS_CLIENTS".into(),
+                registry.to_string(),
+            );
+            settings.insert(
+                "OAUTH_EXAMPLE_LEGACY_CLIENT_ID".into(),
+                "retired-client".into(),
+            );
+            let error = load_clients(&settings)
+                .err()
+                .expect("invalid registry must fail");
+            assert!(!error.contains(marker));
+            assert!(!error.contains("retired-client"));
+        }
+        let mut settings = client_settings();
+        settings.insert(
+            "OAUTH_EXAMPLE_PREVIOUS_CLIENTS".into(),
+            format!("[\"{}\"]", marker.repeat(3000)),
+        );
+        assert!(load_clients(&settings).is_err());
+        settings.insert(
+            "OAUTH_EXAMPLE_PREVIOUS_CLIENTS".into(),
+            serde_json::json!([valid]).to_string(),
+        );
+        assert!(
+            load_clients(&settings).is_err(),
+            "retained clients require an explicit legacy fallback"
+        );
+        settings.insert(
+            "OAUTH_EXAMPLE_LEGACY_CLIENT_ID".into(),
+            "unregistered-client".into(),
+        );
+        let error = load_clients(&settings).err().unwrap();
+        assert!(!error.contains("unregistered-client"));
+        assert!(!error.contains(marker));
+    }
+
+    #[test]
+    fn retained_oauth_client_authentication_must_match_provider_metadata() {
+        let mut doc = document();
+        doc["components"]["securitySchemes"]["auth"]["x-oauth-authentication-details"] = serde_json::json!({
+            "authorizationServerMetadata":{"token_endpoint_auth_methods_supported":["client_secret_basic"]}
+        });
+        let mut settings = client_settings();
+        settings.insert(
+            "OAUTH_EXAMPLE_LEGACY_CLIENT_ID".into(),
+            "retired-client".into(),
+        );
+        settings.insert("OAUTH_EXAMPLE_PREVIOUS_CLIENTS".into(), serde_json::json!([
+            {"client_id":"retired-client","client_secret":"retired-secret","client_auth_method":"client_secret_post"}
+        ]).to_string());
+        assert!(ClientRegistrations::load(
+            Provider::from_document(&doc, None).unwrap(),
+            "OAUTH_EXAMPLE",
+            |key| settings.get(key).cloned()
+        )
+        .is_err());
     }
     #[test]
     fn required_scopes_follow_operation_overrides_without_requesting_all_supported_scopes() {

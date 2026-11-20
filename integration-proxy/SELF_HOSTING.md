@@ -219,6 +219,7 @@ RUST_LOG=info
 | `KEY_CHECK_LIMIT_PER_HOUR` | no | Most API key or token checks per client network and platform in any hour, default `20`, `0` for no limit, at most `10000`. See [Key-check limit and client addresses](#key-check-limit-and-client-addresses). Unreleased. |
 | `TRUST_FORWARDED_FOR` | behind a reverse proxy | `none` (default), or `rightmost` (synonym `heroku`) behind exactly one reverse proxy that appends the client address to `X-Forwarded-For`. Used by the key-check limit and by the webhook inbox's per-network limit (`WEBHOOK_INGRESS_LIMIT_PER_NETWORK`). Same section. Unreleased. |
 | `OAUTH_<PLATFORM>_CLIENT_ID`, `_CLIENT_SECRET`, `_CLIENT_AUTH_METHOD` | per OAuth platform | See [Registering OAuth apps](#registering-oauth-apps). |
+| `OAUTH_<PLATFORM>_PREVIOUS_CLIENTS`, `_LEGACY_CLIENT_ID` | for client rotation | Retain previous registrations and the fixed fallback for pre-binding data; see [OAuth client rotation](README.md#oauth-client-rotation-unreleased). |
 | `RUST_LOG` | no | Log filter, default `info`. |
 
 Variables from before 0.2 (`APP_AUTH_*`, `SERVER_SECRET`) are ignored.

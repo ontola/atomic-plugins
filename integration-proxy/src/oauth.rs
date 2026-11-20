@@ -56,9 +56,24 @@ fn callback_url(state: &AppState, name: &str) -> String {
 
 /// The provider authorization URL for `name`, with a new single-use state
 /// row carrying the sealed `connect::OAuthContext`.
-pub async fn begin(state: &AppState, name: &str, context: String) -> Result<String, ()> {
+pub async fn begin(
+    state: &AppState,
+    name: &str,
+    context: &crate::connect::OAuthContext,
+) -> Result<String, ()> {
     let provider = Provider::configured(&state.catalog, name).map_err(|_| ())?;
     let security = state.security.as_ref().ok_or(())?;
+    let bound_context = crate::connect::OAuthContext {
+        request: context.request.clone(),
+        binding: context.binding.clone(),
+        client_id: Some(provider.client_id.clone()),
+    };
+    let context = security
+        .seal(
+            &serde_json::to_vec(&bound_context).map_err(|_| ())?,
+            crate::connect::OAUTH_CONTEXT_AAD,
+        )
+        .map_err(|_| ())?;
     let oauth_state = crate::connect::random();
     let verifier = crate::connect::random();
     let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
@@ -99,17 +114,6 @@ async fn callback_response(
     query: Callback,
     jar: PrivateCookieJar,
 ) -> Response {
-    let Ok(provider) = Provider::configured(&state.catalog, &name) else {
-        return error();
-    };
-    #[cfg(test)]
-    let provider = {
-        let mut provider = provider;
-        if let Some(upstream) = &state.test_upstream {
-            provider.provider.token_url = format!("{}/token", upstream.trim_end_matches('/'));
-        }
-        provider
-    };
     let Some(security) = &state.security else {
         return error();
     };
@@ -141,6 +145,19 @@ async fn callback_response(
         )
             .into_response();
     }
+    let Ok(provider) =
+        Provider::configured_for_client(&state.catalog, &name, context.client_id.as_deref())
+    else {
+        return error();
+    };
+    #[cfg(test)]
+    let provider = {
+        let mut provider = provider;
+        if let Some(upstream) = &state.test_upstream {
+            provider.provider.token_url = format!("{}/token", upstream.trim_end_matches('/'));
+        }
+        provider
+    };
     let code = query.code.unwrap();
     let callback = callback_url(&state, &name);
     let mut params = vec![
@@ -167,6 +184,7 @@ async fn callback_response(
     };
     let credential = crate::proxy::StoredCredential::OAuth {
         provider: name.clone(),
+        client_id: Some(provider.client_id.clone()),
         access_token: token.access_token,
         refresh_token: token.refresh_token,
         expires_at: token.expires_in.map(|seconds| crate::now_secs() + seconds),
