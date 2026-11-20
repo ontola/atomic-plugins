@@ -41,3 +41,11 @@ The coordinator reviews the combined source, runs package/spec/catalog checks,
 and follows exact-head CI before merging or publishing. Final test counts and
 release evidence are recorded in the paired pull request; this log does not
 claim an unrun gate or live OAuth verification.
+
+A prepublication composed-catalog audit found that the daemon's legacy parser
+rejected explicit representation/discriminator metadata before reading any
+history. Five new actual-catalog regressions failed before the correction. The
+daemon now consumes the shared validated descriptors, preserving its existing
+fixed-object links and retaining unsupported polymorphic/identity values inline
+with diagnostics. It does not guess targets. The full package suite then passed
+2,154 tests with 85 existing skips; typecheck, lint and formatting also passed.

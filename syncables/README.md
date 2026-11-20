@@ -2283,9 +2283,22 @@ returns only new or changed observations reconstructed from its actual response
 journal, allowing a host to materialize supplied records without accepting
 iframe-submitted evidence or widening the iframe's write root.
 
+The daemon's Atomic table projector also validates these descriptors. Its
+existing fixed-object links remain supported, including explicit object
+representations. Polymorphic and identity-only forms currently retain their
+inline JSON/scalar values with a bounded projection diagnostic in that projector;
+it does not guess a target or abort startup merely because the catalog uses a
+supported extended declaration. Browser consumers can use the complete shared
+resolver to materialize those links. Older consumers that only implement the
+strict 0.1 fixed-object form must upgrade before selecting this catalog.
+
 ## Changelog
 
 - **0.31.0**: Catalog-declared linked records and typed supplied summaries.
+  - **Fixed:** The daemon's Atomic table projector accepts validated extended
+    linked-record metadata without aborting the new catalog. Fixed supplied
+    objects retain normal linking; polymorphic and identity-only declarations
+    stay inline with a diagnostic until that projector supports their targets.
   - **Behaviour change:** Typed record projection now rejects values that contradict declared scalar
     types, unsafe integer identities and invalid calendar dates or timestamps.
     This also applies to `readPlatform`, which uses the same pure projection as

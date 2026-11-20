@@ -1,10 +1,10 @@
 import type { OpenApiDocument, SchemaObject } from '../openapi/types.js';
 import { discoverReadModel, isRecord } from '../read/model.js';
 import {
-  embeddedResourcesOf,
   resolveEmbeddedResource,
   type EmbeddedResourceDeclaration,
 } from '../read/embedded-resources.js';
+import { describeResourceFields } from '../read/resource-fields.js';
 import {
   projectionModels,
   canonicalProjectionJson,
@@ -417,7 +417,7 @@ async function projectionTables(
     if (collections.length !== 1)
       throw new Error('Unknown or ambiguous Atomic table collection');
     const resource = collections[0].resource;
-    tables.push({
+    const table: ProjectionTable = {
       prepared,
       originalHash: original.documentHash,
       name,
@@ -427,13 +427,34 @@ async function projectionTables(
       resource,
       schema: resourceSchema(prepared, resource),
       schemaIdentity: resourceClassIdentity(original.documentHash, resource),
-      declarations: embeddedResourcesOf(prepared.document, resource),
+      declarations: [],
       rows: [],
       diagnostics: [],
       contributors: new Map(),
       referenced: false,
       ...(model.hash ? { contractHash: model.hash } : {}),
-    });
+    };
+    // Validate the complete modern contract before projecting any records. The
+    // daemon retains its existing fixed-target projection and identity rules.
+    for (const field of describeResourceFields(prepared.document, resource)) {
+      if (
+        field.representation === 'object' &&
+        !field.discriminator &&
+        field.targets.length === 1
+      ) {
+        table.declarations.push({
+          field: field.field,
+          cardinality: field.cardinality,
+          ...field.targets[0],
+        });
+      } else {
+        diagnostic(
+          table,
+          `${field.field}: Atomic table linking does not support ${field.representation === 'identity' ? 'identity-only' : 'polymorphic object'} references; retained inline`,
+        );
+      }
+    }
+    tables.push(table);
   }
   for (const table of tables) {
     const revision = await store.revision(table.revision);
