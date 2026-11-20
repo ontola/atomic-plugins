@@ -246,6 +246,7 @@ mod tests {
     #[test]
     fn explicit_consent_preserves_the_generated_oauth_parameters() {
         let mut doc = document("required");
+        doc["paths"] = serde_json::json!({"/records":{"get":{}}});
         doc.pointer_mut("/components/securitySchemes/auth/x-oauth-authentication-details/authorizationCode/profile/parameters")
             .unwrap().as_array_mut().unwrap().push(serde_json::json!({
                 "parameter":{"name":"prompt","in":"query","schema":{"type":"string","enum":["consent"]}},
