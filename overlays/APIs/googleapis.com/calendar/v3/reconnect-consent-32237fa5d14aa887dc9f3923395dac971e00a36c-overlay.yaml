@@ -1,0 +1,32 @@
+# Offline access alone can omit a refresh token after previous authorization.
+# Each new sealed connection needs its own token; request fresh consent.
+# https://developers.google.com/identity/protocols/oauth2/web-server#offline
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/32237fa5d14aa887dc9f3923395dac971e00a36c/APIs/googleapis.com/calendar/v3/openapi.yaml
+info:
+  title: google-calendar fresh consent for independently sealed connections
+  version: 1.0.0
+actions:
+- target: $.components.securitySchemes.googleOffline
+  update:
+    x-oauth-authentication-details:
+      authorizationCode:
+        profile:
+          parameters:
+          - parameter:
+              name: access_type
+              in: query
+              schema:
+                type: string
+                enum:
+                - online
+                - offline
+            value: offline
+          - parameter:
+              name: prompt
+              in: query
+              schema:
+                type: string
+                enum:
+                - consent
+            value: consent
