@@ -5,6 +5,11 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
 ## Unreleased
 
+- Authorized expired-connection reads can distinguish missing renewal
+  credentials, provider refusal and unavailable renewal via an optional fixed
+  `reason`. HTTP 401 and `credential_refresh_failed` remain unchanged; provider
+  responses and credentials are never returned.
+
 - Catalog-declared work-account guidance appears before OAuth sign-in. A
   reusable help page offers a copyable administrator request with the public
   client ID and actual scopes, plus instructions to reconnect after approval.

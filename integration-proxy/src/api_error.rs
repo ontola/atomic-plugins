@@ -2,11 +2,31 @@
 //! "message": <text>}`. Clients branch on `error` (for example a plugin
 //! frame asks its page for a new capability on `capability_expired`); the
 //! message is for people and may change.
+//! A classified credential renewal failure also has a fixed `reason`; other
+//! errors and unclassified renewal paths omit it.
 use axum::{
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
+
+/// Fixed, non-sensitive categories, never a provider's free-form response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshReason {
+    MissingRefreshToken,
+    ProviderRefused,
+    Unavailable,
+}
+
+impl RefreshReason {
+    fn code(self) -> &'static str {
+        match self {
+            Self::MissingRefreshToken => "missing_refresh_token",
+            Self::ProviderRefused => "provider_refused",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApiError {
@@ -27,6 +47,7 @@ pub enum ApiError {
     InvalidToken,
     TokenScope,
     CredentialRefreshFailed,
+    CredentialRefreshFailedWithReason(RefreshReason),
     InvalidTransferProof,
     // 403: the caller is known but not allowed.
     NotOwner,
@@ -82,6 +103,7 @@ impl ApiError {
             | InvalidToken
             | UnsupportedAuthorization
             | CredentialRefreshFailed
+            | CredentialRefreshFailedWithReason(_)
             | InvalidTransferProof
             | ConnectionKeyRequired => StatusCode::UNAUTHORIZED,
             NotOwner | NotDelegated | CapabilityScope | TokenScope | AccessDenied(_)
@@ -115,7 +137,9 @@ impl ApiError {
             UnsupportedAuthorization => "unsupported_authorization",
             InvalidToken => "invalid_token",
             TokenScope => "insufficient_scope",
-            CredentialRefreshFailed => "credential_refresh_failed",
+            CredentialRefreshFailed | CredentialRefreshFailedWithReason(_) => {
+                "credential_refresh_failed"
+            }
             InvalidTransferProof => "invalid_transfer_proof",
             AgentRetired => "agent_retired",
             TransferBlocked => "transfer_blocked",
@@ -157,6 +181,9 @@ impl ApiError {
             InvalidToken => "the Local Thought access token is invalid, expired or revoked".into(),
             TokenScope => "the client session does not grant this connection or operation".into(),
             CredentialRefreshFailed => "the provider refused to refresh this connection's token; connect again".into(),
+            CredentialRefreshFailedWithReason(RefreshReason::MissingRefreshToken) => "this connection has no renewal credentials; review the provider's authorization requirements before reconnecting".into(),
+            CredentialRefreshFailedWithReason(RefreshReason::ProviderRefused) => "the provider refused to renew this connection; connect again".into(),
+            CredentialRefreshFailedWithReason(RefreshReason::Unavailable) => "the connection could not be renewed; try again later or contact the proxy operator".into(),
             InvalidTransferProof => "proof is not the new agent's signature over this transfer (old id, new id, this proxy's origin and this request's timestamp)".into(),
             AgentRetired => "this agent id was transferred to another one and can no longer own connections".into(),
             TransferBlocked => "the agent still has open webhook subscriptions; delete them before transferring".into(),
@@ -191,11 +218,11 @@ impl IntoResponse for ApiError {
             ApiError::TokenScope => Some("Bearer error=\"insufficient_scope\""),
             _ => None,
         };
-        let mut response = (
-            self.status(),
-            Json(serde_json::json!({"error": self.code(), "message": self.message()})),
-        )
-            .into_response();
+        let mut body = serde_json::json!({"error": self.code(), "message": self.message()});
+        if let ApiError::CredentialRefreshFailedWithReason(reason) = &self {
+            body["reason"] = reason.code().into();
+        }
+        let mut response = (self.status(), Json(body)).into_response();
         response
             .headers_mut()
             .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
@@ -216,6 +243,33 @@ impl IntoResponse for ApiError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn refresh_reasons_keep_the_existing_wire_code_and_do_not_leak_to_other_errors() {
+        for (reason, expected) in [
+            (RefreshReason::MissingRefreshToken, "missing_refresh_token"),
+            (RefreshReason::ProviderRefused, "provider_refused"),
+            (RefreshReason::Unavailable, "unavailable"),
+        ] {
+            let response = ApiError::CredentialRefreshFailedWithReason(reason).into_response();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+            let body = crate::test_support::body_json(response).await;
+            assert_eq!(body["error"], "credential_refresh_failed");
+            assert_eq!(body["reason"], expected);
+            assert_eq!(body.as_object().unwrap().len(), 3);
+        }
+        for error in [
+            ApiError::NotOwner,
+            ApiError::InvalidConnectionKey,
+            ApiError::CredentialRefreshFailed,
+        ] {
+            assert!(crate::test_support::body_json(error.into_response())
+                .await
+                .get("reason")
+                .is_none());
+        }
+    }
 
     #[test]
     fn provider_quota_is_a_429_with_retry_after_in_whole_seconds() {

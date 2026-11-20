@@ -308,6 +308,19 @@ replay). On `401 capability_expired` the frame asks its page for a new one.
 
 ### Errors
 
+An expired OAuth connection still answers `401 credential_refresh_failed` when
+renewal fails. After authorization and a successful connection-key check, that
+error can also include a fixed `reason`: `missing_refresh_token`,
+`provider_refused`, or `unavailable`. These describe the known failure category,
+not credential values or a provider's free-form error. For example:
+
+```json
+{"error":"credential_refresh_failed","reason":"missing_refresh_token","message":"this connection has no renewal credentials; review the provider's authorization requirements before reconnecting"}
+```
+
+Clients can retain their existing handling of `error`. Other errors and renewal
+paths that cannot be classified omit `reason`; its absence establishes no cause.
+
 Signed endpoints answer errors as JSON, `{"error": "<code>", "message": "<text>"}`:
 
 | Status | `error` |

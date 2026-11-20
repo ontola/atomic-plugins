@@ -159,6 +159,18 @@ pub(crate) enum RefreshFailure {
     Unavailable,
 }
 
+fn refresh_failure_error(failure: RefreshFailure, credential: &StoredCredential) -> ApiError {
+    use crate::api_error::RefreshReason;
+    let reason = match failure {
+        RefreshFailure::Refused if matches!(credential, StoredCredential::OAuth {refresh_token, ..} if refresh_token.as_ref().is_none_or(String::is_empty)) => {
+            RefreshReason::MissingRefreshToken
+        }
+        RefreshFailure::Refused => RefreshReason::ProviderRefused,
+        RefreshFailure::Unavailable => RefreshReason::Unavailable,
+    };
+    ApiError::CredentialRefreshFailedWithReason(reason)
+}
+
 async fn refresh_token(
     state: &AppState,
     credential: &mut StoredCredential,
@@ -536,11 +548,10 @@ async fn forward_inner(
     if credential.provider() != platform {
         return Err(ApiError::PlatformMismatch);
     }
-    if refresh_connection(state, security, connection_id, &key, &mut credential)
-        .await
-        .is_err()
+    if let Err(failure) =
+        refresh_connection(state, security, connection_id, &key, &mut credential).await
     {
-        return Err(ApiError::CredentialRefreshFailed);
+        return Err(refresh_failure_error(failure, &credential));
     }
     let not_in_catalog = || {
         (
@@ -1205,7 +1216,7 @@ mod tests {
                             }
                         };
                         if status != StatusCode::OK {
-                            return (status, axum::Json(json!({"error": error}))).into_response();
+                            return (status, axum::Json(json!({"error": error, "error_description":"do-not-echo-provider-detail"}))).into_response();
                         }
                         axum::Json(json!({"access_token": "new-token", "expires_in": 3600}))
                             .into_response()
@@ -1271,6 +1282,75 @@ mod tests {
             "/items",
         )
         .await
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL and fixture OAuth credentials; CI runs it"]
+    async fn postgres_refresh_reason_is_available_only_after_authorization_and_key_checks() {
+        for (answer, expected) in [
+            (None, "missing_refresh_token"),
+            (
+                Some((StatusCode::BAD_REQUEST, "invalid_grant")),
+                "provider_refused",
+            ),
+            (
+                Some((StatusCode::BAD_REQUEST, "invalid_client")),
+                "unavailable",
+            ),
+        ] {
+            let (s, security, id, tokens, _) =
+                oauth_receiver(answer.into_iter().collect(), Some(0)).await;
+            let owner = Agent::new(48);
+            let id = if answer.is_none() {
+                security
+                    .create_connection(
+                        "github-issues",
+                        &owner.id(),
+                        &serde_json::to_vec(&StoredCredential::OAuth {
+                            provider: "github-issues".into(),
+                            access_token: "expired-access".into(),
+                            refresh_token: None,
+                            expires_at: Some(0),
+                        })
+                        .unwrap(),
+                    )
+                    .await
+                    .unwrap()
+            } else {
+                id
+            };
+            let path = format!("/proxy/{id}/github-issues/items");
+            for request in [
+                signed_request(&s, &Agent::new(49), "GET", &path, vec![]),
+                crate::test_support::signed_request_with_key(
+                    &s,
+                    &owner,
+                    "GET",
+                    &path,
+                    vec![],
+                    None,
+                ),
+            ] {
+                let response = crate::router(s.clone()).oneshot(request).await.unwrap();
+                let body = body_json(response).await;
+                assert!(body.get("reason").is_none());
+                assert_ne!(body["error"], "credential_refresh_failed");
+            }
+            let response = crate::router(s.clone())
+                .oneshot(signed_request(&s, &owner, "GET", &path, vec![]))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            let body = body_json(response).await;
+            assert_eq!(body["error"], "credential_refresh_failed");
+            assert_eq!(body["reason"], expected);
+            assert!(!body.to_string().contains("do-not-echo-provider-detail"));
+            assert!(!body.to_string().contains("a-refresh-token"));
+            assert_eq!(
+                tokens.load(std::sync::atomic::Ordering::SeqCst),
+                usize::from(answer.is_some())
+            );
+        }
     }
 
     /// Review of #394, N2: a refresh that fails for a passing reason does
