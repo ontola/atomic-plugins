@@ -967,10 +967,13 @@ async function execute(
       }
       return response;
     };
-    const bound = await resolveCollectionNavigation(document, nav, {
-      transport: verified,
-    });
-    canonicalBound(document, bound, options);
+    const bound = canonicalBound(
+      document,
+      await resolveCollectionNavigation(document, nav, {
+        transport: verified,
+      }),
+      options,
+    );
     const provenance: ReadProvenance = {
       read: bound,
       origin: origin.entity,

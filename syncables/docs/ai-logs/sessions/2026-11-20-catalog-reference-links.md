@@ -49,3 +49,18 @@ daemon now consumes the shared validated descriptors, preserving its existing
 fixed-object links and retaining unsupported polymorphic/identity values inline
 with diagnostics. It does not guess targets. The full package suite then passed
 2,154 tests with 85 existing skips; typecheck, lint and formatting also passed.
+
+## Live pagination follow-up
+
+Real verification of the authorized feature found that a related Issues read
+used the provider's default page size despite a catalog override. The shared
+reader correctly recomputed the canonical bound recipe but discarded its return
+in the related-read branch. It now retains that recipe for reading, provenance
+and scope. This adds no host adapter or provider-specific branch.
+
+Two regressions using the actual composed GitHub catalog failed before the fix,
+then passed for direct-related and fanout reads, including next-page requests,
+current query defaults, compiled authorization and actual-journal observations.
+The complete package suite passed 2,156 tests with 85 existing skips; typecheck
+and lint passed. The patch release is 0.31.1. The Atomic app separately adjusts
+its bounded request budget; no reader proof or credential boundary is relaxed.

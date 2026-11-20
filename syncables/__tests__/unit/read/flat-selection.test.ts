@@ -1,5 +1,6 @@
 // @wc-ignore-file
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
   prepareDocument,
   bindCollection,
@@ -219,6 +220,127 @@ const request = (path: string): TransportRequest => ({
 });
 
 describe('flat catalog selections', () => {
+  it.each(['related', 'fanout'] as const)(
+    'applies the actual GitHub catalog page-size override to %s issues and follows proved next pages',
+    async (kind) => {
+      const doc = prepareDocument(
+        JSON.parse(
+          readFileSync(
+            new URL(
+              '../../fixtures/real-world/github-reference-links-2026-11-20.json',
+              import.meta.url,
+            ),
+            'utf8',
+          ),
+        ),
+      );
+      const catalog = JSON.parse(
+        readFileSync(
+          new URL(
+            '../../../../overlays/catalog/2026-11-20-reference-links.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      ) as {
+        platforms: {
+          name: string;
+          selection: {
+            query_overrides: {
+              path: string;
+              values: Record<string, unknown>;
+            }[];
+          };
+        }[];
+      };
+      const querySelection = catalog.platforms.find(
+        (platform) => platform.name === 'github',
+      )!.selection;
+      const repository = {
+        id: 456,
+        full_name: 'example/repo',
+        name: 'repo',
+        owner: { id: 7, login: 'example', type: 'User' },
+      };
+      const read = bindCollection(doc, {
+        collection: 'githubRepositories',
+        selection: querySelection,
+      });
+      const entity = resolveEntityIdentity(doc, {
+        resource: 'githubRepository',
+        record: repository,
+      });
+      const relation = {
+        collection: 'repositoryIssues',
+        kind: 'identity' as const,
+      };
+      const selection: ReadSelection = {
+        version: 1,
+        resource: 'issue',
+        source:
+          kind === 'related'
+            ? {
+                kind,
+                origin: { entity, record: repository, context: {}, read },
+                via: relation,
+              }
+            : {
+                kind,
+                from: {
+                  version: 1,
+                  resource: 'githubRepository',
+                  source: { kind: 'bound', bound: read },
+                },
+                via: relation,
+              },
+      };
+      const guard = compileReadSelection(doc, selection, { querySelection });
+      const requests: URL[] = [];
+      const result = await readSelection(doc, selection, {
+        querySelection,
+        transport: async (request) => {
+          requests.push(new URL(request.url.href));
+          expect(guard.allows(request)).toBe(true);
+          const isRepository = request.url.pathname === '/user/repos';
+          const page = Number(request.url.searchParams.get('page') ?? 1);
+          const next = new URL(request.url.href);
+          next.searchParams.set('page', '2');
+          const body = isRepository
+            ? [repository]
+            : [{ id: page, number: page, title: `Issue ${page}` }];
+          const reply = {
+            ...response(body),
+            headers:
+              !isRepository && page === 1
+                ? { link: `<${next.href}>; rel="next"` }
+                : {},
+          };
+          await guard.observe(request, reply);
+          return reply;
+        },
+      });
+      expect(result.errors).toEqual([]);
+      expect(result.observations).toHaveLength(2);
+      const issueRequests = requests.filter(
+        (url) => url.pathname === '/repositories/456/issues',
+      );
+      expect(issueRequests).toHaveLength(2);
+      expect(
+        issueRequests.map((url) => url.searchParams.get('per_page')),
+      ).toEqual(['100', '100']);
+      expect(issueRequests.map((url) => url.searchParams.get('page'))).toEqual([
+        null,
+        '2',
+      ]);
+      expect(
+        result.partitions.find((partition) => partition.role === 'target')!
+          .bound.query.per_page,
+      ).toBe('100');
+      if (kind === 'fanout')
+        expect(requests[0]!.searchParams.get('per_page')).toBe('100');
+    },
+  );
+
   it('groups aliases by exact resource and derives only canonical typed identity variables', () => {
     const doc = fixture();
     expect(

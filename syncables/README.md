@@ -2294,6 +2294,10 @@ strict 0.1 fixed-object form must upgrade before selecting this catalog.
 
 ## Changelog
 
+- **0.31.1**: Retain catalog query defaults in related collection reads.
+  - **Fixed:** Related and fanout collection reads now retain current catalog query defaults
+    in their bound recipes and provenance, including pagination page sizes. The
+    compiled request guard and actual response-journal proof remain unchanged.
 - **0.31.0**: Catalog-declared linked records and typed supplied summaries.
   - **Fixed:** The daemon's Atomic table projector accepts validated extended
     linked-record metadata without aborting the new catalog. Fixed supplied
