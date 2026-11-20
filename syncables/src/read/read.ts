@@ -283,6 +283,9 @@ export function projectReadRecord(
   }
   const values: Record<string, unknown> = {};
   for (const [field, raw] of Object.entries(value)) {
+    // Ontology properties are shared between resources, but only this schema
+    // declares which provider fields belong to this resource's projection.
+    if (!Object.hasOwn(schema?.properties ?? {}, field)) continue;
     const shortname = ontologyShortname(field);
     const datatype = properties.get(shortname);
     if (!datatype) continue;

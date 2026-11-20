@@ -2294,6 +2294,11 @@ strict 0.1 fixed-object form must upgrade before selecting this catalog.
 
 ## Changelog
 
+- **0.31.2**: Scope typed projection to each resource schema.
+  - **Fixed:** Only fields declared for the current resource are projected into typed
+    properties. An undeclared field no longer borrows a same-named property's
+    datatype from another resource; the complete field remains in the raw
+    observation. Declare a field in its resource schema to project it.
 - **0.31.1**: Retain catalog query defaults in related collection reads.
   - **Fixed:** Related and fanout collection reads now retain current catalog query defaults
     in their bound recipes and provenance, including pagination page sizes. The

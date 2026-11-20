@@ -220,6 +220,94 @@ const request = (path: string): TransportRequest => ({
 });
 
 describe('flat catalog selections', () => {
+  it('keeps undeclared fields raw rather than borrowing another resource datatype', () => {
+    const doc = fixture();
+    const resources = doc.components!.crudResources as Record<
+      string,
+      {
+        schema: { properties: Record<string, unknown> };
+      }
+    >;
+    resources.account.schema.properties.type = { type: 'string' };
+    const record = {
+      id: 42,
+      name: 'Workspace',
+      type: { id: 7, name: 'Example type' },
+    };
+    const read = bindCollection(doc, { collection: 'myWorkspaces' });
+    const collection = describeCollections(doc).find(
+      (c) => c.name === 'myWorkspaces',
+    )!;
+    const observation = projectEntityObservation(doc, {
+      collection,
+      record,
+      provenance: { read },
+    });
+    expect(observation.raw).toEqual(record);
+    expect(observation.projected.values).not.toHaveProperty('type');
+    expect(observation.fields).not.toHaveProperty('type');
+    expect(observation.projected.values.name).toBe('Workspace');
+    const accountRead = bindCollection(doc, { collection: 'myAccounts' });
+    const account = describeCollections(doc).find(
+      (c) => c.name === 'myAccounts',
+    )!;
+    expect(() =>
+      projectEntityObservation(doc, {
+        collection: account,
+        record: { id: 7, type: record.type },
+        provenance: { read: accountRead },
+      }),
+    ).toThrow('Invalid provider value for declared datatype');
+    expect(
+      projectEntityObservation(doc, {
+        collection: account,
+        record: { id: 7, type: 'Person' },
+        provenance: { read: accountRead },
+      }).projected.values.type,
+    ).toBe('Person');
+  });
+
+  it('reads an invented object-valued issue type against the actual GitHub catalog without projecting an undeclared field', async () => {
+    const doc = prepareDocument(
+      JSON.parse(
+        readFileSync(
+          new URL(
+            '../../fixtures/real-world/github-reference-links-2026-11-20.json',
+            import.meta.url,
+          ),
+          'utf8',
+        ),
+      ),
+    );
+    const read = bindCollection(doc, {
+      collection: 'repositoryIssues',
+      context: { repository_id: '456' },
+    });
+    const record = {
+      id: 15,
+      number: 1,
+      title: 'Invented issue',
+      type: { id: 7, name: 'Example type', is_enabled: true },
+    };
+    const result = await readSelection(
+      doc,
+      {
+        version: 1,
+        resource: 'issue',
+        source: { kind: 'bound', bound: read },
+      },
+      { transport: async () => response([record]) },
+    );
+    expect(result.errors).toEqual([]);
+    expect(result.observations).toHaveLength(1);
+    expect(result.observations[0]!.raw).toEqual(record);
+    expect(result.observations[0]!.projected.values).not.toHaveProperty('type');
+    expect(result.observations[0]!.fields).not.toHaveProperty('type');
+    expect(result.observations[0]!.projected.values.title).toBe(
+      'Invented issue',
+    );
+  });
+
   it.each(['related', 'fanout'] as const)(
     'applies the actual GitHub catalog page-size override to %s issues and follows proved next pages',
     async (kind) => {

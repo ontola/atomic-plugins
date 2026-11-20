@@ -64,3 +64,19 @@ current query defaults, compiled authorization and actual-journal observations.
 The complete package suite passed 2,156 tests with 85 existing skips; typecheck
 and lint passed. The patch release is 0.31.1. The Atomic app separately adjusts
 its bounded request budget; no reader proof or credential boundary is relaxed.
+
+## Resource schema isolation follow-up
+
+The continuing real import exposed an undeclared structured field whose name
+also existed as a string field on another resource. The shared projector was
+borrowing that other resource's datatype through the global ontology. It now
+projects only properties declared on the current resource schema, retaining
+all undeclared fields unchanged in the raw observation. This preserves the
+schema-driven Table contract without a provider-specific exception or widening
+an unrelated property's datatype.
+
+Generic and actual composed-catalog fixtures failed before the correction and
+then passed, including raw-value retention and rejection of a wrongly typed
+value on the resource that really declares the field. The full package suite
+passed 2,158 tests with 85 existing skips; typecheck, lint and formatting passed.
+The patch release is 0.31.2. No live issue body or credentials are committed.
