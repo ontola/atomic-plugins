@@ -1,0 +1,26 @@
+# Google documents OAuth-client-ID administrator approval separately from
+# service-account impersonation: https://developers.google.com/workspace/keep/api/guides
+# An invalid_scope page stays on Google, so this help is shown before OAuth.
+# Approval is conditional on organization policy and account eligibility.
+overlay: 1.0.0
+extends: https://raw.githubusercontent.com/ontola/openapi-directory/5ccf0e09eef66d45b43e97dfc364233b2707689c/APIs/googleapis.com/keep/v1/openapi.yaml
+info:
+  title: Google Keep work-account authorization help
+  version: 1.0.0
+actions:
+  - target: $.components.securitySchemes.googleKeepOAuth
+    update:
+      x-oauth-authorization-help:
+        summary: Using a work or school account? Your Google Workspace administrator may need to approve this app before you can connect.
+        adminApproval:
+          description: >-
+            Ask a Google Workspace super administrator to review this OAuth
+            client ID and the requested scopes using Google's OAuth-client-ID
+            domain-wide delegation option. This is the option limited to the
+            authenticated user's Keep data; do not set up a service account or
+            user impersonation. The full Keep permission includes reading,
+            creating and permanently deleting notes. If Google shows invalid_scope
+            or "Some requested scopes cannot be shown", ask the administrator to
+            review this setup and your account's eligibility. Approval does not
+            guarantee API availability for the account.
+          documentationUrl: https://developers.google.com/workspace/keep/api/guides

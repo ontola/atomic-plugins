@@ -1,17 +1,62 @@
 use crate::{catalog::Catalog, config::Config};
 use serde_json::Value;
-use std::{collections::BTreeSet, env};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    env,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Provider {
     pub authorization_url: String,
     pub token_url: String,
     pub scopes: Vec<String>,
+    pub scope_descriptions: BTreeMap<String, String>,
+    pub authorization_help: Option<AuthorizationHelp>,
     pub authorization_params: Vec<(String, String)>,
     pub use_pkce: bool,
     supported_client_auth: Option<Vec<String>>,
     token_operation: Option<TokenOperation>,
     refresh_operation: Option<TokenOperation>,
+}
+
+/// Optional, provider-authored help. Plain text only; it changes no authority.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AuthorizationHelp {
+    pub summary: String,
+    pub admin_approval: Option<AdminApproval>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AdminApproval {
+    pub description: String,
+    pub documentation_url: String,
+}
+
+fn authorization_help(scheme: &Value) -> Result<Option<AuthorizationHelp>, String> {
+    let Some(value) = scheme.get("x-oauth-authorization-help") else {
+        return Ok(None);
+    };
+    let help: AuthorizationHelp =
+        serde_json::from_value(value.clone()).map_err(|_| "invalid x-oauth-authorization-help")?;
+    if help.summary.trim().is_empty() {
+        return Err("OAuth authorization help summary must be nonempty".into());
+    }
+    if let Some(admin) = &help.admin_approval {
+        if admin.description.trim().is_empty()
+            || !url::Url::parse(&admin.documentation_url)
+                .ok()
+                .as_ref()
+                .is_some_and(|url| plain_https(url) && url.fragment().is_none())
+        {
+            return Err(
+                "OAuth admin help needs a description and credential-free HTTPS documentation URL"
+                    .into(),
+            );
+        }
+    }
+    Ok(Some(help))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -802,7 +847,17 @@ impl Provider {
         Ok(Self {
             authorization_url: authorization_url.clone(),
             token_url: token_url.clone(),
+            scope_descriptions: scopes
+                .iter()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        declared[name].as_str().unwrap_or_default().to_owned(),
+                    )
+                })
+                .collect(),
             scopes: scopes.into_iter().collect(),
+            authorization_help: authorization_help(scheme)?,
             authorization_params,
             use_pkce: pkce_behavior(scheme)?,
             supported_client_auth: supported_client_auth(scheme)?,

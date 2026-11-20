@@ -41,6 +41,7 @@
 mod access;
 mod agent_id;
 mod api_error;
+mod authorization_help;
 mod capability;
 mod catalog;
 mod client_addr;
@@ -464,6 +465,7 @@ fn router(state: AppState) -> Router {
             axum::routing::any(proxy::forward),
         )
         .route("/oauth/:provider/callback", get(oauth::callback))
+        .route("/oauth/help/:provider", get(authorization_help::page))
         .route("/catalog", get(catalog::list))
         .route("/catalog/apps", get(catalog::apps))
         .route("/catalog/:file", get(catalog::document))

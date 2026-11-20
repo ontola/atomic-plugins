@@ -5,6 +5,11 @@ described in the README ("Deploying 0.2", and the "0.2.1 and later" notes).
 
 ## Unreleased
 
+- Catalog-declared work-account guidance appears before OAuth sign-in. A
+  reusable help page offers a copyable administrator request with the public
+  client ID and actual scopes, plus instructions to reconnect after approval.
+  See ADMIN_APPROVAL.md.
+
 - Read-only device sessions can call POST operations explicitly declared as
   collection lists or their cursor continuations in the trusted catalog.
   Other POST operations still require write scope.
