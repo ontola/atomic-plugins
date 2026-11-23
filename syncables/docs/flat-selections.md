@@ -21,8 +21,12 @@ A JSON `ReadSelection` has `version:1`, `resource`, and one `source`:
 
 - `{kind:'bound', bound}` selects one current catalog collection recipe.
 - `{kind:'related', origin, via}` selects a declared relationship from one entity.
-  `origin` holds `{entity,record,context,read}`. Its raw snapshot and old read address
-  are hints, never evidence that a provider has returned a matching detail record.
+  `origin` holds `{entity,record,context,read?}`. Omit `read` for a stored or
+  catalog-proven embedded reference: this makes no claim that its originating
+  collection was read. A present `read` must still match the current catalog recipe
+  and context; explicit null or invalid values fail. Both forms rederive canonical
+  identity from the record and typed context. Their raw snapshot and old read
+  address are hints, never evidence of a matching provider detail response.
 - `{kind:'fanout', from, via, entities?}` runs a relationship for actual accepted
   source observations. Optional typed entity constraints intersect those actual
   observations; they never introduce a missing entity or expand the source scope.
@@ -49,7 +53,11 @@ include trusted replacement `origins`, `publicOnly`, `querySelection` and
 `observe(request, TransportResponse)` is asynchronous and takes raw JSON text in
 `response.body`. Only actual accepted provider responses unlock descendant scopes.
 A Response Link source is re-read and must identify the selected canonical parent
-before its target is enabled. The guard replays the existing reader against its
+before its target is enabled, including when the origin has no `read`. A changed
+mutable address cannot redirect navigation to a different immutable entity.
+Reference origins do not emit discovery observations or fabricate read history;
+only actual target reads create membership/provenance. They can also start a
+fanout selection, whose next hop still requires accepted source observations. The guard replays the existing reader against its
 bounded response journal, so paging and Link resolution are not reimplemented.
 Unclassified next-link query parameters require the actual replayed next request.
 Public mode checks effective anonymous security on discovery, detail and target
