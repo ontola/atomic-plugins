@@ -79,7 +79,8 @@ export interface OriginRecord {
   entity: EntityIdentity;
   record: Record<string, unknown>;
   context: TypedReadContext;
-  read: BoundCollection;
+  /** Omitted for a stored/reference origin that claims no originating read. */
+  read?: BoundCollection;
 }
 export interface RelationshipSelector {
   collection: string;
@@ -482,7 +483,11 @@ function parseEntity(value: unknown): EntityIdentity {
   return expected;
 }
 function parseOrigin(value: unknown): OriginRecord {
-  const v = object(value, ['entity', 'record', 'context', 'read']);
+  const v = object(
+    value,
+    ['entity', 'record', 'context', 'read'],
+    ['entity', 'record', 'context'],
+  );
   if (!isRecord(v['record']) || !isRecord(v['context']))
     throw new Error('Invalid origin record');
   const context = Object.fromEntries(
@@ -492,7 +497,7 @@ function parseOrigin(value: unknown): OriginRecord {
     entity: parseEntity(v['entity']),
     record: structuredClone(v['record']),
     context,
-    read: parseBound(v['read']),
+    ...(Object.hasOwn(v, 'read') ? { read: parseBound(v['read']) } : {}),
   };
 }
 function parseVia(value: unknown): RelationshipSelector {
@@ -774,12 +779,13 @@ function normalize(
       (o) => o.entity.key === source.origin.entity.key,
     );
     const origin = replacement ? parseOrigin(replacement) : source.origin;
-    canonicalBound(document, origin.read, options);
+    if (origin.read) canonicalBound(document, origin.read, options);
     if (
-      origin.read.resource !== origin.entity.resource ||
-      Object.entries(origin.read.pathParams).some(
-        ([k, v]) => String(origin.context[k]) !== v,
-      ) ||
+      (origin.read &&
+        (origin.read.resource !== origin.entity.resource ||
+          Object.entries(origin.read.pathParams).some(
+            ([k, v]) => String(origin.context[k]) !== v,
+          ))) ||
       entityIdentity(document, {
         resource: origin.entity.resource,
         record: origin.record,

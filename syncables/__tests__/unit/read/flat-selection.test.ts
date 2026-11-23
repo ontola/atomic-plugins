@@ -220,6 +220,175 @@ const request = (path: string): TransportRequest => ({
 });
 
 describe('flat catalog selections', () => {
+  it('roundtrips a stored reference origin without claiming its collection was read', async () => {
+    const doc = fixture();
+    const selected = related(doc);
+    if (selected.source.kind !== 'related') throw new Error('Expected related');
+    const oldKey = readSelectionKey(selected);
+    Reflect.deleteProperty(selected.source.origin, 'read');
+    expect(parseReadSelection(JSON.parse(JSON.stringify(selected)))).toEqual(
+      selected,
+    );
+    expect(readSelectionKey(selected)).toBe(oldKey);
+    const guard = compileReadSelection(doc, selected);
+    expect(guard.allows(request('/me/accounts'))).toBe(false);
+    expect(guard.allows(request('/names/alpha'))).toBe(true);
+    expect(guard.allows(request('/names/alpha/workspaces'))).toBe(false);
+    await guard.observe(
+      request('/names/alpha'),
+      response({ id: 8, slug: 'alpha' }),
+    );
+    expect(guard.allows(request('/names/alpha/workspaces'))).toBe(false);
+    await guard.observe(
+      request('/names/alpha'),
+      response({ id: 7, slug: 'alpha' }),
+    );
+    const observations = await guard.observe(
+      request('/names/alpha/workspaces'),
+      response([{ id: 42 }]),
+    );
+    expect(observations).toHaveLength(1);
+    expect(observations[0]!.entity.resource).toBe('workspace');
+    expect(observations[0]!.provenance.origin).toEqual(
+      selected.source.origin.entity,
+    );
+    expect(observations[0]!.provenance.read.collection).toBe(
+      'accountWorkspaces',
+    );
+  });
+  it('reads reference relationships and two-hop fanout without inventing origin reads', async () => {
+    const doc = fixture();
+    const from = related(doc);
+    if (from.source.kind !== 'related') throw new Error('Expected related');
+    Reflect.deleteProperty(from.source.origin, 'read');
+    const selected: ReadSelection = {
+      version: 1,
+      resource: 'task',
+      source: {
+        kind: 'fanout',
+        from,
+        via: { collection: 'tasks', kind: 'identity' },
+      },
+    };
+    const guard = compileReadSelection(doc, selected);
+    expect(guard.allows(request('/workspaces/42/tasks?status=all'))).toBe(
+      false,
+    );
+    await guard.observe(
+      request('/names/alpha'),
+      response({ id: 7, slug: 'alpha' }),
+    );
+    expect(guard.allows(request('/workspaces/42/tasks?status=all'))).toBe(
+      false,
+    );
+    await guard.observe(
+      request('/names/alpha/workspaces'),
+      response([{ id: 42 }]),
+    );
+    expect(guard.allows(request('/workspaces/42/tasks?status=all'))).toBe(true);
+    expect(guard.allows(request('/workspaces/43/tasks?status=all'))).toBe(
+      false,
+    );
+    const seen: string[] = [];
+    const result = await readSelection(doc, selected, {
+      transport: async (req) => {
+        seen.push(req.url.pathname);
+        if (req.url.pathname === '/v2/names/alpha')
+          return response({ id: 7, slug: 'alpha' });
+        if (req.url.pathname.endsWith('/workspaces'))
+          return response([{ id: 42 }]);
+        return response([{ id: 'first' }]);
+      },
+    });
+    expect(result.complete).toBe(true);
+    expect(result.observations).toHaveLength(1);
+    expect(result.observations[0]!.entity.resource).toBe('task');
+    expect(
+      result.partitions.map((partition) => [
+        partition.role,
+        partition.bound.collection,
+      ]),
+    ).toEqual([
+      ['discovery', 'accountWorkspaces'],
+      ['target', 'tasks'],
+    ]);
+    expect(seen).toEqual([
+      '/v2/names/alpha',
+      '/v2/names/alpha/workspaces',
+      '/v2/workspaces/42/tasks',
+    ]);
+    const failed: string[] = [];
+    const reassigned = await readSelection(doc, from, {
+      transport: async (req) => {
+        failed.push(req.url.pathname);
+        return response({ id: 8, slug: 'alpha' });
+      },
+    });
+    expect(reassigned.complete).toBe(false);
+    expect(reassigned.errors.join('; ')).toMatch(/selected origin/);
+    expect(reassigned.observations).toEqual([]);
+    expect(reassigned.partitions).toEqual([]);
+    expect(failed).toEqual(['/v2/names/alpha']);
+  });
+  it('validates reference replacements and treats a present read as a strict bound recipe', () => {
+    const doc = fixture();
+    const selected = related(doc);
+    const replacement = origin(doc);
+    Reflect.deleteProperty(replacement, 'read');
+    replacement.record.slug = 'renamed';
+    expect(
+      compileReadSelection(doc, selected, { origins: [replacement] }).allows(
+        request('/names/renamed'),
+      ),
+    ).toBe(true);
+    replacement.record.id = 8;
+    expect(() =>
+      compileReadSelection(doc, selected, { origins: [replacement] }),
+    ).toThrow(/identity/);
+    for (const read of [null, {}, undefined]) {
+      const malformed = structuredClone(selected);
+      if (malformed.source.kind !== 'related')
+        throw new Error('Expected related');
+      Object.assign(malformed.source.origin, { read });
+      expect(() => parseReadSelection(malformed)).toThrow();
+    }
+    const invalidRead = structuredClone(selected);
+    if (invalidRead.source.kind !== 'related')
+      throw new Error('Expected related');
+    invalidRead.source.origin.read!.path = '/unrelated';
+    expect(() => compileReadSelection(doc, invalidRead)).toThrow(/recipe/);
+  });
+  it('reads a direct identity relationship from a reference without an originating collection', async () => {
+    const doc = fixture();
+    const record = { id: 42 };
+    const selected: ReadSelection = {
+      version: 1,
+      resource: 'task',
+      source: {
+        kind: 'related',
+        origin: {
+          entity: resolveEntityIdentity(doc, { resource: 'workspace', record }),
+          record,
+          context: {},
+        },
+        via: { collection: 'tasks', kind: 'identity' },
+      },
+    };
+    const seen: string[] = [];
+    const result = await readSelection(doc, selected, {
+      transport: async (req) => {
+        seen.push(req.url.pathname);
+        return response([{ id: 'first' }]);
+      },
+    });
+    expect(result.complete).toBe(true);
+    expect(seen).toEqual(['/v2/workspaces/42/tasks']);
+    expect(result.observations[0]!.entity.values).toEqual([
+      ['workspace_id', 42],
+      ['task_id', 'first'],
+    ]);
+    expect(result.partitions).toHaveLength(1);
+  });
   it('keeps undeclared fields raw rather than borrowing another resource datatype', () => {
     const doc = fixture();
     const resources = doc.components!.crudResources as Record<
@@ -476,7 +645,7 @@ describe('flat catalog selections', () => {
       changed = structuredClone(s);
     if (changed.source.kind === 'related') {
       changed.source.origin.record.slug = 'renamed';
-      changed.source.origin.read.path = '/changed';
+      changed.source.origin.read!.path = '/changed';
     }
     expect(readSelectionKey(changed)).toBe(readSelectionKey(s));
     expect(() => parseReadSelection({ ...s, extra: true })).toThrow();
@@ -514,28 +683,34 @@ describe('flat catalog selections', () => {
       }),
     ).toBe(false);
   });
-  it('enforces anonymous access on target, discovery and detail operations', () => {
-    const doc = fixture();
-    doc.security = [{ token: [] }];
-    doc.paths['/me/accounts']!.get!.security = [];
-    doc.paths['/names/{handle}/workspaces']!.get!.security = [];
-    expect(() =>
-      compileReadSelection(doc, related(doc), { publicOnly: true }),
-    ).toThrow(/detail/);
-    doc.paths['/names/{handle}']!.get!.security = [];
-    expect(() =>
-      compileReadSelection(doc, related(doc), { publicOnly: true }),
-    ).not.toThrow();
-    doc.paths['/me/accounts']!.get!.security = [{ token: [] }];
-    const s: ReadSelection = {
-      version: 1,
-      resource: 'workspace',
-      source: { kind: 'fanout', from: bound(doc, 'myAccounts'), via },
-    };
-    expect(() => compileReadSelection(doc, s, { publicOnly: true })).toThrow(
-      /authentication/,
-    );
-  });
+  it.each([false, true])(
+    'enforces anonymous access with a reference origin: %s',
+    (reference) => {
+      const doc = fixture();
+      doc.security = [{ token: [] }];
+      doc.paths['/me/accounts']!.get!.security = [];
+      doc.paths['/names/{handle}/workspaces']!.get!.security = [];
+      const selected = related(doc);
+      if (reference && selected.source.kind === 'related')
+        Reflect.deleteProperty(selected.source.origin, 'read');
+      expect(() =>
+        compileReadSelection(doc, selected, { publicOnly: true }),
+      ).toThrow(/detail/);
+      doc.paths['/names/{handle}']!.get!.security = [];
+      expect(() =>
+        compileReadSelection(doc, selected, { publicOnly: true }),
+      ).not.toThrow();
+      doc.paths['/me/accounts']!.get!.security = [{ token: [] }];
+      const s: ReadSelection = {
+        version: 1,
+        resource: 'workspace',
+        source: { kind: 'fanout', from: bound(doc, 'myAccounts'), via },
+      };
+      expect(() => compileReadSelection(doc, s, { publicOnly: true })).toThrow(
+        /authentication/,
+      );
+    },
+  );
   it('projects explicit field evidence without treating absence as null', () => {
     const doc = fixture(),
       collection = describeCollections(doc).find(

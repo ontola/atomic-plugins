@@ -2294,6 +2294,13 @@ strict 0.1 fixed-object form must upgrade before selecting this catalog.
 
 ## Changelog
 
+- **0.32.0**: Navigate related collections from stored reference records
+  - **Added:** Related read selections accept a stored or catalog-proven reference origin
+    without an originating collection read. Canonical entity identity and declared
+    relationships are still validated, and Response Links still require a matching
+    provider detail response before enabling target reads. Existing origins with
+    read metadata retain strict catalog validation; reference origins do not invent
+    discovery membership or read history.
 - **0.31.2**: Scope typed projection to each resource schema.
   - **Fixed:** Only fields declared for the current resource are projected into typed
     properties. An undeclared field no longer borrows a same-named property's
