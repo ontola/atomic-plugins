@@ -341,7 +341,7 @@ async fn authenticate(
     uri: &axum::http::Uri,
     headers: &HeaderMap,
     body: &[u8],
-) -> Result<Caller, ApiError> {
+) -> Result<(Caller, agent_id::AgentId), ApiError> {
     let owner = agent_id::parse(&record.owner).ok_or(ApiError::Internal)?;
     let authorization = headers
         .get(header::AUTHORIZATION)
@@ -417,7 +417,7 @@ async fn authenticate(
         return Err(ApiError::PlatformMismatch);
     }
     crate::check_access(state, &owner).await?;
-    Ok(caller)
+    Ok((caller, owner))
 }
 
 /// How to attach a resolved credential to the outbound upstream request.
@@ -488,6 +488,7 @@ async fn forward_inner(
     headers: &HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
+    let started_at = crate::now_secs();
     let request_path = format!("/{path}");
     if contains_traversal_segment(&request_path) {
         return Err(ApiError::BadRequest(
@@ -506,7 +507,7 @@ async fn forward_inner(
         .await
         .map_err(|_| ApiError::Unavailable)?
         .ok_or(ApiError::UnknownConnection)?;
-    let caller = authenticate(
+    let (caller, owner) = authenticate(
         state,
         security,
         &record,
@@ -638,6 +639,7 @@ async fn forward_inner(
         .pacer
         .take(platform, &paced)
         .map_err(ApiError::ProviderQuota)?;
+    let uploaded_bytes = body.len();
     let upstream = match upstream_request(
         &state.http_client,
         method.clone(),
@@ -666,6 +668,17 @@ async fn forward_inner(
                 .into_response())
         }
     };
+    state
+        .access
+        .record_transfer(
+            &owner,
+            crate::ProxyTransfer {
+                started_at,
+                uploaded_bytes,
+                downloaded_bytes: bytes.len(),
+            },
+        )
+        .await;
     let mut response = Response::new(bytes.into());
     *response.status_mut() = status;
     *response.headers_mut() = forwarded_headers;
@@ -2936,6 +2949,67 @@ mod tests {
         // A signed POST covers its body.
         let post = signed_request(&f.state, &f.owner, "POST", &f.path(), b"{}".to_vec());
         assert_eq!(f.send(post).await.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires TEST_DATABASE_URL; CI runs with --include-ignored"]
+    async fn postgres_provider_transfer_is_metered_to_the_connection_owner() {
+        use std::{
+            future::Future,
+            pin::Pin,
+            sync::{Arc, Mutex},
+        };
+
+        #[derive(Default)]
+        struct Recorder(Mutex<Vec<(String, crate::ProxyTransfer)>>);
+
+        impl crate::AccessPolicy for Recorder {
+            fn check<'a>(
+                &'a self,
+                _: &'a crate::AgentId,
+            ) -> Pin<Box<dyn Future<Output = crate::Access> + Send + 'a>> {
+                Box::pin(async { crate::Access::Allowed })
+            }
+
+            fn record_transfer<'a>(
+                &'a self,
+                owner: &'a crate::AgentId,
+                transfer: crate::ProxyTransfer,
+            ) -> Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+                Box::pin(async move {
+                    self.0.lock().unwrap().push((owner.to_string(), transfer));
+                })
+            }
+        }
+
+        let mut f = fixture(55).await;
+        let delegate = Agent::new(56);
+        f.security
+            .put_delegation(&f.id, &f.owner.id(), &delegate.id(), None)
+            .await
+            .unwrap();
+        let recorder = Arc::new(Recorder::default());
+        f.state.access = recorder.clone();
+        let post = signed_request(&f.state, &delegate, "POST", &f.path(), b"{}".to_vec());
+        let replay = crate::test_support::clone_request(&post);
+        let response = f.send(post).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), MAX_RESPONSE_BYTES)
+            .await
+            .unwrap();
+        assert_eq!(f.send(replay).await.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            f.get_as(&Agent::new(57)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+
+        let transfers = recorder.0.lock().unwrap();
+        let [(owner, transfer)] = transfers.as_slice() else {
+            panic!("expected exactly one metered transfer");
+        };
+        assert_eq!(owner, &f.owner.id());
+        assert_eq!(transfer.uploaded_bytes, 2);
+        assert_eq!(transfer.downloaded_bytes, body.len());
     }
 
     /// atomic-plugins#258: on a platform whose document declares a bot token

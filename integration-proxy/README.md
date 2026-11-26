@@ -660,6 +660,7 @@ private and may change in any release:
 | `build_app(&Config) -> Result<axum::Router, Error>` | Loads the catalog, connects to PostgreSQL, returns the router (CORS and tracing layers included), with the default `EnvAccessPolicy`. |
 | `build_app_with_access(&Config, Arc<dyn AccessPolicy>)` | The same, admitting connection owners through a custom policy (e.g. a SaaS account and tier lookup). |
 | `AccessPolicy`, `Access`, `AllowAll`, `EnvAccessPolicy` | The admission check asked about every owner; `AllowAll` for a self-hosted proxy. |
+| `AccessPolicy::record_transfer`, `ProxyTransfer` | Optional hook for request and response body byte counts from completed provider exchanges. It identifies the connection owner, including for delegated calls. An embedding service can store the counts. |
 | `AgentId`, `parse_agent_id` | A parsed agent id; `as_str()` is the canonical `atomic:agent:` form. |
 | `serve(Config) -> Result<(), Error>` | `build_app`, then bind `0.0.0.0:{PORT}` and serve, recording each request's peer address (`into_make_service_with_connect_info::<SocketAddr>()`) for the key-check limit. A caller that serves `build_app`'s router itself should do the same; without it, and without a trusted `X-Forwarded-For`, all clients share one limit. |
 | `TrustForwardedFor`, `DEFAULT_KEY_CHECK_LIMIT_PER_HOUR` | `Config::trust_forwarded_for` and the default of `Config::key_check_limit_per_hour`. Unreleased. |
