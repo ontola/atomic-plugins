@@ -77,7 +77,7 @@ use sha2::{Digest, Sha512};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::EnvFilter;
 
-pub use access::{Access, AccessPolicy, AllowAll, EnvAccessPolicy};
+pub use access::{Access, AccessPolicy, AllowAll, EnvAccessPolicy, ProxyTransfer};
 pub use agent_id::{parse as parse_agent_id, AgentId};
 pub use config::{
     Config, TrustForwardedFor, WebhookConfig, DEFAULT_CATALOG_PATH,
