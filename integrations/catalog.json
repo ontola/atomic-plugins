@@ -605,5 +605,69 @@
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-U5NNkoPeluVn3MIf9lwdCOlHjjVYaHzw6gf/h19P6zlR4MIU3oqrYVjSJMW3WvZS",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Bookmark",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Bookmarks"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "sharesome",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "sharesome",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Sharesome",
+    "https://atomicdata.dev/properties/description": "Choose or upload files and manage public read access. Requires Atomic’s native file and Share controls.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://sharesome.pondersource.com/atomic/sharesome-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-fPnJMZe0ZZcMNlRx81nLoa5wu22CnRHFjD62Nk6ytYQsvAatF8AFwgt88OEWEIZM",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Share",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Shares"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "umai",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "umai",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Umai",
+    "https://atomicdata.dev/properties/description": "Save, edit, and scale recipes in your Atomic cookbook.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://umai.pondersource.com/atomic/umai-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-wIuR8grtdYLSW/hX+AmDSp1YQLEOXnvh7AVDD45tC7LR34Gw/i8Cf8xsnOPn0XWO",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Recipe",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Recipes"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "inspektor",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "inspektor",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Inspektor",
+    "https://atomicdata.dev/properties/description": "Browse and inspect Atomic resources as JSON. Requires Atomic’s native resource picker.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://inspektor.pondersource.com/atomic/inspektor-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-xNqMjrCc/9Pu9yT7PCYXPfUxCWIJhZMgyQnEEtdKmuZvT+pSy+iKk7NeyKvNwmyr",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Inspection",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Inspections"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "media-kraken",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "media-kraken",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Media Kraken",
+    "https://atomicdata.dev/properties/description": "Track watched movies and a watch-later list in your Atomic drive.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://media-kraken.pondersource.com/atomic/media-kraken-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-xQCSkBhViLiUjdJYb0xhrCYWwIb1R/a8bZNQb8orHHG0kWeN9wRhz/y+AxV5AN4R",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Movie",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Movies"
   }
 ]

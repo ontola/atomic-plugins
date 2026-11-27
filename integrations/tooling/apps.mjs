@@ -77,6 +77,10 @@ const EXTERNAL_MODULE_BASES = Object.freeze({
   litewrite: 'https://litewrite.pondersource.com/atomic/',
   todonna:
     'https://raw.githubusercontent.com/pondersource/todonna/2326c60da93694178bb5eb2c3e14500c2018061c/atomic/',
+  inspektor: 'https://inspektor.pondersource.com/atomic/',
+  'media-kraken': 'https://media-kraken.pondersource.com/atomic/',
+  sharesome: 'https://sharesome.pondersource.com/atomic/',
+  umai: 'https://umai.pondersource.com/atomic/',
   webmarks: 'https://webmarks.pondersource.com/atomic/',
 });
 
