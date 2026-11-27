@@ -73,11 +73,11 @@ const MODULE_PATH =
   /^apps\/[a-z0-9][a-z0-9-]*\/[0-9A-Za-z][0-9A-Za-z.+-]*\/ui\.js$/;
 
 /** Versioned standalone releases built and tested in the Litewrite repository. */
-export const hasExternalModule = (id) => id === 'litewrite';
-const externalModuleUrl = (version) =>
+export const hasExternalModule = id => id === 'litewrite';
+const externalModuleUrl = version =>
   `https://litewrite.pondersource.com/atomic/litewrite-${version}.js`;
 
-export const integrityOf = (bytes) =>
+export const integrityOf = bytes =>
   `sha384-${createHash('sha384').update(bytes).digest('base64')}`;
 
 export const catalogPath = (base = root) =>
@@ -90,7 +90,7 @@ export function readCatalog(base = root) {
 /** Catalog entries that are drive apps: they carry `app-module`. */
 export function appEntries(catalog) {
   return catalog.filter(
-    (entry) =>
+    entry =>
       entry &&
       typeof entry === 'object' &&
       typeof entry[terms.module] === 'string',
@@ -107,7 +107,7 @@ export function appEntries(catalog) {
  */
 export function appVersion(id, base = root) {
   const entry = appEntries(readCatalog(base)).find(
-    (candidate) => candidate[terms.shortname] === id,
+    candidate => candidate[terms.shortname] === id,
   );
   if (!entry)
     throw new Error(
@@ -135,7 +135,7 @@ export const APP_FOLDERS = Object.freeze({
 });
 
 /** The repository-relative folder holding an app's `build.mjs`. */
-export const appFolder = (id) =>
+export const appFolder = id =>
   Object.hasOwn(APP_FOLDERS, id) ? APP_FOLDERS[id] : `integrations/${id}/app`;
 
 /**
@@ -238,7 +238,7 @@ export function staticProblems(entry, base = root) {
  * (issue-tracker: `integrations/issue-tracker/app/pnpm-lock.yaml`). The
  * same folders CI's "Install plugin npm dependencies" step covers for apps.
  */
-export const appDependencyDirs = (id) => {
+export const appDependencyDirs = id => {
   const folder = appFolder(id);
   const plugin = folder.split('/').slice(0, 2).join('/');
 
@@ -256,7 +256,7 @@ export function installAppDeps(id, base = root, install = true) {
   return installMissing(appDependencyDirs(id), {
     base,
     ...(typeof install === 'function' ? { install } : {}),
-    log: (message) => console.info(`apps: ${message}`),
+    log: message => console.info(`apps: ${message}`),
   });
 }
 
@@ -279,7 +279,7 @@ export function committedModules(base = root) {
   const dir = resolve(base, 'apps');
   const found = [];
 
-  const walk = (at) => {
+  const walk = at => {
     for (const entry of readdirSync(at, { withFileTypes: true })) {
       const full = join(at, entry.name);
       if (entry.isDirectory()) walk(full);
@@ -325,7 +325,7 @@ export function publishedModules(ref, base = root) {
 }
 
 /** A file's git blob id, as `git hash-object` computes it (no filters). */
-export const blobId = (bytes) =>
+export const blobId = bytes =>
   createHash('sha1')
     .update(`blob ${bytes.length}\0`)
     .update(bytes)
