@@ -466,11 +466,13 @@ export async function check({
     problems.push(...found);
     if (found.length) continue;
     const id = entry[terms.shortname];
+
     if (hasExternalModule(id)) {
       const problem = await checkExternalRelease(entry, fetchModule);
       if (problem) problems.push(problem);
       continue;
     }
+
     const path = modulePath(id, entry[terms.version]);
     const { integrity } = await buildApp(id, base, { install });
     if (integrity !== entry[terms.integrity])

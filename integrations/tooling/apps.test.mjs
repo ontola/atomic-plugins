@@ -536,6 +536,7 @@ test('Litewrite checks its external immutable release and its exact integrity', 
     const fetchModule = async (target, options) => {
       assert.equal(target, url);
       assert.equal(options.redirect, 'error');
+
       return new Response(TEXT, {
         headers: { 'access-control-allow-origin': '*' },
       });
