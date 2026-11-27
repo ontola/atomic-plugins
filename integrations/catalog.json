@@ -384,7 +384,7 @@
       "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
     ],
     "https://atomicdata.dev/properties/shortname": "pets",
-    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/experimental": false,
     "https://atomicdata.dev/integrations/properties/enabled": true,
     "https://atomicdata.dev/properties/name": "Pets",
     "https://atomicdata.dev/properties/emoji": "🐾",
