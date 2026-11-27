@@ -669,5 +669,101 @@
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-xQCSkBhViLiUjdJYb0xhrCYWwIb1R/a8bZNQb8orHHG0kWeN9wRhz/y+AxV5AN4R",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Movie",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Movies"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "focus",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "focus",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Focus",
+    "https://atomicdata.dev/properties/description": "Organize tasks into workspaces and lists, with deadlines, notes and completion.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://focus.pondersource.com/atomic/focus-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-QO193AeZfL6pkWMmBodrk84c5PoHY2ogGcL/M0ZNnRNNBwwj0waWfpPRfBKT23ta",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Task",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Tasks"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "inbox-rs",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "inbox-rs",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Inbox RS",
+    "https://atomicdata.dev/properties/description": "Capture links, notes and host-picked files in your Atomic inbox.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://inbox-rs.pondersource.com/atomic/inbox-rs-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-TRuLu4c1y7je3BlJ1QW5RaM7Cc6OTBUEkbyfZgxBNlnznTvKRa4VCEzkVXwLBIOL",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Item",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Items"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "hyperdraft",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "hyperdraft",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Hyperdraft",
+    "https://atomicdata.dev/properties/description": "Write, find and interlink notes with double brackets in your Atomic drive.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://hyperdraft.pondersource.com/atomic/hyperdraft-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-BakDMg231F3BKOql0S7LyFf1Oog9uoj496FshxkHbInQY55YVlzYWMadcS0mzpIR",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Note",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Notes"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "savr",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "savr",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Savr",
+    "https://atomicdata.dev/properties/description": "Save links and pasted article text, then keep track of what you have read.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://savr.pondersource.com/atomic/savr-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-KEfRiwRqVSRBeGK1ZupETAQOg0swo7G/7H+8U4eOsGToQ4l0HJNtJlRx7m1fh3XZ",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Article",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Articles"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "marco",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "marco",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Marco",
+    "https://atomicdata.dev/properties/description": "Save coordinates in place lists and browse them on a bundled offline world map.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://marco.pondersource.com/atomic/marco-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-Y4RtK/b0O9t+kaCCfjHRp09uw0kQ6/yEbhPkVS9yBDFlTSxD88I/p/5Sj34Ha3QB",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Place",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Places"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "solid-memo",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "solid-memo",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Solid Memo",
+    "https://atomicdata.dev/properties/description": "Create flashcards and review them with Solid Memo’s SM-2 scheduler.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://raw.githubusercontent.com/pondersource/solid-memo/8307f53dd394dfc64e1a3eaa8f790f44f3e3bc2f/atomic/solid-memo-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-vraMYo0MbHYwilf15iQuFBdk4j970ygy8f2LKEkJJAat74mTLUUoQJFVcZzvez9+",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Card",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Cards"
   }
 ]
