@@ -78,8 +78,8 @@ const EXTERNAL_MODULE_BASES = Object.freeze({
   todonna:
     'https://raw.githubusercontent.com/pondersource/todonna/2326c60da93694178bb5eb2c3e14500c2018061c/atomic/',
 });
-export const hasExternalModule = id =>
-  Object.hasOwn(EXTERNAL_MODULE_BASES, id);
+
+export const hasExternalModule = id => Object.hasOwn(EXTERNAL_MODULE_BASES, id);
 const externalModuleUrl = (id, version) =>
   `${EXTERNAL_MODULE_BASES[id]}${id}-${version}.js`;
 
