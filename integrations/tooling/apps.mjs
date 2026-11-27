@@ -72,10 +72,16 @@ export const moduleUrl = (id, version) =>
 const MODULE_PATH =
   /^apps\/[a-z0-9][a-z0-9-]*\/[0-9A-Za-z][0-9A-Za-z.+-]*\/ui\.js$/;
 
-/** Versioned standalone releases built and tested in the Litewrite repository. */
-export const hasExternalModule = id => id === 'litewrite';
-const externalModuleUrl = version =>
-  `https://litewrite.pondersource.com/atomic/litewrite-${version}.js`;
+/** Versioned releases built and tested in each app's source repository. */
+const EXTERNAL_MODULE_BASES = Object.freeze({
+  litewrite: 'https://litewrite.pondersource.com/atomic/',
+  todonna:
+    'https://raw.githubusercontent.com/pondersource/todonna/2326c60da93694178bb5eb2c3e14500c2018061c/atomic/',
+});
+
+export const hasExternalModule = id => Object.hasOwn(EXTERNAL_MODULE_BASES, id);
+const externalModuleUrl = (id, version) =>
+  `${EXTERNAL_MODULE_BASES[id]}${id}-${version}.js`;
 
 export const integrityOf = bytes =>
   `sha384-${createHash('sha384').update(bytes).digest('base64')}`;
@@ -180,9 +186,9 @@ export function staticProblems(entry, base = root) {
     if (typeof version === 'string' && version) {
       if (!MODULE_PATH.test(modulePath(id, version)))
         problems.push(`${id}: version ${version} cannot be a URL path segment`);
-      else if (entry[terms.module] !== externalModuleUrl(version))
+      else if (entry[terms.module] !== externalModuleUrl(id, version))
         problems.push(
-          `${id}: app-module is ${entry[terms.module]}, expected ${externalModuleUrl(version)}`,
+          `${id}: app-module is ${entry[terms.module]}, expected ${externalModuleUrl(id, version)}`,
         );
     }
 
