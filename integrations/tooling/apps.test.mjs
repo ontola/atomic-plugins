@@ -21,6 +21,7 @@ import {
   appVersion,
   blobId,
   check,
+  hasExternalModule,
   integrityOf,
   modulePath,
   moduleUrl,
@@ -518,6 +519,48 @@ test('a new version beside a published one passes', () =>
     );
   }));
 
+test('Litewrite checks its external immutable release and its exact integrity', () =>
+  using({}, async base => {
+    const url = 'https://litewrite.pondersource.com/atomic/litewrite-0.1.0.js';
+    const entry = {
+      [terms.shortname]: 'litewrite',
+      [terms.version]: '0.1.0',
+      [terms.module]: url,
+      [terms.integrity]: integrityOf(TEXT),
+    };
+    writeFileSync(
+      join(base, 'integrations/catalog.json'),
+      JSON.stringify([entry]),
+    );
+
+    const fetchModule = async (target, options) => {
+      assert.equal(target, url);
+      assert.equal(options.redirect, 'error');
+
+      return new Response(TEXT, {
+        headers: { 'access-control-allow-origin': '*' },
+      });
+    };
+
+    assert.deepEqual(await check({ base, fetchModule }), []);
+    const [mismatch] = await check({
+      base,
+      fetchModule: async () =>
+        new Response('changed bytes', {
+          headers: { 'access-control-allow-origin': '*' },
+        }),
+    });
+    assert.match(mismatch, /the catalog pins sha384-/);
+    assert.match(
+      staticProblems(
+        { ...entry, [terms.module]: 'https://example.com/ui.js' },
+        base,
+      )[0],
+      /expected https:\/\/litewrite\.pondersource\.com\//,
+    );
+    await assert.rejects(write({ base, only: 'litewrite' }), /own repository/);
+  }));
+
 test("this repository's app entries are well-formed", () => {
   for (const entry of appEntries(readCatalog(root)))
     assert.deepEqual(staticProblems(entry, root), []);
@@ -574,7 +617,10 @@ test('the lane e2e specs read their app version from the catalog, not a literal'
     }
   }
 
-  // Every drive app in the catalog has a spec that checks its version.
+  // External releases run their browser tests in their own repository.
+  for (const id of ids) if (hasExternalModule(id)) seen.add(id);
+
+  // Every drive app built in this repository has a spec that checks its version.
   assert.deepEqual([...seen].sort(), [...ids].sort());
 });
 

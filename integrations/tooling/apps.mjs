@@ -72,6 +72,11 @@ export const moduleUrl = (id, version) =>
 const MODULE_PATH =
   /^apps\/[a-z0-9][a-z0-9-]*\/[0-9A-Za-z][0-9A-Za-z.+-]*\/ui\.js$/;
 
+/** Versioned standalone releases built and tested in the Litewrite repository. */
+export const hasExternalModule = id => id === 'litewrite';
+const externalModuleUrl = version =>
+  `https://litewrite.pondersource.com/atomic/litewrite-${version}.js`;
+
 export const integrityOf = bytes =>
   `sha384-${createHash('sha384').update(bytes).digest('base64')}`;
 
@@ -170,6 +175,19 @@ export function staticProblems(entry, base = root) {
     problems.push(`${id}: app entry needs a version`);
   if (!/^sha384-[A-Za-z0-9+/]+={0,2}$/.test(entry[terms.integrity] ?? ''))
     problems.push(`${id}: app-module-integrity must be a sha384 SRI hash`);
+
+  if (hasExternalModule(id)) {
+    if (typeof version === 'string' && version) {
+      if (!MODULE_PATH.test(modulePath(id, version)))
+        problems.push(`${id}: version ${version} cannot be a URL path segment`);
+      else if (entry[terms.module] !== externalModuleUrl(version))
+        problems.push(
+          `${id}: app-module is ${entry[terms.module]}, expected ${externalModuleUrl(version)}`,
+        );
+    }
+
+    return problems;
+  }
 
   if (version && !MODULE_PATH.test(modulePath(id, version)))
     problems.push(`${id}: version ${version} cannot be a URL path segment`);
@@ -405,12 +423,42 @@ export function publishedProblems(ref, base = root) {
   return problems;
 }
 
+/** Check the published release without following a redirect to another origin. */
+async function checkExternalRelease(entry, fetchModule) {
+  const id = entry[terms.shortname];
+  const url = entry[terms.module];
+
+  try {
+    const response = await fetchModule(url, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(15_000),
+      headers: { Origin: 'https://atomic.place' },
+    });
+    if (!response.ok) return `${id}: ${url} returned HTTP ${response.status}`;
+    if (response.headers.get('access-control-allow-origin') !== '*')
+      return `${id}: ${url} must allow downloads from any Atomic host`;
+    const text = await response.text();
+    if (Buffer.byteLength(text) > 4 * 1024 * 1024)
+      return `${id}: ${url} exceeds Atomic's 4 MiB bundle limit`;
+    const actual = integrityOf(text);
+    if (actual !== entry[terms.integrity])
+      return `${id}: ${url} is ${actual}, the catalog pins ${entry[terms.integrity]}`;
+  } catch (error) {
+    return `${id}: could not fetch ${url}: ${error.message}`;
+  }
+}
+
 /**
  * All problems with the apps: per entry, `staticProblems` and a fresh build
  * that must equal the committed module; the shape of everything under apps/;
  * and, when `published` names a ref, that none of its version files changed.
  */
-export async function check({ base = root, published, install = true } = {}) {
+export async function check({
+  base = root,
+  published,
+  install = true,
+  fetchModule = fetch,
+} = {}) {
   const problems = [];
 
   for (const entry of appEntries(readCatalog(base))) {
@@ -418,6 +466,13 @@ export async function check({ base = root, published, install = true } = {}) {
     problems.push(...found);
     if (found.length) continue;
     const id = entry[terms.shortname];
+
+    if (hasExternalModule(id)) {
+      const problem = await checkExternalRelease(entry, fetchModule);
+      if (problem) problems.push(problem);
+      continue;
+    }
+
     const path = modulePath(id, entry[terms.version]);
     const { integrity } = await buildApp(id, base, { install });
     if (integrity !== entry[terms.integrity])
@@ -450,13 +505,16 @@ export async function write({
   published,
   install = true,
 } = {}) {
+  if (hasExternalModule(only))
+    throw new Error(`${only} is published from its own repository`);
+
   const catalog = readCatalog(base);
   const onMain = published ? publishedModules(published, base) : new Map();
   const builds = [];
 
   for (const entry of appEntries(catalog)) {
     const id = entry[terms.shortname];
-    if (only && id !== only) continue;
+    if (hasExternalModule(id) || (only && id !== only)) continue;
     const version = entry[terms.version];
     const path = modulePath(id, version);
     if (!MODULE_PATH.test(path))
