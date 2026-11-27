@@ -81,6 +81,13 @@ const EXTERNAL_MODULE_BASES = Object.freeze({
   'media-kraken': 'https://media-kraken.pondersource.com/atomic/',
   sharesome: 'https://sharesome.pondersource.com/atomic/',
   umai: 'https://umai.pondersource.com/atomic/',
+  focus: 'https://focus.pondersource.com/atomic/',
+  'inbox-rs': 'https://inbox-rs.pondersource.com/atomic/',
+  hyperdraft: 'https://hyperdraft.pondersource.com/atomic/',
+  savr: 'https://savr.pondersource.com/atomic/',
+  marco: 'https://marco.pondersource.com/atomic/',
+  'solid-memo':
+    'https://raw.githubusercontent.com/pondersource/solid-memo/8307f53dd394dfc64e1a3eaa8f790f44f3e3bc2f/atomic/',
   webmarks: 'https://webmarks.pondersource.com/atomic/',
 });
 
