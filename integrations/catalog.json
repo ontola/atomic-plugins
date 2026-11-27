@@ -573,5 +573,21 @@
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-yzJxERnpbjNu82mfh1/8VtzdwbhRWaFHgkUAuUdqw2QcEdHFI0qcX2KhbyiackCx",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Note",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Notes"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "todonna",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "todonna",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Todonna",
+    "https://atomicdata.dev/properties/description": "Keep simple to-do and shopping lists in your Atomic drive.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://raw.githubusercontent.com/pondersource/todonna/2326c60da93694178bb5eb2c3e14500c2018061c/atomic/todonna-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-JStnL/4UAhmCGjmbW5LgaLlFS4gmnGT3IoVHIeKjxEhSZCiBMQiMacOc1QZjAJJg",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Task",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Tasks"
   }
 ]
