@@ -557,5 +557,21 @@
     "https://atomicdata.dev/integrations/properties/version": "0.2.0",
     "https://atomicdata.dev/integrations/properties/app-module": "https://ontola.github.io/atomic-plugins/apps/google-keep-view/0.2.0/ui.js",
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-iMQ7lCjJtodxpsCI1or++HQ6QPs72ooMDWU1cDTBvP7hQjz8M4GYmuLOqYTfHSey"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "litewrite",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "litewrite",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Litewrite",
+    "https://atomicdata.dev/properties/description": "A distraction-free editor for private notes in your Atomic drive.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://litewrite.pondersource.com/atomic/litewrite-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-7zr5YzT/GE4T5CCq3M2eQXTGZUZdcuMH/oHT3K4RK9moJmH4HZHHPF6qheQ07ARO",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Note",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Notes"
   }
 ]

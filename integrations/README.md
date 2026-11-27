@@ -266,7 +266,15 @@ package. Every released version keeps its own file and URL: installed apps
 recorded that URL, so a version file that is on `main` is never changed or
 deleted.
 
-To release a new version:
+Litewrite publishes its self-contained module from
+[pondersource/litewrite](https://github.com/pondersource/litewrite) at
+`https://litewrite.pondersource.com/atomic/litewrite-<version>.js`. Publish and
+test the bundle there first, then update the version, URL and SHA-384 in this
+catalog. The catalog check downloads the release, checks that Atomic origins
+can read it, and verifies the hash. Atomic uses its normal drive-app loader
+and sandbox for the verified module.
+
+To release a new version of an app built in this repository:
 
 ```sh
 # 1. change integrations/<id>/app/, then bump the version in both places:

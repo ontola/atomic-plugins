@@ -72,7 +72,12 @@ export const moduleUrl = (id, version) =>
 const MODULE_PATH =
   /^apps\/[a-z0-9][a-z0-9-]*\/[0-9A-Za-z][0-9A-Za-z.+-]*\/ui\.js$/;
 
-export const integrityOf = bytes =>
+/** Versioned standalone releases built and tested in the Litewrite repository. */
+export const hasExternalModule = (id) => id === 'litewrite';
+const externalModuleUrl = (version) =>
+  `https://litewrite.pondersource.com/atomic/litewrite-${version}.js`;
+
+export const integrityOf = (bytes) =>
   `sha384-${createHash('sha384').update(bytes).digest('base64')}`;
 
 export const catalogPath = (base = root) =>
@@ -85,7 +90,7 @@ export function readCatalog(base = root) {
 /** Catalog entries that are drive apps: they carry `app-module`. */
 export function appEntries(catalog) {
   return catalog.filter(
-    entry =>
+    (entry) =>
       entry &&
       typeof entry === 'object' &&
       typeof entry[terms.module] === 'string',
@@ -102,7 +107,7 @@ export function appEntries(catalog) {
  */
 export function appVersion(id, base = root) {
   const entry = appEntries(readCatalog(base)).find(
-    candidate => candidate[terms.shortname] === id,
+    (candidate) => candidate[terms.shortname] === id,
   );
   if (!entry)
     throw new Error(
@@ -130,7 +135,7 @@ export const APP_FOLDERS = Object.freeze({
 });
 
 /** The repository-relative folder holding an app's `build.mjs`. */
-export const appFolder = id =>
+export const appFolder = (id) =>
   Object.hasOwn(APP_FOLDERS, id) ? APP_FOLDERS[id] : `integrations/${id}/app`;
 
 /**
@@ -170,6 +175,19 @@ export function staticProblems(entry, base = root) {
     problems.push(`${id}: app entry needs a version`);
   if (!/^sha384-[A-Za-z0-9+/]+={0,2}$/.test(entry[terms.integrity] ?? ''))
     problems.push(`${id}: app-module-integrity must be a sha384 SRI hash`);
+
+  if (hasExternalModule(id)) {
+    if (typeof version === 'string' && version) {
+      if (!MODULE_PATH.test(modulePath(id, version)))
+        problems.push(`${id}: version ${version} cannot be a URL path segment`);
+      else if (entry[terms.module] !== externalModuleUrl(version))
+        problems.push(
+          `${id}: app-module is ${entry[terms.module]}, expected ${externalModuleUrl(version)}`,
+        );
+    }
+
+    return problems;
+  }
 
   if (version && !MODULE_PATH.test(modulePath(id, version)))
     problems.push(`${id}: version ${version} cannot be a URL path segment`);
@@ -220,7 +238,7 @@ export function staticProblems(entry, base = root) {
  * (issue-tracker: `integrations/issue-tracker/app/pnpm-lock.yaml`). The
  * same folders CI's "Install plugin npm dependencies" step covers for apps.
  */
-export const appDependencyDirs = id => {
+export const appDependencyDirs = (id) => {
   const folder = appFolder(id);
   const plugin = folder.split('/').slice(0, 2).join('/');
 
@@ -238,7 +256,7 @@ export function installAppDeps(id, base = root, install = true) {
   return installMissing(appDependencyDirs(id), {
     base,
     ...(typeof install === 'function' ? { install } : {}),
-    log: message => console.info(`apps: ${message}`),
+    log: (message) => console.info(`apps: ${message}`),
   });
 }
 
@@ -261,7 +279,7 @@ export function committedModules(base = root) {
   const dir = resolve(base, 'apps');
   const found = [];
 
-  const walk = at => {
+  const walk = (at) => {
     for (const entry of readdirSync(at, { withFileTypes: true })) {
       const full = join(at, entry.name);
       if (entry.isDirectory()) walk(full);
@@ -307,7 +325,7 @@ export function publishedModules(ref, base = root) {
 }
 
 /** A file's git blob id, as `git hash-object` computes it (no filters). */
-export const blobId = bytes =>
+export const blobId = (bytes) =>
   createHash('sha1')
     .update(`blob ${bytes.length}\0`)
     .update(bytes)
@@ -405,12 +423,42 @@ export function publishedProblems(ref, base = root) {
   return problems;
 }
 
+/** Check the published release without following a redirect to another origin. */
+async function checkExternalRelease(entry, fetchModule) {
+  const id = entry[terms.shortname];
+  const url = entry[terms.module];
+
+  try {
+    const response = await fetchModule(url, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(15_000),
+      headers: { Origin: 'https://atomic.place' },
+    });
+    if (!response.ok) return `${id}: ${url} returned HTTP ${response.status}`;
+    if (response.headers.get('access-control-allow-origin') !== '*')
+      return `${id}: ${url} must allow downloads from any Atomic host`;
+    const text = await response.text();
+    if (Buffer.byteLength(text) > 4 * 1024 * 1024)
+      return `${id}: ${url} exceeds Atomic's 4 MiB bundle limit`;
+    const actual = integrityOf(text);
+    if (actual !== entry[terms.integrity])
+      return `${id}: ${url} is ${actual}, the catalog pins ${entry[terms.integrity]}`;
+  } catch (error) {
+    return `${id}: could not fetch ${url}: ${error.message}`;
+  }
+}
+
 /**
  * All problems with the apps: per entry, `staticProblems` and a fresh build
  * that must equal the committed module; the shape of everything under apps/;
  * and, when `published` names a ref, that none of its version files changed.
  */
-export async function check({ base = root, published, install = true } = {}) {
+export async function check({
+  base = root,
+  published,
+  install = true,
+  fetchModule = fetch,
+} = {}) {
   const problems = [];
 
   for (const entry of appEntries(readCatalog(base))) {
@@ -418,6 +466,11 @@ export async function check({ base = root, published, install = true } = {}) {
     problems.push(...found);
     if (found.length) continue;
     const id = entry[terms.shortname];
+    if (hasExternalModule(id)) {
+      const problem = await checkExternalRelease(entry, fetchModule);
+      if (problem) problems.push(problem);
+      continue;
+    }
     const path = modulePath(id, entry[terms.version]);
     const { integrity } = await buildApp(id, base, { install });
     if (integrity !== entry[terms.integrity])
@@ -450,13 +503,16 @@ export async function write({
   published,
   install = true,
 } = {}) {
+  if (hasExternalModule(only))
+    throw new Error(`${only} is published from its own repository`);
+
   const catalog = readCatalog(base);
   const onMain = published ? publishedModules(published, base) : new Map();
   const builds = [];
 
   for (const entry of appEntries(catalog)) {
     const id = entry[terms.shortname];
-    if (only && id !== only) continue;
+    if (hasExternalModule(id) || (only && id !== only)) continue;
     const version = entry[terms.version];
     const path = modulePath(id, version);
     if (!MODULE_PATH.test(path))

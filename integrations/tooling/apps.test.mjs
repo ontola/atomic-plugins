@@ -21,6 +21,7 @@ import {
   appVersion,
   blobId,
   check,
+  hasExternalModule,
   integrityOf,
   modulePath,
   moduleUrl,
@@ -144,7 +145,7 @@ test('the module URL is the committed path on GitHub Pages', () => {
 });
 
 test('a matching app entry passes check', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     assert.equal(appEntries(readCatalog(base)).length, 1);
     assert.deepEqual(await check({ base }), []);
   }));
@@ -165,13 +166,13 @@ test('an app depends on the lockfiles of its plugin folder and its own folder', 
 });
 
 test('check installs a lockfile without node_modules before building, once, unless told not to', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     writeFileSync(join(base, 'integrations/gamma/pnpm-lock.yaml'), '');
     writeFileSync(join(base, 'integrations/gamma/app/pnpm-lock.yaml'), '');
     mkdirSync(join(base, 'integrations/gamma/app/node_modules'));
     const installed = [];
 
-    const install = cwd => {
+    const install = (cwd) => {
       installed.push(cwd);
       mkdirSync(join(cwd, 'node_modules'));
 
@@ -191,7 +192,7 @@ test('check installs a lockfile without node_modules before building, once, unle
   }));
 
 test('a failed install fails check with pnpm output, before any build', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     writeFileSync(join(base, 'integrations/gamma/pnpm-lock.yaml'), '');
     await assert.rejects(
       check({
@@ -203,13 +204,13 @@ test('a failed install fails check with pnpm output, before any build', () =>
   }));
 
 test('a fresh build that differs from the committed module fails check', () =>
-  using({ text: `${TEXT}\n// changed` }, async base => {
+  using({ text: `${TEXT}\n// changed` }, async (base) => {
     const [problem] = await check({ base });
     assert.match(problem, /gamma: a fresh build is sha384-.*bump the version/);
   }));
 
 test('the committed module must exist and match the pinned integrity', () =>
-  using({ committed: 'tampered' }, async base => {
+  using({ committed: 'tampered' }, async (base) => {
     const entry = appEntries(readCatalog(base))[0];
     assert.deepEqual(staticProblems(entry, base), [
       `gamma: apps/gamma/1.2.3/ui.js is ${integrityOf('tampered')}, the catalog pins ${integrityOf(TEXT)}`,
@@ -222,7 +223,7 @@ test('the committed module must exist and match the pinned integrity', () =>
   }));
 
 test('version must match package.json, and the URL must be the Pages one', () =>
-  using({ pkgVersion: '1.2.4' }, async base => {
+  using({ pkgVersion: '1.2.4' }, async (base) => {
     const entry = appEntries(readCatalog(base))[0];
     assert.deepEqual(staticProblems(entry, base), [
       'gamma: catalog version 1.2.3 does not match integrations/gamma/package.json 1.2.4',
@@ -240,7 +241,7 @@ test('version must match package.json, and the URL must be the Pages one', () =>
   }));
 
 test('an app-only folder records its version in app/package.json', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     rmSync(join(base, 'integrations/gamma/package.json'));
     const entry = appEntries(readCatalog(base))[0];
     assert.match(staticProblems(entry, base)[0], /records a version/);
@@ -298,7 +299,7 @@ function asMapped(base, version = '1.2.3') {
 }
 
 test('a mapped app builds from its own folder and versions by its package.json', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     asMapped(base);
     const entry = appEntries(readCatalog(base))[0];
     assert.deepEqual(staticProblems(entry, base), []);
@@ -322,7 +323,7 @@ test('a mapped app builds from its own folder and versions by its package.json',
   }));
 
 test('write builds a mapped app from its own folder', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     asMapped(base);
     writeFileSync(
       join(base, 'integrations/money/moneybird/build.mjs'),
@@ -342,7 +343,7 @@ test('write builds a mapped app from its own folder', () =>
   }));
 
 test('apps/ holds only <id>/<version>/ui.js', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     writeFileSync(join(base, 'apps/gamma/notes.txt'), 'x');
     assert.deepEqual(await check({ base }), [
       'apps/gamma/notes.txt: apps/ holds only apps/<id>/<version>/ui.js (see integrations/README.md, "Publishing a drive app")',
@@ -356,7 +357,7 @@ test('write builds into apps/<id>/<version>/ui.js and sets URL and integrity, ke
       text: 'export const view = () => 1;',
       committed: undefined,
     },
-    async base => {
+    async (base) => {
       const before = readFileSync(
         join(base, 'integrations/catalog.json'),
         'utf8',
@@ -381,7 +382,7 @@ test('write builds into apps/<id>/<version>/ui.js and sets URL and integrity, ke
   ));
 
 test('a published version file may not change or disappear', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     const main = commitAsMain(base);
     assert.deepEqual(await check({ base, published: main }), []);
 
@@ -401,7 +402,7 @@ test('a published version file may not change or disappear', () =>
   }));
 
 test('a branch behind main is told to merge, not to restore what main published since', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     const git = (...args) =>
       execFileSync('git', ['-C', base, ...args], { stdio: 'pipe' });
     const main = commitAsMain(base);
@@ -447,7 +448,7 @@ test('a branch behind main is told to merge, not to restore what main published 
   }));
 
 test('without a merge-base, a missing published file is "deleted" and may mean the branch is behind', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     const git = (...args) =>
       execFileSync('git', ['-C', base, ...args], { stdio: 'pipe' });
     const main = commitAsMain(base);
@@ -475,7 +476,7 @@ test('without a merge-base, a missing published file is "deleted" and may mean t
   }));
 
 test('write refuses to rebuild a published version with different bytes', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     const main = commitAsMain(base);
     // Same bytes: harmless.
     await write({ only: 'gamma', base, published: main });
@@ -494,7 +495,7 @@ test('write refuses to rebuild a published version with different bytes', () =>
   }));
 
 test('a new version beside a published one passes', () =>
-  using({}, async base => {
+  using({}, async (base) => {
     const main = commitAsMain(base);
     writeFileSync(
       join(base, 'integrations/gamma/package.json'),
@@ -518,13 +519,54 @@ test('a new version beside a published one passes', () =>
     );
   }));
 
+test('Litewrite checks its external immutable release and its exact integrity', () =>
+  using({}, async (base) => {
+    const url = 'https://litewrite.pondersource.com/atomic/litewrite-0.1.0.js';
+    const entry = {
+      [terms.shortname]: 'litewrite',
+      [terms.version]: '0.1.0',
+      [terms.module]: url,
+      [terms.integrity]: integrityOf(TEXT),
+    };
+    writeFileSync(
+      join(base, 'integrations/catalog.json'),
+      JSON.stringify([entry]),
+    );
+
+    const fetchModule = async (target, options) => {
+      assert.equal(target, url);
+      assert.equal(options.redirect, 'error');
+      return new Response(TEXT, {
+        headers: { 'access-control-allow-origin': '*' },
+      });
+    };
+
+    assert.deepEqual(await check({ base, fetchModule }), []);
+    const [mismatch] = await check({
+      base,
+      fetchModule: async () =>
+        new Response('changed bytes', {
+          headers: { 'access-control-allow-origin': '*' },
+        }),
+    });
+    assert.match(mismatch, /the catalog pins sha384-/);
+    assert.match(
+      staticProblems(
+        { ...entry, [terms.module]: 'https://example.com/ui.js' },
+        base,
+      )[0],
+      /expected https:\/\/litewrite\.pondersource\.com\//,
+    );
+    await assert.rejects(write({ base, only: 'litewrite' }), /own repository/);
+  }));
+
 test("this repository's app entries are well-formed", () => {
   for (const entry of appEntries(readCatalog(root)))
     assert.deepEqual(staticProblems(entry, root), []);
 });
 
 test("appVersion reads an app entry's version from the catalog", () =>
-  using({ version: '2.0.1' }, async base => {
+  using({ version: '2.0.1' }, async (base) => {
     assert.equal(appVersion('gamma', base), '2.0.1');
     // Not a drive app (no app-module), and not in the catalog at all.
     assert.throws(() => appVersion('not-an-app', base), /no drive app entry/);
@@ -541,7 +583,7 @@ test("appVersion reads an app entry's version from the catalog", () =>
 
 test('the lane e2e specs read their app version from the catalog, not a literal', () => {
   const ids = new Set(
-    appEntries(readCatalog()).map(entry => entry[terms.shortname]),
+    appEntries(readCatalog()).map((entry) => entry[terms.shortname]),
   );
   const seen = new Set();
 
@@ -557,7 +599,7 @@ test('the lane e2e specs read their app version from the catalog, not a literal'
       continue;
     }
 
-    for (const file of files.filter(f => f.endsWith('.spec.ts'))) {
+    for (const file of files.filter((f) => f.endsWith('.spec.ts'))) {
       const path = `integrations/${plugin.name}/e2e/${file}`;
       const text = readFileSync(join(root, path), 'utf8');
       assert.doesNotMatch(
@@ -574,7 +616,10 @@ test('the lane e2e specs read their app version from the catalog, not a literal'
     }
   }
 
-  // Every drive app in the catalog has a spec that checks its version.
+  // External releases run their browser tests in their own repository.
+  for (const id of ids) if (hasExternalModule(id)) seen.add(id);
+
+  // Every drive app built in this repository has a spec that checks its version.
   assert.deepEqual([...seen].sort(), [...ids].sort());
 });
 
@@ -660,7 +705,7 @@ test('usertest: a build that misses a package says to install the plugin depende
     explained('notion', async () => {
       throw new Error('Build failed: Could not resolve "syncables/browser"');
     }),
-    error =>
+    (error) =>
       /^usertest: building notion failed on a missing package/.test(
         error.message,
       ) &&
@@ -680,7 +725,7 @@ test('usertest: a build that misses a package says to install the plugin depende
 test("usertest: catalog.mjs installs each app's plugin folders and its lane's shared packages", () => {
   const bases = APP_IDS.map(appBase);
   const invented = dependencyDirs(
-    bases.map(id => ({
+    bases.map((id) => ({
       id,
       paths: id === bases[0] ? ['devonian/src/**', 'ontology/**'] : [],
     })),
@@ -689,7 +734,7 @@ test("usertest: catalog.mjs installs each app's plugin folders and its lane's sh
     for (const dir of [`integrations/${base}`, `integrations/${base}/app`])
       assert.ok(invented.includes(dir), dir);
   // A lane's shared packages, once each.
-  assert.equal(invented.filter(d => d === 'devonian').length, 1);
+  assert.equal(invented.filter((d) => d === 'devonian').length, 1);
 
   // This repository's real lanes: every app's folders, nothing outside it.
   const real = dependencyDirs();
@@ -754,7 +799,7 @@ test('usertest: check-live.mjs: a changed module fails, absent passes, unreachab
   const I = 'https://atomicdata.dev/integrations/properties/';
   const A = 'https://atomicdata.dev/properties/';
   const PATH = 'apps/calendar/usertest-12/ui.js';
-  const entry = integrity => ({
+  const entry = (integrity) => ({
     [A + 'shortname']: 'calendar',
     [I + 'app-module']: PATH,
     [I + 'app-module-integrity']: integrity,
@@ -763,14 +808,14 @@ test('usertest: check-live.mjs: a changed module fails, absent passes, unreachab
   const out = join(dir, 'out');
   // Async: the HTTP cases below answer from this process.
   const run = (args, input = '') =>
-    new Promise(done => {
+    new Promise((done) => {
       const child = spawn(process.execPath, [script, ...args]);
       let stderr = '';
-      child.stderr.on('data', chunk => (stderr += chunk));
-      child.on('close', status => done({ status, stderr }));
+      child.stderr.on('data', (chunk) => (stderr += chunk));
+      child.on('close', (status) => done({ status, stderr }));
       child.stdin.end(input);
     });
-  const live = json => run(['-', out], json);
+  const live = (json) => run(['-', out], json);
   const server = createServer((req, res) => {
     const [status, body] = {
       '/missing': [404, 'Not Found'],
@@ -831,7 +876,7 @@ test('usertest: check-live.mjs: a changed module fails, absent passes, unreachab
     assert.equal((await live('<html>Bad Gateway</html>')).status, 1);
 
     // Over HTTP: 404 is absent; a 502 or an HTML 200 fails; so does no server.
-    await new Promise(ready => server.listen(0, '127.0.0.1', ready));
+    await new Promise((ready) => server.listen(0, '127.0.0.1', ready));
     const base = `http://127.0.0.1:${server.address().port}`;
     assert.equal((await run([`${base}/missing`, out])).status, 0);
     // A redirect is not followed: it fails rather than land on another 404.
