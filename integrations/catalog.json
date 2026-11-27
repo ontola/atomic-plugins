@@ -589,5 +589,21 @@
     "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-JStnL/4UAhmCGjmbW5LgaLlFS4gmnGT3IoVHIeKjxEhSZCiBMQiMacOc1QZjAJJg",
     "https://atomicdata.dev/integrations/properties/app-row-name": "Task",
     "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Tasks"
+  },
+  {
+    "https://atomicdata.dev/properties/localId": "webmarks",
+    "https://atomicdata.dev/properties/isA": [
+      "https://atomicdata.dev/integrations/classes/PluginCatalogEntry"
+    ],
+    "https://atomicdata.dev/properties/shortname": "webmarks",
+    "https://atomicdata.dev/integrations/properties/experimental": true,
+    "https://atomicdata.dev/integrations/properties/enabled": true,
+    "https://atomicdata.dev/properties/name": "Webmarks",
+    "https://atomicdata.dev/properties/description": "Save and organize bookmarks in your Atomic drive.",
+    "https://atomicdata.dev/integrations/properties/version": "0.1.0",
+    "https://atomicdata.dev/integrations/properties/app-module": "https://webmarks.pondersource.com/atomic/webmarks-0.1.0.js",
+    "https://atomicdata.dev/integrations/properties/app-module-integrity": "sha384-U5NNkoPeluVn3MIf9lwdCOlHjjVYaHzw6gf/h19P6zlR4MIU3oqrYVjSJMW3WvZS",
+    "https://atomicdata.dev/integrations/properties/app-row-name": "Bookmark",
+    "https://atomicdata.dev/integrations/properties/app-row-name-plural": "Bookmarks"
   }
 ]

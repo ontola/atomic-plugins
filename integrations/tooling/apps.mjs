@@ -77,6 +77,7 @@ const EXTERNAL_MODULE_BASES = Object.freeze({
   litewrite: 'https://litewrite.pondersource.com/atomic/',
   todonna:
     'https://raw.githubusercontent.com/pondersource/todonna/2326c60da93694178bb5eb2c3e14500c2018061c/atomic/',
+  webmarks: 'https://webmarks.pondersource.com/atomic/',
 });
 
 export const hasExternalModule = id => Object.hasOwn(EXTERNAL_MODULE_BASES, id);
